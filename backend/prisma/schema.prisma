@@ -1,0 +1,94 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  displayName   String
+  role          String    @default("user") // "admin" | "user"
+
+  // Resource Quotas (set from invite token at registration)
+  maxCpu        Int       @default(0)      // total vCPU cores allowed
+  maxRam        Int       @default(0)      // total RAM in MB
+  maxStorage    Int       @default(0)      // total disk in GB
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  vms            VirtualMachine[]
+  invitesCreated InviteToken[]  @relation("CreatedInvites")
+  usedInvite     InviteToken?   @relation("UsedInvite")
+  sessions       Session[]
+}
+
+model Session {
+  id          String   @id @default(cuid())
+  userId      String
+  token       String   @unique
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+}
+
+model InviteToken {
+  id          String    @id @default(cuid())
+  token       String    @unique
+  createdById String
+  label       String?
+
+  maxCpu      Int
+  maxRam      Int
+  maxStorage  Int
+
+  usedById    String?   @unique
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+
+  createdBy   User      @relation("CreatedInvites", fields: [createdById], references: [id])
+  usedBy      User?     @relation("UsedInvite", fields: [usedById], references: [id])
+
+  @@index([token])
+}
+
+model VirtualMachine {
+  id            String    @id @default(cuid())
+  userId        String
+  proxmoxVmId   Int
+  proxmoxNode   String
+  name          String
+  description   String?
+
+  cpu           Int
+  ram           Int
+  storage       Int
+  os            String
+
+  status        String    @default("creating") // creating | running | stopped | error
+  ipAddress     String?
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([proxmoxVmId])
+}
+
+model SystemConfig {
+  key         String    @id
+  value       String
+  sensitive   Boolean   @default(false)
+  updatedAt   DateTime  @updatedAt
+}

@@ -1,0 +1,78 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { LogOut, ChevronDown } from "lucide-react";
+import { api } from "@/lib/api";
+import { useAuthStore } from "@/lib/auth-store";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Badge } from "@/components/ui/badge";
+import { ThemeToggle } from "@/components/theme-toggle";
+
+function initials(name: string): string {
+  return name
+    .split(" ")
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+}
+
+export function Topbar() {
+  const router = useRouter();
+  const user = useAuthStore((s) => s.user);
+  const clear = useAuthStore((s) => s.clear);
+
+  async function logout() {
+    try {
+      await api.post("/auth/logout");
+    } catch {
+      // Even if the call fails, clear locally.
+    }
+    clear();
+    router.replace("/login");
+  }
+
+  return (
+    <header className="flex h-14 shrink-0 items-center justify-end gap-1 border-b bg-background px-4">
+      <ThemeToggle />
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button variant="ghost" className="h-9 gap-2">
+              <span className="flex size-6 items-center justify-center rounded-full bg-primary text-xs font-medium text-primary-foreground">
+                {user ? initials(user.displayName) : "?"}
+              </span>
+              <span className="hidden text-sm font-medium sm:inline">{user?.displayName}</span>
+              <ChevronDown className="size-3.5 text-muted-foreground" />
+            </Button>
+          }
+        />
+        <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuLabel className="flex flex-col gap-1">
+            <span className="text-sm font-medium text-foreground">{user?.displayName}</span>
+            <span className="text-xs text-muted-foreground">{user?.email}</span>
+            {user?.role === "admin" && (
+              <Badge variant="secondary" className="mt-1 w-fit">
+                Administrator
+              </Badge>
+            )}
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem variant="destructive" onClick={logout}>
+            <LogOut />
+            Sign out
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </header>
+  );
+}
