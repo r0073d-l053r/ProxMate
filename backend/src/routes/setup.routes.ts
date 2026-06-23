@@ -49,8 +49,8 @@ router.post('/admin', async (req: Request, res: Response) => {
     return;
   }
   try {
-    await createAdmin(parsed.data);
-    res.json({ success: true });
+    const result = await createAdmin(parsed.data);
+    res.json({ success: true, ...result });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     res.status(400).json({ error: msg });

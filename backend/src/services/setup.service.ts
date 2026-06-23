@@ -14,12 +14,16 @@ export async function createAdmin(data: {
   email: string;
   password: string;
   displayName: string;
-}): Promise<void> {
+}): Promise<{
+  token: string;
+  expiresAt: string;
+  user: { id: string; email: string; role: string; displayName: string };
+}> {
   const existing = await prisma.user.findFirst({ where: { role: 'admin' } });
   if (existing) throw new Error('Admin account already exists');
 
   const passwordHash = await bcrypt.hash(data.password, 12);
-  await prisma.user.create({
+  const user = await prisma.user.create({
     data: {
       email: data.email.toLowerCase().trim(),
       passwordHash,
@@ -29,11 +33,24 @@ export async function createAdmin(data: {
   });
 
   // Generate jwt_secret early so admin can log in even before completing setup
-  const jwtSecret = await getConfig('jwt_secret');
+  let jwtSecret = await getConfig('jwt_secret');
   if (!jwtSecret) {
-    const newSecret = randomBytes(64).toString('hex');
-    await setConfig('jwt_secret', newSecret, true);
+    jwtSecret = randomBytes(64).toString('hex');
+    await setConfig('jwt_secret', jwtSecret, true);
   }
+
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const token = jwt.sign({ sub: user.id, jti: randomBytes(16).toString('hex') }, jwtSecret, {
+    expiresIn: '24h',
+  });
+
+  await prisma.session.create({ data: { userId: user.id, token, expiresAt } });
+
+  return {
+    token,
+    expiresAt: expiresAt.toISOString(),
+    user: { id: user.id, email: user.email, role: user.role, displayName: user.displayName },
+  };
 }
 
 export async function hasAdmin(): Promise<boolean> {

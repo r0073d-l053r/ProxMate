@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useSetupStore } from "@/lib/setup-store";
+import { useAuthStore } from "@/lib/auth-store";
+import type { AuthResponse } from "@/lib/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -14,6 +16,7 @@ import { FormField } from "@/components/form-field";
 export default function SetupAdminPage() {
   const router = useRouter();
   const setSetup = useSetupStore((s) => s.set);
+  const setAuth = useAuthStore((s) => s.setAuth);
 
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -57,7 +60,8 @@ export default function SetupAdminPage() {
     if (!validate()) return;
     setSubmitting(true);
     try {
-      await api.post("/setup/admin", { displayName, email, password });
+      const res = await api.post<AuthResponse>("/setup/admin", { displayName, email, password });
+      setAuth(res.data.token, res.data.user);
       setSetup({ adminEmail: email, adminName: displayName });
       router.push("/setup/proxmox");
     } catch (err) {
