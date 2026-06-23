@@ -14,6 +14,7 @@ import {
   startVm,
   stopVm,
   restartVm,
+  syncVmNode,
 } from '../services/vm.service.js';
 import type { AuthRequest } from '../types/index.js';
 
@@ -146,10 +147,11 @@ router.post('/:id/restart', async (req: Request, res: Response) => {
 
 router.post('/:id/console', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getOwnedVm(req.params['id'] as string, user);
+  let vm = await getOwnedVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   try {
+    vm = await syncVmNode(vm);
     const { ticket, port } = await requestVncProxy(vm.proxmoxNode, vm.proxmoxVmId);
     res.json({ ticket, port });
   } catch (err) {

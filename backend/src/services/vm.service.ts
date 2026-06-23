@@ -131,20 +131,58 @@ export async function listVms(user: { id: string; role: string }): Promise<Virtu
   });
 }
 
+/**
+ * Ensures the VM's stored node in our database is correct by checking cluster resources.
+ * If Proxmox reports the VM is on a different node, we update the DB.
+ */
+export async function syncVmNode(vm: VirtualMachine): Promise<VirtualMachine> {
+  try {
+    const client = await pve.getClient();
+    const res = await client.get<{ data: Array<{ type: string; vmid?: number; node?: string }> }>('/cluster/resources');
+    const match = res.data.data.find(
+      (r) => (r.type === 'qemu' || r.type === 'lxc') && r.vmid === vm.proxmoxVmId
+    );
+    if (match && match.node && match.node !== vm.proxmoxNode) {
+      const updated = await prisma.virtualMachine.update({
+        where: { id: vm.id },
+        data: { proxmoxNode: match.node },
+      });
+      return updated;
+    }
+  } catch (err) {
+    console.error('Failed to sync VM node from Proxmox:', err);
+  }
+  return vm;
+}
+
 /** Merge a VM's DB record with its live Proxmox status (best-effort). */
 export async function getVmWithLiveStatus(
   vm: VirtualMachine,
 ): Promise<VirtualMachine & { live: pve.PveVmStatus | null }> {
+  let currentVm = vm;
   try {
-    const live = await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId);
-    // Keep the DB status loosely in sync with reality.
-    if (live.status && live.status !== vm.status && vm.status !== 'creating') {
-      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: live.status } });
-      vm.status = live.status;
+    let live: pve.PveVmStatus;
+    try {
+      live = await pve.getVmStatus(currentVm.proxmoxNode, currentVm.proxmoxVmId);
+    } catch (err) {
+      // If VM is not found on the stored node, check if it migrated
+      const syncedVm = await syncVmNode(currentVm);
+      if (syncedVm.proxmoxNode !== currentVm.proxmoxNode) {
+        currentVm = syncedVm;
+        live = await pve.getVmStatus(currentVm.proxmoxNode, currentVm.proxmoxVmId);
+      } else {
+        throw err;
+      }
     }
-    return { ...vm, live };
+
+    // Keep the DB status loosely in sync with reality.
+    if (live.status && live.status !== currentVm.status && currentVm.status !== 'creating') {
+      await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: live.status } });
+      currentVm.status = live.status;
+    }
+    return { ...currentVm, live };
   } catch {
-    return { ...vm, live: null };
+    return { ...currentVm, live: null };
   }
 }
 
@@ -170,42 +208,46 @@ async function waitForStopped(
 }
 
 export async function destroyVm(vm: VirtualMachine): Promise<void> {
+  const currentVm = await syncVmNode(vm);
   const client = await pve.getClient();
 
   // Proxmox refuses to delete a running VM, and stop is an async task — so
   // hard-stop first and wait until it's actually stopped before deleting.
   try {
-    const status = await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client);
+    const status = await pve.getVmStatus(currentVm.proxmoxNode, currentVm.proxmoxVmId, client);
     if (status.status !== 'stopped') {
-      await pve.stopVm(vm.proxmoxNode, vm.proxmoxVmId, client);
-      await waitForStopped(vm.proxmoxNode, vm.proxmoxVmId, client);
+      await pve.stopVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client);
+      await waitForStopped(currentVm.proxmoxNode, currentVm.proxmoxVmId, client);
     }
   } catch {
     /* status unavailable or VM already gone — fall through to delete */
   }
 
   try {
-    await pve.deleteVm(vm.proxmoxNode, vm.proxmoxVmId, client);
+    await pve.deleteVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client);
   } catch (err) {
     // If the VM no longer exists on Proxmox, still clean up our record.
     const msg = pve.pveMessage(err);
     if (!/does not exist|not found/i.test(msg)) throw err;
   }
-  await prisma.virtualMachine.delete({ where: { id: vm.id } });
+  await prisma.virtualMachine.delete({ where: { id: currentVm.id } });
 }
 
 export async function startVm(vm: VirtualMachine): Promise<void> {
-  await pve.startVm(vm.proxmoxNode, vm.proxmoxVmId);
-  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
+  const currentVm = await syncVmNode(vm);
+  await pve.startVm(currentVm.proxmoxNode, currentVm.proxmoxVmId);
+  await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'running' } });
 }
 
 export async function stopVm(vm: VirtualMachine, force: boolean): Promise<void> {
-  if (force) await pve.stopVm(vm.proxmoxNode, vm.proxmoxVmId);
-  else await pve.shutdownVm(vm.proxmoxNode, vm.proxmoxVmId);
-  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
+  const currentVm = await syncVmNode(vm);
+  if (force) await pve.stopVm(currentVm.proxmoxNode, currentVm.proxmoxVmId);
+  else await pve.shutdownVm(currentVm.proxmoxNode, currentVm.proxmoxVmId);
+  await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'stopped' } });
 }
 
 export async function restartVm(vm: VirtualMachine): Promise<void> {
-  await pve.rebootVm(vm.proxmoxNode, vm.proxmoxVmId);
-  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
+  const currentVm = await syncVmNode(vm);
+  await pve.rebootVm(currentVm.proxmoxNode, currentVm.proxmoxVmId);
+  await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'running' } });
 }
