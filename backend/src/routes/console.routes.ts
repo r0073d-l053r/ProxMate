@@ -1,7 +1,7 @@
 import type { Server } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { verifyToken } from '../services/auth.service.js';
-import { getOwnedVm } from '../services/vm.service.js';
+import { getOwnedVm, syncVmNode } from '../services/vm.service.js';
 import { connectVncTarget, relay } from '../services/vnc-proxy.service.js';
 
 const CONSOLE_PATH = /^\/api\/vms\/([^/]+)\/console$/;
@@ -45,9 +45,11 @@ export function setupConsoleWebSocket(server: Server): void {
         return;
       }
 
+      const baseVm = vm;
       wss.handleUpgrade(req, socket, head, async (browserWs) => {
         try {
-          const target = await connectVncTarget(vm.proxmoxNode, vm.proxmoxVmId, port, vncticket);
+          const activeVm = await syncVmNode(baseVm);
+          const target = await connectVncTarget(activeVm.proxmoxNode, activeVm.proxmoxVmId, port, vncticket);
           relay(browserWs, target);
         } catch {
           browserWs.close(1011, 'Failed to reach Proxmox VNC');
