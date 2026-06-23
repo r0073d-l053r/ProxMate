@@ -1,0 +1,10 @@
+node_modules
+dist
+npm-debug.log
+.env
+.env.*
+prisma/*.db
+prisma/*.db-journal
+prisma/test-*.db*
+Dockerfile
+.dockerignore

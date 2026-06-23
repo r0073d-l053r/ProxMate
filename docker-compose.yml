@@ -1,0 +1,39 @@
+name: proxmate
+
+services:
+  backend:
+    build:
+      context: ./backend
+    image: proxmate-backend
+    restart: unless-stopped
+    environment:
+      PORT: "4000"
+      NODE_ENV: production
+      # SQLite lives on the named volume so data survives container rebuilds.
+      DATABASE_URL: file:/data/proxmate.db
+      # Used for the CORS allow-list — set to your public frontend origin.
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      # REQUIRED and must be stable across restarts (losing it makes stored
+      # secrets unreadable). Generate once with: openssl rand -hex 32
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env (openssl rand -hex 32)}
+    volumes:
+      - proxmate-data:/data
+    ports:
+      - "${BACKEND_PORT:-4000}:4000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked into the client bundle at build time — must be the API URL the
+        # user's browser can reach (e.g. https://proxmate.example.com/api).
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000/api}
+    image: proxmate-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+
+volumes:
+  proxmate-data:
