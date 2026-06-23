@@ -31,3 +31,14 @@ backend/prisma/migrations/**/migration_lock.toml
 # Logs
 *.log
 npm-debug.log*
+
+# AI agent / local dev tooling (not for public repo)
+.claude/
+frontend/AGENTS.md
+frontend/CLAUDE.md
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Next.js boilerplate README (root README is the project README)
+frontend/README.md
