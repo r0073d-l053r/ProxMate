@@ -26,9 +26,13 @@ ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cl
 |---|---|
 | 🔒 **Invite-Only Registration** | Admin-generated invite links with CPU/RAM/Storage quotas baked in |
 | 🖥️ **VM Lifecycle Management** | Create, start, stop, restart, and delete VMs from a sleek dashboard |
-| 🌐 **In-Browser Console** | noVNC remote access directly in the browser, proxied securely through the backend |
+| 📦 **Template Store** | Publish Proxmox templates as one-click OS builds — cloned and autoscaled on deploy, with admin-authored login notes |
+| ⚖️ **Automatic VM Placement** | Tenants never pick a node — the scheduler auto-places each VM on the node with the most free capacity |
+| 🌐 **In-Browser Console** | noVNC remote access in the browser, proxied securely through the backend — with copy-paste into the VM |
+| 💾 **MateStates Backups** | Scheduled weekly snapshots + one-click in-place restore, with rolling retention |
+| 📈 **Live Admin Monitor** | Per-VM CPU / memory / network sparklines at 1 Hz, with power controls, grouped by owner |
 | 📊 **Resource Quotas** | Users can only provision resources within their assigned limits |
-| 🧙 **First-Time Setup Wizard** | Guided OOBE to configure admin credentials and Proxmox connection |
+| 🧙 **First-Time Setup Wizard** | Guided OOBE to configure admin credentials and the Proxmox connection |
 | 🛡️ **Tenant Network Isolation** | Per-VM Proxmox firewall with MAC/IP filtering and RFC1918 drop rules |
 | 🐳 **Docker Ready** | Multi-stage production builds for both frontend and backend |
 
@@ -38,13 +42,25 @@ ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cl
 
 <div align="center">
 
-### Dashboard
+### Admin Dashboard
 ![ProxMate Dashboard](docs/images/screenshot-dashboard.png)
-*Admin dashboard showing live cluster stats and VM management*
+*Live cluster capacity and every virtual machine at a glance*
 
-### Setup Wizard
+### Create a VM
+![ProxMate New VM Wizard](docs/images/screenshot-newvm.png)
+*One wizard for both custom (ISO) and template-based VMs — tenants are auto-placed on the best node*
+
+### Template Store
+![ProxMate Template Store](docs/images/screenshot-templates.png)
+*Publish ready-made OS builds with login notes; deploy in seconds*
+
+### Live Monitor
+![ProxMate Admin Monitor](docs/images/screenshot-monitor.png)
+*Per-VM CPU / memory / network sparklines at 1 Hz, with power controls*
+
+### First-Time Setup
 ![ProxMate Setup Wizard](docs/images/screenshot-setup.png)
-*Guided first-time setup for connecting to your Proxmox cluster*
+*Guided wizard to create the admin account and connect your Proxmox cluster*
 
 </div>
 
