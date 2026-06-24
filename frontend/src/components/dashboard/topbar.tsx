@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -31,12 +32,10 @@ export function Topbar() {
   const user = useAuthStore((s) => s.user);
   const clear = useAuthStore((s) => s.clear);
 
-  async function logout() {
-    try {
-      await api.post("/auth/logout");
-    } catch {
-      // Even if the call fails, clear locally.
-    }
+  function logout() {
+    // Best-effort server-side session delete; never let a slow/failing
+    // network call block (or throw out of) the sign-out flow.
+    api.post("/auth/logout").catch(() => {});
     clear();
     router.replace("/login");
   }
@@ -57,15 +56,17 @@ export function Topbar() {
           }
         />
         <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuLabel className="flex flex-col gap-1">
-            <span className="text-sm font-medium text-foreground">{user?.displayName}</span>
-            <span className="text-xs text-muted-foreground">{user?.email}</span>
-            {user?.role === "admin" && (
-              <Badge variant="secondary" className="mt-1 w-fit">
-                Administrator
-              </Badge>
-            )}
-          </DropdownMenuLabel>
+          <DropdownMenuGroup>
+            <DropdownMenuLabel className="flex flex-col gap-1">
+              <span className="text-sm font-medium text-foreground">{user?.displayName}</span>
+              <span className="text-xs text-muted-foreground">{user?.email}</span>
+              {user?.role === "admin" && (
+                <Badge variant="secondary" className="mt-1 w-fit">
+                  Administrator
+                </Badge>
+              )}
+            </DropdownMenuLabel>
+          </DropdownMenuGroup>
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" onClick={logout}>
             <LogOut />
