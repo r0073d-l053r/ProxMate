@@ -24,6 +24,8 @@
     "express-ws": "^5.0.2",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
+    "node-cron": "^4.5.0",
+    "prisma": "^6.9.0",
     "ws": "^8.18.0",
     "zod": "^3.25.0"
   },
@@ -34,8 +36,8 @@
     "@types/express-ws": "^3.0.5",
     "@types/jsonwebtoken": "^9.0.9",
     "@types/node": "^22.15.0",
+    "@types/node-cron": "^3.0.11",
     "@types/ws": "^8.18.0",
-    "prisma": "^6.9.0",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0"
   }

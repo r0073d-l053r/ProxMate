@@ -11,8 +11,10 @@ import {
   ipv4NetworkCidr,
   setClusterFirewall,
   getDefaultNode,
+  getClient,
   pveMessage,
 } from '../services/proxmox.service.js';
+import { prisma } from '../lib/prisma.js';
 
 const router = Router();
 
@@ -185,6 +187,80 @@ router.delete('/isolation/enforce', async (_req: Request, res: Response) => {
   try {
     await setClusterFirewall(false);
     res.json({ success: true, enforced: false });
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── GET /api/admin/all-vms ───────────────────────────────────
+// Every VM on the cluster, grouped by owner (admin first, then users by
+// signup order). Used by the admin monitor dashboard.
+
+router.get('/all-vms', async (_req: Request, res: Response) => {
+  const users = await prisma.user.findMany({
+    include: { vms: { orderBy: { createdAt: 'desc' } } },
+    orderBy: [{ role: 'asc' }, { createdAt: 'asc' }],
+  });
+  res.json(
+    users.map((u) => ({
+      id: u.id,
+      email: u.email,
+      displayName: u.displayName,
+      role: u.role,
+      quota: { cpu: u.maxCpu, ram: u.maxRam, storage: u.maxStorage },
+      vms: u.vms,
+    })),
+  );
+});
+
+// ─── GET /api/admin/live-stats ────────────────────────────────
+// Live metrics for ALL guests on the cluster in a single Proxmox call.
+// Returned as a map keyed by proxmoxVmId so the frontend can do O(1) lookups.
+
+interface PveResource {
+  type: string;
+  vmid?: number;
+  status?: string;
+  cpu?: number;
+  maxcpu?: number;
+  mem?: number;
+  maxmem?: number;
+  disk?: number;
+  maxdisk?: number;
+  uptime?: number;
+  netin?: number;
+  netout?: number;
+}
+
+router.get('/live-stats', async (_req: Request, res: Response) => {
+  try {
+    const client = await getClient();
+    const r = await client.get<{ data: PveResource[] }>('/cluster/resources');
+    const stats: Record<number, {
+      status: string;
+      cpu: number; maxcpu: number;
+      mem: number; maxmem: number;
+      disk: number; maxdisk: number;
+      uptime: number;
+      netin: number; netout: number;
+    }> = {};
+    for (const item of r.data.data) {
+      if ((item.type === 'qemu' || item.type === 'lxc') && item.vmid !== undefined) {
+        stats[item.vmid] = {
+          status: item.status ?? 'unknown',
+          cpu: item.cpu ?? 0,
+          maxcpu: item.maxcpu ?? 0,
+          mem: item.mem ?? 0,
+          maxmem: item.maxmem ?? 0,
+          disk: item.disk ?? 0,
+          maxdisk: item.maxdisk ?? 0,
+          uptime: item.uptime ?? 0,
+          netin: item.netin ?? 0,
+          netout: item.netout ?? 0,
+        };
+      }
+    }
+    res.json(stats);
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }

@@ -9,8 +9,14 @@ COPY tsconfig.json ./
 COPY prisma ./prisma
 COPY src ./src
 
-# Generate the Prisma client and compile TypeScript → dist/
-RUN npx prisma generate && npm run build
+# Generate the Prisma client (tsc needs its types), compile TS → dist/, then
+# strip devDeps and regenerate the client so the runtime node_modules carries
+# only production deps + the Prisma CLI/engines (kept because `prisma` is a
+# runtime dependency, needed for `migrate deploy` at startup).
+RUN npx prisma generate \
+ && npm run build \
+ && npm prune --omit=dev \
+ && npx prisma generate
 
 # ─── Runtime stage ────────────────────────────────────────────
 FROM node:20-alpine AS runtime

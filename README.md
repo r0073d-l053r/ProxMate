@@ -156,13 +156,26 @@ hardening checklist.
 
 ---
 
+## 📚 Documentation
+
+**[`docs/`](./docs/)** has the user- and admin-facing guides:
+
+- **[External access overview](./docs/external-access.md)** — the "no port forwarding" rule and which tool to pick for each use case.
+- **[Tailscale for SSH](./docs/tailscale-ssh.md)** — tenants: SSH into your VM from anywhere, no public IP needed.
+- **[Cloudflare Tunnels](./docs/cloudflare-tunnels.md)** — tenants: publish a public website from your VM without forwarding any port.
+- **[Admin guide](./docs/admin-guide.md)** — owners: cluster setup, firewall enforcement, and shipping a tenant-ready Linux template.
+
+All of these are also surfaced inside the app under **Help & Docs** in the sidebar.
+
+---
+
 ## 📁 Project Structure
 
 ```
 ProxMate/
 ├── frontend/           # Next.js dashboard + setup wizard
 ├── backend/            # Express API + Proxmox proxy + WebSocket relay
-├── docs/images/        # README assets
+├── docs/               # User + admin guides (Tailscale, Cloudflare, etc.)
 ├── docker-compose.yml  # Production orchestration
 ├── SECURITY.md         # Hardening guide
 └── project-architecture.md  # Full architecture spec

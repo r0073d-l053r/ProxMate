@@ -21,6 +21,7 @@ if (!process.env.ENCRYPTION_KEY) {
 import http from 'node:http';
 import { app } from './app.js';
 import { setupConsoleWebSocket } from './routes/console.routes.js';
+import { startScheduler } from './services/scheduler.service.js';
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 
@@ -30,4 +31,5 @@ setupConsoleWebSocket(server);
 server.listen(PORT, () => {
   console.log(`\n🚀 ProxMate API running on http://localhost:${PORT}`);
   console.log(`   Environment: ${process.env.NODE_ENV || 'development'}\n`);
+  startScheduler();
 });

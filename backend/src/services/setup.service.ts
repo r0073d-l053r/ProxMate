@@ -88,6 +88,7 @@ export async function getProxmoxResources(): Promise<{
   storages: Array<{ name: string; type: string }>;
   bridges: Array<{ name: string }>;
   isoStorages: Array<{ name: string; type: string }>;
+  backupStorages: Array<{ name: string; type: string }>;
 }> {
   const client = await getClient();
   const [storages, bridges] = await Promise.all([
@@ -103,6 +104,9 @@ export async function getProxmoxResources(): Promise<{
     bridges: bridges.map((b) => ({ name: b.iface })),
     isoStorages: storages
       .filter((s) => s.content?.includes('iso'))
+      .map((s) => ({ name: s.storage, type: s.type })),
+    backupStorages: storages
+      .filter((s) => s.content?.includes('backup'))
       .map((s) => ({ name: s.storage, type: s.type })),
   };
 }
