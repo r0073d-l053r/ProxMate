@@ -6,7 +6,57 @@ import { Select as SelectPrimitive } from "@base-ui/react/select"
 import { cn } from "@/lib/utils"
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
 
-const Select = SelectPrimitive.Root
+// Base UI's <Select.Value> only renders an item's friendly *label* (instead of
+// the raw value) when <Select.Root> is given an `items` map / `itemToStringLabel`,
+// or <Select.Value> is given a function child. Our call sites describe options the
+// idiomatic shadcn way — as <SelectItem> children — so without help the trigger
+// shows the raw value (e.g. "custom", "2", "auto").
+//
+// We can't read the labels off the rendered items: Base UI only mounts the popup
+// (and therefore the <SelectItem>s) while it's open, so when the trigger renders
+// closed there's nothing to read. Instead we derive a value→label map by walking
+// the static JSX children of <Select> — those exist regardless of open state — and
+// hand it to <SelectValue> via context so it can show the selected item's label.
+const SelectLabelsContext =
+  React.createContext<Map<unknown, React.ReactNode> | null>(null)
+
+// Recursively collect every <SelectItem>'s value→label from the element tree,
+// descending through fragments, groups, and `.map()`ed arrays.
+function collectItemLabels(
+  children: React.ReactNode,
+  map: Map<unknown, React.ReactNode>
+) {
+  React.Children.forEach(children, (child) => {
+    if (!React.isValidElement(child)) return
+    const props = child.props as {
+      value?: unknown
+      children?: React.ReactNode
+    }
+    if (child.type === SelectItem) {
+      if (props.value !== undefined) {
+        map.set(props.value, props.children)
+      }
+      return // items don't nest other items
+    }
+    if (props.children != null) {
+      collectItemLabels(props.children, map)
+    }
+  })
+}
+
+function Select(props: React.ComponentProps<typeof SelectPrimitive.Root>) {
+  const labels = React.useMemo(() => {
+    const map = new Map<unknown, React.ReactNode>()
+    collectItemLabels(props.children, map)
+    return map
+  }, [props.children])
+
+  return (
+    <SelectLabelsContext.Provider value={labels}>
+      <SelectPrimitive.Root {...props} />
+    </SelectLabelsContext.Provider>
+  )
+}
 
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   return (
@@ -18,13 +68,37 @@ function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   )
 }
 
-function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
+function SelectValue({
+  className,
+  children,
+  placeholder,
+  ...props
+}: SelectPrimitive.Value.Props) {
+  const labels = React.useContext(SelectLabelsContext)
+
   return (
     <SelectPrimitive.Value
       data-slot="select-value"
       className={cn("flex flex-1 text-left", className)}
       {...props}
-    />
+    >
+      {children != null
+        ? children
+        : (value: unknown) => {
+            // Base UI treats null / "" as "nothing selected".
+            if (value == null || value === "") {
+              return placeholder ?? null
+            }
+            if (Array.isArray(value)) {
+              return value.flatMap((v, i) => {
+                const node = labels?.has(v) ? labels.get(v) : String(v)
+                const label = <React.Fragment key={i}>{node}</React.Fragment>
+                return i === 0 ? [label] : [", ", label]
+              })
+            }
+            return labels?.has(value) ? labels.get(value) : String(value)
+          }}
+    </SelectPrimitive.Value>
   )
 }
 

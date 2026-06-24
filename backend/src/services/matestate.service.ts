@@ -36,7 +36,7 @@ export function listForVm(vmId: string): Promise<MateState[]> {
  * Errors during file deletion are logged but do not block the prune
  * (a stale DB row is worse UX than a missing remote file).
  */
-async function pruneOldMateStates(vmId: string, keep = MATESTATE_RETENTION): Promise<void> {
+export async function pruneOldMateStates(vmId: string, keep = MATESTATE_RETENTION): Promise<void> {
   const ready = await prisma.mateState.findMany({
     where: { vmId, status: 'ready' },
     orderBy: { createdAt: 'desc' },
