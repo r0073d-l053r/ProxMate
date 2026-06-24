@@ -126,12 +126,12 @@ sudo poweroff
 
 Once the VM is powered off:
 
-1. In Proxmox, **right-click the VM → Convert to Template**.
-2. In ProxMate, go to **Templates → Add Template** and select the VM you just converted. Give it a name (e.g. "Debian 12 — pre-baked") and a short description.
+1. In Proxmox, **right-click the VM → Convert to Template** (or use **Save as template** on the VM's detail page in ProxMate).
+2. In ProxMate, go to **Template Store → Add from cluster** and **Publish** the template you just converted. In the same row you can add **login notes** (e.g. the default username/password) — these are shown to tenants in the store and again in the create wizard, so they know how to sign in once the VM boots. You can edit the notes anytime with the pencil on the published card.
 
-It now appears in the **Template Store** for everyone. When a tenant deploys it, ProxMate full-clones it on the chosen node and resizes the disk to whatever the tenant picked.
+It now appears in the **Template Store** for everyone. When a tenant deploys it, ProxMate **linked-clones** it and autoscales (sets cores/RAM, grows the disk to the size the tenant picked, never below the template's base).
 
-> **Why full-clone, not linked-clone?** Linked clones depend on the template file being present on the same storage; a full clone is independent and survives template deletion. Worth the extra disk.
+> **Linked clones** are fast and space-efficient (no full disk copy), so deploys take seconds. Two trade-offs to know: a clone stays on the **template's node**, and the template can't be deleted while clones still reference it. Tenants don't choose a node for custom (ISO) VMs either — ProxMate auto-places those on the node with the most free capacity.
 
 ---
 
