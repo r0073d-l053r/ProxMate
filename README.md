@@ -54,6 +54,10 @@ ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cl
 ![ProxMate Template Store](docs/images/screenshot-templates.png)
 *Publish ready-made OS builds with login notes; deploy in seconds*
 
+### In-Browser Console
+![ProxMate noVNC Console](docs/images/screenshot-console.png)
+*A live, interactive noVNC session on your VM — copy/paste and Ctrl+Alt+Del, no SSH or open ports needed*
+
 ### Live Monitor
 ![ProxMate Admin Monitor](docs/images/screenshot-monitor.png)
 *Per-VM CPU / memory / network sparklines at 1 Hz, with power controls*
