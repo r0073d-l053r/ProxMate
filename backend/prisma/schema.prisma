@@ -124,6 +124,7 @@ model Template {
   proxmoxVmId   Int                           // the Proxmox template's VMID
   proxmoxNode   String                        // node the template lives on
   diskGb        Int       @default(0)         // base disk size = minimum deployable disk
+  notes         String?                       // admin notes shown to users (e.g. default login creds)
   published     Boolean   @default(true)
 
   createdAt     DateTime  @default(now())

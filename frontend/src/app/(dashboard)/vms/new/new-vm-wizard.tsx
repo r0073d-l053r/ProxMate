@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, Loader2, Package, Plus, Rocket, HardDrive } from "lucide-react";
+import { ArrowLeft, Loader2, Package, Plus, Rocket, HardDrive, KeyRound } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import type { MeResponse, ProxmoxNode, ProxmoxIso, Template, VirtualMachine } from "@/lib/types";
@@ -204,6 +204,15 @@ export default function NewVmWizard() {
                     </SelectContent>
                   </Select>
                 </FormField>
+
+                {template?.notes && (
+                  <div className="rounded-md bg-muted/60 p-3 text-xs">
+                    <div className="mb-1 flex items-center gap-1.5 font-medium text-foreground">
+                      <KeyRound className="size-3.5" /> Login &amp; notes for {template.name}
+                    </div>
+                    <p className="whitespace-pre-wrap break-words text-muted-foreground">{template.notes}</p>
+                  </div>
+                )}
 
                 <FormField label="Name" htmlFor="name" error={errors.name} hint="e.g. web-server-01">
                   <Input id="name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />

@@ -3,14 +3,25 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Package, Plus, Trash2, HardDrive, Loader2, Download, RefreshCw } from "lucide-react";
+import {
+  Package,
+  Plus,
+  Trash2,
+  HardDrive,
+  Loader2,
+  Download,
+  RefreshCw,
+  KeyRound,
+  Pencil,
+  Check,
+  X,
+} from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import type { Template, DiscoveredTemplate } from "@/lib/types";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export default function TemplatesPage() {
@@ -62,30 +73,106 @@ export default function TemplatesPage() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {templates.map((t) => (
-            <Card key={t.id} className="flex flex-col">
-              <CardHeader>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                    <Package className="size-5" />
-                  </div>
-                  {isAdmin && <UnregisterButton id={t.id} onDone={load} />}
-                </div>
-                <CardTitle>{t.name}</CardTitle>
-                <CardDescription>{t.description || t.os || "Linux template"}</CardDescription>
-              </CardHeader>
-              <CardContent className="mt-auto flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <HardDrive className="size-3.5" /> {t.diskGb} GB base
-                </span>
-                <Button size="sm" render={<Link href={`/vms/new?template=${t.id}`} />}>
-                  Deploy
-                </Button>
-              </CardContent>
-            </Card>
+            <TemplateCard key={t.id} t={t} isAdmin={isAdmin} onChange={load} />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+function TemplateCard({
+  t,
+  isAdmin,
+  onChange,
+}: {
+  t: Template;
+  isAdmin: boolean;
+  onChange: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [notes, setNotes] = useState(t.notes ?? "");
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setSaving(true);
+    try {
+      await api.patch(`/templates/${t.id}`, { notes });
+      toast.success("Notes saved.");
+      setEditing(false);
+      onChange();
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="flex flex-col">
+      <CardHeader>
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <Package className="size-5" />
+          </div>
+          {isAdmin && <UnregisterButton id={t.id} onDone={onChange} />}
+        </div>
+        <CardTitle>{t.name}</CardTitle>
+        <CardDescription>{t.description || t.os || "Linux template"}</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col gap-3">
+        {editing ? (
+          <div className="grid gap-2">
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Default login & setup notes shown to users — e.g. user: debian / pass: changeme"
+              className="h-24 w-full resize-none rounded-md border bg-background p-2 text-xs outline-none focus:ring-2 focus:ring-ring"
+            />
+            <div className="flex gap-2">
+              <Button size="sm" disabled={saving} onClick={save}>
+                {saving ? <Loader2 className="animate-spin" /> : <Check />} Save
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setEditing(false);
+                  setNotes(t.notes ?? "");
+                }}
+              >
+                <X /> Cancel
+              </Button>
+            </div>
+          </div>
+        ) : t.notes ? (
+          <div className="rounded-md bg-muted/60 p-2.5 text-xs">
+            <div className="mb-1 flex items-center gap-1.5 font-medium text-foreground">
+              <KeyRound className="size-3.5" /> Login & notes
+            </div>
+            <p className="whitespace-pre-wrap break-words text-muted-foreground">{t.notes}</p>
+          </div>
+        ) : isAdmin ? (
+          <p className="text-xs text-muted-foreground italic">No login notes yet — add them so users can sign in.</p>
+        ) : null}
+
+        <div className="mt-auto flex items-center justify-between">
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <HardDrive className="size-3.5" /> {t.diskGb} GB base
+          </span>
+          <div className="flex items-center gap-1">
+            {isAdmin && !editing && (
+              <Button size="icon-sm" variant="ghost" onClick={() => setEditing(true)} title="Edit notes">
+                <Pencil />
+              </Button>
+            )}
+            <Button size="sm" render={<Link href={`/vms/new?template=${t.id}`} />}>
+              Deploy
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -119,9 +206,8 @@ function AdminTemplateManager({ onChange }: { onChange: () => void }) {
   const [open, setOpen] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoveredTemplate[] | null>(null);
   const [loading, setLoading] = useState(false);
-  const [addingVmid, setAddingVmid] = useState<number | null>(null);
 
-  async function loadDiscover() {
+  const loadDiscover = useCallback(async () => {
     setLoading(true);
     try {
       const res = await api.get<DiscoveredTemplate[]>("/templates/discover");
@@ -131,26 +217,7 @@ function AdminTemplateManager({ onChange }: { onChange: () => void }) {
     } finally {
       setLoading(false);
     }
-  }
-
-  async function add(d: DiscoveredTemplate) {
-    setAddingVmid(d.vmid);
-    try {
-      await api.post("/templates", {
-        proxmoxVmId: d.vmid,
-        node: d.node,
-        name: d.name,
-        diskGb: d.diskGb,
-      });
-      toast.success(`"${d.name}" published to the store.`);
-      await loadDiscover();
-      onChange();
-    } catch (err) {
-      toast.error(apiError(err));
-    } finally {
-      setAddingVmid(null);
-    }
-  }
+  }, []);
 
   return (
     <Card className="mb-6">
@@ -159,8 +226,9 @@ function AdminTemplateManager({ onChange }: { onChange: () => void }) {
           <div>
             <CardTitle className="text-sm">Manage templates (admin)</CardTitle>
             <CardDescription>
-              Publish a Proxmox template to the store. Tip: build a minimal VM, install the guest
-              agent, then convert it to a template from its detail page.
+              Publish a Proxmox template to the store. Add login notes so users know how to sign in.
+              Tip: build a minimal VM, install the guest agent, then convert it to a template from its
+              detail page.
             </CardDescription>
           </div>
           <Button
@@ -192,24 +260,67 @@ function AdminTemplateManager({ onChange }: { onChange: () => void }) {
           ) : (
             <ul className="divide-y">
               {discovered.map((d) => (
-                <li key={d.vmid} className="flex items-center justify-between py-2">
-                  <div className="text-sm">
-                    <span className="font-medium">{d.name}</span>
-                    <span className="text-muted-foreground">
-                      {" "}
-                      · vmid {d.vmid} · {d.node} · {d.diskGb} GB
-                    </span>
-                  </div>
-                  <Button size="sm" disabled={addingVmid === d.vmid} onClick={() => add(d)}>
-                    {addingVmid === d.vmid ? <Loader2 className="animate-spin" /> : <Plus />}
-                    Publish
-                  </Button>
-                </li>
+                <DiscoveredRow
+                  key={d.vmid}
+                  d={d}
+                  onPublished={() => {
+                    loadDiscover();
+                    onChange();
+                  }}
+                />
               ))}
             </ul>
           )}
         </CardContent>
       )}
     </Card>
+  );
+}
+
+function DiscoveredRow({ d, onPublished }: { d: DiscoveredTemplate; onPublished: () => void }) {
+  const [notes, setNotes] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function publish() {
+    setBusy(true);
+    try {
+      await api.post("/templates", {
+        proxmoxVmId: d.vmid,
+        node: d.node,
+        name: d.name,
+        diskGb: d.diskGb,
+        notes: notes.trim() || undefined,
+      });
+      toast.success(`"${d.name}" published to the store.`);
+      onPublished();
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <li className="py-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-sm">
+          <span className="font-medium">{d.name}</span>
+          <span className="text-muted-foreground">
+            {" "}
+            · vmid {d.vmid} · {d.node} · {d.diskGb} GB
+          </span>
+        </div>
+        <Button size="sm" disabled={busy} onClick={publish}>
+          {busy ? <Loader2 className="animate-spin" /> : <Plus />}
+          Publish
+        </Button>
+      </div>
+      <textarea
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        placeholder="Optional login notes shown to users — e.g. user: debian / pass: changeme"
+        className="mt-2 h-16 w-full resize-none rounded-md border bg-background p-2 text-xs outline-none focus:ring-2 focus:ring-ring"
+      />
+    </li>
   );
 }

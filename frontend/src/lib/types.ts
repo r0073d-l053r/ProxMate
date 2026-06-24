@@ -163,6 +163,7 @@ export interface Template {
   proxmoxVmId: number;
   proxmoxNode: string;
   diskGb: number;
+  notes: string | null;
   published: boolean;
   createdAt: string;
 }

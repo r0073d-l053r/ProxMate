@@ -5,7 +5,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/admin.js';
 import { pveMessage } from '../services/proxmox.service.js';
 import { deployFromTemplate, QuotaError } from '../services/vm.service.js';
-import { listPublished, listAll, discover, register, unregister } from '../services/template.service.js';
+import { listPublished, listAll, discover, register, unregister, updateTemplate } from '../services/template.service.js';
 import type { AuthRequest } from '../types/index.js';
 
 const router = Router();
@@ -79,6 +79,7 @@ const RegisterSchema = z.object({
   description: z.string().max(500).optional(),
   os: z.string().max(100).optional(),
   diskGb: z.number().int().nonnegative().optional(),
+  notes: z.string().max(2000).optional(),
 });
 
 router.post('/', requireAdmin, async (req: Request, res: Response) => {
@@ -92,6 +93,25 @@ router.post('/', requireAdmin, async (req: Request, res: Response) => {
     res.status(201).json(template);
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+const UpdateSchema = z.object({
+  notes: z.string().max(2000).nullable().optional(),
+  description: z.string().max(500).nullable().optional(),
+});
+
+router.patch('/:id', requireAdmin, async (req: Request, res: Response) => {
+  const parsed = UpdateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  try {
+    const template = await updateTemplate(req.params['id'] as string, parsed.data);
+    res.json(template);
+  } catch {
+    res.status(404).json({ error: 'Template not found' });
   }
 });
 
