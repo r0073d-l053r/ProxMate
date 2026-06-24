@@ -211,7 +211,9 @@ export async function deployFromTemplate(
     }
 
     await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
-    await pve.startVm(node, vmid, client);
+    // Wait for the start task so "running" reflects reality (matches createVm).
+    const startUpid = await pve.startVm(node, vmid, client);
+    await pve.waitForTask(node, startUpid, client);
     return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
   } catch (err) {
     await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'error' } });
