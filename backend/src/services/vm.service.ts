@@ -23,7 +23,7 @@ export interface CreateVmInput {
 }
 
 /** Check the requested resources against the user's remaining quota. */
-async function assertWithinQuota(user: User, input: CreateVmInput): Promise<void> {
+export async function assertWithinQuota(user: User, input: CreateVmInput): Promise<void> {
   // Admins (cluster owners) are not quota-limited.
   if (user.role === 'admin') return;
 
@@ -62,15 +62,36 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
   }
   const isolate = isolationCfg !== 'false'; // tenant isolation is on by default
 
-  // Honor an explicit node (e.g. an admin pinning placement); otherwise
-  // auto-schedule onto the best-capacity node so tenants never pick a node.
-  const node =
-    input.node ??
-    (await pve.pickBestNode(
+  // Only nodes that physically hold the install ISO can build this VM. With
+  // node-local ISO storage (e.g. `local`), an ISO uploaded to one node isn't
+  // visible on the others — the #1 cause of a placement that looks fine but
+  // fails asynchronously in Proxmox. Constrain auto-scheduling to those nodes.
+  const isoNodes = await pve.getIsoNodes(isoStorage, input.os, client);
+  if (isoNodes.length === 0) {
+    throw new Error(
+      `Install ISO "${input.os}" isn't available on any node's "${isoStorage}" storage. ` +
+        `Upload it there (or use a shared ISO storage) and try again.`,
+    );
+  }
+
+  let node: string;
+  if (input.node) {
+    // An explicitly pinned node (admin/API) must still actually have the ISO.
+    if (!isoNodes.includes(input.node)) {
+      throw new Error(
+        `Node "${input.node}" doesn't have ISO "${input.os}" on "${isoStorage}" ` +
+          `(available on: ${isoNodes.join(', ')}).`,
+      );
+    }
+    node = input.node;
+  } else {
+    node = await pve.pickBestNode(
       { cpu: input.cpu, ramMb: input.ram, storageGb: input.storage },
       storage,
       client,
-    ));
+      isoNodes,
+    );
+  }
   const vmid = await pve.getNextVmId(client);
 
   const vm = await prisma.virtualMachine.create({
@@ -88,7 +109,9 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
   });
 
   try {
-    await pve.createVm(
+    // Wait for the create task so a real Proxmox failure (e.g. unusable storage)
+    // surfaces as an error here instead of a false "created" with a broken VM.
+    const createUpid = await pve.createVm(
       {
         node,
         vmid,
@@ -103,6 +126,7 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
       },
       client,
     );
+    await pve.waitForTask(node, createUpid, client);
 
     // Lock the VM's firewall down for tenant isolation before it ever boots.
     if (isolate) {
@@ -112,7 +136,9 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
 
     await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
 
-    await pve.startVm(node, vmid, client);
+    // Wait for the start task too, so "running" means it actually started.
+    const startUpid = await pve.startVm(node, vmid, client);
+    await pve.waitForTask(node, startUpid, client);
     return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
   } catch (err) {
     await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'error' } });

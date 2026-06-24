@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { ArrowLeft, Loader2, Package, Plus, Rocket, HardDrive, KeyRound, Server } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
-import type { MeResponse, ProxmoxNode, ProxmoxIso, Template, VirtualMachine } from "@/lib/types";
+import type { MeResponse, ProxmoxIso, Template, VirtualMachine } from "@/lib/types";
 import { formatRam } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,8 +25,6 @@ import {
 const RAM_OPTIONS = [1, 2, 4, 8, 16, 32];
 const CUSTOM = "custom";
 const CUSTOM_DISK_DEFAULT = 20;
-// Sentinel for "let the backend auto-schedule the node" (tenants never see a node picker).
-const AUTO_NODE = "auto";
 
 export default function NewVmWizard() {
   const router = useRouter();
@@ -34,7 +32,6 @@ export default function NewVmWizard() {
   const isAdmin = useAuthStore((s) => s.user?.role === "admin");
 
   const [quota, setQuota] = useState<MeResponse["user"]["quota"] | null>(null);
-  const [nodes, setNodes] = useState<ProxmoxNode[]>([]);
   const [isos, setIsos] = useState<ProxmoxIso[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -47,23 +44,19 @@ export default function NewVmWizard() {
   const [ramGb, setRamGb] = useState(2);
   const [storageGb, setStorageGb] = useState(CUSTOM_DISK_DEFAULT);
   const [os, setOs] = useState("");
-  const [node, setNode] = useState(AUTO_NODE);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     Promise.all([
       api.get<MeResponse>("/auth/me"),
-      api.get<ProxmoxNode[]>("/proxmox/nodes"),
       api.get<ProxmoxIso[]>("/proxmox/isos"),
       api.get<Template[]>("/templates"),
     ])
-      .then(([meRes, nodesRes, isosRes, tplRes]) => {
+      .then(([meRes, isosRes, tplRes]) => {
         setQuota(meRes.data.user.quota);
-        setNodes(nodesRes.data);
         setIsos(isosRes.data);
         setTemplates(tplRes.data);
-        // Node defaults to auto-scheduling; admins may pin one below.
 
         // Deep-link preselect: /vms/new?template=<id> (e.g. the store's Deploy button).
         const wanted = searchParams.get("template");
@@ -122,8 +115,8 @@ export default function NewVmWizard() {
           ram: ramGb * 1024,
           storage: storageGb,
           os,
-          // Omit node unless an admin pinned a specific one → backend auto-schedules.
-          node: node === AUTO_NODE ? undefined : node,
+          // No node is sent — the backend auto-schedules onto a node that has the
+          // chosen ISO and the disk pool, with the most free capacity.
         });
         toast.success(`VM "${name}" is being created.`);
         router.push(`/vms/${res.data.vm.id}`);
@@ -283,31 +276,11 @@ export default function NewVmWizard() {
                       </Select>
                     </FormField>
 
-                    {isAdmin ? (
-                      <FormField
-                        label="Node"
-                        hint="Auto places the VM on the node with the most free capacity."
-                      >
-                        <Select value={node} onValueChange={(v) => setNode(v as string)}>
-                          <SelectTrigger className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value={AUTO_NODE}>Auto (best capacity)</SelectItem>
-                            {nodes.map((n) => (
-                              <SelectItem key={n.node} value={n.node}>
-                                {n.node}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </FormField>
-                    ) : (
-                      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                        <Server className="size-3.5" />
-                        ProxMate automatically places your VM on the best-available node.
-                      </p>
-                    )}
+                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Server className="size-3.5" />
+                      ProxMate automatically places your VM on a node that has this ISO, with the most
+                      free capacity.
+                    </p>
                   </>
                 )}
 
