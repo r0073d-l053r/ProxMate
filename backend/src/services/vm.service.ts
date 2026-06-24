@@ -62,7 +62,15 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
   }
   const isolate = isolationCfg !== 'false'; // tenant isolation is on by default
 
-  const node = input.node ?? (await pve.getDefaultNode(client));
+  // Honor an explicit node (e.g. an admin pinning placement); otherwise
+  // auto-schedule onto the best-capacity node so tenants never pick a node.
+  const node =
+    input.node ??
+    (await pve.pickBestNode(
+      { cpu: input.cpu, ramMb: input.ram, storageGb: input.storage },
+      storage,
+      client,
+    ));
   const vmid = await pve.getNextVmId(client);
 
   const vm = await prisma.virtualMachine.create({
