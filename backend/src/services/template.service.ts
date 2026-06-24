@@ -33,6 +33,7 @@ export interface RegisterTemplateInput {
   description?: string;
   os?: string;
   diskGb?: number;
+  notes?: string;
 }
 
 /** Register a Proxmox template into the store (or update an existing registration). */
@@ -46,7 +47,17 @@ export async function register(input: RegisterTemplateInput): Promise<Template> 
 
   return prisma.template.upsert({
     where: { proxmoxVmId: input.proxmoxVmId },
-    update: { name: input.name, description: input.description ?? null, os: input.os ?? null, proxmoxNode: input.node, diskGb, published: true },
+    update: {
+      name: input.name,
+      description: input.description ?? null,
+      os: input.os ?? null,
+      proxmoxNode: input.node,
+      diskGb,
+      published: true,
+      // Only touch notes when the caller supplied them, so re-registering
+      // doesn't silently wipe an admin's saved credentials.
+      ...(input.notes !== undefined ? { notes: input.notes || null } : {}),
+    },
     create: {
       name: input.name,
       description: input.description ?? null,
@@ -54,6 +65,21 @@ export async function register(input: RegisterTemplateInput): Promise<Template> 
       proxmoxVmId: input.proxmoxVmId,
       proxmoxNode: input.node,
       diskGb,
+      notes: input.notes ?? null,
+    },
+  });
+}
+
+/** Admin: edit a template's notes (e.g. default login) and/or description. */
+export async function updateTemplate(
+  id: string,
+  data: { notes?: string | null; description?: string | null },
+): Promise<Template> {
+  return prisma.template.update({
+    where: { id },
+    data: {
+      ...(data.notes !== undefined ? { notes: data.notes || null } : {}),
+      ...(data.description !== undefined ? { description: data.description || null } : {}),
     },
   });
 }
