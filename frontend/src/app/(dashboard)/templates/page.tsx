@@ -77,7 +77,7 @@ export default function TemplatesPage() {
                 <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <HardDrive className="size-3.5" /> {t.diskGb} GB base
                 </span>
-                <Button size="sm" render={<Link href={`/templates/${t.id}`} />}>
+                <Button size="sm" render={<Link href={`/vms/new?template=${t.id}`} />}>
                   Deploy
                 </Button>
               </CardContent>
