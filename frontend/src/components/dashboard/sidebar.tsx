@@ -2,16 +2,19 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Server, LayoutDashboard, MonitorPlay, Ticket, Users, Settings } from "lucide-react";
+import { Server, LayoutDashboard, MonitorPlay, Package, Ticket, Users, Settings, BookOpen, Activity } from "lucide-react";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { href: "/vms", label: "Virtual Machines", icon: MonitorPlay, exact: false },
+  { href: "/templates", label: "Template Store", icon: Package, exact: false },
+  { href: "/help", label: "Help & Docs", icon: BookOpen, exact: false },
 ];
 
 const ADMIN_NAV = [
+  { href: "/admin/monitor", label: "Monitor", icon: Activity },
   { href: "/admin/invites", label: "Invites", icon: Ticket },
   { href: "/admin/users", label: "Users", icon: Users },
   { href: "/admin/settings", label: "Settings", icon: Settings },

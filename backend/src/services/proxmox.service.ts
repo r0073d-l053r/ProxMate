@@ -195,6 +195,226 @@ export async function createVm(config: CreateVmConfig, client?: AxiosInstance): 
   return res.data.data;
 }
 
+// ─── Templates & cloning ──────────────────────────────────────
+
+export interface PveTemplate {
+  vmid: number;
+  node: string;
+  name: string;
+  maxdisk?: number; // bytes
+}
+
+/** List all Proxmox VM templates (template=1) across the cluster. */
+export async function getTemplates(client?: AxiosInstance): Promise<PveTemplate[]> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Array<ClusterResource & { template?: number; vmid?: number; name?: string }> }>(
+    '/cluster/resources?type=vm',
+  );
+  return res.data.data
+    .filter((r) => r.type === 'qemu' && r.template === 1 && r.vmid && r.node)
+    .map((r) => ({ vmid: r.vmid!, node: r.node!, name: r.name ?? `vm-${r.vmid}`, maxdisk: r.maxdisk }));
+}
+
+/** Convert an existing (stopped) VM into a template. */
+export async function convertToTemplate(node: string, vmid: number, client?: AxiosInstance): Promise<void> {
+  const c = client ?? (await getClient());
+  await c.post(`/nodes/${node}/qemu/${vmid}/template`);
+}
+
+/** Clone a template into a new VM. Returns the Proxmox task UPID. */
+export async function cloneVm(
+  opts: { node: string; templateVmid: number; newVmid: number; name: string; full?: boolean; storage?: string },
+  client?: AxiosInstance,
+): Promise<string> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams({
+    newid: String(opts.newVmid),
+    name: opts.name,
+    full: opts.full ? '1' : '0',
+  });
+  if (opts.full && opts.storage) params.set('storage', opts.storage);
+  const res = await c.post<{ data: string }>(
+    `/nodes/${opts.node}/qemu/${opts.templateVmid}/clone`,
+    params,
+  );
+  return res.data.data;
+}
+
+/** Poll a Proxmox task (UPID) until it finishes; throws if it failed. */
+export async function waitForTask(
+  node: string,
+  upid: string,
+  client?: AxiosInstance,
+  timeoutMs = 180_000,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await c.get<{ data: { status: string; exitstatus?: string } }>(
+      `/nodes/${node}/tasks/${encodeURIComponent(upid)}/status`,
+    );
+    const { status, exitstatus } = res.data.data;
+    if (status === 'stopped') {
+      if (exitstatus && exitstatus !== 'OK') throw new Error(`Proxmox task failed: ${exitstatus}`);
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  throw new Error('Proxmox task timed out');
+}
+
+/** Update a VM's CPU cores and memory (MB). */
+export async function setVmResources(
+  node: string,
+  vmid: number,
+  cores: number,
+  memory: number,
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  await c.put(
+    `/nodes/${node}/qemu/${vmid}/config`,
+    new URLSearchParams({ cores: String(cores), memory: String(memory) }),
+  );
+}
+
+/** Grow a VM disk to an absolute size in GB (Proxmox only supports growing). */
+export async function resizeDisk(
+  node: string,
+  vmid: number,
+  disk: string,
+  sizeGb: number,
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  await c.put(
+    `/nodes/${node}/qemu/${vmid}/resize`,
+    new URLSearchParams({ disk, size: `${sizeGb}G` }),
+  );
+}
+
+/** Read a VM's config as a string map. */
+export async function getVmConfig(
+  node: string,
+  vmid: number,
+  client?: AxiosInstance,
+): Promise<Record<string, string>> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Record<string, unknown> }>(`/nodes/${node}/qemu/${vmid}/config`);
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(res.data.data)) out[k] = String(v);
+  return out;
+}
+
+/** Find the primary (bootable, non-cdrom) disk key in a VM config, e.g. "scsi0". */
+export function findPrimaryDisk(config: Record<string, string>): string | undefined {
+  return Object.keys(config)
+    .filter((k) => /^(scsi|virtio|sata|ide)\d+$/.test(k))
+    .find((k) => !config[k]!.includes('media=cdrom'));
+}
+
+// ─── Backups (vzdump / restore / list / delete) ──────────────
+
+/** Kick off a vzdump backup. Returns the Proxmox task UPID. */
+export async function startBackup(
+  opts: { node: string; vmid: number; storage: string; mode?: 'snapshot' | 'suspend' | 'stop'; notes?: string },
+  client?: AxiosInstance,
+): Promise<string> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams({
+    vmid: String(opts.vmid),
+    storage: opts.storage,
+    mode: opts.mode ?? 'snapshot',
+    compress: 'zstd',
+    remove: '0', // never let Proxmox's own retention prune — ProxMate manages it
+  });
+  if (opts.notes) params.set('notes-template', opts.notes);
+  const res = await c.post<{ data: string }>(`/nodes/${opts.node}/vzdump`, params);
+  return res.data.data;
+}
+
+export interface PveBackup {
+  volid: string;
+  storage: string;
+  node: string;
+  size: number;
+  ctime: number;
+  vmid?: number;
+}
+
+/** List all backup volumes on a storage. Searches every node where the storage exists. */
+export async function listBackups(
+  storage: string,
+  client?: AxiosInstance,
+): Promise<PveBackup[]> {
+  const c = client ?? (await getClient());
+  const nodes = await getNodes(c);
+  const seen = new Map<string, PveBackup>();
+  for (const { node } of nodes) {
+    try {
+      const res = await c.get<{ data: Array<{ volid: string; size: number; ctime: number; vmid?: number }> }>(
+        `/nodes/${node}/storage/${storage}/content?content=backup`,
+      );
+      for (const b of res.data.data) {
+        // Shared storage reports the same volid on every node — dedupe.
+        if (!seen.has(b.volid)) {
+          seen.set(b.volid, { volid: b.volid, storage, node, size: b.size, ctime: b.ctime, vmid: b.vmid });
+        }
+      }
+    } catch {
+      /* storage not on this node */
+    }
+  }
+  return [...seen.values()];
+}
+
+/** Delete a backup volume. */
+export async function deleteBackup(
+  node: string,
+  storage: string,
+  volid: string,
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  // The volid is "<storage>:backup/<filename>" — the path needs the encoded volid.
+  await c.delete(`/nodes/${node}/storage/${storage}/content/${encodeURIComponent(volid)}`);
+}
+
+/**
+ * Restore a backup into an EXISTING VMID (overwrites the VM in place). The VM must
+ * be stopped first. Returns the Proxmox task UPID.
+ */
+export async function restoreBackup(
+  opts: { node: string; vmid: number; volid: string; storage?: string },
+  client?: AxiosInstance,
+): Promise<string> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams({
+    vmid: String(opts.vmid),
+    archive: opts.volid,
+    force: '1', // overwrite the existing VM
+  });
+  if (opts.storage) params.set('storage', opts.storage);
+  const res = await c.post<{ data: string }>(`/nodes/${opts.node}/qemu`, params);
+  return res.data.data;
+}
+
+/** Ensure every NIC on a VM has the per-NIC firewall flag set (for cloned VMs). */
+export async function ensureNicFirewall(
+  node: string,
+  vmid: number,
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  const cfg = await getVmConfig(node, vmid, c);
+  for (const k of Object.keys(cfg).filter((key) => /^net\d+$/.test(key))) {
+    const val = cfg[k]!;
+    if (/\bfirewall=1\b/.test(val)) continue;
+    const updated = /\bfirewall=0\b/.test(val) ? val.replace(/\bfirewall=0\b/, 'firewall=1') : `${val},firewall=1`;
+    await c.put(`/nodes/${node}/qemu/${vmid}/config`, new URLSearchParams({ [k]: updated }));
+  }
+}
+
 // ─── Firewall / tenant isolation ──────────────────────────────
 
 /** Get the configured gateway IP for a bridge, if any. */

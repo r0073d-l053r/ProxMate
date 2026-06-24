@@ -20,14 +20,19 @@ import {
   Network,
   Hash,
   Lightbulb,
+  Package,
 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import type { VmDetail } from "@/lib/types";
 import { formatRam, formatBytes, formatUptime, formatDate } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
+import { MateStatesPanel } from "@/components/vm/matestates-panel";
+import { useAuthStore } from "@/lib/auth-store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { FormField } from "@/components/form-field";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   AlertDialog,
@@ -64,10 +69,12 @@ function DetailRow({
 export default function VmDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const isAdmin = useAuthStore((s) => s.user?.role === "admin");
 
   const [vm, setVm] = useState<VmDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const [tplName, setTplName] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -104,6 +111,22 @@ export default function VmDetailPage() {
     } catch (err) {
       toast.error(apiError(err));
       setPending("delete-failed");
+    }
+  }
+
+  async function onConvert() {
+    if (!tplName.trim()) {
+      toast.error("Give the template a name.");
+      return;
+    }
+    setPending("convert");
+    try {
+      await api.post(`/vms/${id}/convert-template`, { name: tplName.trim() });
+      toast.success("Converted to a template — find it in the Template Store.");
+      router.push("/templates");
+    } catch (err) {
+      toast.error(apiError(err));
+      setPending(null);
     }
   }
 
@@ -161,6 +184,43 @@ export default function VmDetailPage() {
           <Terminal />
           Console
         </Button>
+
+        {isAdmin && (
+          <AlertDialog>
+            <AlertDialogTrigger
+              render={
+                <Button variant="outline" disabled={busy}>
+                  <Package />
+                  Save as template
+                </Button>
+              }
+            />
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Convert to a template</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This stops {vm.name} and converts it into a reusable, shareable template on
+                  Proxmox. It will no longer appear as a VM. Best on a minimal, configured build.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <FormField label="Template name" htmlFor="tplName">
+                <Input
+                  id="tplName"
+                  value={tplName}
+                  onChange={(e) => setTplName(e.target.value)}
+                  placeholder="e.g. Debian 12 base"
+                />
+              </FormField>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={onConvert} disabled={pending === "convert"}>
+                  {pending === "convert" ? <Loader2 className="animate-spin" /> : <Package />}
+                  Convert
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        )}
 
         <div className="ml-auto">
           <AlertDialog>
@@ -241,6 +301,8 @@ export default function VmDetailPage() {
         </Card>
       </div>
 
+      <MateStatesPanel vmId={vm.id} vmName={vm.name} />
+
       <Card className="mt-4">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
@@ -263,6 +325,14 @@ export default function VmDetailPage() {
           <p>
             <span className="font-medium text-foreground">Reuse it</span> — once configured,
             convert the VM to a Template in Proxmox to clone new ones instantly.
+          </p>
+          <p>
+            <span className="font-medium text-foreground">Reach it from outside ProxMate</span> —
+            use{" "}
+            <Link href="/help" className="text-primary underline-offset-4 hover:underline">
+              Tailscale (private SSH) or Cloudflare Tunnel (public web)
+            </Link>
+            . Don&apos;t ask for port forwarding — it isn&apos;t allowed on this cluster.
           </p>
         </CardContent>
       </Card>

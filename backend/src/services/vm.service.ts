@@ -1,4 +1,4 @@
-import type { User, VirtualMachine } from '@prisma/client';
+import type { User, VirtualMachine, Template } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { getConfig } from './config.service.js';
 import * as pve from './proxmox.service.js';
@@ -104,6 +104,79 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
 
     await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
 
+    await pve.startVm(node, vmid, client);
+    return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
+  } catch (err) {
+    await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'error' } });
+    throw err;
+  }
+}
+
+export interface DeployTemplateInput {
+  name: string;
+  cpu: number;
+  ram: number; // MB
+  storage: number; // GB (clamped up to the template's base disk)
+}
+
+/**
+ * Deploy a new VM from a published template: quota check → linked-clone the
+ * template → autoscale (cores/memory + grow disk) → isolate → start.
+ */
+export async function deployFromTemplate(
+  user: User,
+  template: Template,
+  input: DeployTemplateInput,
+): Promise<VirtualMachine> {
+  // Can't deploy a disk smaller than the template's base image.
+  const diskGb = Math.max(input.storage, template.diskGb || input.storage);
+  await assertWithinQuota(user, { name: input.name, cpu: input.cpu, ram: input.ram, storage: diskGb, os: template.name });
+
+  const client = await pve.getClient();
+  const isolate = (await getConfig('isolation_enabled')) !== 'false';
+
+  const node = template.proxmoxNode; // linked clone stays on the template's node
+  const vmid = await pve.getNextVmId(client);
+
+  const vm = await prisma.virtualMachine.create({
+    data: {
+      userId: user.id,
+      proxmoxVmId: vmid,
+      proxmoxNode: node,
+      name: input.name,
+      description: `From template: ${template.name}`,
+      cpu: input.cpu,
+      ram: input.ram,
+      storage: diskGb,
+      os: template.os ?? template.name,
+      status: 'creating',
+    },
+  });
+
+  try {
+    const upid = await pve.cloneVm(
+      { node, templateVmid: template.proxmoxVmId, newVmid: vmid, name: input.name, full: false },
+      client,
+    );
+    await pve.waitForTask(node, upid, client);
+
+    // Autoscale: set cores/memory, then grow the primary disk if needed.
+    await pve.setVmResources(node, vmid, input.cpu, input.ram, client);
+    const cfg = await pve.getVmConfig(node, vmid, client);
+    const disk = pve.findPrimaryDisk(cfg);
+    if (disk && diskGb > (template.diskGb || 0)) {
+      await pve.resizeDisk(node, vmid, disk, diskGb, client);
+    }
+
+    // Tenant isolation (cloned NICs may lack the per-NIC firewall flag).
+    if (isolate) {
+      await pve.ensureNicFirewall(node, vmid, client);
+      const bridge = (await getConfig('default_bridge')) ?? undefined;
+      const gateway = bridge ? await pve.getBridgeGateway(bridge, node, client) : undefined;
+      await pve.configureVmIsolation(node, vmid, { gateway }, client);
+    }
+
+    await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
     await pve.startVm(node, vmid, client);
     return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
   } catch (err) {

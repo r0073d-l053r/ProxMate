@@ -138,6 +138,42 @@ export interface IsolationStatus {
   suggestedMgmtCidr: string | null;
 }
 
+export type MateStateStatus = "creating" | "ready" | "restoring" | "error";
+
+export interface MateState {
+  id: string;
+  vmId: string;
+  proxmoxVmId: number;
+  proxmoxNode: string;
+  storage: string;
+  volid: string;
+  size: number;
+  status: MateStateStatus;
+  kind: "scheduled" | "manual";
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Template {
+  id: string;
+  name: string;
+  description: string | null;
+  os: string | null;
+  proxmoxVmId: number;
+  proxmoxNode: string;
+  diskGb: number;
+  published: boolean;
+  createdAt: string;
+}
+
+export interface DiscoveredTemplate {
+  vmid: number;
+  node: string;
+  name: string;
+  diskGb: number;
+}
+
 export interface ClusterStats {
   nodes: number;
   cpu: { total: number; used: number };
@@ -145,3 +181,27 @@ export interface ClusterStats {
   storage: { total: number; used: number };
   vmCount: number;
 }
+
+export interface UserGroup {
+  id: string;
+  email: string;
+  displayName: string;
+  role: Role;
+  quota: { cpu: number; ram: number; storage: number };
+  vms: VirtualMachine[];
+}
+
+export interface LiveVmStats {
+  status: string;
+  cpu: number;       // 0..1, fraction of allocated cores
+  maxcpu: number;
+  mem: number;       // bytes
+  maxmem: number;
+  disk: number;
+  maxdisk: number;
+  uptime: number;    // seconds
+  netin: number;     // cumulative bytes
+  netout: number;
+}
+
+export type LiveStats = Record<number, LiveVmStats>;

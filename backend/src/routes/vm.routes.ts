@@ -4,6 +4,13 @@ import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { pveMessage } from '../services/proxmox.service.js';
 import { requestVncProxy } from '../services/vnc-proxy.service.js';
+import { convertVmToTemplate } from '../services/template.service.js';
+import {
+  listForVm,
+  createMateState,
+  restoreFromMateState,
+  deleteMateState,
+} from '../services/matestate.service.js';
 import {
   QuotaError,
   createVm,
@@ -137,6 +144,84 @@ router.post('/:id/restart', async (req: Request, res: Response) => {
   try {
     await restartVm(vm);
     res.json({ success: true, status: 'running' });
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── POST /api/vms/:id/convert-template ───────────────────────
+// Admin: turn a VM into a reusable, shareable template.
+
+const ConvertSchema = z.object({
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).optional(),
+  os: z.string().max(100).optional(),
+});
+
+router.post('/:id/convert-template', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  if (user.role !== 'admin') { res.status(403).json({ error: 'Admin only' }); return; }
+
+  const parsed = ConvertSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  const vm = await getOwnedVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+
+  try {
+    const template = await convertVmToTemplate(vm, parsed.data);
+    res.status(201).json(template);
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── MateStates (per-VM backups) ──────────────────────────────
+
+router.get('/:id/matestates', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getOwnedVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  res.json(await listForVm(vm.id));
+});
+
+router.post('/:id/matestates', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getOwnedVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  try {
+    const ms = await createMateState(vm, 'manual');
+    res.status(201).json(ms);
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+router.post('/:id/matestates/:msid/restore', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getOwnedVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  const ms = await prisma.mateState.findUnique({ where: { id: req.params['msid'] as string } });
+  if (!ms || ms.vmId !== vm.id) { res.status(404).json({ error: 'MateState not found' }); return; }
+  try {
+    await restoreFromMateState(vm, ms);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+router.delete('/:id/matestates/:msid', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getOwnedVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  const ms = await prisma.mateState.findUnique({ where: { id: req.params['msid'] as string } });
+  if (!ms || ms.vmId !== vm.id) { res.status(404).json({ error: 'MateState not found' }); return; }
+  try {
+    await deleteMateState(ms);
+    res.json({ success: true });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }

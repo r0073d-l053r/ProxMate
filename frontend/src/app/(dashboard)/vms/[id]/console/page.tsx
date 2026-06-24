@@ -20,10 +20,18 @@ type RfbInstance = {
 
 type ConnState = "connecting" | "connected" | "disconnected" | "error";
 
-const WS_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api").replace(
-  /^http/i,
-  "ws",
-);
+/**
+ * Resolve the WebSocket base from the API URL against the page's current origin,
+ * so the console works wherever ProxMate is accessed from — including behind a
+ * reverse proxy, Tailscale, or a Cloudflare Tunnel (not just localhost).
+ * A relative API URL (e.g. "/api") becomes same-origin wss automatically.
+ */
+function wsBase(): string {
+  const raw = process.env.NEXT_PUBLIC_API_URL ?? "/api";
+  const u = new URL(raw, window.location.origin);
+  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+  return u.toString().replace(/\/+$/, "");
+}
 
 export default function ConsolePage() {
   const { id } = useParams<{ id: string }>();
@@ -49,7 +57,7 @@ export default function ConsolePage() {
       const token = getToken() ?? "";
 
       const params = new URLSearchParams({ token, vncticket: ticket, port });
-      const wsUrl = `${WS_BASE}/vms/${id}/console?${params.toString()}`;
+      const wsUrl = `${wsBase()}/vms/${id}/console?${params.toString()}`;
 
       const { default: RFB } = await import("@novnc/novnc");
       if (!screenRef.current) return;

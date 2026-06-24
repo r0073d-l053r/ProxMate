@@ -81,9 +81,31 @@ model VirtualMachine {
   updatedAt     DateTime  @updatedAt
 
   user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  matestates    MateState[]
 
   @@index([userId])
   @@index([proxmoxVmId])
+}
+
+// A point-in-time backup of a VM (Proxmox vzdump). "MateState" — never "droplet".
+// Strict rolling retention: only the 2 most recent per VM are kept; older are pruned.
+model MateState {
+  id            String    @id @default(cuid())
+  vmId          String                              // FK to VirtualMachine.id
+  proxmoxVmId   Int                                 // the VMID the backup was taken of
+  proxmoxNode   String                              // where the backup currently lives
+  storage       String                              // Proxmox storage holding the backup
+  volid         String    @unique                   // e.g. local:backup/vzdump-qemu-100-…
+  size          Int       @default(0)               // bytes
+  status        String    @default("creating")      // creating | ready | restoring | error
+  kind          String    @default("scheduled")     // scheduled | manual
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  vm            VirtualMachine @relation(fields: [vmId], references: [id], onDelete: Cascade)
+
+  @@index([vmId])
 }
 
 model SystemConfig {
@@ -91,4 +113,21 @@ model SystemConfig {
   value       String
   sensitive   Boolean   @default(false)
   updatedAt   DateTime  @updatedAt
+}
+
+// A published, cloneable OS build (maps to a Proxmox template VM).
+model Template {
+  id            String    @id @default(cuid())
+  name          String
+  description   String?
+  os            String?                       // display label, e.g. "Debian 12"
+  proxmoxVmId   Int                           // the Proxmox template's VMID
+  proxmoxNode   String                        // node the template lives on
+  diskGb        Int       @default(0)         // base disk size = minimum deployable disk
+  published     Boolean   @default(true)
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([proxmoxVmId])
 }
