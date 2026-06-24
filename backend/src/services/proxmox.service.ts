@@ -107,12 +107,13 @@ export async function pickBestNode(
   want: { cpu: number; ramMb: number; storageGb: number },
   storagePool?: string,
   client?: AxiosInstance,
+  candidateNodes?: string[],
 ): Promise<string> {
   const c = client ?? (await getClient());
   const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources');
   const items = res.data.data;
 
-  const nodes = items.filter((i) => i.type === 'node' && i.status === 'online' && i.node);
+  let nodes = items.filter((i) => i.type === 'node' && i.status === 'online' && i.node);
   if (nodes.length === 0) throw new Error('No online Proxmox nodes available');
 
   const wantMem = want.ramMb * 1024 * 1024;
@@ -125,6 +126,17 @@ export async function pickBestNode(
       if (s.status && s.status !== 'available') continue;
       poolByNode.set(s.node!, { free: Math.max(0, (s.maxdisk ?? 0) - (s.disk ?? 0)), total: s.maxdisk ?? 0 });
     }
+  }
+
+  // Only place where the VM can actually be built: the node must be in the
+  // caller's candidate set (e.g. nodes that physically hold the install ISO) AND,
+  // when a node-local disk pool is requested, must actually have that pool. (If
+  // the pool isn't reported on any node we don't filter on it — better to try
+  // than to block creation outright.)
+  if (candidateNodes) nodes = nodes.filter((n) => candidateNodes.includes(n.node!));
+  if (storagePool && poolByNode.size > 0) nodes = nodes.filter((n) => poolByNode.has(n.node!));
+  if (nodes.length === 0) {
+    throw new Error('No eligible node has both the install ISO and the configured disk pool');
   }
 
   const scored: NodePlacement[] = nodes.map((n) => {
@@ -222,6 +234,40 @@ export async function getIsos(storage?: string, client?: AxiosInstance): Promise
   }
 
   return [...seen.values()];
+}
+
+/**
+ * Which online nodes can actually serve a given ISO volume. Node-local ISO
+ * storage (e.g. `local`) only holds the file on the node it was uploaded to, so
+ * a VM referencing `<storage>:iso/<name>` can only be built where that file
+ * physically exists; shared ISO storage returns every node. Used to constrain
+ * auto-placement so a VM is never scheduled onto a node missing its install
+ * media (which Proxmox rejects asynchronously).
+ */
+export async function getIsoNodes(
+  isoStorage: string,
+  iso: string,
+  client?: AxiosInstance,
+): Promise<string[]> {
+  const c = client ?? (await getClient());
+  const volid = `${isoStorage}:iso/${iso}`;
+  const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources');
+  const nodeNames = res.data.data
+    .filter((i) => i.type === 'node' && i.status === 'online' && i.node)
+    .map((i) => i.node!);
+
+  const result: string[] = [];
+  for (const node of nodeNames) {
+    try {
+      const content = await c.get<{ data: Array<{ volid: string }> }>(
+        `/nodes/${node}/storage/${isoStorage}/content?content=iso`,
+      );
+      if (content.data.data?.some((i) => i.volid === volid)) result.push(node);
+    } catch {
+      // ISO storage not present/readable on this node → not a candidate.
+    }
+  }
+  return result;
 }
 
 // ─── VM lifecycle ─────────────────────────────────────────────
