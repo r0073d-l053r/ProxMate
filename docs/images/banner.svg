@@ -1,0 +1,68 @@
+<svg width="1280" height="400" viewBox="0 0 1280 400" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>ProxMate</title>
+<desc>ProxMate — your Proxmox cluster, shared like the cloud. Invite-only, per-tenant isolation, backups.</desc>
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0f1422"/><stop offset="0.55" stop-color="#151d2c"/><stop offset="1" stop-color="#0b0f17"/></linearGradient>
+<linearGradient id="accent" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5b8cff"/><stop offset="1" stop-color="#2dd4bf"/></linearGradient>
+<linearGradient id="sparkfill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2dd4bf" stop-opacity="0.34"/><stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/></linearGradient>
+<radialGradient id="glow" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#3b7dff" stop-opacity="0.30"/><stop offset="1" stop-color="#3b7dff" stop-opacity="0"/></radialGradient>
+<radialGradient id="glow2" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#2dd4bf" stop-opacity="0.18"/><stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/></radialGradient>
+<pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1" fill="#6f8dff" fill-opacity="0.05"/></pattern>
+</defs>
+<rect x="0" y="0" width="1280" height="400" fill="url(#bg)"/>
+<rect x="0" y="0" width="1280" height="400" fill="url(#dots)"/>
+<ellipse cx="1120" cy="40" rx="520" ry="360" fill="url(#glow)"/>
+<ellipse cx="1230" cy="360" rx="360" ry="260" fill="url(#glow2)"/>
+<rect x="0" y="397" width="1280" height="3" fill="url(#accent)"/>
+
+<rect x="80" y="132" width="100" height="100" rx="24" fill="url(#accent)"/>
+<rect x="104" y="151" width="52" height="12" rx="5" fill="#0c1018" fill-opacity="0.18"/>
+<rect x="104" y="176" width="52" height="12" rx="5" fill="#0c1018" fill-opacity="0.18"/>
+<rect x="104" y="201" width="52" height="12" rx="5" fill="#0c1018" fill-opacity="0.18"/>
+<circle cx="113" cy="157" r="3" fill="#0c1018" fill-opacity="0.45"/>
+<circle cx="113" cy="182" r="3" fill="#0c1018" fill-opacity="0.45"/>
+<circle cx="113" cy="207" r="3" fill="#0c1018" fill-opacity="0.45"/>
+
+<text x="204" y="197" font-family="'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif" font-size="76" font-weight="700" letter-spacing="-1.5"><tspan fill="#eef2f7">Prox</tspan><tspan fill="url(#accent)">Mate</tspan></text>
+<text x="207" y="238" font-family="'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif" font-size="23" font-weight="400" fill="#9aa4b5">Your Proxmox cluster, shared like the cloud.</text>
+
+<g font-family="'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif" font-size="15" font-weight="500">
+<rect x="206" y="266" width="142" height="34" rx="17" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.12"/>
+<circle cx="226" cy="283" r="4" fill="#5b8cff"/><text x="240" y="288" fill="#cbd2dc">Invite-only</text>
+<rect x="360" y="266" width="218" height="34" rx="17" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.12"/>
+<circle cx="380" cy="283" r="4" fill="#2dd4bf"/><text x="394" y="288" fill="#cbd2dc">Per-tenant isolation</text>
+<rect x="590" y="266" width="120" height="34" rx="17" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.12"/>
+<circle cx="610" cy="283" r="4" fill="#f5b65c"/><text x="624" y="288" fill="#cbd2dc">Backups</text>
+</g>
+
+<rect x="752" y="64" width="456" height="272" rx="20" fill="#ffffff" fill-opacity="0.03" stroke="#ffffff" stroke-opacity="0.07"/>
+
+<polygon points="776,138 818,116 860,128 902,102 944,122 986,100 1028,126 1070,108 1112,130 1154,106 1184,120 1184,172 776,172" fill="url(#sparkfill)"/>
+<polyline points="776,138 818,116 860,128 902,102 944,122 986,100 1028,126 1070,108 1112,130 1154,106 1184,120" fill="none" stroke="url(#accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="986" cy="100" r="3.5" fill="#2dd4bf"/><circle cx="1154" cy="106" r="3.5" fill="#5b8cff"/>
+
+<line x1="836" y1="250" x2="836" y2="302" stroke="#ffffff" stroke-opacity="0.10" stroke-width="0.75"/>
+<line x1="980" y1="238" x2="980" y2="302" stroke="#ffffff" stroke-opacity="0.10" stroke-width="0.75"/>
+<line x1="1124" y1="254" x2="1124" y2="302" stroke="#ffffff" stroke-opacity="0.10" stroke-width="0.75"/>
+
+<line x1="1052" y1="172" x2="1052" y2="300" stroke="#2dd4bf" stroke-opacity="0.45" stroke-width="1.5" stroke-dasharray="5 6"/>
+<circle cx="1052" cy="270" r="12" fill="#0f1a24" stroke="#2dd4bf" stroke-opacity="0.7" stroke-width="1.25"/>
+<path d="M1047 268 a5 5 0 0 1 10 0" fill="none" stroke="#2dd4bf" stroke-width="1.5"/>
+<rect x="1045" y="268" width="14" height="9" rx="2" fill="#2dd4bf"/>
+
+<rect x="772" y="192" width="128" height="58" rx="11" fill="#1b2434" stroke="#ffffff" stroke-opacity="0.10"/>
+<circle cx="788" cy="210" r="4" fill="#34d399"/><rect x="802" y="205" width="62" height="7" rx="3.5" fill="#ffffff" fill-opacity="0.22"/><rect x="788" y="225" width="88" height="6" rx="3" fill="#ffffff" fill-opacity="0.10"/>
+<rect x="916" y="180" width="128" height="58" rx="11" fill="#1b2434" stroke="#ffffff" stroke-opacity="0.10"/>
+<circle cx="932" cy="198" r="4" fill="#f5b65c"/><rect x="946" y="193" width="62" height="7" rx="3.5" fill="#ffffff" fill-opacity="0.22"/><rect x="932" y="213" width="88" height="6" rx="3" fill="#ffffff" fill-opacity="0.10"/>
+<rect x="1060" y="196" width="128" height="58" rx="11" fill="#1b2434" stroke="#ffffff" stroke-opacity="0.10"/>
+<circle cx="1076" cy="214" r="4" fill="#34d399"/><rect x="1090" y="209" width="62" height="7" rx="3.5" fill="#ffffff" fill-opacity="0.22"/><rect x="1076" y="229" width="88" height="6" rx="3" fill="#ffffff" fill-opacity="0.10"/>
+
+<g font-family="'Cascadia Code','Consolas',ui-monospace,monospace" font-size="13">
+<rect x="772" y="302" width="128" height="28" rx="8" fill="#121a27" stroke="#ffffff" stroke-opacity="0.10"/>
+<circle cx="788" cy="316" r="3.5" fill="#34d399"/><text x="800" y="321" fill="#9aa4b5">pve-0</text>
+<rect x="916" y="302" width="128" height="28" rx="8" fill="#121a27" stroke="#ffffff" stroke-opacity="0.10"/>
+<circle cx="932" cy="316" r="3.5" fill="#34d399"/><text x="944" y="321" fill="#9aa4b5">pve-1</text>
+<rect x="1060" y="302" width="128" height="28" rx="8" fill="#121a27" stroke="#ffffff" stroke-opacity="0.10"/>
+<circle cx="1076" cy="316" r="3.5" fill="#34d399"/><text x="1088" y="321" fill="#9aa4b5">pve-2</text>
+</g>
+</svg>
