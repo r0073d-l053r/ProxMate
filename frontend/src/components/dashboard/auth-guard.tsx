@@ -55,7 +55,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     };
   }, [hydrated, token, router, setUser]);
 
-  if (!hydrated || !validated) {
+  // `!token` also gates here so that the instant sign-out clears the token, the
+  // dashboard subtree stops rendering (no null-user flash) while we redirect.
+  if (!hydrated || !validated || !token) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
         <Loader2 className="mr-2 size-4 animate-spin" /> Loading ProxMate…
