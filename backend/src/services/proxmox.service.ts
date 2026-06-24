@@ -86,6 +86,78 @@ export async function getDefaultNode(client?: AxiosInstance): Promise<string> {
   return node;
 }
 
+export interface NodePlacement {
+  node: string;
+  score: number;
+  freeCpu: number; // cores
+  freeMemBytes: number;
+  freeDiskBytes: number | null; // for the chosen pool on that node; null if unknown
+  fits: boolean;
+}
+
+/**
+ * Auto-schedule: pick the online node with the best available capacity for a
+ * requested VM. Ranks by free RAM (weighted highest), free CPU, and — when the
+ * target disk pool is node-local — free pool space. Nodes that can actually fit
+ * the request get a large bonus so we prefer them, but we never hard-fail (so a
+ * node is always returned even under memory overcommit). Used when the caller
+ * doesn't pin a node (e.g. tenants, whose node dropdown is hidden).
+ */
+export async function pickBestNode(
+  want: { cpu: number; ramMb: number; storageGb: number },
+  storagePool?: string,
+  client?: AxiosInstance,
+): Promise<string> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources');
+  const items = res.data.data;
+
+  const nodes = items.filter((i) => i.type === 'node' && i.status === 'online' && i.node);
+  if (nodes.length === 0) throw new Error('No online Proxmox nodes available');
+
+  const wantMem = want.ramMb * 1024 * 1024;
+  const wantDisk = want.storageGb * 1024 * 1024 * 1024;
+
+  // Per-node free space for the chosen pool (node-local pools like local-lvm).
+  const poolByNode = new Map<string, { free: number; total: number }>();
+  if (storagePool) {
+    for (const s of items.filter((i) => i.type === 'storage' && i.storage === storagePool && i.node)) {
+      if (s.status && s.status !== 'available') continue;
+      poolByNode.set(s.node!, { free: Math.max(0, (s.maxdisk ?? 0) - (s.disk ?? 0)), total: s.maxdisk ?? 0 });
+    }
+  }
+
+  const scored: NodePlacement[] = nodes.map((n) => {
+    const maxcpu = n.maxcpu ?? 0;
+    const freeCpu = Math.max(0, maxcpu - (n.cpu ?? 0) * maxcpu);
+    const freeMem = Math.max(0, (n.maxmem ?? 0) - (n.mem ?? 0));
+    const pool = n.node ? poolByNode.get(n.node) : undefined;
+    const hasDisk = !!pool && pool.total > 0;
+    const freeDisk = pool ? pool.free : null;
+
+    const memFrac = n.maxmem ? freeMem / n.maxmem : 0;
+    const cpuFrac = maxcpu ? freeCpu / maxcpu : 0;
+    const diskFrac = hasDisk ? pool!.free / pool!.total : 0;
+
+    let score = hasDisk
+      ? memFrac * 0.5 + cpuFrac * 0.35 + diskFrac * 0.15
+      : memFrac * 0.6 + cpuFrac * 0.4;
+
+    const fits = freeMem >= wantMem && freeCpu >= want.cpu && (freeDisk === null || freeDisk >= wantDisk);
+    if (fits) score += 1; // strongly prefer nodes that can actually hold the VM
+
+    return { node: n.node!, score, freeCpu, freeMemBytes: freeMem, freeDiskBytes: freeDisk, fits };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  const best = scored[0]!;
+  console.log(
+    `[scheduler] placed VM (cpu=${want.cpu}, ram=${want.ramMb}MB, disk=${want.storageGb}GB) on ${best.node} ` +
+      `(fits=${best.fits}, freeCpu=${best.freeCpu.toFixed(1)}, freeMem=${Math.round(best.freeMemBytes / 1024 / 1024)}MB)`,
+  );
+  return best.node;
+}
+
 // ─── Storage / network / ISO listing ──────────────────────────
 
 export interface PveStorage {
