@@ -36,6 +36,7 @@ npm-debug.log*
 .claude/
 frontend/AGENTS.md
 frontend/CLAUDE.md
+completed-tasks.md
 
 # TypeScript incremental build cache
 *.tsbuildinfo
