@@ -1,0 +1,21 @@
+labels: ["community"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Welcome to the ProxMate community. We are glad to have you here.
+
+        Use this space to introduce yourself, connect with other members, and discuss anything related to ProxMate, self-hosting, and virtualization.
+
+        To help us get to know you, consider sharing:
+        - How you are using ProxMate (e.g., home lab, team environment, development)
+        - Your current Proxmox VE setup
+        - What features you are most excited about
+  - type: textarea
+    id: introduction
+    attributes:
+      label: Introduction or Topic Details
+      description: Share your thoughts, introduction, or general topic here.
+      placeholder: Tell us about your setup or start a conversation...
+    validations:
+      required: true

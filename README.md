@@ -230,12 +230,24 @@ See [project-architecture.md](./project-architecture.md) for the complete specif
 
 ---
 
-## 📄 License
+## Community and Discussions
+
+If you need help configuring ProxMate, want to suggest new features, or would like to share your virtual environment setup, we welcome you to join our discussions:
+- [General Discussions](https://github.com/r0073d-l053r/ProxMate/discussions/categories/general): Introduce yourself, meet other self-hosters, and talk about virtualization.
+- [Questions and Answers](https://github.com/r0073d-l053r/ProxMate/discussions/categories/q-a): Troubleshoot setup issues and get help from the community.
+- [Ideas and Feature Proposals](https://github.com/r0073d-l053r/ProxMate/discussions/categories/ideas): Suggest new dashboard capabilities and optimizations.
+- [Show and Tell](https://github.com/r0073d-l053r/ProxMate/discussions/categories/show-and-tell): Share your homelab architectures and custom ProxMate dashboards.
+
+We are committed to building a welcoming and collaborative space. Please check our [Contributing Guide](CONTRIBUTING.md) to learn how to get involved.
+
+---
+
+## License
 
 GNU Affero General Public License v3.0 (AGPLv3) — see the [LICENSE](./LICENSE) file for details.
 
 ---
 
 <div align="center">
-  <sub>Built with ☁️ by the ProxMate team.</sub>
+  <sub>Built by the ProxMate team.</sub>
 </div>
