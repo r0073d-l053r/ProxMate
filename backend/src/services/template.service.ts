@@ -85,16 +85,17 @@ export async function register(input: RegisterTemplateInput): Promise<Template> 
   });
 }
 
-/** Admin: edit a template's notes (e.g. default login) and/or description. */
+/** Admin: edit a template's notes, description, and/or custom icon. */
 export async function updateTemplate(
   id: string,
-  data: { notes?: string | null; description?: string | null },
+  data: { notes?: string | null; description?: string | null; icon?: string | null },
 ): Promise<Template> {
   return prisma.template.update({
     where: { id },
     data: {
       ...(data.notes !== undefined ? { notes: data.notes || null } : {}),
       ...(data.description !== undefined ? { description: data.description || null } : {}),
+      ...(data.icon !== undefined ? { icon: data.icon || null } : {}),
     },
   });
 }

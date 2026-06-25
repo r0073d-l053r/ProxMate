@@ -128,6 +128,8 @@ apply to containers if added; LXC additionally benefits from running **unprivile
 | Transport | Run ProxMate behind HTTPS in production (reverse proxy). Set `verifySsl=true` once Proxmox has a valid cert. |
 | CORS | Restricted to `FRONTEND_URL`. |
 | Console tickets | One-time, short-lived Proxmox VNC tickets; the console WebSocket verifies JWT + VM ownership before relaying. |
+| Rate limiting | Built-in `express-rate-limit` on `/auth/login`, `/auth/register`, `/auth/invite/:token` (env-tunable). Honors `trust proxy`. |
+| Audit log | VM lifecycle (create/delete/start/stop/restart/restore) and auth events are recorded with actor + client IP; admin-viewable at `/admin/audit`. |
 
 ### Recommended: scope the Proxmox API token
 
@@ -148,5 +150,5 @@ firewall) on the relevant nodes/pool, and use that token instead. ProxMate needs
 - [ ] Enable the **Proxmox cluster firewall** (§3b) — required for tenant isolation.
 - [ ] Prefer a **dedicated tenant VLAN/SDN** (§ Gold-standard).
 - [ ] Use a **least-privilege** Proxmox token, not `root@pam`.
-- [ ] Put the API behind a rate limiter at the proxy (login/register/invite endpoints).
+- [x] **Rate limiting** on login/register/invite is **built in** (`express-rate-limit`). Behind a reverse proxy, set `TRUST_PROXY` to the trusted hop count so it keys on the real client IP.
 - [ ] Keep Proxmox VE patched (guest→host isolation ultimately depends on the hypervisor).

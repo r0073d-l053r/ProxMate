@@ -144,6 +144,7 @@ model Template {
   diskGb        Int       @default(0)         // base disk size = minimum deployable disk
   notes         String?                       // admin notes shown to users (e.g. default login creds)
   cloudInit     Boolean   @default(false)      // true = cloud image; deploy injects SSH key/user (no ISO installer)
+  icon          String?                       // custom icon data-URI (admin upload); null = auto OS icon
   published     Boolean   @default(true)
 
   createdAt     DateTime  @default(now())
