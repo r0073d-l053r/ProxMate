@@ -183,6 +183,13 @@ router.post('/', requireAdmin, async (req: Request, res: Response) => {
 const UpdateSchema = z.object({
   notes: z.string().max(2000).nullable().optional(),
   description: z.string().max(500).nullable().optional(),
+  // Custom icon as a small image data-URI (admin upload). Cap ~300 KB encoded.
+  icon: z
+    .string()
+    .max(400_000)
+    .regex(/^data:image\/(png|jpeg|webp|svg\+xml);base64,/, 'Must be an image data URI')
+    .nullable()
+    .optional(),
 });
 
 router.patch('/:id', requireAdmin, async (req: Request, res: Response) => {

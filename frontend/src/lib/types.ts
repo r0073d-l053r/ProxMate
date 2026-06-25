@@ -165,6 +165,7 @@ export interface Template {
   diskGb: number;
   notes: string | null;
   cloudInit: boolean;
+  icon: string | null;
   published: boolean;
   createdAt: string;
 }

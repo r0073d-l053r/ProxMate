@@ -10,11 +10,12 @@
   <img src="https://img.shields.io/badge/Next.js-16-black" alt="Next.js 16"/>
   <img src="https://img.shields.io/badge/Proxmox%20VE-9%2B-e57000" alt="Proxmox VE 9+"/>
   <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker" alt="Docker ready"/>
+  <a href="https://github.com/r0073d-l053r/ProxMate/actions/workflows/ci.yml"><img src="https://github.com/r0073d-l053r/ProxMate/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
 </p>
 
 **A lightweight, invite-only cloud dashboard built on Proxmox VE.**
 
-ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cluster. Generate invite links with resource quotas, let users spin up VMs, and access them via an in-browser noVNC console — all without exposing your Proxmox admin panel.
+ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cluster. Generate invite links with resource quotas, let users spin up VMs from an ISO **or a one-click cloud image** (paste an SSH key → a ready-to-SSH box in ~60s), and access them via an in-browser noVNC console — all without exposing your Proxmox admin panel.
 
 </div>
 
@@ -26,15 +27,18 @@ ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cl
 |---|---|
 | 🔒 **Invite-Only Registration** | Admin-generated invite links with CPU/RAM/Storage quotas baked in |
 | 🖥️ **VM Lifecycle Management** | Create, start, stop, restart, and delete VMs from a sleek dashboard |
-| 📦 **Template Store** | Publish Proxmox templates as one-click OS builds — cloned and autoscaled on deploy, with admin-authored login notes |
-| ⚖️ **Automatic VM Placement** | Tenants never pick a node — the scheduler auto-places each VM on the node with the most free capacity |
+| ☁️ **Cloud-Init Deploys** | One-click cloud images (16 curated distros + custom URLs), imported entirely through the Proxmox API — paste an SSH key for a ready-to-SSH box in ~60s, with optional first-boot **Docker** / **Tailscale** installs |
+| 📦 **Template Store** | Publish Proxmox templates as one-click OS builds — cloned and autoscaled on deploy, with OS-matched (or custom-uploaded) icons and admin-authored login notes |
+| ⚖️ **Automatic VM Placement** | Tenants never pick a node — the scheduler auto-places each VM on a node that has the chosen image, with the most free capacity |
 | 🌐 **In-Browser Console** | noVNC remote access in the browser, proxied securely through the backend — with copy-paste into the VM |
 | 💾 **MateStates Backups** | Scheduled weekly snapshots + one-click in-place restore, with rolling retention |
 | 📈 **Live Admin Monitor** | Per-VM CPU / memory / network sparklines at 1 Hz, with power controls, grouped by owner |
+| 🛡️ **Tenant Network Isolation** | Per-VM Proxmox firewall with MAC/IP filtering and RFC1918 drop rules |
+| 📝 **Audit Log** | Who created / deleted / restored / started which VM, plus sign-ins — an admin-viewable activity trail |
+| 🚦 **Rate Limiting** | Built-in brute-force protection on the login / register / invite endpoints |
 | 📊 **Resource Quotas** | Users can only provision resources within their assigned limits |
 | 🧙 **First-Time Setup Wizard** | Guided OOBE to configure admin credentials and the Proxmox connection |
-| 🛡️ **Tenant Network Isolation** | Per-VM Proxmox firewall with MAC/IP filtering and RFC1918 drop rules |
-| 🐳 **Docker Ready** | Multi-stage production builds for both frontend and backend |
+| 🐳 **Docker + CI** | Multi-stage production images, plus GitHub Actions CI (typecheck, tests, image builds) and an automated test suite |
 
 ---
 
@@ -48,11 +52,11 @@ ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cl
 
 ### Create a VM
 ![ProxMate New VM Wizard](docs/images/screenshot-newvm.png)
-*One wizard for both custom (ISO) and template-based VMs — tenants are auto-placed on the best node*
+*One wizard for custom (ISO), template, and cloud-init deploys — paste an SSH key and tenants are auto-placed on the best node*
 
 ### Template Store
 ![ProxMate Template Store](docs/images/screenshot-templates.png)
-*Publish ready-made OS builds with login notes; deploy in seconds*
+*Add cloud images in one click and publish ready-made OS builds — OS-matched icons, login notes, deploy in seconds*
 
 ### In-Browser Console
 ![ProxMate noVNC Console](docs/images/screenshot-console.png)
@@ -74,12 +78,13 @@ ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cl
 
 | Layer | Technology |
 |---|---|
-| **Frontend** | Next.js 16 (App Router), TailwindCSS v4, Shadcn/UI (Base UI) |
-| **Backend** | Node.js, Express 5, `ws` (WebSocket relay) |
-| **Database** | SQLite via Prisma ORM |
+| **Frontend** | Next.js 16 (App Router), TailwindCSS v4, Shadcn/UI (Base UI), react-icons |
+| **Backend** | Node.js, Express 5, `ws` (WebSocket relay), `express-rate-limit`, `node-cron` |
+| **Database** | SQLite via Prisma ORM (migrations) |
 | **Auth** | JWT + bcrypt, invite-token system |
 | **Proxmox** | REST API with API Token authentication |
 | **Console** | noVNC WebSocket proxy |
+| **Testing / CI** | Vitest, GitHub Actions |
 
 ---
 
@@ -111,8 +116,8 @@ cd ProxMate
 # Install backend dependencies
 cd backend
 npm install
-cp ../.env.example .env  # Edit with your settings
-npx prisma db push       # Create the SQLite database
+cp ../.env.example .env       # Edit with your settings
+npx prisma migrate deploy     # Create the SQLite database + apply migrations
 
 # Install frontend dependencies
 cd ../frontend
@@ -134,6 +139,22 @@ cd ../frontend && npm run dev  # Next.js on :3000
    - **Step 4:** Review and finalize
 
 You'll be logged in as admin and ready to generate invite links for your users.
+
+---
+
+## 🧪 Testing & CI
+
+The backend ships with a [Vitest](https://vitest.dev) suite covering the security-critical
+logic — quota enforcement, the per-VM firewall rule builder, node placement, MateState
+retention, ownership checks, cloud-init config, and `createVm`/`deployFromTemplate`
+orchestration against a mocked Proxmox API (no live cluster or DB needed):
+
+```bash
+cd backend && npm test        # or: npm run test:watch
+```
+
+Every push and PR runs **GitHub Actions** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
+backend typecheck + tests, frontend lint + build, and a Docker build of both images.
 
 ---
 
@@ -162,17 +183,20 @@ docker compose up -d --build
 
 **For a real public deployment**, put a reverse proxy (Caddy/nginx/Traefik) in front to
 terminate **HTTPS**, set `NEXT_PUBLIC_API_URL` to `https://<your-domain>/api`, proxy `/api`
-to the backend, and add rate limiting. See [SECURITY.md](./SECURITY.md).
+to the backend, and set `TRUST_PROXY=1` so the built-in rate limiter keys on the real client
+IP. See [SECURITY.md](./SECURITY.md).
 
 ---
 
 ## 🔐 Security
 
 ProxMate is designed for sharing resources with people you don't fully trust (friends,
-family). Before going public, read **[SECURITY.md](./SECURITY.md)** — it covers tenant
-**network isolation** (keeping guests off your LAN and away from your other VMs/host), the
-required Proxmox cluster-firewall step, least-privilege API tokens, and a production
-hardening checklist.
+family). It ships with tenant **network isolation** (a per-VM Proxmox firewall), **rate
+limiting** on the auth/invite endpoints, and an **audit log** of VM and sign-in activity.
+
+Before going public, read **[SECURITY.md](./SECURITY.md)** — it covers the isolation model
+(keeping guests off your LAN and away from your other VMs/host), the required Proxmox
+cluster-firewall step, least-privilege API tokens, and a production hardening checklist.
 
 ---
 
@@ -183,7 +207,7 @@ hardening checklist.
 - **[External access overview](./docs/external-access.md)** — the "no port forwarding" rule and which tool to pick for each use case.
 - **[Tailscale for SSH](./docs/tailscale-ssh.md)** — tenants: SSH into your VM from anywhere, no public IP needed.
 - **[Cloudflare Tunnels](./docs/cloudflare-tunnels.md)** — tenants: publish a public website from your VM without forwarding any port.
-- **[Admin guide](./docs/admin-guide.md)** — owners: cluster setup, firewall enforcement, and shipping a tenant-ready Linux template.
+- **[Admin guide](./docs/admin-guide.md)** — owners: cluster setup, firewall enforcement, adding cloud images, the Docker/Tailscale deploy-time extras, and shipping a tenant-ready Linux template.
 
 All of these are also surfaced inside the app under **Help & Docs** in the sidebar.
 
@@ -193,11 +217,12 @@ All of these are also surfaced inside the app under **Help & Docs** in the sideb
 
 ```
 ProxMate/
-├── frontend/           # Next.js dashboard + setup wizard
-├── backend/            # Express API + Proxmox proxy + WebSocket relay
-├── docs/               # User + admin guides (Tailscale, Cloudflare, etc.)
-├── docker-compose.yml  # Production orchestration
-├── SECURITY.md         # Hardening guide
+├── frontend/             # Next.js dashboard + setup wizard
+├── backend/              # Express API + Proxmox proxy + WebSocket relay (+ Vitest tests)
+├── docs/                 # User + admin guides (Tailscale, Cloudflare, etc.)
+├── .github/workflows/    # CI — typecheck, tests, Docker build
+├── docker-compose.yml    # Production orchestration
+├── SECURITY.md           # Hardening guide
 └── project-architecture.md  # Full architecture spec
 ```
 

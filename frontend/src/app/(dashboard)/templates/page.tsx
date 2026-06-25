@@ -17,6 +17,7 @@ import {
   X,
   Cloud,
   Container,
+  ImagePlus,
 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
@@ -35,6 +36,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import { TemplateIcon, fileToIconDataUrl } from "@/components/template-icon";
 
 export default function TemplatesPage() {
   const isAdmin = useAuthStore((s) => s.user?.role === "admin");
@@ -106,13 +108,26 @@ function TemplateCard({
 }) {
   const [editing, setEditing] = useState(false);
   const [notes, setNotes] = useState(t.notes ?? "");
+  const [icon, setIcon] = useState(t.icon);
   const [saving, setSaving] = useState(false);
+
+  async function onPickIcon(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // let the same file be re-picked later
+    if (!file) return;
+    try {
+      setIcon(await fileToIconDataUrl(file));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not load that image.");
+    }
+  }
 
   async function save() {
     setSaving(true);
     try {
-      await api.patch(`/templates/${t.id}`, { notes });
-      toast.success("Notes saved.");
+      // Only send the icon when it changed (the data-URI can be a few KB).
+      await api.patch(`/templates/${t.id}`, { notes, ...(icon !== t.icon ? { icon } : {}) });
+      toast.success("Template updated.");
       setEditing(false);
       onChange();
     } catch (err) {
@@ -126,8 +141,8 @@ function TemplateCard({
     <Card className="flex flex-col">
       <CardHeader>
         <div className="flex items-start justify-between gap-2">
-          <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-            <Package className="size-5" />
+          <div className="flex size-9 items-center justify-center overflow-hidden rounded-lg bg-primary/10 text-primary">
+            <TemplateIcon os={t.os} name={t.name} icon={t.icon} className="size-5" />
           </div>
           {isAdmin && <UnregisterButton id={t.id} onDone={onChange} />}
         </div>
@@ -144,6 +159,35 @@ function TemplateCard({
       <CardContent className="flex flex-1 flex-col gap-3">
         {editing ? (
           <div className="grid gap-2">
+            <div className="flex items-center gap-3">
+              <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-muted/40">
+                <TemplateIcon os={t.os} name={t.name} icon={icon} className="size-7" />
+              </div>
+              <div className="flex flex-col items-start gap-1">
+                <label className="cursor-pointer">
+                  <span className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors hover:bg-muted">
+                    <ImagePlus className="size-3.5" /> Upload icon
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                    className="hidden"
+                    onChange={onPickIcon}
+                  />
+                </label>
+                {icon ? (
+                  <button
+                    type="button"
+                    onClick={() => setIcon(null)}
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    Use OS default
+                  </button>
+                ) : (
+                  <span className="text-xs text-muted-foreground">Auto-matched to {t.os || "the OS"}</span>
+                )}
+              </div>
+            </div>
             <textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
@@ -160,6 +204,7 @@ function TemplateCard({
                 onClick={() => {
                   setEditing(false);
                   setNotes(t.notes ?? "");
+                  setIcon(t.icon);
                 }}
               >
                 <X /> Cancel
@@ -183,7 +228,7 @@ function TemplateCard({
           </span>
           <div className="flex items-center gap-1">
             {isAdmin && !editing && (
-              <Button size="icon-sm" variant="ghost" onClick={() => setEditing(true)} title="Edit notes">
+              <Button size="icon-sm" variant="ghost" onClick={() => setEditing(true)} title="Edit notes & icon">
                 <Pencil />
               </Button>
             )}

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, Loader2, Package, Plus, Rocket, HardDrive, KeyRound, Server, Container } from "lucide-react";
+import { ArrowLeft, Loader2, Plus, Rocket, HardDrive, KeyRound, Server, Container } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import type { MeResponse, ProxmoxIso, Template, VirtualMachine } from "@/lib/types";
@@ -14,6 +14,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/form-field";
+import { TemplateIcon } from "@/components/template-icon";
 import {
   Select,
   SelectContent,
@@ -254,7 +255,7 @@ export default function NewVmWizard() {
                           {templates.map((t) => (
                             <SelectItem key={t.id} value={t.id}>
                               <span className="flex items-center gap-2">
-                                <Package className="size-3.5" /> {t.name}
+                                <TemplateIcon os={t.os} name={t.name} icon={t.icon} className="size-3.5" /> {t.name}
                                 <span className="text-muted-foreground">· {t.diskGb} GB</span>
                               </span>
                             </SelectItem>
