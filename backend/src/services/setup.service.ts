@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma.js';
 import { isSetupComplete, getConfig, setConfig } from './config.service.js';
+import { createSession } from './auth.service.js';
 import { getClient, getVersion, getNodes, getStorages, getBridges } from './proxmox.service.js';
 
 // Re-export config helpers so existing imports from setup.service keep working.
@@ -16,7 +16,8 @@ export async function createAdmin(data: {
   displayName: string;
 }): Promise<{
   token: string;
-  expiresAt: string;
+  csrfToken: string;
+  expiresAt: Date;
   user: { id: string; email: string; role: string; displayName: string };
 }> {
   const existing = await prisma.user.findFirst({ where: { role: 'admin' } });
@@ -32,23 +33,16 @@ export async function createAdmin(data: {
     },
   });
 
-  // Generate jwt_secret early so admin can log in even before completing setup
-  let jwtSecret = await getConfig('jwt_secret');
-  if (!jwtSecret) {
-    jwtSecret = randomBytes(64).toString('hex');
-    await setConfig('jwt_secret', jwtSecret, true);
+  // Generate jwt_secret early so admin can log in even before completing setup.
+  if (!(await getConfig('jwt_secret'))) {
+    await setConfig('jwt_secret', randomBytes(64).toString('hex'), true);
   }
 
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-  const token = jwt.sign({ sub: user.id, jti: randomBytes(16).toString('hex') }, jwtSecret, {
-    expiresIn: '24h',
-  });
-
-  await prisma.session.create({ data: { userId: user.id, token, expiresAt } });
-
+  const { token, csrfToken, expiresAt } = await createSession(user.id);
   return {
     token,
-    expiresAt: expiresAt.toISOString(),
+    csrfToken,
+    expiresAt,
     user: { id: user.id, email: user.email, role: user.role, displayName: user.displayName },
   };
 }
@@ -127,29 +121,23 @@ export async function saveDefaults(data: {
 
 export async function completeSetup(): Promise<{
   token: string;
-  expiresAt: string;
+  csrfToken: string;
+  expiresAt: Date;
   user: { id: string; email: string; role: string; displayName: string };
 }> {
   const admin = await prisma.user.findFirst({ where: { role: 'admin' } });
   if (!admin) throw new Error('Admin account not found — complete step 1 first');
 
-  let jwtSecret = await getConfig('jwt_secret');
-  if (!jwtSecret) {
-    jwtSecret = randomBytes(64).toString('hex');
-    await setConfig('jwt_secret', jwtSecret, true);
+  if (!(await getConfig('jwt_secret'))) {
+    await setConfig('jwt_secret', randomBytes(64).toString('hex'), true);
   }
   await setConfig('setup_complete', 'true');
 
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-  const token = jwt.sign({ sub: admin.id, jti: randomBytes(16).toString('hex') }, jwtSecret, {
-    expiresIn: '24h',
-  });
-
-  await prisma.session.create({ data: { userId: admin.id, token, expiresAt } });
-
+  const { token, csrfToken, expiresAt } = await createSession(admin.id);
   return {
     token,
-    expiresAt: expiresAt.toISOString(),
+    csrfToken,
+    expiresAt,
     user: { id: admin.id, email: admin.email, role: admin.role, displayName: admin.displayName },
   };
 }

@@ -24,13 +24,15 @@ export interface MeResponse {
   user: AuthUser & {
     createdAt: string;
     quota: Quota;
+    twoFactorEnabled?: boolean;
+    require2fa?: boolean;
+    mfaSetupRequired?: boolean;
   };
 }
 
 export interface AuthResponse {
+  // The session is delivered as an httpOnly cookie; only the user comes back in JSON.
   user: AuthUser;
-  token: string;
-  expiresAt: string;
 }
 
 export interface VirtualMachine {
@@ -69,6 +71,7 @@ export interface Invite {
   maxCpu: number;
   maxRam: number;
   maxStorage: number;
+  require2fa: boolean;
   used: boolean;
   usedBy: { email: string; displayName: string } | null;
   expired: boolean;
@@ -84,6 +87,7 @@ export interface CreatedInvite {
   maxCpu: number;
   maxRam: number;
   maxStorage: number;
+  require2fa: boolean;
   expiresAt: string;
 }
 
@@ -92,6 +96,7 @@ export interface InviteValidation {
   quotas: { maxCpu: number; maxRam: number; maxStorage: number };
   expiresAt: string;
   label: string | null;
+  require2fa: boolean;
 }
 
 export interface ManagedUser {
@@ -101,6 +106,14 @@ export interface ManagedUser {
   role: Role;
   vmCount: number;
   quota: Quota;
+  createdAt: string;
+}
+
+export interface PasswordResetRequest {
+  id: string;
+  userId: string;
+  email: string;
+  status: string;
   createdAt: string;
 }
 
@@ -128,6 +141,24 @@ export interface ProxmoxResources {
 export interface AdminSettings {
   proxmox: { host: string | null; tokenId: string | null; verifySsl: boolean; hasSecret: boolean };
   defaults: { storage: string | null; bridge: string | null; isoStorage: string | null };
+  smtp:
+    | { configured: false }
+    | { configured: true; host: string; port: number; secure: boolean; user: string; from: string; hasPass: boolean };
+  sso:
+    | { configured: false; callbackUrl: string }
+    | {
+        configured: true;
+        enabled: boolean;
+        issuer: string;
+        clientId: string;
+        scopes: string;
+        groupsClaim: string;
+        adminGroup: string;
+        allowSignup: boolean;
+        buttonLabel: string;
+        hasSecret: boolean;
+        callbackUrl: string;
+      };
 }
 
 export interface IsolationStatus {

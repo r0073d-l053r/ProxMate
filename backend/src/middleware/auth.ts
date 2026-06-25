@@ -1,20 +1,42 @@
 import type { Request, Response, NextFunction } from 'express';
-import { verifyToken } from '../services/auth.service.js';
+import { verifySession } from '../services/auth.service.js';
+import { SESSION_COOKIE } from '../lib/cookies.js';
 import type { AuthRequest } from '../types/index.js';
 
+const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
 export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+  // Prefer the httpOnly session cookie (browser); fall back to a Bearer token
+  // for non-browser API clients.
+  const cookieToken = req.cookies?.[SESSION_COOKIE] as string | undefined;
   const header = req.headers.authorization;
-  if (!header?.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Unauthorized — missing token' });
+  const bearer = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
+  const token = cookieToken ?? bearer;
+
+  if (!token) {
+    res.status(401).json({ error: 'Unauthorized — missing session' });
     return;
   }
 
-  const user = await verifyToken(header.slice(7));
-  if (!user) {
-    res.status(401).json({ error: 'Invalid or expired token' });
+  const session = await verifySession(token);
+  if (!session) {
+    res.status(401).json({ error: 'Invalid or expired session' });
     return;
   }
 
-  (req as AuthRequest).user = user;
+  // CSRF: cookie-authenticated browser requests that change state must echo the
+  // session's CSRF token in a header (double-submit). Bearer/API clients don't
+  // auto-send cookies, so they have no CSRF surface and are exempt.
+  if (cookieToken && MUTATING.has(req.method)) {
+    const csrf = req.header('x-csrf-token');
+    if (!csrf || !session.csrfToken || csrf !== session.csrfToken) {
+      res.status(403).json({ error: 'Invalid or missing CSRF token' });
+      return;
+    }
+  }
+
+  const ar = req as AuthRequest;
+  ar.user = session.user;
+  ar.sessionToken = token;
   next();
 }

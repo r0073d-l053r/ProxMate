@@ -164,9 +164,46 @@ It now appears in the **Template Store** for everyone. When a tenant deploys it,
 
 Click **Generate** and share the invite link. The tenant signs up, picks a template (or builds from an ISO), and is bounded by their quota.
 
+## 5. Security & Authentication Controls (SMTP, MFA, SSO)
+
+ProxMate provides robust security features to protect accounts and control how users authenticate, including Multi-Factor Authentication (MFA), passwordless Passkeys, OpenID Connect (OIDC) Single Sign-On (SSO), and secure email-based password recovery.
+
+### 5.1 SMTP Settings & Password Recovery
+To enable self-service password reset links, configure your mail server in **Admin → Settings → Email (SMTP)**:
+- **Host / Port / Encryption**: Enter your SMTP server details (e.g., SMTP Host, Port, and select Secure TLS/SSL if required).
+- **Authentication**: Specify your SMTP Username and Password (encrypted at rest in the database).
+- **From Address**: The sender address for ProxMate emails.
+- Click **Test Configuration** to verify connection.
+
+If SMTP is **not configured**, ProxMate defaults to a secure fallback:
+- When a user clicks "Forgot password" on the login screen, they file a password reset request.
+- The request is saved in the database, and a banner appears in the admin panel (**Admin → Users → Reset Requests**).
+- You can manually generate a temporary password or reset their password directly from the user list.
+
+### 5.2 Multi-Factor Authentication (MFA / 2FA)
+Users can secure their accounts using two-step verification methods in their personal dashboard under the **Security** settings page:
+1. **TOTP (Authenticator Apps)**: Scanning a QR code with apps like Google Authenticator or Aegis. Standard 10 single-use recovery codes are generated upon activation.
+2. **Passkeys (WebAuthn)**: Registering a security key (YubiKey) or biometric authentication (Touch ID / Windows Hello) for passwordless login.
+
+#### Invite-Enforced 2FA
+Admins can enforce two-step authentication for new users:
+- When generating an invite link (**Admin → Invites → New invite**), check **"Require two-step authentication"**.
+- Upon registration, the invited user will be forced to enroll in either TOTP or a Passkey before accessing any dashboard or VM operations.
+- Until MFA is set up, they will be redirected to the Security page on every navigation, and all VM API requests will return a `403 MFA Setup Required` error.
+- *Note:* SSO-linked users are exempt from this requirement since their Identity Provider handles authentication policy.
+
+### 5.3 Bring-Your-Own SSO (OIDC)
+You can delegate authentication to an external OpenID Connect (OIDC) provider (e.g., Keycloak, Authentik, Google) in **Admin → Settings → Single Sign-On (OIDC)**:
+- **Enable SSO**: Toggles the login button on the sign-in screen.
+- **Client ID & Client Secret**: Registered credentials from your provider (secret is encrypted at rest).
+- **Issuer URL**: The discovery endpoint of your provider (e.g., `https://keycloak.example.com/realms/myrealm`).
+- **Callback URL**: Register `${BACKEND_PUBLIC_URL}/api/auth/sso/callback` as the permitted redirect URI in your identity provider.
+- **Group mapping**: Specify a "Groups Claim" (e.g., `groups` or `roles`) and the "Admin Group" name. Users with this group membership will be automatically promoted to Admin in ProxMate on login.
+- **JIT Provisioning**: When "Allow self-sign up via SSO (JIT)" is checked, new users can sign up automatically via SSO. If unchecked, only pre-invited or existing users whose emails match the SSO provider's claims can sign in.
+
 ---
 
-## 5. Hand them the user docs
+## 6. Hand them the user docs
 
 Once they have a VM running, point them at:
 
@@ -178,7 +215,7 @@ The in-app **Help** page in ProxMate links to all of these.
 
 ---
 
-## 6. Operating the cluster
+## 7. Operating the cluster
 
 A few things worth knowing day-to-day:
 
@@ -189,7 +226,7 @@ A few things worth knowing day-to-day:
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | Symptom | Cause / Fix |
 |---|---|

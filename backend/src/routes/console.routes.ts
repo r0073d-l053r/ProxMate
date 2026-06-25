@@ -1,18 +1,31 @@
 import type { Server } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { verifyToken } from '../services/auth.service.js';
+import { SESSION_COOKIE } from '../lib/cookies.js';
 import { getOwnedVm, syncVmNode } from '../services/vm.service.js';
 import { connectVncTarget, relay } from '../services/vnc-proxy.service.js';
 
 const CONSOLE_PATH = /^\/api\/vms\/([^/]+)\/console$/;
+
+/** Pull a single cookie value out of a raw `Cookie` header. */
+function getCookie(header: string | undefined, name: string): string | undefined {
+  if (!header) return undefined;
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    if (part.slice(0, idx).trim() === name) return decodeURIComponent(part.slice(idx + 1).trim());
+  }
+  return undefined;
+}
 
 /**
  * Attach the noVNC console relay to the HTTP server's `upgrade` event.
  *
  * We use a noServer `ws` instance (rather than express-ws) so the relay is
  * independent of the Express 5 router internals. The browser authenticates via
- * `?token=<JWT>` and supplies the `vncticket`/`port` it received from
- * `POST /api/vms/:id/console`.
+ * the **httpOnly session cookie** (no JWT in the URL) and an **Origin check**
+ * (anti cross-site-WS-hijacking), and supplies the `vncticket`/`port` it
+ * received from `POST /api/vms/:id/console`.
  */
 export function setupConsoleWebSocket(server: Server): void {
   const wss = new WebSocketServer({ noServer: true });
@@ -26,8 +39,18 @@ export function setupConsoleWebSocket(server: Server): void {
         return;
       }
 
+      // Anti cross-site-WS-hijacking: browsers always send Origin on a WS
+      // handshake; require it to match our app origin.
+      const allowedOrigin = process.env.FRONTEND_URL || 'http://localhost:3000';
+      if (req.headers.origin !== allowedOrigin) {
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+
       const vmId = match[1] as string;
-      const token = url.searchParams.get('token');
+      // Auth via the httpOnly session cookie — no token in the URL.
+      const token = getCookie(req.headers.cookie, SESSION_COOKIE);
       const vncticket = url.searchParams.get('vncticket');
       const port = url.searchParams.get('port');
 

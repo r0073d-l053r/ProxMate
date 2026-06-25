@@ -6,7 +6,6 @@ import { useParams } from "next/navigation";
 import { toast } from "sonner";
 import { ArrowLeft, Loader2, RefreshCw, Keyboard, Circle, ClipboardPaste, Send, X } from "lucide-react";
 import { api, apiError } from "@/lib/api";
-import { getToken } from "@/lib/auth-store";
 import type { RFBOptions } from "@novnc/novnc";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -82,9 +81,10 @@ export default function ConsolePage() {
     try {
       const res = await api.post<{ ticket: string; port: string }>(`/vms/${id}/console`);
       const { ticket, port } = res.data;
-      const token = getToken() ?? "";
 
-      const params = new URLSearchParams({ token, vncticket: ticket, port });
+      // Auth rides on the httpOnly session cookie (sent on the WS handshake) —
+      // no token in the URL.
+      const params = new URLSearchParams({ vncticket: ticket, port });
       const wsUrl = `${wsBase()}/vms/${id}/console?${params.toString()}`;
 
       const { default: RFB } = await import("@novnc/novnc");

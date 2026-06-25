@@ -25,12 +25,15 @@ ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cl
 
 | Feature | Description |
 |---|---|
-| 🔒 **Invite-Only Registration** | Admin-generated invite links with CPU/RAM/Storage quotas baked in |
+| 🔒 **Invite-Only Registration** | Admin-generated invite links with CPU/RAM/Storage quotas, with optional **enforced 2FA** on registration |
+| 🛡️ **Multi-Factor Auth (MFA/2FA)** | Secure accounts via TOTP (authenticator apps) with recovery codes, or passwordless **Passkeys (WebAuthn)** using biometric keys |
+| 🔑 **Single Sign-On (OIDC SSO)** | Bring-your-own SSO (Keycloak, Authentik, etc.) with custom group-to-admin mapping and optional JIT user provisioning |
+| ✉️ **SMTP & Password Recovery** | Email-based secure password resets, with a database-backed "contact admin" request queue if SMTP is disabled |
 | 🖥️ **VM Lifecycle Management** | Create, start, stop, restart, and delete VMs from a sleek dashboard |
 | ☁️ **Cloud-Init Deploys** | One-click cloud images (16 curated distros + custom URLs), imported entirely through the Proxmox API — paste an SSH key for a ready-to-SSH box in ~60s, with optional first-boot **Docker** / **Tailscale** installs |
 | 📦 **Template Store** | Publish Proxmox templates as one-click OS builds — cloned and autoscaled on deploy, with OS-matched (or custom-uploaded) icons and admin-authored login notes |
 | ⚖️ **Automatic VM Placement** | Tenants never pick a node — the scheduler auto-places each VM on a node that has the chosen image, with the most free capacity |
-| 🌐 **In-Browser Console** | noVNC remote access in the browser, proxied securely through the backend — with copy-paste into the VM |
+| 🌐 **In-Browser Console** | noVNC remote access in the browser, proxied securely through the backend — with copy-paste into the VM (fixed std VGA console display for Cloud-init templates) |
 | 💾 **MateStates Backups** | Scheduled weekly snapshots + one-click in-place restore, with rolling retention |
 | 📈 **Live Admin Monitor** | Per-VM CPU / memory / network sparklines at 1 Hz, with power controls, grouped by owner |
 | 🛡️ **Tenant Network Isolation** | Per-VM Proxmox firewall with MAC/IP filtering and RFC1918 drop rules |
@@ -79,9 +82,9 @@ ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cl
 | Layer | Technology |
 |---|---|
 | **Frontend** | Next.js 16 (App Router), TailwindCSS v4, Shadcn/UI (Base UI), react-icons |
-| **Backend** | Node.js, Express 5, `ws` (WebSocket relay), `express-rate-limit`, `node-cron` |
+| **Backend** | Node.js, Express 5, `ws` (WebSocket relay), `express-rate-limit`, `node-cron`, `nodemailer` |
 | **Database** | SQLite via Prisma ORM (migrations) |
-| **Auth** | JWT + bcrypt, invite-token system |
+| **Auth** | JWT + bcrypt, OIDC SSO (`openid-client`), Passkeys (`@simplewebauthn/server`), TOTP 2FA (`otplib`), SMTP |
 | **Proxmox** | REST API with API Token authentication |
 | **Console** | noVNC WebSocket proxy |
 | **Testing / CI** | Vitest, GitHub Actions |
@@ -184,7 +187,7 @@ docker compose up -d --build
 **For a real public deployment**, put a reverse proxy (Caddy/nginx/Traefik) in front to
 terminate **HTTPS**, set `NEXT_PUBLIC_API_URL` to `https://<your-domain>/api`, proxy `/api`
 to the backend, and set `TRUST_PROXY=1` so the built-in rate limiter keys on the real client
-IP. See [SECURITY.md](./SECURITY.md).
+IP. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the production runbook and [SECURITY.md](./SECURITY.md) for the hardening guide.
 
 ---
 
@@ -204,10 +207,11 @@ cluster-firewall step, least-privilege API tokens, and a production hardening ch
 
 **[`docs/`](./docs/)** has the user- and admin-facing guides:
 
+- **[Production Deployment Runbook](./DEPLOYMENT.md)** — owners: step-by-step production setup guide including Caddy, Keycloak OIDC SSO, SMTP email config, and 2FA verification.
 - **[External access overview](./docs/external-access.md)** — the "no port forwarding" rule and which tool to pick for each use case.
 - **[Tailscale for SSH](./docs/tailscale-ssh.md)** — tenants: SSH into your VM from anywhere, no public IP needed.
 - **[Cloudflare Tunnels](./docs/cloudflare-tunnels.md)** — tenants: publish a public website from your VM without forwarding any port.
-- **[Admin guide](./docs/admin-guide.md)** — owners: cluster setup, firewall enforcement, adding cloud images, the Docker/Tailscale deploy-time extras, and shipping a tenant-ready Linux template.
+- **[Admin guide](./docs/admin-guide.md)** — owners: cluster setup, firewall enforcement, adding cloud images, authentication settings (SMTP, MFA, OIDC SSO), and shipping a tenant-ready Linux template.
 
 All of these are also surfaced inside the app under **Help & Docs** in the sidebar.
 

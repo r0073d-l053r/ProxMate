@@ -24,14 +24,14 @@ export default function SetupCompletePage() {
   const router = useRouter();
   const setup = useSetupStore();
   const resetSetup = useSetupStore((s) => s.reset);
-  const setAuth = useAuthStore((s) => s.setAuth);
+  const setUser = useAuthStore((s) => s.setUser);
   const [submitting, setSubmitting] = useState(false);
 
   async function onFinish() {
     setSubmitting(true);
     try {
       const res = await api.post<AuthResponse>("/setup/complete");
-      setAuth(res.data.token, res.data.user);
+      setUser(res.data.user);
       resetSetup();
       toast.success("Setup complete — welcome to ProxMate!");
       router.replace("/");

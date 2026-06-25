@@ -16,7 +16,7 @@ import { FormField } from "@/components/form-field";
 export default function SetupAdminPage() {
   const router = useRouter();
   const setSetup = useSetupStore((s) => s.set);
-  const setAuth = useAuthStore((s) => s.setAuth);
+  const setUser = useAuthStore((s) => s.setUser);
 
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -61,7 +61,7 @@ export default function SetupAdminPage() {
     setSubmitting(true);
     try {
       const res = await api.post<AuthResponse>("/setup/admin", { displayName, email, password });
-      setAuth(res.data.token, res.data.user);
+      setUser(res.data.user);
       setSetup({ adminEmail: email, adminName: displayName });
       router.push("/setup/proxmox");
     } catch (err) {

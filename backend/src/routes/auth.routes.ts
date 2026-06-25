@@ -1,10 +1,31 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
-import { hashPassword, verifyPasswordSafe, signToken } from '../services/auth.service.js';
+import {
+  hashPassword,
+  verifyPasswordSafe,
+  createSession,
+  signChallenge,
+  verifyChallenge,
+} from '../services/auth.service.js';
+import * as twofa from '../services/twofactor.service.js';
+import * as passkeys from '../services/passkey.service.js';
+import * as sso from '../services/sso.service.js';
+import { isMfaSetupRequired } from '../services/mfa.service.js';
+import {
+  setAuthCookies,
+  clearAuthCookies,
+  setChallengeCookie,
+  clearChallengeCookie,
+  WEBAUTHN_COOKIE,
+  setSsoCookie,
+  clearSsoCookie,
+  SSO_COOKIE,
+} from '../lib/cookies.js';
 import { requireAuth } from '../middleware/auth.js';
 import { authLimiter } from '../middleware/rate-limit.js';
 import { recordAudit } from '../services/audit.service.js';
+import { requestReset, resetWithToken } from '../services/password-reset.service.js';
 import type { AuthRequest } from '../types/index.js';
 
 const router = Router();
@@ -47,6 +68,7 @@ router.post('/register', authLimiter, async (req: Request, res: Response) => {
       maxCpu: invite.maxCpu,
       maxRam: invite.maxRam,
       maxStorage: invite.maxStorage,
+      require2fa: invite.require2fa,
     },
   });
 
@@ -62,15 +84,13 @@ router.post('/register', authLimiter, async (req: Request, res: Response) => {
     return;
   }
 
-  const { token, expiresAt } = await signToken(user.id);
-  await prisma.session.create({ data: { userId: user.id, token, expiresAt } });
+  const { token, csrfToken, expiresAt } = await createSession(user.id);
+  setAuthCookies(res, token, csrfToken, expiresAt);
 
   await recordAudit({ action: 'auth.register', actor: user, targetType: 'user', targetId: user.id, req });
 
   res.status(201).json({
     user: { id: user.id, email: user.email, role: user.role, displayName: user.displayName },
-    token,
-    expiresAt: expiresAt.toISOString(),
   });
 });
 
@@ -99,25 +119,65 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
     return;
   }
 
-  const { token, expiresAt } = await signToken(user.id);
-  await prisma.session.create({ data: { userId: user.id, token, expiresAt } });
+  // 2FA: don't issue a session yet — hand back a short-lived challenge to be
+  // exchanged (with a TOTP/recovery code) at /2fa/verify.
+  if (user.twoFactorEnabled) {
+    res.json({ twoFactorRequired: true, challenge: await signChallenge(user.id) });
+    return;
+  }
+
+  const { token, csrfToken, expiresAt } = await createSession(user.id);
+  setAuthCookies(res, token, csrfToken, expiresAt);
 
   await recordAudit({ action: 'auth.login', actor: user, req });
 
   res.json({
     user: { id: user.id, email: user.email, role: user.role, displayName: user.displayName },
-    token,
-    expiresAt: expiresAt.toISOString(),
   });
+});
+
+// ─── POST /api/auth/2fa/verify ────────────────────────────────
+// Exchange a login challenge + TOTP (or recovery) code for a real session.
+
+const TwoFaVerifySchema = z.object({ challenge: z.string().min(1), code: z.string().min(1) });
+
+router.post('/2fa/verify', authLimiter, async (req: Request, res: Response) => {
+  const parsed = TwoFaVerifySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed' });
+    return;
+  }
+  const userId = await verifyChallenge(parsed.data.challenge);
+  if (!userId) {
+    res.status(401).json({ error: 'Your login session expired — please sign in again.' });
+    return;
+  }
+  const ok =
+    (await twofa.verifyTotp(userId, parsed.data.code)) ||
+    (await twofa.verifyRecoveryCode(userId, parsed.data.code));
+  if (!ok) {
+    await recordAudit({ action: 'auth.2fa_failed', actor: { id: userId }, req });
+    res.status(401).json({ error: 'Invalid authentication code.' });
+    return;
+  }
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) {
+    res.status(401).json({ error: 'Account not found.' });
+    return;
+  }
+  const { token, csrfToken, expiresAt } = await createSession(user.id);
+  setAuthCookies(res, token, csrfToken, expiresAt);
+  await recordAudit({ action: 'auth.login', actor: user, detail: '2fa', req });
+  res.json({ user: { id: user.id, email: user.email, role: user.role, displayName: user.displayName } });
 });
 
 // ─── POST /api/auth/logout ────────────────────────────────────
 
 router.post('/logout', requireAuth, async (req: Request, res: Response) => {
-  const header = req.headers.authorization!;
-  const token = header.slice(7);
-  await prisma.session.deleteMany({ where: { token } });
-  await recordAudit({ action: 'auth.logout', actor: (req as AuthRequest).user, req });
+  const ar = req as AuthRequest;
+  if (ar.sessionToken) await prisma.session.deleteMany({ where: { token: ar.sessionToken } });
+  clearAuthCookies(res);
+  await recordAudit({ action: 'auth.logout', actor: ar.user, req });
   res.json({ success: true });
 });
 
@@ -140,6 +200,9 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
       email: user.email,
       role: user.role,
       displayName: user.displayName,
+      twoFactorEnabled: user.twoFactorEnabled,
+      require2fa: user.require2fa,
+      mfaSetupRequired: await isMfaSetupRequired(user.id),
       createdAt: user.createdAt,
       quota: {
         cpu: { used: usedCpu, max: user.maxCpu },
@@ -148,6 +211,165 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
       },
     },
   });
+});
+
+// ─── 2FA (TOTP) management — authenticated ────────────────────
+
+router.post('/2fa/setup', requireAuth, async (req: Request, res: Response) => {
+  const u = (req as AuthRequest).user;
+  res.json(await twofa.beginSetup(u.id, u.email));
+});
+
+const TwoFaCodeSchema = z.object({ code: z.string().min(1) });
+
+router.post('/2fa/enable', requireAuth, async (req: Request, res: Response) => {
+  const parsed = TwoFaCodeSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Enter the 6-digit code from your app.' }); return; }
+  const u = (req as AuthRequest).user;
+  try {
+    const { recoveryCodes } = await twofa.enable(u.id, parsed.data.code);
+    await recordAudit({ action: 'auth.2fa_enabled', actor: u, req });
+    res.json({ recoveryCodes });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : '2FA enable failed' });
+  }
+});
+
+router.post('/2fa/disable', requireAuth, async (req: Request, res: Response) => {
+  const parsed = TwoFaCodeSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Enter a code to confirm.' }); return; }
+  const u = (req as AuthRequest).user;
+  try {
+    await twofa.disable(u.id, parsed.data.code);
+    await recordAudit({ action: 'auth.2fa_disabled', actor: u, req });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : '2FA disable failed' });
+  }
+});
+
+router.get('/2fa/status', requireAuth, async (req: Request, res: Response) => {
+  res.json(await twofa.getStatus((req as AuthRequest).user.id));
+});
+
+// ─── Passkeys (WebAuthn) ──────────────────────────────────────
+
+// Passwordless login: request assertion options (usernameless / discoverable).
+router.post('/passkeys/auth/options', authLimiter, async (_req: Request, res: Response) => {
+  const options = await passkeys.authenticationOptions();
+  setChallengeCookie(res, options.challenge);
+  res.json(options);
+});
+
+// Passwordless login: verify the assertion → issue a real session.
+router.post('/passkeys/auth/verify', authLimiter, async (req: Request, res: Response) => {
+  const challenge = req.cookies?.[WEBAUTHN_COOKIE];
+  if (!challenge) {
+    res.status(400).json({ error: 'Passkey challenge expired — please try again.' });
+    return;
+  }
+  try {
+    const userId = await passkeys.verifyAuthentication(req.body, challenge);
+    clearChallengeCookie(res);
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      res.status(401).json({ error: 'Account not found.' });
+      return;
+    }
+    const { token, csrfToken, expiresAt } = await createSession(user.id);
+    setAuthCookies(res, token, csrfToken, expiresAt);
+    await recordAudit({ action: 'auth.login', actor: user, detail: 'passkey', req });
+    res.json({ user: { id: user.id, email: user.email, role: user.role, displayName: user.displayName } });
+  } catch (err) {
+    await recordAudit({ action: 'auth.passkey_failed', req });
+    res.status(401).json({ error: err instanceof Error ? err.message : 'Passkey login failed' });
+  }
+});
+
+// Enroll a passkey (authenticated).
+router.post('/passkeys/register/options', requireAuth, async (req: Request, res: Response) => {
+  const u = (req as AuthRequest).user;
+  const options = await passkeys.registrationOptions(u.id, u.email);
+  setChallengeCookie(res, options.challenge);
+  res.json(options);
+});
+
+const PasskeyRegisterSchema = z.object({ response: z.any(), name: z.string().max(100).optional() });
+
+router.post('/passkeys/register/verify', requireAuth, async (req: Request, res: Response) => {
+  const challenge = req.cookies?.[WEBAUTHN_COOKIE];
+  if (!challenge) {
+    res.status(400).json({ error: 'Passkey challenge expired — please try again.' });
+    return;
+  }
+  const parsed = PasskeyRegisterSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed' });
+    return;
+  }
+  const u = (req as AuthRequest).user;
+  try {
+    await passkeys.verifyRegistration(u.id, parsed.data.response, challenge, parsed.data.name ?? 'Passkey');
+    clearChallengeCookie(res);
+    await recordAudit({ action: 'auth.passkey_added', actor: u, req });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Passkey registration failed' });
+  }
+});
+
+router.get('/passkeys', requireAuth, async (req: Request, res: Response) => {
+  res.json({ passkeys: await passkeys.listPasskeys((req as AuthRequest).user.id) });
+});
+
+router.delete('/passkeys/:id', requireAuth, async (req: Request, res: Response) => {
+  const u = (req as AuthRequest).user;
+  await passkeys.deletePasskey(u.id, req.params.id as string);
+  await recordAudit({ action: 'auth.passkey_removed', actor: u, req });
+  res.json({ success: true });
+});
+
+// ─── SSO (OIDC) ───────────────────────────────────────────────
+
+const FRONTEND = () => process.env.FRONTEND_URL || 'http://localhost:3000';
+
+// Public: does the login page show an SSO button, and what does it say?
+router.get('/sso/info', async (_req: Request, res: Response) => {
+  res.json(await sso.getPublicSsoInfo());
+});
+
+// Kick off the flow: redirect the browser to the identity provider.
+router.get('/sso/login', async (_req: Request, res: Response) => {
+  try {
+    const { url, cookie } = await sso.beginLogin();
+    setSsoCookie(res, cookie);
+    res.redirect(url);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'SSO is unavailable';
+    res.redirect(`${FRONTEND()}/login?sso_error=${encodeURIComponent(msg)}`);
+  }
+});
+
+// Provider redirects back here with ?code&state → exchange + sign in.
+router.get('/sso/callback', async (req: Request, res: Response) => {
+  const cookieValue = req.cookies?.[SSO_COOKIE];
+  clearSsoCookie(res);
+  if (!cookieValue) {
+    res.redirect(`${FRONTEND()}/login?sso_error=${encodeURIComponent('Login session expired — please try again.')}`);
+    return;
+  }
+  try {
+    const qs = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
+    const user = await sso.completeLogin(`${sso.callbackUrl()}${qs}`, cookieValue);
+    const { token, csrfToken, expiresAt } = await createSession(user.id);
+    setAuthCookies(res, token, csrfToken, expiresAt);
+    await recordAudit({ action: 'auth.login', actor: user, detail: 'sso', req });
+    res.redirect(`${FRONTEND()}/`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'SSO login failed';
+    await recordAudit({ action: 'auth.sso_failed', detail: msg, req });
+    res.redirect(`${FRONTEND()}/login?sso_error=${encodeURIComponent(msg)}`);
+  }
 });
 
 // ─── GET /api/auth/invite/:token ──────────────────────────────
@@ -167,7 +389,53 @@ router.get('/invite/:token', authLimiter, async (req: Request, res: Response) =>
     quotas: { maxCpu: invite.maxCpu, maxRam: invite.maxRam, maxStorage: invite.maxStorage },
     expiresAt: invite.expiresAt.toISOString(),
     label: invite.label,
+    require2fa: invite.require2fa,
   });
+});
+
+// ─── POST /api/auth/forgot-password ───────────────────────────
+// If SMTP is configured, email a single-use reset link; otherwise file a request
+// for an admin. Returns the same generic message regardless of email existence.
+
+const ForgotSchema = z.object({ email: z.string().email() });
+
+router.post('/forgot-password', authLimiter, async (req: Request, res: Response) => {
+  const parsed = ForgotSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Enter a valid email address' });
+    return;
+  }
+  const appUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const { method } = await requestReset(parsed.data.email, appUrl);
+  res.json({
+    method,
+    message:
+      method === 'email'
+        ? 'If an account exists for that email, a reset link is on its way.'
+        : 'If an account exists for that email, your administrator has been notified.',
+  });
+});
+
+// ─── POST /api/auth/reset-password ────────────────────────────
+
+const ResetSchema = z.object({
+  token: z.string().min(1),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+});
+
+router.post('/reset-password', authLimiter, async (req: Request, res: Response) => {
+  const parsed = ResetSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  try {
+    const user = await resetWithToken(parsed.data.token, parsed.data.password);
+    await recordAudit({ action: 'auth.password_reset', actor: user, targetType: 'user', targetId: user.id, req });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Reset failed' });
+  }
 });
 
 export default router;

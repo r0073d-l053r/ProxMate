@@ -19,7 +19,7 @@ export default function SetupLayout({ children }: { children: React.ReactNode })
   const pathname = usePathname();
   const router = useRouter();
   const [checked, setChecked] = useState(false);
-  const token = useAuthStore((s) => s.token);
+  const user = useAuthStore((s) => s.user);
   const hydrated = useHydrated();
 
   // Guard routing through the wizard based on setup and auth state
@@ -37,7 +37,7 @@ export default function SetupLayout({ children }: { children: React.ReactNode })
           return;
         }
 
-        if (token) {
+        if (user) {
           // If authenticated, step 1 is done
           if (pathname === "/setup") {
             router.replace("/setup/proxmox");
@@ -59,7 +59,7 @@ export default function SetupLayout({ children }: { children: React.ReactNode })
     return () => {
       active = false;
     };
-  }, [hydrated, token, pathname, router]);
+  }, [hydrated, user, pathname, router]);
 
   const currentIndex = STEPS.findIndex((s) => s.path === pathname);
 
@@ -74,7 +74,7 @@ export default function SetupLayout({ children }: { children: React.ReactNode })
   return (
     <div className="relative flex flex-1 flex-col items-center bg-muted/30 px-4 py-12">
       <div className="absolute right-4 top-4 flex items-center gap-4">
-        {token && (
+        {user && (
           <button
             onClick={() => {
               useAuthStore.getState().clear();

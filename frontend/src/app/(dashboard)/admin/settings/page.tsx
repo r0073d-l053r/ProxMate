@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Plug, Save, RefreshCw, ShieldCheck, ShieldAlert } from "lucide-react";
+import { Loader2, Plug, Save, RefreshCw, ShieldCheck, ShieldAlert, Mail, Building2, Copy } from "lucide-react";
 import { api, apiError } from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 import type { AdminSettings, ProxmoxResources, IsolationStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/dashboard/page-header";
@@ -49,6 +50,32 @@ export default function SettingsPage() {
   const [bridge, setBridge] = useState("");
   const [isoStorage, setIsoStorage] = useState("");
   const [savingDefaults, setSavingDefaults] = useState(false);
+
+  // SMTP (email) — optional
+  const [smtpHost, setSmtpHost] = useState("");
+  const [smtpPort, setSmtpPort] = useState(587);
+  const [smtpSecure, setSmtpSecure] = useState(false);
+  const [smtpUser, setSmtpUser] = useState("");
+  const [smtpPass, setSmtpPass] = useState("");
+  const [smtpFrom, setSmtpFrom] = useState("");
+  const [smtpHasPass, setSmtpHasPass] = useState(false);
+  const [savingSmtp, setSavingSmtp] = useState(false);
+  const [testingSmtp, setTestingSmtp] = useState(false);
+
+  // SSO (OIDC) — optional
+  const [ssoEnabled, setSsoEnabled] = useState(false);
+  const [ssoIssuer, setSsoIssuer] = useState("");
+  const [ssoClientId, setSsoClientId] = useState("");
+  const [ssoClientSecret, setSsoClientSecret] = useState("");
+  const [ssoScopes, setSsoScopes] = useState("openid profile email");
+  const [ssoGroupsClaim, setSsoGroupsClaim] = useState("groups");
+  const [ssoAdminGroup, setSsoAdminGroup] = useState("");
+  const [ssoAllowSignup, setSsoAllowSignup] = useState(false);
+  const [ssoButtonLabel, setSsoButtonLabel] = useState("Sign in with SSO");
+  const [ssoHasSecret, setSsoHasSecret] = useState(false);
+  const [ssoCallbackUrl, setSsoCallbackUrl] = useState("");
+  const [savingSso, setSavingSso] = useState(false);
+  const [testingSso, setTestingSso] = useState(false);
 
   // Network isolation
   const [isolation, setIsolation] = useState<IsolationStatus | null>(null);
@@ -129,6 +156,28 @@ export default function SettingsPage() {
         setStorage(defaults.storage ?? "");
         setBridge(defaults.bridge ?? "");
         setIsoStorage(defaults.isoStorage ?? "");
+        if (res.data.smtp.configured) {
+          const s = res.data.smtp;
+          setSmtpHost(s.host);
+          setSmtpPort(s.port);
+          setSmtpSecure(s.secure);
+          setSmtpUser(s.user);
+          setSmtpFrom(s.from);
+          setSmtpHasPass(s.hasPass);
+        }
+        setSsoCallbackUrl(res.data.sso.callbackUrl);
+        if (res.data.sso.configured) {
+          const s = res.data.sso;
+          setSsoEnabled(s.enabled);
+          setSsoIssuer(s.issuer);
+          setSsoClientId(s.clientId);
+          setSsoScopes(s.scopes);
+          setSsoGroupsClaim(s.groupsClaim);
+          setSsoAdminGroup(s.adminGroup);
+          setSsoAllowSignup(s.allowSignup);
+          setSsoButtonLabel(s.buttonLabel);
+          setSsoHasSecret(s.hasSecret);
+        }
       })
       .catch((err) => toast.error(apiError(err)))
       .finally(() => setLoading(false));
@@ -185,6 +234,86 @@ export default function SettingsPage() {
       toast.error(apiError(err));
     } finally {
       setSavingDefaults(false);
+    }
+  }
+
+  async function saveSmtp(e: React.FormEvent) {
+    e.preventDefault();
+    if (!smtpHost.trim()) {
+      toast.error("Enter an SMTP host.");
+      return;
+    }
+    setSavingSmtp(true);
+    try {
+      await api.put("/admin/settings/smtp", {
+        host: smtpHost.trim(),
+        port: smtpPort,
+        secure: smtpSecure,
+        user: smtpUser || undefined,
+        pass: smtpPass || undefined,
+        from: smtpFrom || undefined,
+      });
+      if (smtpPass) setSmtpHasPass(true);
+      setSmtpPass("");
+      toast.success("Email settings saved.");
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setSavingSmtp(false);
+    }
+  }
+
+  async function testSmtp() {
+    setTestingSmtp(true);
+    try {
+      await api.post("/admin/settings/smtp/test");
+      toast.success("SMTP connection OK.");
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setTestingSmtp(false);
+    }
+  }
+
+  async function saveSso(e: React.FormEvent) {
+    e.preventDefault();
+    if (!ssoIssuer.trim() || !ssoClientId.trim()) {
+      toast.error("Enter the issuer URL and client ID.");
+      return;
+    }
+    setSavingSso(true);
+    try {
+      await api.put("/admin/settings/sso", {
+        enabled: ssoEnabled,
+        issuer: ssoIssuer.trim(),
+        clientId: ssoClientId.trim(),
+        clientSecret: ssoClientSecret || undefined,
+        scopes: ssoScopes || undefined,
+        groupsClaim: ssoGroupsClaim || undefined,
+        adminGroup: ssoAdminGroup || undefined,
+        allowSignup: ssoAllowSignup,
+        buttonLabel: ssoButtonLabel || undefined,
+      });
+      if (ssoClientSecret) setSsoHasSecret(true);
+      setSsoClientSecret("");
+      toast.success("SSO settings saved.");
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setSavingSso(false);
+    }
+  }
+
+  // Tests the *saved* config (discovery runs server-side) — save before testing.
+  async function testSso() {
+    setTestingSso(true);
+    try {
+      await api.post("/admin/settings/sso/test");
+      toast.success("Discovery OK — the provider is reachable.");
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setTestingSso(false);
     }
   }
 
@@ -364,6 +493,217 @@ export default function SettingsPage() {
               <Button type="button" variant="outline" onClick={testConnection} disabled={testing}>
                 {testing ? <Loader2 className="animate-spin" /> : <Plug />}
                 Test connection
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Mail className="size-4" /> Email (SMTP)
+          </CardTitle>
+          <CardDescription>
+            Optional. Lets ProxMate send password-reset emails — point it at any SMTP relay (e.g. the
+            same one your Proxmox uses). Without it, password resets fall back to admin approval.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={saveSmtp} className="grid gap-4">
+            <FormField label="Host" htmlFor="smtpHost">
+              <Input
+                id="smtpHost"
+                value={smtpHost}
+                onChange={(e) => setSmtpHost(e.target.value)}
+                placeholder="smtp.example.com"
+              />
+            </FormField>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField label="Port" htmlFor="smtpPort">
+                <Input
+                  id="smtpPort"
+                  type="number"
+                  value={smtpPort}
+                  onChange={(e) => setSmtpPort(Number(e.target.value))}
+                />
+              </FormField>
+              <FormField label="From address" htmlFor="smtpFrom">
+                <Input
+                  id="smtpFrom"
+                  value={smtpFrom}
+                  onChange={(e) => setSmtpFrom(e.target.value)}
+                  placeholder="noreply@example.com"
+                />
+              </FormField>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField label="Username" htmlFor="smtpUser" hint="Blank for unauthenticated relays.">
+                <Input id="smtpUser" value={smtpUser} onChange={(e) => setSmtpUser(e.target.value)} />
+              </FormField>
+              <FormField
+                label="Password"
+                htmlFor="smtpPass"
+                hint={smtpHasPass ? "A password is set. Leave blank to keep it." : undefined}
+              >
+                <Input
+                  id="smtpPass"
+                  type="password"
+                  value={smtpPass}
+                  onChange={(e) => setSmtpPass(e.target.value)}
+                  placeholder={smtpHasPass ? "••••••••" : ""}
+                />
+              </FormField>
+            </div>
+            <label className="flex items-center gap-2 text-sm select-none">
+              <input
+                type="checkbox"
+                checked={smtpSecure}
+                onChange={(e) => setSmtpSecure(e.target.checked)}
+                className="size-4 rounded border-input accent-primary"
+              />
+              Use TLS (port 465). Leave off for STARTTLS on 587.
+            </label>
+            <div className="flex gap-2">
+              <Button type="submit" disabled={savingSmtp}>
+                {savingSmtp ? <Loader2 className="animate-spin" /> : <Save />}
+                Save email settings
+              </Button>
+              <Button type="button" variant="outline" onClick={testSmtp} disabled={testingSmtp}>
+                {testingSmtp ? <Loader2 className="animate-spin" /> : <Plug />}
+                Test
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Building2 className="size-4" /> Single sign-on (OIDC)
+          </CardTitle>
+          <CardDescription>
+            Optional. Let users sign in with your identity provider (Keycloak, Authentik, Auth0, Entra ID,
+            Google…). Local passwords keep working alongside it. Save first, then use Test.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={saveSso} className="grid gap-4">
+            <FormField
+              label="Redirect / callback URL"
+              htmlFor="ssoCallback"
+              hint="Register this exact URL in your provider as the allowed redirect URI."
+            >
+              <div className="flex gap-2">
+                <Input id="ssoCallback" value={ssoCallbackUrl} readOnly className="font-mono text-xs" />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => copyText(ssoCallbackUrl)}
+                  aria-label="Copy callback URL"
+                >
+                  <Copy />
+                </Button>
+              </div>
+            </FormField>
+            <FormField
+              label="Issuer URL"
+              htmlFor="ssoIssuer"
+              hint="The provider's base URL — it must serve /.well-known/openid-configuration."
+            >
+              <Input
+                id="ssoIssuer"
+                value={ssoIssuer}
+                onChange={(e) => setSsoIssuer(e.target.value)}
+                placeholder="https://keycloak.example.com/realms/main"
+              />
+            </FormField>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField label="Client ID" htmlFor="ssoClientId">
+                <Input
+                  id="ssoClientId"
+                  value={ssoClientId}
+                  onChange={(e) => setSsoClientId(e.target.value)}
+                  placeholder="proxmate"
+                />
+              </FormField>
+              <FormField
+                label="Client secret"
+                htmlFor="ssoClientSecret"
+                hint={ssoHasSecret ? "A secret is set. Leave blank to keep it." : undefined}
+              >
+                <Input
+                  id="ssoClientSecret"
+                  type="password"
+                  value={ssoClientSecret}
+                  onChange={(e) => setSsoClientSecret(e.target.value)}
+                  placeholder={ssoHasSecret ? "••••••••" : ""}
+                />
+              </FormField>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField label="Scopes" htmlFor="ssoScopes">
+                <Input
+                  id="ssoScopes"
+                  value={ssoScopes}
+                  onChange={(e) => setSsoScopes(e.target.value)}
+                  placeholder="openid profile email"
+                />
+              </FormField>
+              <FormField label="Login button label" htmlFor="ssoButtonLabel">
+                <Input
+                  id="ssoButtonLabel"
+                  value={ssoButtonLabel}
+                  onChange={(e) => setSsoButtonLabel(e.target.value)}
+                  placeholder="Sign in with Keycloak"
+                />
+              </FormField>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField label="Groups claim" htmlFor="ssoGroupsClaim" hint="ID-token claim listing the user's groups.">
+                <Input
+                  id="ssoGroupsClaim"
+                  value={ssoGroupsClaim}
+                  onChange={(e) => setSsoGroupsClaim(e.target.value)}
+                  placeholder="groups"
+                />
+              </FormField>
+              <FormField label="Admin group" htmlFor="ssoAdminGroup" hint="Members become admins. Blank = no mapping.">
+                <Input
+                  id="ssoAdminGroup"
+                  value={ssoAdminGroup}
+                  onChange={(e) => setSsoAdminGroup(e.target.value)}
+                  placeholder="proxmate-admins"
+                />
+              </FormField>
+            </div>
+            <label className="flex items-center gap-2 text-sm select-none">
+              <input
+                type="checkbox"
+                checked={ssoAllowSignup}
+                onChange={(e) => setSsoAllowSignup(e.target.checked)}
+                className="size-4 rounded border-input accent-primary"
+              />
+              Auto-create accounts for new SSO users. Off = only existing/invited accounts may sign in.
+            </label>
+            <label className="flex items-center gap-2 text-sm select-none">
+              <input
+                type="checkbox"
+                checked={ssoEnabled}
+                onChange={(e) => setSsoEnabled(e.target.checked)}
+                className="size-4 rounded border-input accent-primary"
+              />
+              Enable SSO (show the button on the login page).
+            </label>
+            <div className="flex gap-2">
+              <Button type="submit" disabled={savingSso}>
+                {savingSso ? <Loader2 className="animate-spin" /> : <Save />}
+                Save SSO settings
+              </Button>
+              <Button type="button" variant="outline" onClick={testSso} disabled={testingSso}>
+                {testingSso ? <Loader2 className="animate-spin" /> : <Plug />}
+                Test
               </Button>
             </div>
           </form>

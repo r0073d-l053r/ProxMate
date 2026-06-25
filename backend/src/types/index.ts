@@ -9,4 +9,6 @@ export interface AuthUser {
 
 export interface AuthRequest extends Request {
   user: AuthUser;
+  /** The session token that authenticated this request (cookie or Bearer). */
+  sessionToken?: string;
 }

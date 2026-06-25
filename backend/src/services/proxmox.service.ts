@@ -385,8 +385,11 @@ export async function createCloudInitVm(config: CloudInitVmConfig, client?: Axio
     scsi0: `${config.diskStorage}:0,import-from=${config.importFrom}`,
     ide2: `${config.diskStorage}:cloudinit`,
     net0: `virtio,bridge=${config.bridge},firewall=1`,
+    // Keep a serial port available (boot logs / `qm terminal`), but use a normal
+    // VGA display so ProxMate's noVNC console shows a usable login terminal
+    // instead of the "starting serial terminal" placeholder.
     serial0: 'socket',
-    vga: 'serial0', // cloud images expect a serial console
+    vga: 'std',
     boot: 'order=scsi0',
     ostype: 'l26',
     agent: '1',
