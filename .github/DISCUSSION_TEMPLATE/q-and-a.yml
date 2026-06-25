@@ -1,0 +1,41 @@
+title: "Question: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Welcome to ProxMate Q&A.
+
+        If you are experiencing issues, please check our documentation (including the Admin Guide and Security Guide) first.
+
+        Please provide as much context as possible so the community can help you troubleshoot.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to achieve or troubleshoot?
+      description: Describe the question or issue in detail.
+      placeholder: I am trying to configure cloud-init images, but...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Details
+      description: Provide details about your setup.
+      placeholder: |
+        - ProxMate version:
+        - Proxmox VE version:
+        - OS/Platform:
+        - Installation method (Docker / Local Dev):
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or Error Messages
+      description: Paste relevant logs from ProxMate backend, frontend, or Proxmox tasks.
+      placeholder: |
+        Backend error log:
+        ...
+    validations:
+      required: false

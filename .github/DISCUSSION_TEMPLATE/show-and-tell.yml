@@ -1,0 +1,30 @@
+title: "Showcase: "
+labels: ["showcase"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Welcome to ProxMate Show and Tell.
+
+        Have you built a cool dashboard, integrated custom cloud-init templates, or scaled ProxMate across multiple nodes? We would love to see it.
+
+        Share screenshots, architecture diagrams, or descriptions of your setup.
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe your setup
+      description: What makes your ProxMate deployment unique?
+      placeholder: I am running ProxMate in a multi-node home lab to host...
+    validations:
+      required: true
+  - type: textarea
+    id: tech-details
+    attributes:
+      label: Technical Details
+      description: Share your configuration, Proxmox storage backends, or custom scripts if applicable.
+      placeholder: |
+        - Storage: Ceph / ZFS
+        - Custom scripts used:
+        - Network configuration:
+    validations:
+      required: false
