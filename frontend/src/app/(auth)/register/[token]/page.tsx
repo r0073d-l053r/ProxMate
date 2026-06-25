@@ -31,15 +31,37 @@ export default function RegisterPage() {
 
   useEffect(() => {
     let active = true;
-    api
-      .get<InviteValidation>(`/auth/invite/${token}`)
-      .then((res) => active && setInvite(res.data))
-      .catch(() => active && setInvalid(true))
-      .finally(() => active && setChecking(false));
+
+    (async () => {
+      // If this visitor is already signed in, don't re-validate the (now-consumed)
+      // invite and dead-end them. This is the common mobile case: the user
+      // registered on this link, was sent to /security to set up 2FA, then bounced
+      // back to the invite URL — by re-tapping the link in their email/SMS, or
+      // because the browser discarded and reloaded the backgrounded tab while they
+      // were in their authenticator app. Forward them into the app; AuthGuard
+      // corrals them to /security to finish 2FA if it's still pending.
+      try {
+        await api.get("/auth/me");
+        if (active) router.replace("/");
+        return;
+      } catch {
+        // Not signed in → a genuine prospective registrant; validate the invite.
+      }
+
+      try {
+        const res = await api.get<InviteValidation>(`/auth/invite/${token}`);
+        if (active) setInvite(res.data);
+      } catch {
+        if (active) setInvalid(true);
+      } finally {
+        if (active) setChecking(false);
+      }
+    })();
+
     return () => {
       active = false;
     };
-  }, [token]);
+  }, [token, router]);
 
   function validate(): boolean {
     const e: Record<string, string> = {};
@@ -88,13 +110,16 @@ export default function RegisterPage() {
           </div>
           <CardTitle>Invite not valid</CardTitle>
           <CardDescription>
-            This invite link is invalid, has expired, or has already been used. Ask your
-            administrator for a new one.
+            This invite link is invalid, has expired, or has already been used.{" "}
+            <span className="font-medium text-foreground">
+              If you already created your account, sign in to finish setting up
+            </span>{" "}
+            — including two-step authentication. Otherwise, ask your administrator for a new invite.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Button variant="outline" onClick={() => router.replace("/login")} className="w-full">
-            Go to sign in
+          <Button onClick={() => router.replace("/login")} className="w-full">
+            Sign in to continue
           </Button>
         </CardContent>
       </Card>

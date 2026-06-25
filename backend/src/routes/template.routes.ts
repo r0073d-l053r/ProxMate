@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/admin.js';
+import { enforceMfaSetup } from '../middleware/mfa.js';
 import { pveMessage } from '../services/proxmox.service.js';
 import { deployFromTemplate, QuotaError } from '../services/vm.service.js';
 import {
@@ -22,6 +23,9 @@ import type { AuthRequest } from '../types/index.js';
 
 const router = Router();
 router.use(requireAuth);
+// A user whose admin required 2FA can't browse or deploy templates until they
+// enrol a method — same gate as /api/vms (notably covers POST /templates/deploy).
+router.use(enforceMfaSetup);
 
 // ─── GET /api/templates ───────────────────────────────────────
 // Published templates for the Template Store (any authed user).

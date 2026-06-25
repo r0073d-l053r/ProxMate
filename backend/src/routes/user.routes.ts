@@ -2,13 +2,14 @@ import { Router, type Request, type Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/admin.js';
+import { enforceMfaSetup } from '../middleware/mfa.js';
 import { destroyVm } from '../services/vm.service.js';
 import { pveMessage } from '../services/proxmox.service.js';
 import type { AuthRequest } from '../types/index.js';
 
 const router = Router();
 
-router.use(requireAuth, requireAdmin);
+router.use(requireAuth, requireAdmin, enforceMfaSetup);
 
 // ─── GET /api/users ───────────────────────────────────────────
 
