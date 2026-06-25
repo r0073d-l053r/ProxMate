@@ -1,11 +1,14 @@
 import { Router, type Request, type Response } from 'express';
 import { requireAuth } from '../middleware/auth.js';
+import { enforceMfaSetup } from '../middleware/mfa.js';
 import { getNodes, getIsos, getStorages, pveMessage } from '../services/proxmox.service.js';
 import { getProxmoxResources } from '../services/setup.service.js';
 
 const router = Router();
 
 router.use(requireAuth);
+// Block cluster introspection until a required second factor is enrolled.
+router.use(enforceMfaSetup);
 
 // ─── GET /api/proxmox/resources ───────────────────────────────
 // Storages, bridges, and ISO-capable storages (for VM create + settings).
