@@ -3,7 +3,7 @@
 import { ArrowUpRight, BookOpen, ShieldOff, Terminal, Globe, Server, AlertTriangle } from "lucide-react";
 import { useAuthStore } from "@/lib/auth-store";
 import { PageHeader } from "@/components/dashboard/page-header";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 const REPO_DOCS_BASE = "https://github.com/r0073dl053r/ProxMate/blob/main/docs";
 

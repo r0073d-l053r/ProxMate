@@ -270,6 +270,49 @@ export async function getIsoNodes(
   return result;
 }
 
+/** Storages on a node that accept disk images for `import-from` (content includes `import`). */
+export async function getImportStorages(node: string, client?: AxiosInstance): Promise<string[]> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Array<{ storage: string; content?: string; active?: number }> }>(
+    `/nodes/${node}/storage`,
+  );
+  return res.data.data
+    .filter((s) => s.active !== 0 && (s.content ?? '').split(',').includes('import'))
+    .map((s) => s.storage);
+}
+
+/**
+ * Download a file (e.g. a cloud image) from a URL into a storage. Returns the
+ * Proxmox task UPID. Cloud images must be stored with `content=import` and a
+ * disk-image extension (`.qcow2`) so they can later be used with `import-from`.
+ */
+export async function downloadUrlToStorage(
+  node: string,
+  storage: string,
+  opts: { url: string; filename: string; content?: string; checksum?: string; checksumAlgorithm?: string },
+  client?: AxiosInstance,
+): Promise<string> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams({
+    content: opts.content ?? 'import',
+    url: opts.url,
+    filename: opts.filename,
+  });
+  if (opts.checksum) {
+    params.set('checksum', opts.checksum);
+    params.set('checksum-algorithm', opts.checksumAlgorithm ?? 'sha256');
+  }
+  const res = await c.post<{ data: string }>(`/nodes/${node}/storage/${storage}/download-url`, params);
+  return res.data.data;
+}
+
+/** Delete a storage volume by volid (e.g. a downloaded import image after it's imported). */
+export async function deleteStorageVolume(node: string, volid: string, client?: AxiosInstance): Promise<void> {
+  const c = client ?? (await getClient());
+  const storage = volid.split(':')[0];
+  await c.delete(`/nodes/${node}/storage/${storage}/content/${encodeURIComponent(volid)}`);
+}
+
 // ─── VM lifecycle ─────────────────────────────────────────────
 
 export async function getNextVmId(client?: AxiosInstance): Promise<number> {
@@ -311,6 +354,183 @@ export async function createVm(config: CreateVmConfig, client?: AxiosInstance): 
   });
   const res = await c.post<{ data: string }>(`/nodes/${config.node}/qemu`, params);
   return res.data.data;
+}
+
+export interface CloudInitVmConfig {
+  node: string;
+  vmid: number;
+  name: string;
+  importFrom: string; // e.g. "local:import/debian-12.qcow2"
+  diskStorage: string; // where the imported disk + cloudinit drive live
+  bridge: string;
+  cores?: number;
+  memory?: number; // MB
+}
+
+/**
+ * Create a cloud-init-ready VM by importing a downloaded cloud image as the boot
+ * disk and attaching a cloud-init drive + serial console. Meant to be converted
+ * to a template afterwards. Returns the Proxmox task UPID.
+ */
+export async function createCloudInitVm(config: CloudInitVmConfig, client?: AxiosInstance): Promise<string> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams({
+    vmid: String(config.vmid),
+    name: config.name,
+    cores: String(config.cores ?? 1),
+    sockets: '1',
+    memory: String(config.memory ?? 1024),
+    scsihw: 'virtio-scsi-pci',
+    // import-from converts the cloud image into the VM's primary disk.
+    scsi0: `${config.diskStorage}:0,import-from=${config.importFrom}`,
+    ide2: `${config.diskStorage}:cloudinit`,
+    net0: `virtio,bridge=${config.bridge},firewall=1`,
+    serial0: 'socket',
+    vga: 'serial0', // cloud images expect a serial console
+    boot: 'order=scsi0',
+    ostype: 'l26',
+    agent: '1',
+  });
+  const res = await c.post<{ data: string }>(`/nodes/${config.node}/qemu`, params);
+  return res.data.data;
+}
+
+/** True if a VM config carries a cloud-init drive (so it's cloud-init capable). */
+export function isCloudInitTemplate(config: Record<string, string>): boolean {
+  return Object.values(config).some((v) => v.includes('cloudinit'));
+}
+
+/**
+ * Set per-VM cloud-init parameters (applied on next boot). NOTE: Proxmox expects
+ * `sshkeys` to be URL-encoded by the caller (it un-escapes it when generating the
+ * cloud-init config), so we encode it explicitly on top of normal form-encoding.
+ */
+export async function setCloudInitConfig(
+  node: string,
+  vmid: number,
+  opts: { ciuser?: string; cipassword?: string; sshKeys?: string; ipConfig?: string; vendorSnippet?: string },
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams();
+  if (opts.ciuser) params.set('ciuser', opts.ciuser);
+  if (opts.cipassword) params.set('cipassword', opts.cipassword);
+  if (opts.sshKeys) params.set('sshkeys', encodeURIComponent(opts.sshKeys));
+  // vendor-data MERGES with the generated user-data (ciuser/sshkeys still apply),
+  // unlike a `user=` snippet which would replace it — that's why we use vendor.
+  if (opts.vendorSnippet) params.set('cicustom', `vendor=${opts.vendorSnippet}`);
+  params.set('ipconfig0', opts.ipConfig ?? 'ip=dhcp');
+  await c.put(`/nodes/${node}/qemu/${vmid}/config`, params);
+}
+
+// ─── Cloud-init "extras" snippets (install Docker / Tailscale on boot) ───
+//
+// Each optional install is a cloud-init VENDOR-data snippet (merges with the
+// SSH-key/user ProxMate injects, unlike a `user=` snippet which replaces it).
+// Proxmox allows only ONE vendor snippet per VM, so a multi-feature deploy uses
+// a *combined* snippet whose filename is the sorted feature ids joined by "-".
+// The Proxmox API can't create snippet files, so admins place them once.
+
+export interface CloudInitFeature {
+  id: string;
+  label: string;
+  hint: string; // shown next to the toggle
+  packages: string[];
+  runcmd: string[];
+}
+
+export const CLOUD_INIT_FEATURES: CloudInitFeature[] = [
+  {
+    id: 'docker',
+    label: 'Install Docker',
+    hint: 'Installs Docker Engine on first boot and adds your user to the docker group.',
+    packages: ['curl'],
+    runcmd: [
+      'curl -fsSL https://get.docker.com | sh',
+      'systemctl enable --now docker 2>/dev/null || true',
+      'usermod -aG docker $(id -nu 1000) 2>/dev/null || true',
+    ],
+  },
+  {
+    id: 'tailscale',
+    label: 'Install Tailscale',
+    hint: 'Installs Tailscale on first boot. SSH in and run `sudo tailscale up --ssh` to connect.',
+    packages: ['curl'],
+    runcmd: [
+      'curl -fsSL https://tailscale.com/install.sh | sh',
+      'systemctl enable --now tailscaled 2>/dev/null || true',
+    ],
+  },
+];
+
+/** Snippet filename for a feature combo, e.g. ['tailscale','docker'] → proxmate-docker-tailscale.yaml */
+export function cloudInitSnippetFile(featureIds: string[]): string {
+  return `proxmate-${[...featureIds].sort().join('-')}.yaml`;
+}
+
+/** The cloud-config vendor-data body for a feature combo (packages deduped, runcmd concatenated). */
+export function cloudInitSnippetContent(featureIds: string[]): string {
+  const ids = [...featureIds].sort();
+  const feats = CLOUD_INIT_FEATURES.filter((f) => ids.includes(f.id));
+  const packages = [...new Set(feats.flatMap((f) => f.packages))];
+  const runcmd = feats.flatMap((f) => f.runcmd);
+  return [
+    '#cloud-config',
+    `# Managed by ProxMate — cloud-init vendor-data (${ids.join(', ')}).`,
+    'package_update: true',
+    'packages:',
+    ...packages.map((p) => `  - ${p}`),
+    'runcmd:',
+    ...runcmd.map((c) => `  - [ sh, -c, ${JSON.stringify(c)} ]`),
+    '',
+  ].join('\n');
+}
+
+// Kept so the original Docker snippet filename is unchanged (already placed by admins).
+export const DOCKER_SNIPPET_FILE = cloudInitSnippetFile(['docker']);
+
+/** Ensure a (directory/file) storage has the `snippets` content type enabled. */
+export async function ensureSnippetsEnabled(storage: string, client?: AxiosInstance): Promise<void> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Array<{ storage: string; content?: string }> }>('/storage');
+  const s = res.data.data.find((x) => x.storage === storage);
+  if (!s) throw new Error(`Storage "${storage}" not found`);
+  const content = (s.content ?? '').split(',').filter(Boolean);
+  if (content.includes('snippets')) return;
+  await c.put(`/storage/${storage}`, new URLSearchParams({ content: [...content, 'snippets'].join(',') }));
+}
+
+/** Filesystem path of a storage (for showing the admin where to drop a snippet). */
+export async function getStoragePath(storage: string, client?: AxiosInstance): Promise<string | undefined> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Array<{ storage: string; path?: string }> }>('/storage');
+  return res.data.data.find((x) => x.storage === storage)?.path ?? undefined;
+}
+
+/** Online nodes that physically have a given snippet file on a storage. */
+export async function nodesWithSnippet(
+  storage: string,
+  filename: string,
+  client?: AxiosInstance,
+): Promise<string[]> {
+  const c = client ?? (await getClient());
+  const volid = `${storage}:snippets/${filename}`;
+  const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources');
+  const nodeNames = res.data.data
+    .filter((i) => i.type === 'node' && i.status === 'online' && i.node)
+    .map((i) => i.node!);
+  const out: string[] = [];
+  for (const node of nodeNames) {
+    try {
+      const r = await c.get<{ data: Array<{ volid: string }> }>(
+        `/nodes/${node}/storage/${storage}/content?content=snippets`,
+      );
+      if (r.data.data?.some((x) => x.volid === volid)) out.push(node);
+    } catch {
+      // snippets not enabled / not present on this node
+    }
+  }
+  return out;
 }
 
 // ─── Templates & cloning ──────────────────────────────────────
@@ -429,6 +649,18 @@ export function findPrimaryDisk(config: Record<string, string>): string | undefi
   return Object.keys(config)
     .filter((k) => /^(scsi|virtio|sata|ide)\d+$/.test(k))
     .find((k) => !config[k]!.includes('media=cdrom'));
+}
+
+/** Primary disk size in whole GB (rounded up), from a VM config. 0 if not found. */
+export function primaryDiskSizeGb(config: Record<string, string>): number {
+  const key = findPrimaryDisk(config);
+  if (!key) return 0;
+  const m = /\bsize=(\d+(?:\.\d+)?)([KMGT])?/i.exec(config[key]!);
+  if (!m) return 0;
+  const n = parseFloat(m[1]!);
+  const unit = (m[2] ?? 'G').toUpperCase();
+  const gb = unit === 'T' ? n * 1024 : unit === 'G' ? n : unit === 'M' ? n / 1024 : n / 1024 / 1024;
+  return Math.max(1, Math.ceil(gb));
 }
 
 // ─── Backups (vzdump / restore / list / delete) ──────────────

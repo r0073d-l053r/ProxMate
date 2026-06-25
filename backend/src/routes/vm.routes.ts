@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
+import { recordAudit } from '../services/audit.service.js';
 import { pveMessage } from '../services/proxmox.service.js';
 import { requestVncProxy } from '../services/vnc-proxy.service.js';
 import { convertVmToTemplate } from '../services/template.service.js';
@@ -71,6 +72,14 @@ router.post('/', async (req: Request, res: Response) => {
 
   try {
     const vm = await createVm(user, parsed.data);
+    await recordAudit({
+      action: 'vm.create',
+      actor: user,
+      targetType: 'vm',
+      targetId: vm.id,
+      detail: `${vm.name} (vmid ${vm.proxmoxVmId} on ${vm.proxmoxNode}, ${vm.cpu}c/${vm.ram}MB/${vm.storage}GB)`,
+      req,
+    });
     res.status(201).json({ vm, status: vm.status });
   } catch (err) {
     if (err instanceof QuotaError) {
@@ -101,6 +110,10 @@ router.delete('/:id', async (req: Request, res: Response) => {
 
   try {
     await destroyVm(vm);
+    await recordAudit({
+      action: 'vm.delete', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `${vm.name} (vmid ${vm.proxmoxVmId})`, req,
+    });
     res.json({ success: true });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
@@ -116,6 +129,7 @@ router.post('/:id/start', async (req: Request, res: Response) => {
 
   try {
     await startVm(vm);
+    await recordAudit({ action: 'vm.start', actor: user, targetType: 'vm', targetId: vm.id, detail: vm.name, req });
     res.json({ success: true, status: 'running' });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
@@ -130,6 +144,10 @@ router.post('/:id/stop', async (req: Request, res: Response) => {
   const force = req.query['force'] === 'true';
   try {
     await stopVm(vm, force);
+    await recordAudit({
+      action: force ? 'vm.stop_force' : 'vm.stop', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: vm.name, req,
+    });
     res.json({ success: true, status: 'stopped', forced: force });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
@@ -143,6 +161,7 @@ router.post('/:id/restart', async (req: Request, res: Response) => {
 
   try {
     await restartVm(vm);
+    await recordAudit({ action: 'vm.restart', actor: user, targetType: 'vm', targetId: vm.id, detail: vm.name, req });
     res.json({ success: true, status: 'running' });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
@@ -172,6 +191,10 @@ router.post('/:id/convert-template', async (req: Request, res: Response) => {
 
   try {
     const template = await convertVmToTemplate(vm, parsed.data);
+    await recordAudit({
+      action: 'template.create', actor: user, targetType: 'template', targetId: template.id,
+      detail: `${parsed.data.name} (from vm ${vm.name})`, req,
+    });
     res.status(201).json(template);
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
@@ -193,6 +216,10 @@ router.post('/:id/matestates', async (req: Request, res: Response) => {
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   try {
     const ms = await createMateState(vm, 'manual');
+    await recordAudit({
+      action: 'matestate.create', actor: user, targetType: 'matestate', targetId: ms.id,
+      detail: `manual backup of ${vm.name}`, req,
+    });
     res.status(201).json(ms);
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
@@ -207,6 +234,10 @@ router.post('/:id/matestates/:msid/restore', async (req: Request, res: Response)
   if (!ms || ms.vmId !== vm.id) { res.status(404).json({ error: 'MateState not found' }); return; }
   try {
     await restoreFromMateState(vm, ms);
+    await recordAudit({
+      action: 'matestate.restore', actor: user, targetType: 'matestate', targetId: ms.id,
+      detail: `restored ${vm.name} from ${ms.createdAt.toISOString()}`, req,
+    });
     res.json({ success: true });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
@@ -221,6 +252,10 @@ router.delete('/:id/matestates/:msid', async (req: Request, res: Response) => {
   if (!ms || ms.vmId !== vm.id) { res.status(404).json({ error: 'MateState not found' }); return; }
   try {
     await deleteMateState(ms);
+    await recordAudit({
+      action: 'matestate.delete', actor: user, targetType: 'matestate', targetId: ms.id,
+      detail: `deleted a backup of ${vm.name}`, req,
+    });
     res.json({ success: true });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });

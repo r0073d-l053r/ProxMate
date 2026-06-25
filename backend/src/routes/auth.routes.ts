@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { hashPassword, verifyPasswordSafe, signToken } from '../services/auth.service.js';
 import { requireAuth } from '../middleware/auth.js';
+import { authLimiter } from '../middleware/rate-limit.js';
+import { recordAudit } from '../services/audit.service.js';
 import type { AuthRequest } from '../types/index.js';
 
 const router = Router();
@@ -16,7 +18,7 @@ const RegisterSchema = z.object({
   inviteToken: z.string().min(1),
 });
 
-router.post('/register', async (req: Request, res: Response) => {
+router.post('/register', authLimiter, async (req: Request, res: Response) => {
   const parsed = RegisterSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
@@ -63,6 +65,8 @@ router.post('/register', async (req: Request, res: Response) => {
   const { token, expiresAt } = await signToken(user.id);
   await prisma.session.create({ data: { userId: user.id, token, expiresAt } });
 
+  await recordAudit({ action: 'auth.register', actor: user, targetType: 'user', targetId: user.id, req });
+
   res.status(201).json({
     user: { id: user.id, email: user.email, role: user.role, displayName: user.displayName },
     token,
@@ -77,7 +81,7 @@ const LoginSchema = z.object({
   password: z.string().min(1),
 });
 
-router.post('/login', async (req: Request, res: Response) => {
+router.post('/login', authLimiter, async (req: Request, res: Response) => {
   const parsed = LoginSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
@@ -90,12 +94,15 @@ router.post('/login', async (req: Request, res: Response) => {
   const valid = await verifyPasswordSafe(password, user?.passwordHash);
 
   if (!user || !valid) {
+    await recordAudit({ action: 'auth.login_failed', targetType: 'email', targetId: email.toLowerCase(), req });
     res.status(401).json({ error: 'Invalid email or password' });
     return;
   }
 
   const { token, expiresAt } = await signToken(user.id);
   await prisma.session.create({ data: { userId: user.id, token, expiresAt } });
+
+  await recordAudit({ action: 'auth.login', actor: user, req });
 
   res.json({
     user: { id: user.id, email: user.email, role: user.role, displayName: user.displayName },
@@ -110,6 +117,7 @@ router.post('/logout', requireAuth, async (req: Request, res: Response) => {
   const header = req.headers.authorization!;
   const token = header.slice(7);
   await prisma.session.deleteMany({ where: { token } });
+  await recordAudit({ action: 'auth.logout', actor: (req as AuthRequest).user, req });
   res.json({ success: true });
 });
 
@@ -144,7 +152,7 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
 
 // ─── GET /api/auth/invite/:token ──────────────────────────────
 
-router.get('/invite/:token', async (req: Request, res: Response) => {
+router.get('/invite/:token', authLimiter, async (req: Request, res: Response) => {
   const invite = await prisma.inviteToken.findUnique({
     where: { token: req.params['token'] as string },
   });

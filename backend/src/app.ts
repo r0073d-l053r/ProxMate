@@ -13,6 +13,11 @@ import { errorHandler } from './middleware/errorHandler.js';
 
 const app = express();
 
+// Behind a reverse proxy / tunnel (Cloudflare, Tailscale, nginx), set
+// TRUST_PROXY to the number of trusted hops so rate limiting & req.ip use the
+// real client IP. Default 0 = trust none (direct connections / dev).
+app.set('trust proxy', Number(process.env.TRUST_PROXY ?? 0));
+
 // ─── Global Middleware ────────────────────────────────────────
 app.use(helmet());
 app.use(cors({

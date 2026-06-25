@@ -15,14 +15,26 @@ import {
   Pencil,
   Check,
   X,
+  Cloud,
+  Container,
 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 import { useAuthStore } from "@/lib/auth-store";
-import type { Template, DiscoveredTemplate } from "@/lib/types";
+import type { Template, DiscoveredTemplate, CuratedImage } from "@/lib/types";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 
 export default function TemplatesPage() {
   const isAdmin = useAuthStore((s) => s.user?.role === "admin");
@@ -50,6 +62,8 @@ export default function TemplatesPage() {
         </Button>
       </PageHeader>
 
+      {isAdmin && <AddCloudImagePanel onChange={load} />}
+      {isAdmin && <CloudInitExtrasCard />}
       {isAdmin && <AdminTemplateManager onChange={load} />}
 
       {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
@@ -117,7 +131,14 @@ function TemplateCard({
           </div>
           {isAdmin && <UnregisterButton id={t.id} onDone={onChange} />}
         </div>
-        <CardTitle>{t.name}</CardTitle>
+        <CardTitle className="flex flex-wrap items-center gap-2">
+          {t.name}
+          {t.cloudInit && (
+            <Badge variant="secondary" className="gap-1 text-[10px]">
+              <Cloud className="size-3" /> Cloud-init
+            </Badge>
+          )}
+        </CardTitle>
         <CardDescription>{t.description || t.os || "Linux template"}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-3">
@@ -183,12 +204,19 @@ function UnregisterButton({ id, onDone }: { id: string; onDone: () => void }) {
       size="icon-sm"
       variant="ghost"
       disabled={busy}
-      title="Remove from store"
+      title="Delete template (store + Proxmox)"
       onClick={async () => {
+        if (
+          !window.confirm(
+            "Delete this template from the store AND from the Proxmox cluster?\n\n" +
+              "Any VMs already cloned from it must be deleted first.",
+          )
+        )
+          return;
         setBusy(true);
         try {
           await api.delete(`/templates/${id}`);
-          toast.success("Removed from store.");
+          toast.success("Template deleted from the store and Proxmox.");
           onDone();
         } catch (err) {
           toast.error(apiError(err));
@@ -322,5 +350,248 @@ function DiscoveredRow({ d, onPublished }: { d: DiscoveredTemplate; onPublished:
         className="mt-2 h-16 w-full resize-none rounded-md border bg-background p-2 text-xs outline-none focus:ring-2 focus:ring-ring"
       />
     </li>
+  );
+}
+
+interface CloudInitBundle {
+  features: string[];
+  label: string;
+  file: string;
+  volid: string;
+  content: string;
+  command: string;
+  nodesReady: string[];
+}
+
+interface CloudInitExtras {
+  storage: string;
+  snippetsEnabled: boolean;
+  features: { id: string; label: string; hint: string }[];
+  bundles: CloudInitBundle[];
+}
+
+function CloudInitExtrasCard() {
+  const [extras, setExtras] = useState<CloudInitExtras | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  const load = useCallback(() => {
+    api
+      .get<CloudInitExtras>("/templates/cloud-init-extras")
+      .then((r) => setExtras(r.data))
+      .catch(() => {});
+  }, []);
+  useEffect(load, [load]);
+
+  async function enable() {
+    setBusy(true);
+    try {
+      const r = await api.post<CloudInitExtras>("/templates/cloud-init-extras/enable");
+      setExtras(r.data);
+      setOpen(true);
+      toast.success("Snippets enabled — now place the snippets below on each node.");
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copy(cmd: string) {
+    (await copyText(cmd)) ? toast.success("Command copied.") : toast.error("Couldn't copy — select it manually.");
+  }
+
+  if (!extras) return null;
+
+  return (
+    <Card className="mb-6">
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Container className="size-4" /> Cloud-init extras (admin)
+            </CardTitle>
+            <CardDescription>
+              Enables the &ldquo;Install Docker / Tailscale&rdquo; checkboxes when tenants deploy a cloud image.
+              Proxmox&apos;s API can&apos;t create snippet files, so each is a one-time manual step per node.
+            </CardDescription>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => setOpen((o) => !o)}>
+            {open ? "Hide" : "Set up"}
+          </Button>
+        </div>
+        <div className="mt-1">
+          <Badge variant={extras.snippetsEnabled ? "secondary" : "outline"}>
+            {extras.snippetsEnabled ? "✓" : "○"} snippets enabled
+          </Badge>
+        </div>
+      </CardHeader>
+      {open && (
+        <CardContent className="grid gap-4 text-sm">
+          {!extras.snippetsEnabled && (
+            <div>
+              <p className="mb-2 text-muted-foreground">
+                Step 1 — enable the <code>snippets</code> content type on <code>{extras.storage}</code> (ProxMate does
+                this via the API):
+              </p>
+              <Button size="sm" disabled={busy} onClick={enable}>
+                {busy ? <Loader2 className="animate-spin" /> : <Check />} Enable snippets
+              </Button>
+            </div>
+          )}
+          <div className="grid gap-3">
+            <p className="text-muted-foreground">
+              {extras.snippetsEnabled ? "" : "Step 2 — "}On <strong>each Proxmox node</strong>, run the command for each
+              option you want to offer. (The combined snippet is needed only if a tenant selects more than one.)
+            </p>
+            {extras.bundles.map((b) => {
+              const ready = b.nodesReady.length > 0;
+              return (
+                <div key={b.file} className="rounded-md border p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="font-medium">{b.label}</span>
+                    <Badge variant={ready ? "secondary" : "outline"} className="text-[10px]">
+                      {ready ? `✓ ${b.nodesReady.join(", ")}` : "○ not placed"}
+                    </Badge>
+                  </div>
+                  <div className="relative">
+                    <pre className="max-h-48 overflow-auto rounded-md border bg-muted/60 p-3 pr-16 text-xs">
+                      {b.command}
+                    </pre>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="absolute right-2 top-2"
+                      onClick={() => copy(b.command)}
+                    >
+                      Copy
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+            <Button variant="ghost" size="sm" onClick={load}>
+              <RefreshCw /> Re-check nodes
+            </Button>
+          </div>
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
+function AddCloudImagePanel({ onChange }: { onChange: () => void }) {
+  const [images, setImages] = useState<CuratedImage[] | null>(null);
+  const [choice, setChoice] = useState(""); // a curated image id or "custom"
+  const [name, setName] = useState("");
+  const [customUrl, setCustomUrl] = useState("");
+  const [customOs, setCustomOs] = useState("");
+  const [building, setBuilding] = useState(false);
+
+  useEffect(() => {
+    api
+      .get<CuratedImage[]>("/templates/cloud-images")
+      .then((r) => setImages(r.data))
+      .catch(() => setImages([]));
+  }, []);
+
+  const isCustom = choice === "custom";
+  const selected = images?.find((i) => i.id === choice);
+
+  function onChoice(v: string) {
+    setChoice(v);
+    const img = images?.find((i) => i.id === v);
+    if (img && !name) setName(img.label);
+  }
+
+  async function add() {
+    const imageUrl = isCustom ? customUrl.trim() : selected?.url;
+    const os = isCustom ? customOs.trim() || undefined : selected?.os;
+    if (!imageUrl || !name.trim()) {
+      toast.error("Pick an image and give it a name.");
+      return;
+    }
+    setBuilding(true);
+    try {
+      // The image download + import takes minutes, so allow a long timeout.
+      await api.post("/templates/cloud-image", { name: name.trim(), imageUrl, os }, { timeout: 20 * 60 * 1000 });
+      toast.success(`"${name}" built and added to the store.`);
+      setChoice("");
+      setName("");
+      setCustomUrl("");
+      setCustomOs("");
+      onChange();
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setBuilding(false);
+    }
+  }
+
+  return (
+    <Card className="mb-6">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <Cloud className="size-4" /> Add a cloud image (admin)
+        </CardTitle>
+        <CardDescription>
+          A one-click cloud-init OS. ProxMate downloads the image and builds a template — users deploy it
+          with their SSH key and it&apos;s ready to log into on first boot, no installer.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-1.5">
+            <label className="text-xs font-medium">Image</label>
+            <Select value={choice} onValueChange={(v) => onChoice(v as string)}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder={images ? "Choose a cloud image" : "Loading…"} />
+              </SelectTrigger>
+              <SelectContent>
+                {images?.map((i) => (
+                  <SelectItem key={i.id} value={i.id}>
+                    {i.label}
+                  </SelectItem>
+                ))}
+                <SelectItem value="custom">Custom image URL…</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1.5">
+            <label className="text-xs font-medium">Store name</label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Debian 12" />
+          </div>
+        </div>
+
+        {isCustom && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-1.5">
+              <label className="text-xs font-medium">Image URL (.qcow2 / .img)</label>
+              <Input
+                value={customUrl}
+                onChange={(e) => setCustomUrl(e.target.value)}
+                placeholder="https://…/image.qcow2"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <label className="text-xs font-medium">OS label (optional)</label>
+              <Input value={customOs} onChange={(e) => setCustomOs(e.target.value)} placeholder="e.g. Rocky Linux 9" />
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-3">
+          <Button size="sm" disabled={building || !choice} onClick={add}>
+            {building ? <Loader2 className="animate-spin" /> : <Download />}
+            {building ? "Building…" : "Add to store"}
+          </Button>
+          {building && (
+            <span className="text-xs text-muted-foreground">
+              Downloading &amp; importing the image — this can take a few minutes.
+            </span>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

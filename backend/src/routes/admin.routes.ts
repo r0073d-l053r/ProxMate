@@ -14,11 +14,21 @@ import {
   getClient,
   pveMessage,
 } from '../services/proxmox.service.js';
+import { listAudit } from '../services/audit.service.js';
 import { prisma } from '../lib/prisma.js';
 
 const router = Router();
 
 router.use(requireAuth, requireAdmin);
+
+// ─── GET /api/admin/audit ─────────────────────────────────────
+// Append-only activity trail (who did what, when). Newest first, paginated.
+
+router.get('/audit', async (req: Request, res: Response) => {
+  const limit = Number(req.query['limit']) || 100;
+  const offset = Number(req.query['offset']) || 0;
+  res.json(await listAudit({ limit, offset }));
+});
 
 // ─── GET /api/admin/settings ──────────────────────────────────
 // Returns current config (never the Proxmox token secret).

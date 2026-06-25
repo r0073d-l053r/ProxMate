@@ -151,6 +151,12 @@ export interface DeployTemplateInput {
   cpu: number;
   ram: number; // MB
   storage: number; // GB (clamped up to the template's base disk)
+  // Cloud-init templates only: injected on first boot so the box is reachable.
+  sshKey?: string;
+  username?: string;
+  password?: string;
+  installDocker?: boolean; // attach the cloud-init "extras" vendor snippet
+  installTailscale?: boolean;
 }
 
 /**
@@ -188,11 +194,13 @@ export async function deployFromTemplate(
   });
 
   try {
+    // Cloud images are imported disks on which lvmthin doesn't support linked
+    // clones, so full-clone them (small + fast). Regular templates stay linked.
     const upid = await pve.cloneVm(
-      { node, templateVmid: template.proxmoxVmId, newVmid: vmid, name: input.name, full: false },
+      { node, templateVmid: template.proxmoxVmId, newVmid: vmid, name: input.name, full: template.cloudInit },
       client,
     );
-    await pve.waitForTask(node, upid, client);
+    await pve.waitForTask(node, upid, client, 600_000);
 
     // Autoscale: set cores/memory, then grow the primary disk if needed.
     await pve.setVmResources(node, vmid, input.cpu, input.ram, client);
@@ -200,6 +208,42 @@ export async function deployFromTemplate(
     const disk = pve.findPrimaryDisk(cfg);
     if (disk && diskGb > (template.diskGb || 0)) {
       await pve.resizeDisk(node, vmid, disk, diskGb, client);
+    }
+
+    // Cloud-init: inject the login user + SSH key + DHCP so the box is
+    // immediately reachable on first boot (no installer). Hostname = VM name.
+    if (template.cloudInit) {
+      let vendorSnippet: string | undefined;
+      const features: string[] = [];
+      if (input.installDocker) features.push('docker');
+      if (input.installTailscale) features.push('tailscale');
+      if (features.length > 0) {
+        // The matching snippet (combined for multiple features) must already be on
+        // this node — admins place it; the API can't write snippets. Fail clearly
+        // rather than letting cloud-init reference a missing file.
+        const snippetStorage = (await getConfig('iso_storage')) ?? 'local';
+        const file = pve.cloudInitSnippetFile(features);
+        const ready = await pve.nodesWithSnippet(snippetStorage, file, client);
+        if (!ready.includes(node)) {
+          throw new Error(
+            `The selected setup (${features.join(' + ')}) isn't installed on node "${node}" — ` +
+              `an admin needs to add its snippet (Template Store → Cloud-init extras).`,
+          );
+        }
+        vendorSnippet = `${snippetStorage}:snippets/${file}`;
+      }
+      await pve.setCloudInitConfig(
+        node,
+        vmid,
+        {
+          ciuser: input.username || 'debian',
+          cipassword: input.password,
+          sshKeys: input.sshKey,
+          ipConfig: 'ip=dhcp',
+          vendorSnippet,
+        },
+        client,
+      );
     }
 
     // Tenant isolation (cloned NICs may lack the per-NIC firewall flag).

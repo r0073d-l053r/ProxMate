@@ -71,7 +71,26 @@ Tenants can still install Tailscale and Cloudflare Tunnel inside their VMs becau
 
 ## 3. Prepare a tenant-friendly Linux template
 
-Tenants can build a VM from an ISO, but it's faster and more consistent to ship a small template they can deploy from in one click. Goal: a minimal Debian/Ubuntu image with the QEMU guest agent, optional pre-installed Tailscale, and a sensible cloud-init / first-boot user setup.
+Tenants can build a VM from an ISO, but it's faster and more consistent to ship a small template they can deploy from in one click.
+
+### 3.0 Easiest: add a cloud image (recommended)
+
+**Template Store → Add a cloud image** is the one-click path — no host shell, no ISO install. Pick a curated image (Debian 12/13, Ubuntu 22.04/24.04) or paste a custom cloud-image URL (`.qcow2`/`.img`), give it a store name, and click **Add to store**. ProxMate downloads the image and builds a **cloud-init** template entirely through the Proxmox API (download → import the disk → attach a cloud-init drive → convert to a template). This takes a few minutes (the download is a few hundred MB) — leave the page open until it finishes.
+
+When a tenant deploys a cloud-init template, the wizard asks for their **SSH public key** (and optional username/password). On first boot the VM applies the user + key + DHCP and is **ready to SSH into in ~60s — no installer**. The template carries a "Cloud-init" badge in the store.
+
+> Notes: deploys of a cloud-init template are **full clones** (small cloud images, fast) that stay on the template's node. Cloud genericcloud/cloudimg images don't ship the QEMU guest agent, so ProxMate's IP display may be blank until the guest agent is installed (the tenant can `apt install qemu-guest-agent`); reaching the box is the [Tailscale guide](./tailscale-ssh.md).
+
+#### Enable the "Install Docker" / "Install Tailscale" options (cloud-init extras)
+
+Tenants can check **Install Docker** and/or **Install Tailscale** when deploying a cloud image — each installs on first boot. It needs a one-time setup because the Proxmox API can't create cloud-init snippet files:
+
+1. In **Template Store → Cloud-init extras (admin)**, click **Enable snippets** (ProxMate enables the `snippets` content type on `local` via the API).
+2. SSH into **each Proxmox node** and run the command the card shows for each option you want to offer — Docker, Tailscale, **and** Docker + Tailscale. Each `cat`s a small cloud-init **vendor-data** snippet into `/var/lib/vz/snippets/`. The combined snippet is needed only if a tenant selects both at once (Proxmox allows one vendor snippet per VM). The card's **Re-check nodes** button confirms which are ready.
+
+Once a snippet shows ready, its checkbox appears for cloud-init templates on that node. Snippets are delivered as vendor-data, so the SSH-key/user injection still works (verified). Notes: Docker's installer covers Debian/Ubuntu/Fedora/RHEL-family (Arch/openSUSE just skip it). **Install Tailscale only installs the client** — the tenant then SSHes in and runs `sudo tailscale up --ssh` to connect (see the [Tailscale guide](./tailscale-ssh.md)).
+
+The rest of this section is the **manual** route — build your own template from an ISO (useful if you want pre-baked tooling like Tailscale, or a non-cloud-init image).
 
 ### 3.1 Build the base VM
 

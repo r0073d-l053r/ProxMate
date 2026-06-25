@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Server, LayoutDashboard, MonitorPlay, Package, Ticket, Users, Settings, BookOpen, Activity } from "lucide-react";
+import { Server, LayoutDashboard, MonitorPlay, Package, Ticket, Users, Settings, BookOpen, Activity, ScrollText } from "lucide-react";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +17,7 @@ const ADMIN_NAV = [
   { href: "/admin/monitor", label: "Monitor", icon: Activity },
   { href: "/admin/invites", label: "Invites", icon: Ticket },
   { href: "/admin/users", label: "Users", icon: Users },
+  { href: "/admin/audit", label: "Audit Log", icon: ScrollText },
   { href: "/admin/settings", label: "Settings", icon: Settings },
 ];
 

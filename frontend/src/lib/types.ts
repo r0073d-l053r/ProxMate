@@ -164,8 +164,17 @@ export interface Template {
   proxmoxNode: string;
   diskGb: number;
   notes: string | null;
+  cloudInit: boolean;
   published: boolean;
   createdAt: string;
+}
+
+export interface CuratedImage {
+  id: string;
+  label: string;
+  url: string;
+  os: string;
+  defaultUser: string;
 }
 
 export interface DiscoveredTemplate {
@@ -206,3 +215,22 @@ export interface LiveVmStats {
 }
 
 export type LiveStats = Record<number, LiveVmStats>;
+
+export interface AuditEntry {
+  id: string;
+  userId: string | null;
+  actorEmail: string | null;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  detail: string | null;
+  ip: string | null;
+  createdAt: string;
+}
+
+export interface AuditListResponse {
+  items: AuditEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
