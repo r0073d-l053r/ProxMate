@@ -5,7 +5,7 @@ import { useAuthStore } from "@/lib/auth-store";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-const REPO_DOCS_BASE = "https://github.com/r0073dl053r/ProxMate/blob/main/docs";
+const REPO_DOCS_BASE = "https://github.com/r0073d-l053r/ProxMate/blob/main/docs";
 
 function DocLink({
   icon: Icon,
@@ -106,7 +106,7 @@ export default function HelpPage() {
               icon={AlertTriangle}
               title="Security model — full details"
               description="The application-layer and network-layer isolation guarantees, the &quot;gold-standard&quot; dedicated-VLAN setup, secrets handling, and the deployment hardening checklist."
-              href="https://github.com/r0073dl053r/ProxMate/blob/main/SECURITY.md"
+              href="https://github.com/r0073d-l053r/ProxMate/blob/main/SECURITY.md"
             />
           </>
         )}
