@@ -960,7 +960,11 @@ export async function configureVmIsolation(
       dhcp: '1',
       ndp: '1',
       macfilter: '1',
-      ipfilter: '1',
+      // ipfilter would require registering each tenant VM's (DHCP-assigned) IP in an
+      // `ipfilter-net*` ipset; without that, Proxmox drops ALL of the VM's traffic once
+      // the cluster firewall is on (no internet, no DNS). Isolation is enforced by the
+      // destination RFC1918 DROP rules below + macfilter, so keep ipfilter off.
+      ipfilter: '0',
       policy_in: 'DROP',
       policy_out: 'ACCEPT',
     }),
