@@ -32,7 +32,9 @@ export async function connectVncTarget(
   ticket: string,
 ): Promise<WebSocket> {
   const { host, tokenId, tokenSecret, verifySsl } = await getConnectionConfig();
-  const wsBase = host.replace(/^http/i, 'ws'); // https→wss, http→ws
+  // Proxmox's API/console listens on HTTPS only; force wss so a host saved as http://
+  // (which REST tolerates via a 301 redirect, but the ws client does NOT) still works.
+  const wsBase = `wss://${host.replace(/^[a-z]+:\/\//i, '')}`;
   const url =
     `${wsBase}/api2/json/nodes/${node}/qemu/${vmid}/vncwebsocket` +
     `?port=${encodeURIComponent(port)}&vncticket=${encodeURIComponent(ticket)}`;
@@ -66,8 +68,16 @@ export function relay(browser: WebSocket, target: WebSocket): void {
     if (target.readyState === WebSocket.OPEN || target.readyState === WebSocket.CONNECTING) target.close();
   };
 
-  target.on('close', closeBoth);
+  target.on('close', (code, reason) => {
+    if (code && code !== 1000) {
+      console.error(`[console] Proxmox VNC target closed: code=${code} reason=${reason?.toString() || ''}`);
+    }
+    closeBoth();
+  });
   browser.on('close', closeBoth);
-  target.on('error', closeBoth);
+  target.on('error', (err) => {
+    console.error('[console] Proxmox VNC target error:', (err as Error)?.message ?? err);
+    closeBoth();
+  });
   browser.on('error', closeBoth);
 }
