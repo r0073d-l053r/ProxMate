@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, Loader2, Package, Plus, Rocket, HardDrive, KeyRound, Server } from "lucide-react";
+import { ArrowLeft, Loader2, Package, Plus, Rocket, HardDrive, KeyRound, Server, Container } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import type { MeResponse, ProxmoxIso, Template, VirtualMachine } from "@/lib/types";
@@ -17,7 +17,10 @@ import { FormField } from "@/components/form-field";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -25,6 +28,22 @@ import {
 const RAM_OPTIONS = [1, 2, 4, 8, 16, 32];
 const CUSTOM = "custom";
 const CUSTOM_DISK_DEFAULT = 20;
+
+/** Snippet filename for a feature combo — must mirror the backend (sorted, hyphen-joined). */
+const cloudSnippetFile = (ids: string[]) => `proxmate-${[...ids].sort().join("-")}.yaml`;
+
+/** Best-guess default cloud-init login user from a template's OS label. */
+function cloudUserForOs(os: string | null): string {
+  const s = (os ?? "").toLowerCase();
+  if (s.includes("ubuntu")) return "ubuntu";
+  if (s.includes("fedora")) return "fedora";
+  if (s.includes("alma")) return "almalinux";
+  if (s.includes("rocky")) return "rocky";
+  if (s.includes("centos") || s.includes("oracle")) return "cloud-user";
+  if (s.includes("arch")) return "arch";
+  if (s.includes("suse")) return "opensuse";
+  return "debian";
+}
 
 export default function NewVmWizard() {
   const router = useRouter();
@@ -44,6 +63,13 @@ export default function NewVmWizard() {
   const [ramGb, setRamGb] = useState(2);
   const [storageGb, setStorageGb] = useState(CUSTOM_DISK_DEFAULT);
   const [os, setOs] = useState("");
+  // Cloud-init template deploys only:
+  const [sshKey, setSshKey] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [cloudFeatures, setCloudFeatures] = useState<{ id: string; label: string; hint: string }[]>([]);
+  const [cloudNodes, setCloudNodes] = useState<Record<string, string[]>>({}); // node → present snippet files
+  const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
@@ -52,11 +78,19 @@ export default function NewVmWizard() {
       api.get<MeResponse>("/auth/me"),
       api.get<ProxmoxIso[]>("/proxmox/isos"),
       api.get<Template[]>("/templates"),
+      // Cloud-init "extras" (Docker/Tailscale) availability — never block the wizard.
+      api
+        .get<{ features: { id: string; label: string; hint: string }[]; nodes: Record<string, string[]> }>(
+          "/templates/cloud-init-status",
+        )
+        .catch(() => ({ data: { features: [], nodes: {} } })),
     ])
-      .then(([meRes, isosRes, tplRes]) => {
+      .then(([meRes, isosRes, tplRes, extrasRes]) => {
         setQuota(meRes.data.user.quota);
         setIsos(isosRes.data);
         setTemplates(tplRes.data);
+        setCloudFeatures(extrasRes.data.features ?? []);
+        setCloudNodes(extrasRes.data.nodes ?? {});
 
         // Deep-link preselect: /vms/new?template=<id> (e.g. the store's Deploy button).
         const wanted = searchParams.get("template");
@@ -64,6 +98,7 @@ export default function NewVmWizard() {
         if (preselected) {
           setSource(preselected.id);
           setStorageGb(Math.max(preselected.diskGb, 1));
+          if (preselected.cloudInit) setUsername(cloudUserForOs(preselected.os));
         }
       })
       .catch((err) => setLoadError(apiError(err)))
@@ -72,6 +107,11 @@ export default function NewVmWizard() {
 
   const template = source === CUSTOM ? null : templates.find((t) => t.id === source) ?? null;
   const isCustom = source === CUSTOM;
+  const isCloud = !!template?.cloudInit;
+  const nodeSnippets = isCloud && template ? cloudNodes[template.proxmoxNode] ?? [] : [];
+  const availableFeatures = isCloud ? cloudFeatures.filter((f) => nodeSnippets.includes(cloudSnippetFile([f.id]))) : [];
+  // A combo deploy needs the combined snippet present too (admins place those).
+  const bundleReady = selectedFeatures.length === 0 || nodeSnippets.includes(cloudSnippetFile(selectedFeatures));
   const minDisk = template?.diskGb ?? 1;
 
   const cpuLeft = quota ? quota.cpu.max - quota.cpu.used : 0;
@@ -81,11 +121,13 @@ export default function NewVmWizard() {
   function onSourceChange(v: string) {
     setSource(v);
     setErrors({});
+    setSelectedFeatures([]);
     if (v === CUSTOM) {
       setStorageGb(CUSTOM_DISK_DEFAULT);
     } else {
       const t = templates.find((x) => x.id === v);
       setStorageGb(t ? Math.max(t.diskGb, 1) : CUSTOM_DISK_DEFAULT);
+      if (t?.cloudInit) setUsername((u) => u || cloudUserForOs(t.os));
     }
   }
 
@@ -99,6 +141,14 @@ export default function NewVmWizard() {
       e.storage = template ? `Template needs at least ${minDisk} GB` : "At least 1 GB";
     else if (!isAdmin && storageGb > storageLeft) e.storage = `Exceeds your remaining ${storageLeft} GB`;
     if (isCustom && !os) e.os = "Select an installation ISO";
+    if (isCloud) {
+      if (!sshKey.trim() && !password) e.sshKey = "Add an SSH public key (or set a password below)";
+      else if (sshKey.trim() && !/^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-|sk-)/.test(sshKey.trim()))
+        e.sshKey = "That doesn't look like an OpenSSH public key";
+      if (username && !/^[a-z_][a-z0-9_-]{0,31}$/.test(username)) e.username = "Lowercase letters, digits, _ and -";
+      if (selectedFeatures.length > 0 && !bundleReady)
+        e.features = "This combination isn't set up on the template's node — ask an admin to add its snippet.";
+    }
     setErrors(e);
     return Object.keys(e).length === 0;
   }
@@ -127,6 +177,15 @@ export default function NewVmWizard() {
           cpu,
           ram: ramGb * 1024,
           storage: storageGb,
+          ...(isCloud
+            ? {
+                sshKey: sshKey.trim() || undefined,
+                username: username || undefined,
+                password: password || undefined,
+                installDocker: selectedFeatures.includes("docker") || undefined,
+                installTailscale: selectedFeatures.includes("tailscale") || undefined,
+              }
+            : {}),
         });
         toast.success(`Deploying "${name}" from ${template?.name}.`);
         router.push(`/vms/${res.data.vm.id}`);
@@ -188,14 +247,20 @@ export default function NewVmWizard() {
                           <Plus className="size-3.5" /> Custom VM (install from ISO)
                         </span>
                       </SelectItem>
-                      {templates.map((t) => (
-                        <SelectItem key={t.id} value={t.id}>
-                          <span className="flex items-center gap-2">
-                            <Package className="size-3.5" /> {t.name}
-                            <span className="text-muted-foreground">· {t.diskGb} GB</span>
-                          </span>
-                        </SelectItem>
-                      ))}
+                      {templates.length > 0 && (
+                        <SelectGroup>
+                          <SelectSeparator />
+                          <SelectLabel>Template Store</SelectLabel>
+                          {templates.map((t) => (
+                            <SelectItem key={t.id} value={t.id}>
+                              <span className="flex items-center gap-2">
+                                <Package className="size-3.5" /> {t.name}
+                                <span className="text-muted-foreground">· {t.diskGb} GB</span>
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      )}
                     </SelectContent>
                   </Select>
                 </FormField>
@@ -258,6 +323,74 @@ export default function NewVmWizard() {
                     onChange={(e) => setStorageGb(Number(e.target.value))}
                   />
                 </FormField>
+
+                {isCloud && (
+                  <>
+                    <FormField
+                      label="SSH public key"
+                      htmlFor="sshkey"
+                      error={errors.sshKey}
+                      hint="Injected on first boot so you can SSH in right away — paste the output of `cat ~/.ssh/id_ed25519.pub`."
+                    >
+                      <textarea
+                        id="sshkey"
+                        value={sshKey}
+                        onChange={(e) => setSshKey(e.target.value)}
+                        placeholder="ssh-ed25519 AAAA… you@laptop"
+                        className="h-20 w-full resize-none rounded-md border bg-background p-2 font-mono text-xs outline-none focus:ring-2 focus:ring-ring"
+                      />
+                    </FormField>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <FormField label="Username" htmlFor="ciuser" error={errors.username} hint="The login user to create.">
+                        <Input
+                          id="ciuser"
+                          value={username}
+                          onChange={(e) => setUsername(e.target.value)}
+                          placeholder="debian"
+                        />
+                      </FormField>
+                      <FormField label="Password (optional)" htmlFor="cipassword" hint="SSH key is recommended.">
+                        <Input
+                          id="cipassword"
+                          type="password"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                        />
+                      </FormField>
+                    </div>
+                    {availableFeatures.length > 0 && (
+                      <div className="grid gap-2">
+                        {availableFeatures.map((f) => {
+                          const checked = selectedFeatures.includes(f.id);
+                          return (
+                            <label
+                              key={f.id}
+                              className="flex cursor-pointer items-start gap-2.5 rounded-md border bg-muted/40 p-3"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) =>
+                                  setSelectedFeatures((s) =>
+                                    e.target.checked ? [...s, f.id] : s.filter((x) => x !== f.id),
+                                  )
+                                }
+                                className="mt-0.5 size-4 accent-primary"
+                              />
+                              <span className="text-sm">
+                                <span className="flex items-center gap-1.5 font-medium">
+                                  <Container className="size-3.5" /> {f.label}
+                                </span>
+                                <span className="text-xs text-muted-foreground">{f.hint}</span>
+                              </span>
+                            </label>
+                          );
+                        })}
+                        {errors.features && <p className="text-xs text-destructive">{errors.features}</p>}
+                      </div>
+                    )}
+                  </>
+                )}
 
                 {isCustom && (
                   <>

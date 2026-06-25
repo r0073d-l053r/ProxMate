@@ -115,6 +115,24 @@ model SystemConfig {
   updatedAt   DateTime  @updatedAt
 }
 
+// Append-only record of who did what, for trust/debugging/accountability on a
+// multi-tenant box. Deliberately NOT relationally tied to User: actorEmail is
+// denormalized so the trail survives a user (and their cascade) being deleted.
+model AuditLog {
+  id          String    @id @default(cuid())
+  userId      String?                       // acting user id (null for anonymous / failed login)
+  actorEmail  String?                       // denormalized actor email (outlives the user row)
+  action      String                        // e.g. "vm.create", "vm.delete", "auth.login"
+  targetType  String?                       // e.g. "vm", "matestate", "session"
+  targetId    String?                       // id/name of the affected entity
+  detail      String?                       // short human-readable summary
+  ip          String?                       // client IP (honors trust proxy)
+  createdAt   DateTime  @default(now())
+
+  @@index([createdAt])
+  @@index([userId])
+}
+
 // A published, cloneable OS build (maps to a Proxmox template VM).
 model Template {
   id            String    @id @default(cuid())
@@ -125,6 +143,7 @@ model Template {
   proxmoxNode   String                        // node the template lives on
   diskGb        Int       @default(0)         // base disk size = minimum deployable disk
   notes         String?                       // admin notes shown to users (e.g. default login creds)
+  cloudInit     Boolean   @default(false)      // true = cloud image; deploy injects SSH key/user (no ISO installer)
   published     Boolean   @default(true)
 
   createdAt     DateTime  @default(now())
