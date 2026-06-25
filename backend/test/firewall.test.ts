@@ -38,7 +38,7 @@ describe('configureVmIsolation (per-VM firewall rule builder)', () => {
   const OPTIONS_URL = `/nodes/${NODE}/qemu/${VMID}/firewall/options`;
   const RULES_URL = `/nodes/${NODE}/qemu/${VMID}/firewall/rules`;
 
-  it('sets a default-deny inbound policy with anti-spoofing on', async () => {
+  it('sets a default-deny inbound policy with MAC anti-spoofing on', async () => {
     const c = fakeClient();
     await configureVmIsolation(NODE, VMID, { gateway: '10.0.0.1' }, asClient(c));
 
@@ -49,7 +49,9 @@ describe('configureVmIsolation (per-VM firewall rule builder)', () => {
       policy_in: 'DROP',
       policy_out: 'ACCEPT',
       macfilter: '1',
-      ipfilter: '1',
+      // ipfilter is intentionally off: DHCP tenant VMs have no IP registered in an
+      // ipfilter-net ipset, so enabling it would drop all of their traffic.
+      ipfilter: '0',
       dhcp: '1',
       ndp: '1',
     });
