@@ -16,10 +16,29 @@ services:
       # REQUIRED and must be stable across restarts (losing it makes stored
       # secrets unreadable). Generate once with: openssl rand -hex 32
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env (openssl rand -hex 32)}
+      # Send Secure cookies (HTTPS only). MUST be "true" in production — passkeys
+      # and SameSite cookies require a secure context.
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # Number of reverse-proxy hops in front of the API, so the real client IP
+      # is used for rate-limiting + audit. 1 when behind a single proxy (Caddy/nginx).
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      # Public base URL of the API — used to build the SSO (OIDC) callback URL
+      # (${BACKEND_PUBLIC_URL}/api/auth/sso/callback). Set to your public origin.
+      BACKEND_PUBLIC_URL: ${BACKEND_PUBLIC_URL:-http://localhost:4000}
+      # WebAuthn (passkey) relying-party. Default to the FRONTEND_URL host; set
+      # explicitly in production. RP ID = registrable domain (no scheme/port),
+      # ORIGIN = the full https:// origin the browser sees.
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
+      WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-}
+      # Optional auth rate-limit tuning (defaults: 20 req / 15 min / IP).
+      AUTH_RATE_LIMIT_MAX: ${AUTH_RATE_LIMIT_MAX:-20}
+      AUTH_RATE_LIMIT_WINDOW_MS: ${AUTH_RATE_LIMIT_WINDOW_MS:-900000}
     volumes:
       - proxmate-data:/data
     ports:
-      - "${BACKEND_PORT:-4000}:4000"
+      # Bind to 127.0.0.1 in production (BIND_ADDR=127.0.0.1) so only the local
+      # reverse proxy can reach the API; default 0.0.0.0 for simple/dev use.
+      - "${BIND_ADDR:-0.0.0.0}:${BACKEND_PORT:-4000}:4000"
 
   frontend:
     build:
@@ -33,7 +52,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "${BIND_ADDR:-0.0.0.0}:${FRONTEND_PORT:-3000}:3000"
 
 volumes:
   proxmate-data:

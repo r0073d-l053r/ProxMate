@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
+import { enforceMfaSetup } from '../middleware/mfa.js';
 import { recordAudit } from '../services/audit.service.js';
 import { pveMessage } from '../services/proxmox.service.js';
 import { requestVncProxy } from '../services/vnc-proxy.service.js';
@@ -29,6 +30,8 @@ import type { AuthRequest } from '../types/index.js';
 const router = Router();
 
 router.use(requireAuth);
+// Users whose admin required 2FA can't touch VMs until they've enrolled a method.
+router.use(enforceMfaSetup);
 
 // ─── GET /api/vms ─────────────────────────────────────────────
 

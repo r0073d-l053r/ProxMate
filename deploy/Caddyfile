@@ -1,0 +1,27 @@
+# ProxMate — single-domain reverse proxy with automatic HTTPS (Let's Encrypt).
+#
+# Install Caddy on the host (https://caddyserver.com/docs/install), drop this in
+# /etc/caddy/Caddyfile, replace the domain + email, then: `sudo systemctl reload caddy`.
+#
+# The app containers bind to 127.0.0.1 only (BIND_ADDR=127.0.0.1 in .env), so the
+# API/UI are reachable solely through this proxy.
+
+{
+	# Email for the ACME (Let's Encrypt) account — used for cert expiry notices.
+	email you@example.com
+}
+
+proxmate.example.com {
+	encode gzip
+
+	# API + the noVNC console WebSocket → backend. Caddy upgrades WebSockets
+	# automatically, so the console relay at /api/vms/:id/console works as-is.
+	handle /api/* {
+		reverse_proxy 127.0.0.1:4000
+	}
+
+	# Everything else → the Next.js frontend.
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+}

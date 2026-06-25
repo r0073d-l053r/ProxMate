@@ -54,6 +54,7 @@ export default function InvitesPage() {
   const [storage, setStorage] = useState(100);
   const [label, setLabel] = useState("");
   const [expiresIn, setExpiresIn] = useState("7d");
+  const [require2fa, setRequire2fa] = useState(false);
   const [creating, setCreating] = useState(false);
   const [lastUrl, setLastUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -77,6 +78,7 @@ export default function InvitesPage() {
         maxStorage: storage,
         label: label.trim() || undefined,
         expiresIn,
+        require2fa,
       });
       setLastUrl(res.data.inviteUrl);
       setLabel("");
@@ -156,6 +158,18 @@ export default function InvitesPage() {
             <FormField label="Label (optional)" htmlFor="label" hint="A note to help you remember who this is for">
               <Input id="label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Dev team member" />
             </FormField>
+            <label className="flex items-start gap-2 text-sm select-none">
+              <input
+                type="checkbox"
+                checked={require2fa}
+                onChange={(e) => setRequire2fa(e.target.checked)}
+                className="mt-0.5 size-4 rounded border-input accent-primary"
+              />
+              <span>
+                Require two-step authentication — the user must set up an authenticator app or a passkey
+                before they can use ProxMate. (Not applied to users who sign in via SSO.)
+              </span>
+            </label>
             <Button type="submit" disabled={creating} className="w-fit">
               {creating ? <Loader2 className="animate-spin" /> : <Ticket />}
               Generate invite
@@ -197,7 +211,14 @@ export default function InvitesPage() {
               <TableBody>
                 {invites.map((inv) => (
                   <TableRow key={inv.id}>
-                    <TableCell className="font-medium">{inv.label ?? "—"}</TableCell>
+                    <TableCell className="font-medium">
+                      {inv.label ?? "—"}
+                      {inv.require2fa && (
+                        <Badge variant="outline" className="ml-2 font-normal">
+                          2FA
+                        </Badge>
+                      )}
+                    </TableCell>
                     <TableCell className="text-muted-foreground">
                       {inv.maxCpu} vCPU · {formatRam(inv.maxRam)} · {inv.maxStorage} GB
                     </TableCell>

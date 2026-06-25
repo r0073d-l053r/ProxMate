@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2, UserPlus, Cpu, MemoryStick, HardDrive, TriangleAlert } from "lucide-react";
+import { Loader2, UserPlus, Cpu, MemoryStick, HardDrive, TriangleAlert, ShieldCheck } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import type { AuthResponse, InviteValidation } from "@/lib/types";
@@ -16,7 +16,7 @@ import { formatRam } from "@/lib/format";
 export default function RegisterPage() {
   const router = useRouter();
   const { token } = useParams<{ token: string }>();
-  const setAuth = useAuthStore((s) => s.setAuth);
+  const setUser = useAuthStore((s) => s.setUser);
 
   const [invite, setInvite] = useState<InviteValidation | null>(null);
   const [checking, setChecking] = useState(true);
@@ -62,7 +62,7 @@ export default function RegisterPage() {
         password,
         inviteToken: token,
       });
-      setAuth(res.data.token, res.data.user);
+      setUser(res.data.user);
       toast.success("Account created — welcome to ProxMate!");
       router.replace("/");
     } catch (err) {
@@ -128,6 +128,17 @@ export default function RegisterPage() {
             <div className="text-xs text-muted-foreground">Disk</div>
           </div>
         </div>
+
+        {invite.require2fa && (
+          <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+            <ShieldCheck className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <span className="text-muted-foreground">
+              This invite requires{" "}
+              <span className="font-medium text-foreground">two-step authentication</span>. Right after
+              signing up, you&apos;ll set up an authenticator app or a passkey before you can continue.
+            </span>
+          </div>
+        )}
 
         <form onSubmit={onSubmit} className="grid gap-4">
           <FormField label="Display name" htmlFor="displayName" error={errors.displayName}>

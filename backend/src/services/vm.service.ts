@@ -244,6 +244,12 @@ export async function deployFromTemplate(
         },
         client,
       );
+
+      // Cloud-image templates default to a serial display (`vga=serial0`), which
+      // makes ProxMate's noVNC console show the "starting serial terminal"
+      // placeholder. Force a normal VGA console so the web console is usable;
+      // the serial port stays available for boot logs via Proxmox.
+      await client.put(`/nodes/${node}/qemu/${vmid}/config`, new URLSearchParams({ vga: 'std' }));
     }
 
     // Tenant isolation (cloned NICs may lack the per-NIC firewall flag).

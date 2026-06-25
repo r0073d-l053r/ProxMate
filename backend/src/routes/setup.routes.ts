@@ -10,6 +10,7 @@ import {
   completeSetup,
   hasAdmin,
 } from '../services/setup.service.js';
+import { setAuthCookies } from '../lib/cookies.js';
 
 const router = Router();
 
@@ -50,7 +51,8 @@ router.post('/admin', async (req: Request, res: Response) => {
   }
   try {
     const result = await createAdmin(parsed.data);
-    res.json({ success: true, ...result });
+    setAuthCookies(res, result.token, result.csrfToken, result.expiresAt);
+    res.json({ success: true, user: result.user });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     res.status(400).json({ error: msg });
@@ -133,7 +135,8 @@ router.post('/defaults', async (req: Request, res: Response) => {
 router.post('/complete', async (_req: Request, res: Response) => {
   try {
     const result = await completeSetup();
-    res.json({ ...result, redirectTo: '/' });
+    setAuthCookies(res, result.token, result.csrfToken, result.expiresAt);
+    res.json({ user: result.user, redirectTo: '/' });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Setup completion failed';
     res.status(500).json({ error: msg });

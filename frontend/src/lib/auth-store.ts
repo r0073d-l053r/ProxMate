@@ -6,32 +6,41 @@ import { persist } from "zustand/middleware";
 import type { AuthUser } from "./types";
 
 interface AuthState {
-  token: string | null;
+  // The session itself lives in an httpOnly cookie (not readable here); this is
+  // only the cached user profile for instant UI. The cookie is the source of truth.
   user: AuthUser | null;
-  setAuth: (token: string, user: AuthUser) => void;
+  // Admin required 2FA but the user hasn't set up a method yet — gate the app.
+  // Session-derived (from /auth/me); deliberately NOT persisted.
+  mfaSetupRequired: boolean;
   setUser: (user: AuthUser) => void;
+  setMfaSetupRequired: (v: boolean) => void;
   clear: () => void;
 }
 
 export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
-      token: null,
       user: null,
-      setAuth: (token, user) => set({ token, user }),
+      mfaSetupRequired: false,
       setUser: (user) => set({ user }),
-      clear: () => set({ token: null, user: null }),
+      setMfaSetupRequired: (mfaSetupRequired) => set({ mfaSetupRequired }),
+      clear: () => set({ user: null, mfaSetupRequired: false }),
     }),
     {
       name: "proxmate-auth",
-      partialize: (state) => ({ token: state.token, user: state.user }),
+      partialize: (state) => ({ user: state.user }),
     },
   ),
 );
 
-/** Read the current token outside React (used by the axios interceptor). */
-export function getToken(): string | null {
-  return useAuthStore.getState().token;
+/**
+ * Read the double-submit CSRF token from the JS-readable `proxmate_csrf` cookie,
+ * to echo back in the `X-CSRF-Token` header on mutating requests.
+ */
+export function getCsrfToken(): string | null {
+  if (typeof document === "undefined") return null;
+  const m = document.cookie.match(/(?:^|;\s*)proxmate_csrf=([^;]+)/);
+  return m ? decodeURIComponent(m[1]!) : null;
 }
 
 /**

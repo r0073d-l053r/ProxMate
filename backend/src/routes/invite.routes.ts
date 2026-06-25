@@ -17,6 +17,7 @@ const CreateInviteSchema = z.object({
   maxStorage: z.number().int().positive(),
   label: z.string().max(200).optional(),
   expiresIn: z.string().default('7d'),
+  require2fa: z.boolean().default(false),
 });
 
 router.post('/', async (req: Request, res: Response) => {
@@ -43,6 +44,7 @@ router.post('/', async (req: Request, res: Response) => {
       maxCpu: parsed.data.maxCpu,
       maxRam: parsed.data.maxRam,
       maxStorage: parsed.data.maxStorage,
+      require2fa: parsed.data.require2fa,
       expiresAt,
     },
   });
@@ -56,6 +58,7 @@ router.post('/', async (req: Request, res: Response) => {
     maxCpu: invite.maxCpu,
     maxRam: invite.maxRam,
     maxStorage: invite.maxStorage,
+    require2fa: invite.require2fa,
     expiresAt: invite.expiresAt.toISOString(),
   });
 });
@@ -76,6 +79,7 @@ router.get('/', async (_req: Request, res: Response) => {
       maxCpu: inv.maxCpu,
       maxRam: inv.maxRam,
       maxStorage: inv.maxStorage,
+      require2fa: inv.require2fa,
       used: !!inv.usedById,
       usedBy: inv.usedBy ? { email: inv.usedBy.email, displayName: inv.usedBy.displayName } : null,
       expired: inv.expiresAt < new Date(),

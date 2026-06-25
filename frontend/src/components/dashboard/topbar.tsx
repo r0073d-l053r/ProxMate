@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { LogOut, ChevronDown } from "lucide-react";
+import { LogOut, ChevronDown, ShieldCheck } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { Button } from "@/components/ui/button";
@@ -68,6 +68,10 @@ export function Topbar() {
             </DropdownMenuLabel>
           </DropdownMenuGroup>
           <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={() => router.push("/security")}>
+            <ShieldCheck />
+            Security
+          </DropdownMenuItem>
           <DropdownMenuItem variant="destructive" onClick={logout}>
             <LogOut />
             Sign out

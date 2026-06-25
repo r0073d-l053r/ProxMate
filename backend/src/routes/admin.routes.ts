@@ -14,7 +14,11 @@ import {
   getClient,
   pveMessage,
 } from '../services/proxmox.service.js';
-import { listAudit } from '../services/audit.service.js';
+import { listAudit, recordAudit } from '../services/audit.service.js';
+import { getMailConfig, saveMailConfig, verifyMailConfig } from '../services/mail.service.js';
+import * as sso from '../services/sso.service.js';
+import { listResetRequests, adminResetPassword } from '../services/password-reset.service.js';
+import type { AuthRequest } from '../types/index.js';
 import { prisma } from '../lib/prisma.js';
 
 const router = Router();
@@ -43,10 +47,118 @@ router.get('/settings', async (_req: Request, res: Response) => {
     getConfig('iso_storage'),
   ]);
 
+  const mail = await getMailConfig();
+  const ssoCfg = await sso.getSsoConfig();
   res.json({
     proxmox: { host, tokenId, verifySsl: verifySsl === 'true', hasSecret: !!(await getConfig('proxmox_token_secret')) },
     defaults: { storage, bridge, isoStorage },
+    smtp: mail
+      ? { configured: true, host: mail.host, port: mail.port, secure: mail.secure, user: mail.user ?? '', from: mail.from, hasPass: !!mail.pass }
+      : { configured: false },
+    sso: ssoCfg
+      ? {
+          configured: true,
+          enabled: ssoCfg.enabled,
+          issuer: ssoCfg.issuer,
+          clientId: ssoCfg.clientId,
+          scopes: ssoCfg.scopes,
+          groupsClaim: ssoCfg.groupsClaim,
+          adminGroup: ssoCfg.adminGroup,
+          allowSignup: ssoCfg.allowSignup,
+          buttonLabel: ssoCfg.buttonLabel,
+          hasSecret: await sso.hasClientSecret(),
+          callbackUrl: sso.callbackUrl(),
+        }
+      : { configured: false, callbackUrl: sso.callbackUrl() },
   });
+});
+
+// ─── SMTP (email) settings ────────────────────────────────────
+
+const SmtpSchema = z.object({
+  host: z.string().min(1),
+  port: z.number().int().positive().max(65535),
+  secure: z.boolean().default(false),
+  user: z.string().optional(),
+  pass: z.string().optional(), // kept if blank
+  from: z.string().optional(),
+});
+
+router.put('/settings/smtp', async (req: Request, res: Response) => {
+  const parsed = SmtpSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  await saveMailConfig(parsed.data);
+  res.json({ success: true });
+});
+
+router.post('/settings/smtp/test', async (_req: Request, res: Response) => {
+  try {
+    res.json(await verifyMailConfig());
+  } catch (err) {
+    res.status(502).json({ ok: false, error: err instanceof Error ? err.message : 'SMTP test failed' });
+  }
+});
+
+// ─── SSO (OIDC) settings ──────────────────────────────────────
+
+const SsoSchema = z.object({
+  enabled: z.boolean().default(false),
+  issuer: z.string().url('Issuer must be a valid URL'),
+  clientId: z.string().min(1),
+  clientSecret: z.string().optional(), // kept if blank
+  scopes: z.string().optional(),
+  groupsClaim: z.string().optional(),
+  adminGroup: z.string().optional(),
+  allowSignup: z.boolean().optional(),
+  buttonLabel: z.string().optional(),
+});
+
+router.put('/settings/sso', async (req: Request, res: Response) => {
+  const parsed = SsoSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  await sso.saveSsoConfig(parsed.data);
+  await recordAudit({ action: 'admin.sso_config', actor: (req as AuthRequest).user, req });
+  res.json({ success: true });
+});
+
+router.post('/settings/sso/test', async (_req: Request, res: Response) => {
+  try {
+    res.json(await sso.verifyDiscovery());
+  } catch (err) {
+    res.status(502).json({ ok: false, error: err instanceof Error ? err.message : 'SSO discovery failed' });
+  }
+});
+
+// ─── Password reset (no-SMTP fallback) ────────────────────────
+
+router.get('/password-requests', async (_req: Request, res: Response) => {
+  res.json(await listResetRequests());
+});
+
+const AdminResetSchema = z.object({ password: z.string().min(8, 'Password must be at least 8 characters') });
+
+router.post('/users/:id/reset-password', async (req: Request, res: Response) => {
+  const parsed = AdminResetSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  const userId = req.params['id'] as string;
+  const target = await prisma.user.findUnique({ where: { id: userId } });
+  if (!target) { res.status(404).json({ error: 'User not found' }); return; }
+
+  await adminResetPassword(userId, parsed.data.password);
+  await recordAudit({
+    action: 'admin.reset_password', actor: (req as AuthRequest).user,
+    targetType: 'user', targetId: userId, detail: target.email, req,
+  });
+  res.json({ success: true });
 });
 
 // ─── PUT /api/admin/settings/proxmox ──────────────────────────

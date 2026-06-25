@@ -47,11 +47,27 @@ export async function signToken(userId: string): Promise<{ token: string; expire
 }
 
 /**
- * Verify a JWT and its backing session, returning the user or null.
- * Shared by the HTTP auth middleware and the WebSocket console upgrade
- * (which can only pass the token via query param).
+ * Mint a session: sign a JWT, generate a CSRF token, and persist the `Session`
+ * row. The caller sets the httpOnly session cookie + readable CSRF cookie from
+ * the returned values. Requires the JWT secret to already exist.
  */
-export async function verifyToken(token: string): Promise<AuthUser | null> {
+export async function createSession(
+  userId: string,
+): Promise<{ token: string; csrfToken: string; expiresAt: Date }> {
+  const { token, expiresAt } = await signToken(userId);
+  const csrfToken = randomBytes(32).toString('hex');
+  await prisma.session.create({ data: { userId, token, csrfToken, expiresAt } });
+  return { token, csrfToken, expiresAt };
+}
+
+/**
+ * Verify a JWT and its backing session, returning the user + the session's CSRF
+ * token (or null). Used by the HTTP auth middleware (which enforces CSRF on
+ * cookie-authenticated mutating requests).
+ */
+export async function verifySession(
+  token: string,
+): Promise<{ user: AuthUser; csrfToken: string | null } | null> {
   try {
     const secret = await getJwtSecret();
     const payload = jwt.verify(token, secret) as { sub: string };
@@ -62,7 +78,39 @@ export async function verifyToken(token: string): Promise<AuthUser | null> {
     const user = await prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user) return null;
 
-    return { id: user.id, email: user.email, role: user.role, displayName: user.displayName };
+    return {
+      user: { id: user.id, email: user.email, role: user.role, displayName: user.displayName },
+      csrfToken: session.csrfToken,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Verify a token and return just the user (or null). Shared by the WebSocket
+ * console upgrade, which authenticates via the session cookie (not a header).
+ */
+export async function verifyToken(token: string): Promise<AuthUser | null> {
+  return (await verifySession(token))?.user ?? null;
+}
+
+/**
+ * Sign a short-lived "2FA pending" token issued after a correct password, to be
+ * exchanged (with a TOTP/recovery code) for a real session. Proves the password
+ * step happened without holding it client-side.
+ */
+export async function signChallenge(userId: string): Promise<string> {
+  const secret = await getJwtSecret();
+  return jwt.sign({ sub: userId, twofa: true }, secret, { expiresIn: '5m' });
+}
+
+/** Verify a 2FA challenge token; returns the userId or null. */
+export async function verifyChallenge(token: string): Promise<string | null> {
+  try {
+    const secret = await getJwtSecret();
+    const payload = jwt.verify(token, secret) as { sub: string; twofa?: boolean };
+    return payload.twofa ? payload.sub : null;
   } catch {
     return null;
   }

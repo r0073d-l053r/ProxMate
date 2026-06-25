@@ -14,6 +14,15 @@ model User {
   displayName   String
   role          String    @default("user") // "admin" | "user"
 
+  // SSO (OIDC) link — the provider's stable `sub` claim, set on first SSO login.
+  ssoSubject    String?   @unique
+
+  // Two-factor auth (TOTP). `twoFactorSecret` is the AES-encrypted base32 secret.
+  twoFactorEnabled Boolean  @default(false)
+  twoFactorSecret  String?
+  // Admin-enforced (via the invite): user must set up a 2FA method before using ProxMate.
+  require2fa       Boolean  @default(false)
+
   // Resource Quotas (set from invite token at registration)
   maxCpu        Int       @default(0)      // total vCPU cores allowed
   maxRam        Int       @default(0)      // total RAM in MB
@@ -32,6 +41,7 @@ model Session {
   id          String   @id @default(cuid())
   userId      String
   token       String   @unique
+  csrfToken   String?                  // double-submit CSRF token bound to this session
   expiresAt   DateTime
   createdAt   DateTime @default(now())
 
@@ -50,6 +60,7 @@ model InviteToken {
   maxCpu      Int
   maxRam      Int
   maxStorage  Int
+  require2fa  Boolean   @default(false) // force the invited user to set up 2FA
 
   usedById    String?   @unique
   expiresAt   DateTime
@@ -151,4 +162,58 @@ model Template {
   updatedAt     DateTime  @updatedAt
 
   @@unique([proxmoxVmId])
+}
+
+// Email-based password reset: the raw token is emailed; only its SHA-256 hash is
+// stored. Single-use (usedAt) and short-lived (expiresAt).
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// "Contact admin for a password reset" fallback when no SMTP is configured —
+// surfaced to admins, who set a temp password or issue a reset link.
+model PasswordResetRequest {
+  id         String    @id @default(cuid())
+  userId     String
+  email      String                      // denormalized for the admin list
+  status     String    @default("pending") // pending | handled
+  createdAt  DateTime  @default(now())
+  handledAt  DateTime?
+
+  @@index([status])
+}
+
+// One-time TOTP recovery codes (lost-device backup). Stored as SHA-256 hashes.
+model TwoFactorRecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// WebAuthn passkeys. `id` is the credential ID (base64url); `publicKey` is the
+// COSE public-key blob. `counter` guards against cloned-authenticator replay.
+model Passkey {
+  id         String    @id
+  userId     String
+  publicKey  Bytes
+  counter    Int       @default(0)
+  transports String?                   // CSV of authenticator transports
+  name       String                    // user-friendly label
+  deviceType String?                   // "singleDevice" | "multiDevice"
+  backedUp   Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  @@index([userId])
 }
