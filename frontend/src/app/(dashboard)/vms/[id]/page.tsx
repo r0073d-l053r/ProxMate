@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -46,6 +46,9 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
+/** Client-side optimistic state while a power action is in flight. */
+type Transition = "starting" | "stopping" | "restarting" | null;
+
 function DetailRow({
   icon: Icon,
   label,
@@ -74,31 +77,74 @@ export default function VmDetailPage() {
   const [vm, setVm] = useState<VmDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const [transition, setTransition] = useState<Transition>(null);
   const [tplName, setTplName] = useState("");
+
+  const transitionRef = useRef<Transition>(null);
+  const mounted = useRef(true);
+  const inFlight = useRef(false);
+  const safety = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Set the optimistic transition + a safety timeout so it can never get stuck.
+  const setTrans = useCallback((t: Transition) => {
+    transitionRef.current = t;
+    setTransition(t);
+    if (safety.current) clearTimeout(safety.current);
+    if (t) safety.current = setTimeout(() => { transitionRef.current = null; setTransition(null); }, 120_000);
+  }, []);
 
   const load = useCallback(async () => {
     try {
       const res = await api.get<VmDetail>(`/vms/${id}`);
+      if (!mounted.current) return;
       setVm(res.data);
+      setError(null);
+      // Clear the optimistic transition once the real status reaches its target.
+      const t = transitionRef.current;
+      const s = res.data.status;
+      if (t === "starting" && s === "running") setTrans(null);
+      else if (t === "stopping" && (s === "stopped" || s === "error")) setTrans(null);
     } catch (err) {
-      setError(apiError(err));
+      if (mounted.current) setError(apiError(err));
     }
-  }, [id]);
+  }, [id, setTrans]);
 
+  // Live refresh: poll the VM so status, IP, uptime, and console-readiness update
+  // on their own — no manual page refresh. Paused when the tab isn't visible.
   useEffect(() => {
-    load();
+    mounted.current = true;
+    const tick = async () => {
+      if (document.visibilityState !== "visible" || inFlight.current) return;
+      inFlight.current = true;
+      try {
+        await load();
+      } finally {
+        inFlight.current = false;
+      }
+    };
+    tick();
+    const iv = setInterval(tick, 2500);
+    return () => {
+      mounted.current = false;
+      clearInterval(iv);
+      if (safety.current) clearTimeout(safety.current);
+    };
   }, [load]);
 
   async function action(kind: "start" | "stop" | "restart", path: string) {
-    setPending(kind);
+    setTrans(kind === "start" ? "starting" : kind === "stop" ? "stopping" : "restarting");
     try {
       await api.post(`/vms/${id}/${path}`);
-      toast.success(`VM ${kind} requested.`);
       await load();
+      // A reboot stays "running", so there's no clean completion signal — clear it shortly.
+      if (kind === "restart") {
+        setTimeout(() => {
+          if (transitionRef.current === "restarting") setTrans(null);
+        }, 8000);
+      }
     } catch (err) {
       toast.error(apiError(err));
-    } finally {
-      setPending(null);
+      setTrans(null);
     }
   }
 
@@ -152,7 +198,8 @@ export default function VmDetailPage() {
     );
   }
 
-  const busy = pending !== null && pending !== "delete-failed";
+  const acting = transition !== null;
+  const busy = acting || (pending !== null && pending !== "delete-failed");
   const running = vm.status === "running";
   const stopped = vm.status === "stopped" || vm.status === "error";
 
@@ -163,24 +210,29 @@ export default function VmDetailPage() {
       </Button>
 
       <PageHeader title={vm.name} description={vm.description ?? undefined}>
-        <VmStatusBadge status={vm.status} />
+        <div className="flex items-center gap-3">
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground" title="Auto-refreshing">
+            <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" /> Live
+          </span>
+          <VmStatusBadge status={transition ?? vm.status} />
+        </div>
       </PageHeader>
 
       {/* Power controls */}
       <div className="mb-6 flex flex-wrap gap-2">
         <Button onClick={() => action("start", "start")} disabled={busy || running} variant="outline">
-          {pending === "start" ? <Loader2 className="animate-spin" /> : <Play />}
+          {transition === "starting" ? <Loader2 className="animate-spin" /> : <Play />}
           Start
         </Button>
         <Button onClick={() => action("stop", "stop")} disabled={busy || stopped} variant="outline">
-          {pending === "stop" ? <Loader2 className="animate-spin" /> : <Square />}
+          {transition === "stopping" ? <Loader2 className="animate-spin" /> : <Square />}
           Stop
         </Button>
         <Button onClick={() => action("restart", "restart")} disabled={busy || !running} variant="outline">
-          {pending === "restart" ? <Loader2 className="animate-spin" /> : <RotateCw />}
+          {transition === "restarting" ? <Loader2 className="animate-spin" /> : <RotateCw />}
           Restart
         </Button>
-        <Button variant="outline" render={<Link href={`/vms/${vm.id}/console`} />} disabled={!running}>
+        <Button variant="outline" render={<Link href={`/vms/${vm.id}/console`} />} disabled={!running || acting}>
           <Terminal />
           Console
         </Button>

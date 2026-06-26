@@ -7,6 +7,10 @@ const STATUS: Record<string, { label: string; dot: string }> = {
   stopped: { label: "Stopped", dot: "bg-muted-foreground" },
   creating: { label: "Creating", dot: "bg-amber-500 animate-pulse" },
   error: { label: "Error", dot: "bg-destructive" },
+  // Client-side transient states while an action is in flight.
+  starting: { label: "Starting…", dot: "bg-amber-500 animate-pulse" },
+  stopping: { label: "Stopping…", dot: "bg-amber-500 animate-pulse" },
+  restarting: { label: "Restarting…", dot: "bg-amber-500 animate-pulse" },
 };
 
 export function VmStatusBadge({ status }: { status: VmStatus | string }) {
