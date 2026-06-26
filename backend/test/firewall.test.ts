@@ -40,7 +40,7 @@ describe('configureVmIsolation (per-VM firewall rule builder)', () => {
 
   it('sets a default-deny inbound policy with MAC anti-spoofing on', async () => {
     const c = fakeClient();
-    await configureVmIsolation(NODE, VMID, { gateway: '10.0.0.1' }, asClient(c));
+    await configureVmIsolation(NODE, VMID, {}, asClient(c));
 
     expect(c.put).toHaveBeenCalledTimes(1);
     expect(c.put.mock.calls[0]![0]).toBe(OPTIONS_URL);
@@ -57,12 +57,12 @@ describe('configureVmIsolation (per-VM firewall rule builder)', () => {
     });
   });
 
-  it('blocks every RFC1918 range and allows DNS only to the gateway', async () => {
+  it('blocks every RFC1918 range and, with no resolver set, allows DNS to any destination', async () => {
     const c = fakeClient();
-    await configureVmIsolation(NODE, VMID, { gateway: '10.0.0.1' }, asClient(c));
+    await configureVmIsolation(NODE, VMID, {}, asClient(c));
 
     const posts = c.post.mock.calls.map((call) => ({ url: call[0], body: bodyOf(call) }));
-    // 3 RFC1918 drops + 2 DNS allows (tcp + udp), all to the rules endpoint.
+    // 3 RFC1918 drops + 2 DNS allows (udp + tcp), all to the rules endpoint.
     expect(posts).toHaveLength(5);
     expect(posts.every((p) => p.url === RULES_URL)).toBe(true);
 
@@ -74,30 +74,31 @@ describe('configureVmIsolation (per-VM firewall rule builder)', () => {
     ]);
     expect(drops.every((p) => p.body.type === 'out')).toBe(true);
 
+    // Default (no resolver configured): DNS allowed to ANY destination (no `dest`).
     const dns = posts.filter((p) => p.body.action === 'ACCEPT');
     expect(dns).toHaveLength(2);
     expect(dns.map((p) => p.body.proto).sort()).toEqual(['tcp', 'udp']);
-    expect(dns.every((p) => p.body.dport === '53' && p.body.dest === '10.0.0.1')).toBe(true);
+    expect(dns.every((p) => p.body.dport === '53' && p.body.dest === undefined)).toBe(true);
+  });
+
+  it('restricts DNS to the configured resolver(s) when set', async () => {
+    const c = fakeClient();
+    await configureVmIsolation(NODE, VMID, { dnsServers: ['192.168.60.13'] }, asClient(c));
+
+    const dns = c.post.mock.calls.map((call) => bodyOf(call)).filter((b) => b.action === 'ACCEPT');
+    expect(dns).toHaveLength(2);
+    expect(dns.every((b) => b.dport === '53' && b.dest === '192.168.60.13')).toBe(true);
+    expect(dns.map((b) => b.proto).sort()).toEqual(['tcp', 'udp']);
   });
 
   it('inserts DNS-allow AFTER the drops so (pos=0 prepend) DNS ends up evaluated first', async () => {
     const c = fakeClient();
-    await configureVmIsolation(NODE, VMID, { gateway: '10.0.0.1' }, asClient(c));
+    await configureVmIsolation(NODE, VMID, { dnsServers: ['10.0.0.1'] }, asClient(c));
 
-    // Every rule is prepended at pos=0; Proxmox evaluates top-to-bottom, first
-    // match wins. So the LAST-inserted rules (DNS) sit on top of the drops —
-    // the gateway's own subnet (RFC1918) must not shadow DNS. This ordering is
-    // the security-critical invariant of the isolation model.
+    // Every rule is prepended at pos=0; Proxmox evaluates top-to-bottom, first match
+    // wins. So the LAST-inserted rules (DNS) sit on top of the drops.
     expect(c.post.mock.calls.every((call) => bodyOf(call).pos === '0')).toBe(true);
     const actions = c.post.mock.calls.map((call) => bodyOf(call).action);
     expect(actions).toEqual(['DROP', 'DROP', 'DROP', 'ACCEPT', 'ACCEPT']);
-  });
-
-  it('omits DNS rules when no gateway is known (still drops all RFC1918)', async () => {
-    const c = fakeClient();
-    await configureVmIsolation(NODE, VMID, {}, asClient(c));
-
-    expect(c.post).toHaveBeenCalledTimes(3);
-    expect(c.post.mock.calls.every((call) => bodyOf(call).action === 'DROP')).toBe(true);
   });
 });

@@ -55,10 +55,13 @@ ProxMate creates is configured with:
 
 - `firewall=1` on its network device,
 - guest firewall `enable=1`, `policy_in=DROP` (nothing on the LAN can initiate to the VM),
-  `policy_out=ACCEPT` (further restricted below), `macfilter=1`, `ipfilter=1`
-  (the VM can't spoof another machine's MAC/IP), `dhcp=1` (so it can still lease an address),
+  `policy_out=ACCEPT` (further restricted below), `macfilter=1` (the VM can't spoof
+  another machine's MAC), `dhcp=1` (so it can still lease an address). `ipfilter` is left
+  **off** — turning it on requires registering each VM's DHCP-assigned IP in an
+  `ipfilter-net*` ipset, and without that Proxmox drops *all* of the VM's traffic.
 - outbound firewall rules, evaluated top-to-bottom:
-  1. `ACCEPT` → gateway:53 (DNS via your router),
+  1. `ACCEPT` → DNS (port 53) to your configured resolver(s) — or to **any** destination
+     when none are set (see note), so tenant VMs always resolve names,
   2. `DROP` → `10.0.0.0/8`,
   3. `DROP` → `172.16.0.0/12`,
   4. `DROP` → `192.168.0.0/16`,
@@ -66,6 +69,13 @@ ProxMate creates is configured with:
 
 Net effect: the tenant VM can reach **the internet and DNS**, but **cannot reach any
 RFC1918 address** — that includes your LAN, your other VMs, and the Proxmox host.
+
+> **DNS servers (Admin → Settings → Network isolation).** Your resolver is often *not*
+> your gateway — a Pi-hole/AdGuard box, a dedicated DNS server, or one on a separate
+> VLAN. By default the isolation rules allow DNS to **any** destination so name
+> resolution always works (the rest of RFC1918 stays blocked, so tenants still can't
+> reach any other internal service). To tighten it, list your DNS server IP(s) in the
+> **DNS servers** field and isolation will permit DNS *only* to those.
 
 ### 3b. You must enable the Proxmox cluster firewall
 

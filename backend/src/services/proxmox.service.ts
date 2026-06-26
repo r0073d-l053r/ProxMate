@@ -938,14 +938,17 @@ export async function getClusterStats(
  * Lock a VM down for tenant isolation: enable its firewall with a default-deny
  * inbound policy and outbound rules that block all RFC1918 ranges (the owner's
  * LAN, other VMs, and the Proxmox host) while still allowing the internet and
- * DNS via the gateway. Idempotent enough to re-run.
+ * DNS. DNS is permitted to the admin-configured resolver(s) when set (tightest),
+ * otherwise to any destination — so a tenant VM can always resolve names no
+ * matter where its DNS server lives (gateway, Pi-hole, a separate subnet, …).
+ * Idempotent enough to re-run.
  *
  * NOTE: guest firewalls only take effect once the cluster firewall is enabled.
  */
 export async function configureVmIsolation(
   node: string,
   vmid: number,
-  opts: { gateway?: string } = {},
+  opts: { dnsServers?: string[] } = {},
   client?: AxiosInstance,
 ): Promise<void> {
   const c = client ?? (await getClient());
@@ -971,8 +974,8 @@ export async function configureVmIsolation(
   );
 
   // Rules are evaluated top-to-bottom; first match wins, else the default policy.
-  // We want DNS-to-gateway allowed before the broad RFC1918 drops, so we POST in
-  // reverse with pos=0 (each insert prepends).
+  // The DNS allow must sit above the broad RFC1918 drops, so we POST the drops
+  // first and the DNS allow(s) last (each insert prepends at pos=0).
   const post = (params: Record<string, string>) =>
     c.post(`${base}/rules`, new URLSearchParams({ enable: '1', pos: '0', ...params }));
 
@@ -984,9 +987,23 @@ export async function configureVmIsolation(
       comment: 'ProxMate isolation: block local/private networks',
     });
   }
-  if (opts.gateway) {
-    await post({ type: 'out', action: 'ACCEPT', dest: opts.gateway, proto: 'tcp', dport: '53', comment: 'ProxMate: DNS via gateway' });
-    await post({ type: 'out', action: 'ACCEPT', dest: opts.gateway, proto: 'udp', dport: '53', comment: 'ProxMate: DNS via gateway' });
+  // DNS must keep working for the tenant to reach the internet. Allow it to the
+  // admin-configured resolver(s) when set (tightest), else to ANY destination so
+  // resolution works no matter where the DNS server lives. The rest of RFC1918
+  // stays blocked, so the tenant still can't reach any other internal service.
+  const dnsServers = (opts.dnsServers ?? []).filter(Boolean);
+  const dnsTargets: (string | undefined)[] = dnsServers.length > 0 ? dnsServers : [undefined];
+  for (const dest of dnsTargets) {
+    for (const proto of ['udp', 'tcp'] as const) {
+      await post({
+        type: 'out',
+        action: 'ACCEPT',
+        proto,
+        dport: '53',
+        ...(dest ? { dest } : {}),
+        comment: dest ? `ProxMate: DNS to ${dest}` : 'ProxMate: DNS (any resolver)',
+      });
+    }
   }
 }
 
