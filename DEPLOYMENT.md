@@ -12,14 +12,20 @@ two-step-authentication methods. Follow it top to bottom.
 
 ## 0. Target topology
 
-```
-                          ┌────────────────────────── your server ──────────────────────────┐
-  browser ──HTTPS──▶  Caddy (:443, auto-TLS)                                                  │
-                          ├── /api/*  ──▶  proxmate-backend  (127.0.0.1:4000, Express + SQLite)│
-                          └── /*      ──▶  proxmate-frontend (127.0.0.1:3000, Next.js)         │
-                                                   │                                           │
-                                                   └── Proxmox API token ──▶ Proxmox VE cluster │
-                          └──────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  browser([Browser])
+  subgraph server [Your server]
+    caddy["Caddy reverse proxy<br/>(:443, auto-TLS)"]
+    backend["proxmate-backend<br/>127.0.0.1:4000 · Express + SQLite"]
+    frontend["proxmate-frontend<br/>127.0.0.1:3000 · Next.js"]
+  end
+  pve[("Proxmox VE cluster")]
+
+  browser -- HTTPS --> caddy
+  caddy -- "/api/*" --> backend
+  caddy -- "/*" --> frontend
+  backend -- "Proxmox API token" --> pve
 ```
 
 - **One public domain** (e.g. `proxmate.example.com`). Frontend at `/`, API at `/api`.
