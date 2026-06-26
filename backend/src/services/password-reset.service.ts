@@ -2,6 +2,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import { hashPassword } from './auth.service.js';
 import { isMailConfigured, sendMail } from './mail.service.js';
+import { passwordResetEmail } from '../lib/email-templates.js';
 
 const TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -25,13 +26,11 @@ export async function requestReset(email: string, appUrl: string): Promise<{ met
         data: { userId: user.id, tokenHash: sha256(raw), expiresAt: new Date(Date.now() + TOKEN_TTL_MS) },
       });
       const link = `${appUrl.replace(/\/+$/, '')}/reset-password?token=${raw}`;
+      const email = passwordResetEmail(link);
       // Don't let a mail failure leak (or 500) — log it; the user still gets the generic message.
-      await sendMail({
-        to: user.email,
-        subject: 'Reset your ProxMate password',
-        text: `Someone requested a password reset for your ProxMate account.\n\nReset it here (valid for 1 hour):\n${link}\n\nIf this wasn't you, you can ignore this email.`,
-        html: `<p>Someone requested a password reset for your ProxMate account.</p><p><a href="${link}">Reset your password</a> (valid for 1 hour).</p><p>If this wasn't you, you can ignore this email.</p>`,
-      }).catch((err) => console.error('[reset] failed to send email:', err));
+      await sendMail({ to: user.email, ...email }).catch((err) =>
+        console.error('[reset] failed to send email:', err),
+      );
     } else {
       // Dedupe pending requests so the admin list isn't spammed.
       const existing = await prisma.passwordResetRequest.findFirst({
