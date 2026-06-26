@@ -130,8 +130,8 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
 
     // Lock the VM's firewall down for tenant isolation before it ever boots.
     if (isolate) {
-      const gateway = await pve.getBridgeGateway(bridge, node, client);
-      await pve.configureVmIsolation(node, vmid, { gateway }, client);
+      const dnsServers = ((await getConfig('isolation_dns_servers')) ?? '').split(/[,\s]+/).filter(Boolean);
+      await pve.configureVmIsolation(node, vmid, { dnsServers }, client);
     }
 
     await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
@@ -255,9 +255,8 @@ export async function deployFromTemplate(
     // Tenant isolation (cloned NICs may lack the per-NIC firewall flag).
     if (isolate) {
       await pve.ensureNicFirewall(node, vmid, client);
-      const bridge = (await getConfig('default_bridge')) ?? undefined;
-      const gateway = bridge ? await pve.getBridgeGateway(bridge, node, client) : undefined;
-      await pve.configureVmIsolation(node, vmid, { gateway }, client);
+      const dnsServers = ((await getConfig('isolation_dns_servers')) ?? '').split(/[,\s]+/).filter(Boolean);
+      await pve.configureVmIsolation(node, vmid, { dnsServers }, client);
     }
 
     await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
