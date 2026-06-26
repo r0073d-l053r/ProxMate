@@ -35,6 +35,16 @@ export interface AuthResponse {
   user: AuthUser;
 }
 
+/**
+ * Returned by register/login when the user must set up a required second factor
+ * before they get a session. The token is scoped to the enrollment endpoints
+ * only (no session is issued until they log in with the new factor).
+ */
+export interface EnrollmentResponse {
+  mfaEnrollmentRequired: true;
+  enrollmentToken: string;
+}
+
 export interface VirtualMachine {
   id: string;
   userId: string;
