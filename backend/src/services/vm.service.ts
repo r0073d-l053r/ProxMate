@@ -372,6 +372,44 @@ export async function refreshVmIps<T extends VirtualMachine>(vms: T[]): Promise<
   return vms;
 }
 
+export interface LiveUsage {
+  cpu: number; // cores currently in use (sum of cpu-fraction × cores over running VMs)
+  mem: number; // bytes of RAM currently in use
+  maxMem: number; // bytes of RAM allocated to the running VMs
+  running: number; // count of running VMs
+}
+
+/**
+ * Live aggregate resource usage of the requesting user's OWN VMs, from a single
+ * `/cluster/resources` call. Drives the dashboard's live-usage sparklines.
+ */
+export async function getLiveUsage(user: { id: string }): Promise<LiveUsage> {
+  const vms = await prisma.virtualMachine.findMany({
+    where: { userId: user.id },
+    select: { proxmoxVmId: true },
+  });
+  const ids = new Set(vms.map((v) => v.proxmoxVmId));
+  const empty: LiveUsage = { cpu: 0, mem: 0, maxMem: 0, running: 0 };
+  if (ids.size === 0) return empty;
+
+  const client = await pve.getClient();
+  const res = await client.get<{
+    data: Array<{ type: string; vmid?: number; status?: string; cpu?: number; maxcpu?: number; mem?: number; maxmem?: number }>;
+  }>('/cluster/resources');
+
+  const usage = { ...empty };
+  for (const r of res.data.data) {
+    if ((r.type === 'qemu' || r.type === 'lxc') && r.vmid !== undefined && ids.has(r.vmid) && r.status === 'running') {
+      usage.cpu += (r.cpu ?? 0) * (r.maxcpu ?? 0);
+      usage.mem += r.mem ?? 0;
+      usage.maxMem += r.maxmem ?? 0;
+      usage.running += 1;
+    }
+  }
+  usage.cpu = Math.round(usage.cpu * 100) / 100;
+  return usage;
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Poll a VM's status until it reports "stopped" or the timeout elapses. */
