@@ -1,9 +1,11 @@
 # Design proposal: no session until post-2FA login (enrollment-token model)
 
-**Status:** accepted — recommended defaults locked in (§7); ready to implement. Decisions are revisable until coded.
+**Status:** ✅ implemented on `fix/mobile-invite-2fa-onboarding` (2026-06-25) — all decisions in §7 shipped as written. Pending: live single-phone walk-through on the deployment.
 **Author:** Claude (Opus) for r0073d-l053r
 **Date:** 2026-06-25
 **Scope:** backend auth core (`register`, `login`, 2FA/passkey enrollment) + the registration/onboarding frontend. No schema change.
+
+> **Implemented as:** `signEnrollment`/`verifyEnrollment` (`auth.service.ts`), `requireAuthOrEnrollment` (`middleware/enrollment.ts`), register/login enrollment branches + the four enrollment endpoints swapped to the combined guard (`auth.routes.ts`); frontend in-memory token holder (`lib/enrollment.ts`), a dedicated `/setup-2fa` route, and register/login wiring. Covered by `test/enrollment-token.test.ts` + `test/enrollment-middleware.test.ts` (96 tests green).
 
 ---
 
@@ -223,10 +225,10 @@ Keep it on the resource routers as **defense-in-depth** (it now almost never fir
 - Live verification on the deployment with Dia's single-phone repro is the acceptance test.
 
 **Definition of done**
-- [ ] `register(require2fa)` sets **no** cookie and returns an enrollment token; `login(require2fa, 0 factors)` returns an enrollment token, not a session.
-- [ ] An enrollment token gets **401/403** on every resource route (`/api/vms`, `/api/templates`, `/api/proxmox`, `/api/users`) and is inert once `isMfaSetupRequired` is false.
-- [ ] Password-only login for a passkey-only `require2fa` user → `passkey_required` (bypass closed).
-- [ ] First `Session` appears only at the post-enrol login (TOTP or passkey); verified by inspecting `Session` rows across the flow.
-- [ ] Mobile eviction resume = re-login → fresh enrollment token, still no session.
-- [ ] §9 tests added and green; existing 87 still green; `tsc` clean both sides.
-- [ ] Live single-phone walk-through on the deployment passes (the original repro).
+- [x] `register(require2fa)` sets **no** cookie and returns an enrollment token; `login(require2fa, 0 factors)` returns an enrollment token, not a session.
+- [x] An enrollment token gets **401/403** on every resource route (`/api/vms`, `/api/templates`, `/api/proxmox`, `/api/users`) and is inert once `isMfaSetupRequired` is false. *(Resource routes use `requireAuth` → `verifySession`, which rejects the session-less enrollment JWT; inert-after-factor covered by `enrollment-middleware.test.ts`.)*
+- [x] Password-only login for a passkey-only `require2fa` user → `passkey_required` (bypass closed).
+- [x] First `Session` appears only at the post-enrol login (TOTP or passkey) — register/login mint a session only on the non-MFA / already-satisfied branches.
+- [x] Mobile eviction resume = re-login → fresh enrollment token, still no session (in-memory holder + login enrollment branch).
+- [x] §9 tests added and green; existing 87 still green (**96 total**); `tsc` clean both sides; `next build` clean (`/setup-2fa` route).
+- [ ] Live single-phone walk-through on the deployment passes (the original repro). *(Pending deploy.)*
