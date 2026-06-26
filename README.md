@@ -36,7 +36,7 @@ ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cl
 | 🌐 **In-Browser Console** | noVNC remote access in the browser, proxied securely through the backend — with copy-paste into the VM (fixed std VGA console display for Cloud-init templates) |
 | 💾 **MateStates Backups** | Scheduled weekly snapshots + one-click in-place restore, with rolling retention |
 | 📈 **Live Admin Monitor** | Per-VM CPU / memory / network sparklines at 1 Hz, with power controls, grouped by owner |
-| 🛡️ **Tenant Network Isolation** | Per-VM Proxmox firewall with MAC/IP filtering and RFC1918 drop rules |
+| 🛡️ **Tenant Network Isolation** | Per-VM Proxmox firewall — MAC filtering, RFC1918 drop rules, and a configurable DNS allow-list — keeps guests off your LAN, your other VMs, and the host |
 | 📝 **Audit Log** | Who created / deleted / restored / started which VM, plus sign-ins — an admin-viewable activity trail |
 | 🚦 **Rate Limiting** | Built-in brute-force protection on the login / register / invite endpoints |
 | 📊 **Resource Quotas** | Users can only provision resources within their assigned limits |
@@ -184,10 +184,25 @@ docker compose up -d --build
 > token and JWT secret. Back it up. `NEXT_PUBLIC_API_URL` is baked into the frontend at
 > **build time**, so rebuild the frontend image if it changes.
 
-**For a real public deployment**, put a reverse proxy (Caddy/nginx/Traefik) in front to
-terminate **HTTPS**, set `NEXT_PUBLIC_API_URL` to `https://<your-domain>/api`, proxy `/api`
-to the backend, and set `TRUST_PROXY=1` so the built-in rate limiter keys on the real client
-IP. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the production runbook and [SECURITY.md](./SECURITY.md) for the hardening guide.
+**For a real public deployment**, serve ProxMate from a **single HTTPS origin** — passkeys,
+`Secure` cookies, and the OIDC SSO callback all require it. Put a reverse proxy
+(**Caddy / nginx / Traefik**, or a **Cloudflare Tunnel**) in front to terminate HTTPS and route
+`/api/*` to the backend and everything else to the frontend on one domain, then set in `.env`:
+
+```bash
+FRONTEND_URL=https://proxmate.example.com
+BACKEND_PUBLIC_URL=https://proxmate.example.com
+NEXT_PUBLIC_API_URL=https://proxmate.example.com/api   # baked in at build time → rebuild if changed
+WEBAUTHN_RP_ID=proxmate.example.com
+WEBAUTHN_ORIGIN=https://proxmate.example.com
+COOKIE_SECURE=true
+TRUST_PROXY=1            # real client IP for rate-limiting + audit behind the proxy
+BIND_ADDR=127.0.0.1     # only the local reverse proxy can reach the app ports
+```
+
+See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for the full production runbook (reverse-proxy /
+Cloudflare-Tunnel topology, tenant isolation, Keycloak OIDC SSO, SMTP, and the 2FA test matrix)
+and **[SECURITY.md](./SECURITY.md)** for the hardening guide.
 
 ---
 
