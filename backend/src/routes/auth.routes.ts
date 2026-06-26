@@ -7,6 +7,7 @@ import {
   createSession,
   signChallenge,
   verifyChallenge,
+  signEnrollment,
 } from '../services/auth.service.js';
 import * as twofa from '../services/twofactor.service.js';
 import * as passkeys from '../services/passkey.service.js';
@@ -23,6 +24,7 @@ import {
   SSO_COOKIE,
 } from '../lib/cookies.js';
 import { requireAuth } from '../middleware/auth.js';
+import { requireAuthOrEnrollment } from '../middleware/enrollment.js';
 import { authLimiter } from '../middleware/rate-limit.js';
 import { recordAudit } from '../services/audit.service.js';
 import { requestReset, resetWithToken } from '../services/password-reset.service.js';
@@ -84,10 +86,19 @@ router.post('/register', authLimiter, async (req: Request, res: Response) => {
     return;
   }
 
+  await recordAudit({ action: 'auth.register', actor: user, targetType: 'user', targetId: user.id, req });
+
+  // If the invite required 2FA, mint NO session — hand back a scoped enrollment
+  // token instead. The first real session is issued only at the post-enrollment
+  // login (password + factor, or a passkey), so no session ever exists before a
+  // second factor does.
+  if (await isMfaSetupRequired(user.id)) {
+    res.status(201).json({ mfaEnrollmentRequired: true, enrollmentToken: await signEnrollment(user.id) });
+    return;
+  }
+
   const { token, csrfToken, expiresAt } = await createSession(user.id);
   setAuthCookies(res, token, csrfToken, expiresAt);
-
-  await recordAudit({ action: 'auth.register', actor: user, targetType: 'user', targetId: user.id, req });
 
   res.status(201).json({
     user: { id: user.id, email: user.email, role: user.role, displayName: user.displayName },
@@ -116,6 +127,22 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
   if (!user || !valid) {
     await recordAudit({ action: 'auth.login_failed', targetType: 'email', targetId: email.toLowerCase(), req });
     res.status(401).json({ error: 'Invalid email or password' });
+    return;
+  }
+
+  // Required 2FA but no factor enrolled yet → no session. Hand back an enrollment
+  // token so an interrupted setup resumes here (a correct password never yields a
+  // session until a second factor exists).
+  if (await isMfaSetupRequired(user.id)) {
+    res.json({ mfaEnrollmentRequired: true, enrollmentToken: await signEnrollment(user.id) });
+    return;
+  }
+
+  // A require2fa user whose only factor is a passkey has twoFactorEnabled=false;
+  // a password alone must not be sufficient for them — they sign in passwordless
+  // with the passkey (which is strong MFA on its own).
+  if (user.require2fa && !user.ssoSubject && !user.twoFactorEnabled) {
+    res.status(401).json({ code: 'passkey_required', error: 'Use your passkey to sign in.' });
     return;
   }
 
@@ -215,14 +242,14 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
 
 // ─── 2FA (TOTP) management — authenticated ────────────────────
 
-router.post('/2fa/setup', requireAuth, async (req: Request, res: Response) => {
+router.post('/2fa/setup', requireAuthOrEnrollment, async (req: Request, res: Response) => {
   const u = (req as AuthRequest).user;
   res.json(await twofa.beginSetup(u.id, u.email));
 });
 
 const TwoFaCodeSchema = z.object({ code: z.string().min(1) });
 
-router.post('/2fa/enable', requireAuth, async (req: Request, res: Response) => {
+router.post('/2fa/enable', requireAuthOrEnrollment, async (req: Request, res: Response) => {
   const parsed = TwoFaCodeSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Enter the 6-digit code from your app.' }); return; }
   const u = (req as AuthRequest).user;
@@ -287,7 +314,7 @@ router.post('/passkeys/auth/verify', authLimiter, async (req: Request, res: Resp
 });
 
 // Enroll a passkey (authenticated).
-router.post('/passkeys/register/options', requireAuth, async (req: Request, res: Response) => {
+router.post('/passkeys/register/options', requireAuthOrEnrollment, async (req: Request, res: Response) => {
   const u = (req as AuthRequest).user;
   const options = await passkeys.registrationOptions(u.id, u.email);
   setChallengeCookie(res, options.challenge);
@@ -296,7 +323,7 @@ router.post('/passkeys/register/options', requireAuth, async (req: Request, res:
 
 const PasskeyRegisterSchema = z.object({ response: z.any(), name: z.string().max(100).optional() });
 
-router.post('/passkeys/register/verify', requireAuth, async (req: Request, res: Response) => {
+router.post('/passkeys/register/verify', requireAuthOrEnrollment, async (req: Request, res: Response) => {
   const challenge = req.cookies?.[WEBAUTHN_COOKIE];
   if (!challenge) {
     res.status(400).json({ error: 'Passkey challenge expired — please try again.' });

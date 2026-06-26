@@ -6,7 +6,8 @@ import { toast } from "sonner";
 import { Loader2, UserPlus, Cpu, MemoryStick, HardDrive, TriangleAlert, ShieldCheck } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
-import type { AuthResponse, InviteValidation } from "@/lib/types";
+import { setEnrollmentToken } from "@/lib/enrollment";
+import type { AuthResponse, EnrollmentResponse, InviteValidation } from "@/lib/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -78,12 +79,20 @@ export default function RegisterPage() {
     if (!validate()) return;
     setSubmitting(true);
     try {
-      const res = await api.post<AuthResponse>("/auth/register", {
+      const res = await api.post<AuthResponse | EnrollmentResponse>("/auth/register", {
         displayName,
         email,
         password,
         inviteToken: token,
       });
+      // 2FA-required invite: no session yet — go set up the second factor with the
+      // scoped enrollment token, then sign in with it to finish.
+      if ("mfaEnrollmentRequired" in res.data) {
+        setEnrollmentToken(res.data.enrollmentToken);
+        toast.success("Account created — set up two-step authentication to continue.");
+        router.replace("/setup-2fa");
+        return;
+      }
       setUser(res.data.user);
       toast.success("Account created — welcome to ProxMate!");
       router.replace("/");

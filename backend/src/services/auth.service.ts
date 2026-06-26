@@ -115,3 +115,27 @@ export async function verifyChallenge(token: string): Promise<string | null> {
     return null;
   }
 }
+
+/**
+ * Sign a short-lived "2FA enrollment" token, issued at registration (or a
+ * re-login) for a user whose invite required 2FA but who hasn't set up a factor.
+ * It is NOT a session — it carries no `Session` row, so `verifySession` (and
+ * therefore every resource route) rejects it. It authorizes only the first-factor
+ * enrollment endpoints (via `requireEnrollment`), and only while the user still
+ * needs setup. The real session is minted later, at the post-enrollment login.
+ */
+export async function signEnrollment(userId: string): Promise<string> {
+  const secret = await getJwtSecret();
+  return jwt.sign({ sub: userId, enroll: true }, secret, { expiresIn: '15m' });
+}
+
+/** Verify a 2FA enrollment token; returns the userId or null. */
+export async function verifyEnrollment(token: string): Promise<string | null> {
+  try {
+    const secret = await getJwtSecret();
+    const payload = jwt.verify(token, secret) as { sub: string; enroll?: boolean };
+    return payload.enroll ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
