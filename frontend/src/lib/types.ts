@@ -177,6 +177,7 @@ export interface IsolationStatus {
   enforced: boolean;
   reachable: boolean;
   suggestedMgmtCidr: string | null;
+  dnsServers: string;
 }
 
 export type MateStateStatus = "creating" | "ready" | "restoring" | "error";
