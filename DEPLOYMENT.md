@@ -141,6 +141,26 @@ at the box and ports 80/443 are reachable. (Prefer nginx/Traefik? Mirror the sam
 routing: `/api/*` → `127.0.0.1:4000` with WebSocket upgrade, everything else →
 `127.0.0.1:3000`.)
 
+### Alternative: Cloudflare Tunnel (no open ports)
+
+If you can't (or don't want to) open 80/443 — e.g. behind CGNAT — front ProxMate with
+a **Cloudflare Tunnel** instead. TLS terminates at Cloudflare's edge and `cloudflared`
+forwards plain HTTP to a **single local origin**, so you still need one merge-proxy that
+joins `/api` and `/` onto one host:port. Run a small Caddy "merge-proxy" (no TLS):
+
+```
+# deploy/Caddyfile.proxy
+:8184 {
+	handle /api/* { reverse_proxy 127.0.0.1:4000 }
+	handle       { reverse_proxy 127.0.0.1:3000 }
+}
+```
+Start it (`auto_https off`), then in the Cloudflare Zero Trust dashboard point the public
+hostname (`proxmate.example.com`) at `http://<host>:8184`. WebSockets (the noVNC console)
+pass through automatically on proxied hostnames. The `.env` values are identical to the
+reverse-proxy setup above (single HTTPS origin), and **no inbound ports** are exposed on
+the host.
+
 ---
 
 ## 6. Build & launch
