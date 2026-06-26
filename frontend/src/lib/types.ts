@@ -235,6 +235,14 @@ export interface ClusterStats {
   vmCount: number;
 }
 
+/** Live aggregate usage of the caller's own running VMs (dashboard sparklines). */
+export interface LiveUsage {
+  cpu: number; // cores in use
+  mem: number; // bytes in use
+  maxMem: number; // bytes allocated to running VMs
+  running: number;
+}
+
 export interface UserGroup {
   id: string;
   email: string;
