@@ -1,6 +1,6 @@
 # Design proposal: no session until post-2FA login (enrollment-token model)
 
-**Status:** proposal — awaiting review (Dia)
+**Status:** accepted — recommended defaults locked in (§7); ready to implement. Decisions are revisable until coded.
 **Author:** Claude (Opus) for r0073d-l053r
 **Date:** 2026-06-25
 **Scope:** backend auth core (`register`, `login`, 2FA/passkey enrollment) + the registration/onboarding frontend. No schema change.
@@ -58,7 +58,7 @@ This reuses a pattern **already in the codebase**: the login 2FA step issues a `
 | property | value |
 |---|---|
 | shape | JWT `{ sub: userId, enroll: true }` |
-| TTL | **15 min** (proposed — see open questions) |
+| TTL | **15 min** (decided, §7) |
 | backing | **none** — stateless, **no `Session` row** |
 | transport | response body → frontend holds it **in memory only**, sends as `Authorization: Bearer <token>` |
 | accepted by | `requireEnrollment` only (the 4 enrollment endpoints) |
@@ -179,18 +179,20 @@ Keep it on the resource routers as **defense-in-depth** (it now almost never fir
 | **Mobile tab eviction mid-setup** | in-memory token lost → frontend has no token → redirect to `/login` w/ note → password login → `isMfaSetupRequired` still true → **new enrollment token** → resume. No session ever existed. |
 | **Non-`require2fa` invite** | unchanged: register issues a session directly. |
 | **SSO user** | exempt (IdP handles MFA), unchanged. |
-| **Admin flips `require2fa` on an existing, logged-in user** | they keep their pre-existing session; `enforceMfaSetup` (kept) + `AuthGuard` corral them to `/security`, where they enrol via their **session** (not the enrollment token). *Open decision:* optionally invalidate their sessions on flip to force the clean re-login (§7). |
+| **Admin flips `require2fa` on an existing, logged-in user** | **their sessions are invalidated on flip** (decided, §7) → next request 401s → clean re-login, which (no factor yet) returns an enrollment token, not a session. Fallback if ever relaxed: keep the session, corralled to `/security` by `enforceMfaSetup` + `AuthGuard`. |
 | **Leaked enrollment token (<15 min, before any factor)** | attacker could only enrol *their own* authenticator as the victim's first factor — which the victim's next login would expose (their code won't work) and which an account-recovery path resolves. Bounded, short, and strictly weaker than leaking a session. Mitigated further by the short TTL + inert-after-first-factor rule. |
 
 ---
 
-## 7. Open questions for review
+## 7. Decisions (locked in — revisable until coded)
 
-1. **Enrollment token TTL** — 15 min proposed. Long enough to scan + app-switch; resume is a re-login. Shorter (e.g., 10) is fine since resume is cheap. Pick one.
-2. **In-memory bearer vs. a scoped httpOnly enrollment cookie.** In-memory (proposed) = *nothing ambient before 2FA*, at the cost of a password re-entry if the mobile tab is evicted. A short-lived scoped cookie would survive eviction (smoother) but reintroduces an ambient pre-2FA credential (still resource-incapable). The review's stance ("no valid session at all") points to **in-memory**; confirm we accept the re-login-on-eviction UX.
-3. **Require an explicit login after enrol?** Proposed **yes** (the review's literal ask), even though `/2fa/enable` already verifies a live code — the clean boundary is "first session == first full login." Confirm.
-4. **Passkey-only login** — proposed: a `require2fa` user with only a passkey **cannot** complete password-only login (`code: passkey_required`); they use the passwordless passkey button. Confirm this is the desired UX (vs. adding a password→passkey step-up).
-5. **Existing-user `require2fa` flip** — invalidate their current sessions to force the clean flow, or let the existing session ride (softer guarantee, corralled by `enforceMfaSetup`)? 
+1. **Enrollment token TTL — 15 min.** Enough to scan a QR and app-switch; if it lapses, resume is a cheap re-login. (Drop to 10 if review prefers; no code impact beyond the constant.)
+2. **In-memory bearer, not a cookie.** Nothing ambient exists before 2FA — matches the review's "no valid session at all." Accepted cost: a password re-entry if the mobile tab is evicted mid-setup (the secure resume path, §6). A scoped httpOnly cookie was considered (survives eviction) but rejected: it reintroduces an ambient pre-2FA credential, even if resource-incapable.
+3. **Explicit login required after enrol — yes.** Even though `/2fa/enable` verifies a live code, the boundary is "first session == first full login." The post-enrol screen routes to `/login`.
+4. **Passkey-only `require2fa` users sign in passwordless.** Password-only login for such a user returns `code: passkey_required` and the frontend prompts the passkey button. Closes the current bypass; no password→passkey step-up to build.
+5. **Flipping `require2fa` on an existing user invalidates that user's sessions** (`prisma.session.deleteMany({ where: { userId } })` at the point the admin sets the flag). Forces the clean re-login → enrollment flow rather than leaving a pre-existing session riding behind the gate. *Note:* there is no "set `require2fa` on an existing user" endpoint today — the flag is set at registration, before any session exists, so this rule is a guardrail for **if/when** such an admin toggle is added.
+
+> These are the recommended defaults, adopted so the spec is implementable as-is. Any can be overridden before coding — note the change here and the affected section.
 
 ---
 
@@ -219,3 +221,12 @@ Keep it on the resource routers as **defense-in-depth** (it now almost never fir
 - One branch (extends or follows `fix/mobile-invite-2fa-onboarding`). The route-gating from the mitigation **stays** as defense-in-depth.
 - No migration. Fully-onboarded existing users are unaffected (they already have sessions and factors).
 - Live verification on the deployment with Dia's single-phone repro is the acceptance test.
+
+**Definition of done**
+- [ ] `register(require2fa)` sets **no** cookie and returns an enrollment token; `login(require2fa, 0 factors)` returns an enrollment token, not a session.
+- [ ] An enrollment token gets **401/403** on every resource route (`/api/vms`, `/api/templates`, `/api/proxmox`, `/api/users`) and is inert once `isMfaSetupRequired` is false.
+- [ ] Password-only login for a passkey-only `require2fa` user → `passkey_required` (bypass closed).
+- [ ] First `Session` appears only at the post-enrol login (TOTP or passkey); verified by inspecting `Session` rows across the flow.
+- [ ] Mobile eviction resume = re-login → fresh enrollment token, still no session.
+- [ ] §9 tests added and green; existing 87 still green; `tsc` clean both sides.
+- [ ] Live single-phone walk-through on the deployment passes (the original repro).
