@@ -18,6 +18,7 @@ import { listAudit, recordAudit } from '../services/audit.service.js';
 import { getMailConfig, saveMailConfig, verifyMailConfig } from '../services/mail.service.js';
 import * as sso from '../services/sso.service.js';
 import { listResetRequests, adminResetPassword } from '../services/password-reset.service.js';
+import { refreshVmIps } from '../services/vm.service.js';
 import type { AuthRequest } from '../types/index.js';
 import { prisma } from '../lib/prisma.js';
 
@@ -329,6 +330,8 @@ router.get('/all-vms', async (_req: Request, res: Response) => {
     include: { vms: { orderBy: { createdAt: 'desc' } } },
     orderBy: [{ role: 'asc' }, { createdAt: 'asc' }],
   });
+  // Refresh guest IPs (running VMs) so the owner-grouped list shows live addresses.
+  await refreshVmIps(users.flatMap((u) => u.vms));
   res.json(
     users.map((u) => ({
       id: u.id,

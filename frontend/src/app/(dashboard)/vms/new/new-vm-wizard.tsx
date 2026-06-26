@@ -185,6 +185,7 @@ export default function NewVmWizard() {
                 password: password || undefined,
                 installDocker: selectedFeatures.includes("docker") || undefined,
                 installTailscale: selectedFeatures.includes("tailscale") || undefined,
+                installGuestAgent: selectedFeatures.includes("guest-agent") || undefined,
               }
             : {}),
         });
