@@ -16,7 +16,7 @@ export function QuotaCard({
   display: (n: number) => string;
 }) {
   const pct = usedPercent(used, max);
-  const danger = pct >= 90;
+  const barColor = pct >= 90 ? "bg-destructive" : pct >= 75 ? "bg-amber-500" : "bg-primary";
 
   return (
     <Card>
@@ -33,7 +33,7 @@ export function QuotaCard({
         </div>
         <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
           <div
-            className={cn("h-full rounded-full transition-all", danger ? "bg-destructive" : "bg-primary")}
+            className={cn("h-full rounded-full transition-all", barColor)}
             style={{ width: `${pct}%` }}
           />
         </div>
