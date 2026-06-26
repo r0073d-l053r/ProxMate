@@ -177,7 +177,6 @@ export interface IsolationStatus {
   enforced: boolean;
   reachable: boolean;
   suggestedMgmtCidr: string | null;
-  dnsServers: string;
 }
 
 export type MateStateStatus = "creating" | "ready" | "restoring" | "error";
@@ -233,6 +232,14 @@ export interface ClusterStats {
   memory: { total: number; used: number };
   storage: { total: number; used: number };
   vmCount: number;
+}
+
+/** Live aggregate usage of the caller's own running VMs (dashboard sparklines). */
+export interface LiveUsage {
+  cpu: number; // cores in use
+  mem: number; // bytes in use
+  maxMem: number; // bytes allocated to running VMs
+  running: number;
 }
 
 export interface UserGroup {

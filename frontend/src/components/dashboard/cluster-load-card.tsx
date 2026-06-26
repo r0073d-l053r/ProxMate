@@ -4,6 +4,7 @@ import { Cpu, MemoryStick, HardDrive, Gauge as GaugeIcon, Server, Boxes } from "
 import type { ClusterStats } from "@/lib/types";
 import { formatBytes, usedPercent } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Sparkline } from "./sparkline";
 import { cn } from "@/lib/utils";
 
 /** Tailwind text color for a load level — drives both the arc and the number. */
@@ -60,10 +61,19 @@ function RadialGauge({
 }
 
 /** Aggregate cluster-wide load shown as three radial gauges (CPU / RAM / storage). */
-export function ClusterLoadCard({ cluster }: { cluster: ClusterStats }) {
+export function ClusterLoadCard({
+  cluster,
+  cpuHistory,
+  memHistory,
+}: {
+  cluster: ClusterStats;
+  cpuHistory?: number[];
+  memHistory?: number[];
+}) {
   const cpuPct = usedPercent(cluster.cpu.used, cluster.cpu.total);
   const memPct = usedPercent(cluster.memory.used, cluster.memory.total);
   const stPct = usedPercent(cluster.storage.used, cluster.storage.total);
+  const hasTrend = (cpuHistory?.length ?? 0) > 1 || (memHistory?.length ?? 0) > 1;
 
   return (
     <Card>
@@ -88,6 +98,29 @@ export function ClusterLoadCard({ cluster }: { cluster: ClusterStats }) {
             sub={`${formatBytes(cluster.storage.used)} / ${formatBytes(cluster.storage.total)}`}
           />
         </div>
+        {hasTrend && (
+          <div className="grid grid-cols-2 gap-4 border-t pt-3">
+            <div>
+              <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                <span className="flex items-center gap-1.5">
+                  <Cpu className="size-3.5" /> CPU load
+                </span>
+                <span className="tabular-nums">{cpuPct}%</span>
+              </div>
+              <Sparkline data={cpuHistory ?? []} max={100} className="text-primary" />
+            </div>
+            <div>
+              <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                <span className="flex items-center gap-1.5">
+                  <MemoryStick className="size-3.5" /> Memory
+                </span>
+                <span className="tabular-nums">{memPct}%</span>
+              </div>
+              <Sparkline data={memHistory ?? []} max={100} className="text-primary" />
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-wrap justify-center gap-4 border-t pt-3 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <Server className="size-3.5" /> {cluster.nodes} node{cluster.nodes === 1 ? "" : "s"} online
