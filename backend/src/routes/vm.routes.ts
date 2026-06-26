@@ -17,6 +17,7 @@ import {
   QuotaError,
   createVm,
   listVms,
+  refreshVmIps,
   getOwnedVm,
   getVmWithLiveStatus,
   destroyVm,
@@ -37,7 +38,7 @@ router.use(enforceMfaSetup);
 
 router.get('/', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vms = await listVms(user);
+  const vms = await refreshVmIps(await listVms(user));
   res.json(vms);
 });
 

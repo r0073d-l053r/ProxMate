@@ -63,6 +63,7 @@ const DeploySchema = z.object({
   password: z.string().min(1).max(128).optional(),
   installDocker: z.boolean().optional(),
   installTailscale: z.boolean().optional(),
+  installGuestAgent: z.boolean().optional(),
 });
 
 router.post('/deploy', async (req: Request, res: Response) => {

@@ -157,6 +157,7 @@ export interface DeployTemplateInput {
   password?: string;
   installDocker?: boolean; // attach the cloud-init "extras" vendor snippet
   installTailscale?: boolean;
+  installGuestAgent?: boolean; // installs qemu-guest-agent so the VM reports its IP
 }
 
 /**
@@ -217,6 +218,7 @@ export async function deployFromTemplate(
       const features: string[] = [];
       if (input.installDocker) features.push('docker');
       if (input.installTailscale) features.push('tailscale');
+      if (input.installGuestAgent) features.push('guest-agent');
       if (features.length > 0) {
         // The matching snippet (combined for multiple features) must already be on
         // this node — admins place it; the API can't write snippets. Fail clearly
@@ -338,10 +340,36 @@ export async function getVmWithLiveStatus(
       await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: live.status } });
       currentVm.status = live.status;
     }
+    // Refresh the guest IP (best-effort, needs qemu-guest-agent in the guest).
+    if (currentVm.status === 'running') await refreshVmIps([currentVm]);
     return { ...currentVm, live };
   } catch {
     return { ...currentVm, live: null };
   }
+}
+
+/**
+ * Best-effort refresh of guest IPs via the QEMU guest agent, caching each result
+ * on `VirtualMachine.ipAddress`. Only running VMs are queried (the agent is
+ * unreachable otherwise) and failures are swallowed — a missing agent never
+ * breaks the list, it just leaves the IP blank. Mutates + returns the same array.
+ */
+export async function refreshVmIps<T extends VirtualMachine>(vms: T[]): Promise<T[]> {
+  const running = vms.filter((v) => v.status === 'running');
+  if (running.length === 0) return vms;
+  const client = await pve.getClient();
+  await Promise.all(
+    running.map(async (vm) => {
+      const ip = await pve.getVmIpAddress(vm.proxmoxNode, vm.proxmoxVmId, client);
+      if (ip && ip !== vm.ipAddress) {
+        vm.ipAddress = ip;
+        await prisma.virtualMachine
+          .update({ where: { id: vm.id }, data: { ipAddress: ip } })
+          .catch(() => undefined);
+      }
+    }),
+  );
+  return vms;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
