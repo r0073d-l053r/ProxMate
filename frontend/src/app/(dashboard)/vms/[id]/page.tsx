@@ -78,9 +78,11 @@ export default function VmDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [transition, setTransition] = useState<Transition>(null);
+  const [elapsed, setElapsed] = useState(0);
   const [tplName, setTplName] = useState("");
 
   const transitionRef = useRef<Transition>(null);
+  const startRef = useRef(0);
   const mounted = useRef(true);
   const inFlight = useRef(false);
   const safety = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -89,9 +91,19 @@ export default function VmDetailPage() {
   const setTrans = useCallback((t: Transition) => {
     transitionRef.current = t;
     setTransition(t);
+    if (t) { startRef.current = Date.now(); setElapsed(0); }
     if (safety.current) clearTimeout(safety.current);
     if (t) safety.current = setTimeout(() => { transitionRef.current = null; setTransition(null); }, 120_000);
   }, []);
+
+  // Tick the elapsed-seconds counter while a transition is in flight, so you can
+  // see how long a start/stop/reboot is taking.
+  useEffect(() => {
+    if (!transition) return;
+    setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
+    const iv = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000);
+    return () => clearInterval(iv);
+  }, [transition]);
 
   const load = useCallback(async () => {
     try {
@@ -215,6 +227,11 @@ export default function VmDetailPage() {
             <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" /> Live
           </span>
           <VmStatusBadge status={transition ?? vm.status} />
+          {transition && (
+            <span className="text-xs text-muted-foreground tabular-nums" title="Time in this transition">
+              {elapsed}s
+            </span>
+          )}
         </div>
       </PageHeader>
 

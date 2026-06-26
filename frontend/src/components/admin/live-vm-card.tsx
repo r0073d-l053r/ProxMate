@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { Play, Power, Square, RotateCw, Terminal, Loader2 } from "lucide-react";
@@ -14,6 +14,9 @@ import { Sparkline } from "@/components/admin/sparkline";
 
 /** Rolling buffer length — 60 samples × 1Hz = 1 minute of history. */
 const SAMPLES = 60;
+
+/** Optimistic state while a power action is in flight, mirroring the VM-detail page. */
+type Transition = "starting" | "stopping" | "restarting" | null;
 
 interface Props {
   vm: VirtualMachine;
@@ -34,8 +37,41 @@ export function LiveVmCard({ vm, live, onActionDone }: Props) {
   const [memSeries, setMemSeries] = useState<number[]>([]);
   const [netSeries, setNetSeries] = useState<number[]>([]);
   const lastNetRef = useRef<{ in: number; out: number; ts: number } | null>(null);
-  const [pending, setPending] = useState<string | null>(null);
 
+  // Sustained power-action feedback: which transition is in flight, which button
+  // kicked it off (so we spin the right one), and how long it's been running.
+  const [transition, setTransition] = useState<Transition>(null);
+  const [actingLabel, setActingLabel] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const transitionRef = useRef<Transition>(null);
+  const startRef = useRef(0);
+  const safety = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearTrans = useCallback(() => {
+    transitionRef.current = null;
+    setTransition(null);
+    setActingLabel(null);
+    if (safety.current) {
+      clearTimeout(safety.current);
+      safety.current = null;
+    }
+  }, []);
+
+  const beginTrans = useCallback(
+    (t: Exclude<Transition, null>, label: string) => {
+      transitionRef.current = t;
+      setTransition(t);
+      setActingLabel(label);
+      startRef.current = Date.now();
+      setElapsed(0);
+      if (safety.current) clearTimeout(safety.current);
+      // Never let the indicator get stuck if the VM never reports its target state.
+      safety.current = setTimeout(clearTrans, 120_000);
+    },
+    [clearTrans],
+  );
+
+  // Feed the rolling sparkline buffers from each 1Hz live tick.
   useEffect(() => {
     if (!live) return;
     // Record CPU as percentage of *allocated* cores (matches Proxmox UI feel).
@@ -57,21 +93,55 @@ export function LiveVmCard({ vm, live, onActionDone }: Props) {
     setNetSeries((b) => pushSample(b, rate));
   }, [live]);
 
-  async function act(label: string, fn: () => Promise<unknown>) {
-    setPending(label);
+  // Clear the optimistic transition once the real status reaches its target. The
+  // parent re-polls /admin/live-stats at 1Hz, so this resolves within ~1s of the
+  // VM actually reaching the state. A reboot stays "running", so it's cleared by
+  // a short timer in act() instead.
+  const liveStatus = live?.status;
+  useEffect(() => {
+    const t = transitionRef.current;
+    if (!t || !liveStatus) return;
+    if (t === "starting" && liveStatus === "running") clearTrans();
+    else if (t === "stopping" && (liveStatus === "stopped" || liveStatus === "error")) clearTrans();
+  }, [liveStatus, clearTrans]);
+
+  // Tick the elapsed-seconds counter while a transition is in flight.
+  useEffect(() => {
+    if (!transition) return;
+    setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
+    const iv = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000);
+    return () => clearInterval(iv);
+  }, [transition]);
+
+  // Clear any pending safety timeout on unmount.
+  useEffect(() => () => clearTrans(), [clearTrans]);
+
+  async function act(
+    kind: Exclude<Transition, null>,
+    label: string,
+    fn: () => Promise<unknown>,
+  ) {
+    beginTrans(kind, label);
     try {
       await fn();
-      toast.success(`${label} sent`);
       onActionDone();
+      if (kind === "restarting") {
+        // A reboot stays "running", so there's no clean target status — clear it
+        // after a grace period once the request is acknowledged.
+        setTimeout(() => {
+          if (transitionRef.current === "restarting") clearTrans();
+        }, 8000);
+      }
     } catch (err) {
       toast.error(apiError(err));
-    } finally {
-      setPending(null);
+      clearTrans();
     }
   }
 
-  const running = (live?.status ?? vm.status) === "running";
-  const stopped = (live?.status ?? vm.status) === "stopped";
+  const status = (live?.status ?? vm.status) as string;
+  const running = status === "running";
+  const stopped = status === "stopped";
+  const busy = transition !== null;
 
   const cpuNow = live ? (live.cpu * 100).toFixed(1) + "%" : "—";
   const memNow = live ? `${formatBytes(live.mem)} / ${formatBytes(live.maxmem)}` : "—";
@@ -86,7 +156,12 @@ export function LiveVmCard({ vm, live, onActionDone }: Props) {
             <Link href={`/vms/${vm.id}`} className="truncate text-sm font-medium hover:underline">
               {vm.name}
             </Link>
-            <VmStatusBadge status={(live?.status ?? vm.status) as VirtualMachine["status"]} />
+            <VmStatusBadge status={transition ?? status} />
+            {busy && (
+              <span className="text-xs text-muted-foreground tabular-nums" title="Time in this transition">
+                {elapsed}s
+              </span>
+            )}
           </div>
           <div className="text-xs text-muted-foreground">
             VMID {vm.proxmoxVmId} · {vm.proxmoxNode} · {vm.cpu} vCPU · {formatBytes(vm.ram * 1024 * 1024)} ·{" "}
@@ -98,44 +173,44 @@ export function LiveVmCard({ vm, live, onActionDone }: Props) {
           <Button
             size="sm"
             variant="outline"
-            disabled={!!pending || running}
-            onClick={() => act("Start", () => api.post(`/vms/${vm.id}/start`))}
+            disabled={busy || running}
+            onClick={() => act("starting", "Start", () => api.post(`/vms/${vm.id}/start`))}
             title="Start"
           >
-            {pending === "Start" ? <Loader2 className="animate-spin" /> : <Play />}
+            {actingLabel === "Start" ? <Loader2 className="animate-spin" /> : <Play />}
           </Button>
           <Button
             size="sm"
             variant="outline"
-            disabled={!!pending || stopped}
-            onClick={() => act("Shutdown", () => api.post(`/vms/${vm.id}/stop`))}
+            disabled={busy || stopped}
+            onClick={() => act("stopping", "Shutdown", () => api.post(`/vms/${vm.id}/stop`))}
             title="Graceful shutdown (ACPI)"
           >
-            {pending === "Shutdown" ? <Loader2 className="animate-spin" /> : <Power />}
+            {actingLabel === "Shutdown" ? <Loader2 className="animate-spin" /> : <Power />}
           </Button>
           <Button
             size="sm"
             variant="destructive"
-            disabled={!!pending || stopped}
-            onClick={() => act("Hard stop", () => api.post(`/vms/${vm.id}/stop?force=true`))}
+            disabled={busy || stopped}
+            onClick={() => act("stopping", "Hard stop", () => api.post(`/vms/${vm.id}/stop?force=true`))}
             title="Hard power off"
           >
-            {pending === "Hard stop" ? <Loader2 className="animate-spin" /> : <Square />}
+            {actingLabel === "Hard stop" ? <Loader2 className="animate-spin" /> : <Square />}
           </Button>
           <Button
             size="sm"
             variant="outline"
-            disabled={!!pending || !running}
-            onClick={() => act("Reboot", () => api.post(`/vms/${vm.id}/restart`))}
+            disabled={busy || !running}
+            onClick={() => act("restarting", "Reboot", () => api.post(`/vms/${vm.id}/restart`))}
             title="Reboot"
           >
-            {pending === "Reboot" ? <Loader2 className="animate-spin" /> : <RotateCw />}
+            {actingLabel === "Reboot" ? <Loader2 className="animate-spin" /> : <RotateCw />}
           </Button>
           <Button
             size="sm"
             variant="outline"
             render={<Link href={`/vms/${vm.id}/console`} />}
-            disabled={!running}
+            disabled={!running || busy}
             title="Open noVNC console"
           >
             <Terminal />
