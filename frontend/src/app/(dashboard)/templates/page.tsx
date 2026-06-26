@@ -532,6 +532,7 @@ function AddCloudImagePanel({ onChange }: { onChange: () => void }) {
   const [customUrl, setCustomUrl] = useState("");
   const [customOs, setCustomOs] = useState("");
   const [building, setBuilding] = useState(false);
+  const [elapsed, setElapsed] = useState(0); // seconds since the build started
 
   useEffect(() => {
     api
@@ -539,6 +540,14 @@ function AddCloudImagePanel({ onChange }: { onChange: () => void }) {
       .then((r) => setImages(r.data))
       .catch(() => setImages([]));
   }, []);
+
+  // Tick an elapsed counter while a build runs — drives the progress bar.
+  useEffect(() => {
+    if (!building) return;
+    setElapsed(0);
+    const iv = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(iv);
+  }, [building]);
 
   const isCustom = choice === "custom";
   const selected = images?.find((i) => i.id === choice);
@@ -631,9 +640,20 @@ function AddCloudImagePanel({ onChange }: { onChange: () => void }) {
             {building ? "Building…" : "Add to store"}
           </Button>
           {building && (
-            <span className="text-xs text-muted-foreground">
-              Downloading &amp; importing the image — this can take a few minutes.
-            </span>
+            <div className="min-w-0 flex-1">
+              <div className="mb-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span className="truncate">Downloading &amp; importing — this can take a few minutes.</span>
+                <span className="tabular-nums">
+                  {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")}
+                </span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-1000 ease-linear"
+                  style={{ width: `${Math.min(95, Math.round((elapsed / 180) * 100))}%` }}
+                />
+              </div>
+            </div>
           )}
         </div>
       </CardContent>
