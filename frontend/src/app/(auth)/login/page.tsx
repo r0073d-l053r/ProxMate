@@ -8,6 +8,7 @@ import { Loader2, LogIn, ShieldCheck, KeyRound, Building2 } from "lucide-react";
 import { startAuthentication } from "@simplewebauthn/browser";
 import { api, apiError, apiBaseUrl } from "@/lib/api";
 import { useAuthStore, useHydrated } from "@/lib/auth-store";
+import { setEnrollmentToken } from "@/lib/enrollment";
 import type { AuthUser } from "@/lib/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -86,10 +87,20 @@ export default function LoginPage() {
     e.preventDefault();
     setSubmitting(true);
     try {
-      const res = await api.post<{ user?: AuthUser; twoFactorRequired?: boolean; challenge?: string }>(
-        "/auth/login",
-        { email, password },
-      );
+      const res = await api.post<{
+        user?: AuthUser;
+        twoFactorRequired?: boolean;
+        challenge?: string;
+        mfaEnrollmentRequired?: boolean;
+        enrollmentToken?: string;
+      }>("/auth/login", { email, password });
+      // Required 2FA not set up yet → no session; resume enrollment with the
+      // scoped token (this is the recovery path after a mobile tab eviction).
+      if (res.data.mfaEnrollmentRequired && res.data.enrollmentToken) {
+        setEnrollmentToken(res.data.enrollmentToken);
+        router.replace("/setup-2fa");
+        return;
+      }
       if (res.data.twoFactorRequired && res.data.challenge) {
         setChallenge(res.data.challenge);
         setSubmitting(false);
