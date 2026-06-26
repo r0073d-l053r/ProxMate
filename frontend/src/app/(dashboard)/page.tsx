@@ -6,10 +6,11 @@ import { Cpu, MemoryStick, HardDrive, Plus, MonitorPlay } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import type { MeResponse, VirtualMachine, ClusterStats, UserGroup } from "@/lib/types";
-import { formatRam } from "@/lib/format";
+import { formatRam, usedPercent } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { QuotaCard } from "@/components/dashboard/quota-card";
 import { ClusterLoadCard } from "@/components/dashboard/cluster-load-card";
+import { LiveUsageCard } from "@/components/dashboard/live-usage-card";
 import { OwnerGroupHeader } from "@/components/dashboard/owner-group-header";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,6 +51,9 @@ export default function DashboardPage() {
   const [cluster, setCluster] = useState<ClusterStats | null>(null);
   const [clusterError, setClusterError] = useState<string | null>(null);
   const [groups, setGroups] = useState<UserGroup[] | null>(null);
+  // Rolling history for the cluster CPU/RAM activity sparklines.
+  const [cpuHist, setCpuHist] = useState<number[]>([]);
+  const [memHist, setMemHist] = useState<number[]>([]);
 
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
@@ -84,8 +88,11 @@ export default function DashboardPage() {
       try {
         const res = await api.get<ClusterStats>("/admin/cluster-stats");
         if (!cancelled) {
-          setCluster(res.data);
+          const c = res.data;
+          setCluster(c);
           setClusterError(null);
+          setCpuHist((h) => [...h, usedPercent(c.cpu.used, c.cpu.total)].slice(-40));
+          setMemHist((h) => [...h, usedPercent(c.memory.used, c.memory.total)].slice(-40));
         }
       } catch (err) {
         if (!cancelled) setClusterError(apiError(err));
@@ -132,7 +139,7 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
         ) : cluster ? (
-          <ClusterLoadCard cluster={cluster} />
+          <ClusterLoadCard cluster={cluster} cpuHistory={cpuHist} memHistory={memHist} />
         ) : (
           <Skeleton className="h-64" />
         )
@@ -147,6 +154,13 @@ export default function DashboardPage() {
           <Skeleton className="h-28" />
           <Skeleton className="h-28" />
           <Skeleton className="h-28" />
+        </div>
+      )}
+
+      {/* Live current-usage sparklines for users (admins get the cluster trends above) */}
+      {!isAdmin && me && (
+        <div className="mt-4">
+          <LiveUsageCard quota={me.quota} />
         </div>
       )}
 

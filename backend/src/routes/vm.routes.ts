@@ -18,6 +18,7 @@ import {
   createVm,
   listVms,
   refreshVmIps,
+  getLiveUsage,
   getOwnedVm,
   getVmWithLiveStatus,
   destroyVm,
@@ -40,6 +41,18 @@ router.get('/', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vms = await refreshVmIps(await listVms(user));
   res.json(vms);
+});
+
+// ─── GET /api/vms/live-usage ──────────────────────────────────
+// Live aggregate usage of the caller's own running VMs (dashboard sparklines).
+// Declared before `/:id` so it isn't matched as a VM id.
+
+router.get('/live-usage', async (req: Request, res: Response) => {
+  try {
+    res.json(await getLiveUsage((req as AuthRequest).user));
+  } catch {
+    res.status(502).json({ error: 'Could not read live usage' });
+  }
 });
 
 // ─── POST /api/vms ────────────────────────────────────────────
