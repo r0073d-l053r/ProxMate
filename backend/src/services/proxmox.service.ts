@@ -464,6 +464,13 @@ export const CLOUD_INIT_FEATURES: CloudInitFeature[] = [
       'systemctl enable --now tailscaled 2>/dev/null || true',
     ],
   },
+  {
+    id: 'guest-agent',
+    label: 'Install QEMU guest agent',
+    hint: "Lets ProxMate show the VM's IP address and shut it down cleanly. Recommended.",
+    packages: ['qemu-guest-agent'],
+    runcmd: ['systemctl enable --now qemu-guest-agent 2>/dev/null || true'],
+  },
 ];
 
 /** Snippet filename for a feature combo, e.g. ['tailscale','docker'] → proxmate-docker-tailscale.yaml */
@@ -1056,4 +1063,43 @@ export async function getVmStatus(
   const c = client ?? (await getClient());
   const res = await c.get<{ data: PveVmStatus }>(`/nodes/${node}/qemu/${vmid}/status/current`);
   return res.data.data;
+}
+
+interface AgentNetworkInterface {
+  name?: string;
+  'ip-addresses'?: Array<{ 'ip-address-type'?: string; 'ip-address'?: string }>;
+}
+
+/**
+ * Best-effort guest IP via the QEMU guest agent. Returns the first non-loopback
+ * IPv4 (preferred) or global IPv6, or null when the agent isn't installed/running
+ * (VM off, or the guest has no `qemu-guest-agent` daemon). Fail-fast (short
+ * timeout) so it never hangs a VM list.
+ */
+export async function getVmIpAddress(
+  node: string,
+  vmid: number,
+  client?: AxiosInstance,
+): Promise<string | null> {
+  const c = client ?? (await getClient());
+  try {
+    const res = await c.get<{ data: { result?: AgentNetworkInterface[] } }>(
+      `/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`,
+      { timeout: 2000 },
+    );
+    let v4: string | null = null;
+    let v6: string | null = null;
+    for (const iface of res.data.data?.result ?? []) {
+      if (iface.name === 'lo') continue;
+      for (const addr of iface['ip-addresses'] ?? []) {
+        const ip = addr['ip-address'];
+        if (!ip) continue;
+        if (addr['ip-address-type'] === 'ipv4' && !v4 && !ip.startsWith('127.')) v4 = ip;
+        else if (addr['ip-address-type'] === 'ipv6' && !v6 && !ip.startsWith('::1') && !ip.toLowerCase().startsWith('fe80')) v6 = ip;
+      }
+    }
+    return v4 ?? v6;
+  } catch {
+    return null; // agent absent/not running, or VM stopped
+  }
 }
