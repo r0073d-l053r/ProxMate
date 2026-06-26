@@ -82,6 +82,8 @@ export default function SettingsPage() {
   const [togglingIsolation, setTogglingIsolation] = useState(false);
   const [mgmtCidr, setMgmtCidr] = useState("");
   const [enforcing, setEnforcing] = useState(false);
+  const [dnsServers, setDnsServers] = useState("");
+  const [savingDns, setSavingDns] = useState(false);
 
   function loadIsolation() {
     api
@@ -89,8 +91,23 @@ export default function SettingsPage() {
       .then((res) => {
         setIsolation(res.data);
         if (res.data.suggestedMgmtCidr) setMgmtCidr(res.data.suggestedMgmtCidr);
+        setDnsServers(res.data.dnsServers ?? "");
       })
       .catch(() => setIsolation(null));
+  }
+
+  async function saveDnsServers() {
+    if (!isolation) return;
+    setSavingDns(true);
+    try {
+      await api.put("/admin/isolation", { enabled: isolation.isolationEnabled, dnsServers });
+      toast.success("DNS isolation settings saved — new VMs will use them.");
+      loadIsolation();
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setSavingDns(false);
+    }
   }
 
   async function enableEnforcement() {
@@ -389,6 +406,28 @@ export default function SettingsPage() {
                 </p>
               )}
             </div>
+
+            {/* Optional DNS allow-list for tenant isolation */}
+            {isolation.isolationEnabled && (
+              <div className="grid gap-2">
+                <FormField
+                  label="DNS servers (optional)"
+                  htmlFor="dnsServers"
+                  hint="Tenant VMs always resolve names — by default DNS is allowed to any resolver. To tighten, list your DNS server IP(s), comma-separated, and isolation will permit DNS only to those. Leave blank for auto."
+                >
+                  <Input
+                    id="dnsServers"
+                    value={dnsServers}
+                    onChange={(e) => setDnsServers(e.target.value)}
+                    placeholder="e.g. 192.168.60.13"
+                  />
+                </FormField>
+                <Button className="w-fit" disabled={savingDns} onClick={saveDnsServers}>
+                  {savingDns ? <Loader2 className="animate-spin" /> : null}
+                  Save DNS settings
+                </Button>
+              </div>
+            )}
 
             {/* Guided enforcement: enable/disable the Proxmox cluster firewall */}
             {isolation.isolationEnabled && !isolation.enforced && (

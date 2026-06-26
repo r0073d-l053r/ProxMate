@@ -265,12 +265,13 @@ router.get('/isolation', async (_req: Request, res: Response) => {
     enforced: isolationEnabled && clusterFirewallEnabled,
     reachable,
     suggestedMgmtCidr: reachable ? await suggestMgmtCidr() : null,
+    dnsServers: (await getConfig('isolation_dns_servers')) ?? '',
   });
 });
 
 // ─── PUT /api/admin/isolation ─────────────────────────────────
 
-const IsolationSchema = z.object({ enabled: z.boolean() });
+const IsolationSchema = z.object({ enabled: z.boolean(), dnsServers: z.string().optional() });
 
 router.put('/isolation', async (req: Request, res: Response) => {
   const parsed = IsolationSchema.safeParse(req.body);
@@ -279,6 +280,11 @@ router.put('/isolation', async (req: Request, res: Response) => {
     return;
   }
   await setConfig('isolation_enabled', String(parsed.data.enabled));
+  // Optional DNS allow-list for the isolation rule-builder. Empty = allow DNS to
+  // any resolver (so tenant VMs always resolve names); set = restrict to these IPs.
+  if (parsed.data.dnsServers !== undefined) {
+    await setConfig('isolation_dns_servers', parsed.data.dnsServers.trim());
+  }
   res.json({ success: true });
 });
 
