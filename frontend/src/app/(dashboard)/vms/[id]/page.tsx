@@ -11,6 +11,7 @@ import {
   RotateCw,
   Trash2,
   Terminal,
+  SquareTerminal,
   Loader2,
   Cpu,
   MemoryStick,
@@ -252,6 +253,15 @@ export default function VmDetailPage() {
         <Button variant="outline" render={<Link href={`/vms/${vm.id}/console`} />} disabled={!running || acting}>
           <Terminal />
           Console
+        </Button>
+        <Button
+          variant="outline"
+          render={<Link href={`/vms/${vm.id}/console?mode=text`} />}
+          disabled={!running || acting}
+          title="Text console with clickable links, copy/paste and scrollback"
+        >
+          <SquareTerminal />
+          Text console
         </Button>
 
         {isAdmin && (

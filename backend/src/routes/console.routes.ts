@@ -3,9 +3,10 @@ import { WebSocketServer } from 'ws';
 import { verifyToken } from '../services/auth.service.js';
 import { SESSION_COOKIE } from '../lib/cookies.js';
 import { getOwnedVm, syncVmNode } from '../services/vm.service.js';
-import { connectVncTarget, relay } from '../services/vnc-proxy.service.js';
+import { connectVncTarget, connectSerialTarget, relay } from '../services/vnc-proxy.service.js';
 
 const CONSOLE_PATH = /^\/api\/vms\/([^/]+)\/console$/;
+const SERIAL_PATH = /^\/api\/vms\/([^/]+)\/serial$/;
 
 /** Pull a single cookie value out of a raw `Cookie` header. */
 function getCookie(header: string | undefined, name: string): string | undefined {
@@ -33,7 +34,12 @@ export function setupConsoleWebSocket(server: Server): void {
   server.on('upgrade', (req, socket, head) => {
     void (async () => {
       const url = new URL(req.url ?? '', 'http://localhost');
-      const match = url.pathname.match(CONSOLE_PATH);
+      // Two console transports share this handler: the graphical noVNC console
+      // (/console → vncproxy) and the xterm.js text console (/serial → termproxy).
+      const consoleMatch = url.pathname.match(CONSOLE_PATH);
+      const serialMatch = url.pathname.match(SERIAL_PATH);
+      const match = consoleMatch ?? serialMatch;
+      const isSerial = serialMatch !== null;
       if (!match) {
         socket.destroy();
         return;
@@ -72,10 +78,12 @@ export function setupConsoleWebSocket(server: Server): void {
       wss.handleUpgrade(req, socket, head, async (browserWs) => {
         try {
           const activeVm = await syncVmNode(baseVm);
-          const target = await connectVncTarget(activeVm.proxmoxNode, activeVm.proxmoxVmId, port, vncticket);
+          const target = isSerial
+            ? await connectSerialTarget(activeVm.proxmoxNode, activeVm.proxmoxVmId, port, vncticket)
+            : await connectVncTarget(activeVm.proxmoxNode, activeVm.proxmoxVmId, port, vncticket);
           relay(browserWs, target);
         } catch {
-          browserWs.close(1011, 'Failed to reach Proxmox VNC');
+          browserWs.close(1011, 'Failed to reach Proxmox console');
         }
       });
     })().catch(() => socket.destroy());

@@ -1,9 +1,17 @@
 import { WebSocket, type RawData } from 'ws';
-import { getClient, getConnectionConfig } from './proxmox.service.js';
+import type { AxiosInstance } from 'axios';
+import { getClient, getConnectionConfig, type ProxmoxConnection } from './proxmox.service.js';
 
 export interface VncTicket {
   ticket: string;
   port: string;
+}
+
+export interface TermTicket {
+  ticket: string;
+  port: string;
+  /** The Proxmox user the ticket was issued for — the browser sends `${user}:${ticket}` to authenticate the serial stream. */
+  user: string;
 }
 
 /**
@@ -21,17 +29,33 @@ export async function requestVncProxy(node: string, vmid: number): Promise<VncTi
 }
 
 /**
- * Open a WebSocket to the Proxmox node's vncwebsocket endpoint for the given
- * ticket/port. Authenticated with the stored API token; the browser never
- * sees the token.
+ * Ask Proxmox for a serial/terminal proxy session (`termproxy`), the text-console
+ * counterpart to `vncproxy`. Returns the one-time ticket, the port to attach to,
+ * and the `user` the ticket is bound to — the xterm.js client authenticates the
+ * stream in-band by sending `${user}:${ticket}\n` as its first message.
  */
-export async function connectVncTarget(
-  node: string,
-  vmid: number,
-  port: string,
-  ticket: string,
-): Promise<WebSocket> {
-  const { host, tokenId, tokenSecret, verifySsl } = await getConnectionConfig();
+export async function requestTermProxy(node: string, vmid: number, client?: AxiosInstance): Promise<TermTicket> {
+  const c = client ?? (await getClient());
+  const res = await c.post<{ data: { ticket: string; port: number | string; user: string } }>(
+    `/nodes/${node}/qemu/${vmid}/termproxy`,
+    new URLSearchParams(),
+  );
+  return {
+    ticket: String(res.data.data.ticket),
+    port: String(res.data.data.port),
+    user: String(res.data.data.user),
+  };
+}
+
+/**
+ * Open a WebSocket to the Proxmox node's `vncwebsocket` endpoint for the given
+ * ticket/port. Both the graphical (VNC/RFB) and the text (serial/termproxy)
+ * consoles ride this same transport — only the wire protocol flowing over it
+ * differs — so they share this connector. Authenticated with the stored API
+ * token; the browser never sees the token.
+ */
+function connectConsoleTarget(node: string, vmid: number, port: string, ticket: string, config: ProxmoxConnection): WebSocket {
+  const { host, tokenId, tokenSecret, verifySsl } = config;
   // Proxmox's API/console listens on HTTPS only; force wss so a host saved as http://
   // (which REST tolerates via a 301 redirect, but the ws client does NOT) still works.
   const wsBase = `wss://${host.replace(/^[a-z]+:\/\//i, '')}`;
@@ -45,22 +69,47 @@ export async function connectVncTarget(
   });
 }
 
+/** Open the Proxmox vncwebsocket for a graphical (noVNC) console session. */
+export async function connectVncTarget(
+  node: string,
+  vmid: number,
+  port: string,
+  ticket: string,
+): Promise<WebSocket> {
+  return connectConsoleTarget(node, vmid, port, ticket, await getConnectionConfig());
+}
+
+/** Open the Proxmox vncwebsocket for a text (serial/termproxy) console session. */
+export async function connectSerialTarget(
+  node: string,
+  vmid: number,
+  port: string,
+  ticket: string,
+): Promise<WebSocket> {
+  return connectConsoleTarget(node, vmid, port, ticket, await getConnectionConfig());
+}
+
 /** Pipe bytes bidirectionally between the browser and Proxmox sockets. */
 export function relay(browser: WebSocket, target: WebSocket): void {
-  const pending: RawData[] = [];
+  const pending: Array<{ data: RawData; isBinary: boolean }> = [];
 
   target.on('open', () => {
-    for (const msg of pending) target.send(msg);
+    for (const msg of pending) target.send(msg.data, { binary: msg.isBinary });
     pending.length = 0;
   });
 
-  target.on('message', (data) => {
-    if (browser.readyState === WebSocket.OPEN) browser.send(data);
+  // Preserve the text/binary opcode in both directions. The VNC (RFB) stream is
+  // always binary; the serial (termproxy) stream's control frames are text
+  // (`0:len:data`, `1:cols:rows:`, `2`) — forwarding those as binary could
+  // confuse the terminal parser, so we relay them with the opcode they arrived
+  // with rather than coercing everything to binary.
+  target.on('message', (data, isBinary) => {
+    if (browser.readyState === WebSocket.OPEN) browser.send(data, { binary: isBinary });
   });
 
-  browser.on('message', (data) => {
-    if (target.readyState === WebSocket.OPEN) target.send(data);
-    else pending.push(data);
+  browser.on('message', (data, isBinary) => {
+    if (target.readyState === WebSocket.OPEN) target.send(data, { binary: isBinary });
+    else pending.push({ data, isBinary });
   });
 
   const closeBoth = () => {
