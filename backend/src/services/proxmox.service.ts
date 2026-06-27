@@ -626,6 +626,17 @@ export async function setVmResources(
   );
 }
 
+/** Set a VM's display name (the Proxmox `name`/hostname config field). */
+export async function setVmName(
+  node: string,
+  vmid: number,
+  name: string,
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  await c.put(`/nodes/${node}/qemu/${vmid}/config`, new URLSearchParams({ name }));
+}
+
 /** Grow a VM disk to an absolute size in GB (Proxmox only supports growing). */
 export async function resizeDisk(
   node: string,
@@ -765,6 +776,76 @@ export async function restoreBackup(
   });
   if (opts.storage) params.set('storage', opts.storage);
   const res = await c.post<{ data: string }>(`/nodes/${opts.node}/qemu`, params);
+  return res.data.data;
+}
+
+// ─── Snapshots (live, in-place point-in-time — distinct from vzdump backups) ──
+
+export interface PveSnapshot {
+  name: string;
+  description?: string;
+  snaptime?: number; // epoch seconds
+  vmstate?: number; // 1 if the RAM state was captured too
+  parent?: string;
+}
+
+/**
+ * A VM's snapshots, newest first. Proxmox includes a synthetic `current`
+ * pseudo-entry representing the live (un-snapshotted) state — we drop it.
+ */
+export async function listSnapshots(
+  node: string,
+  vmid: number,
+  client?: AxiosInstance,
+): Promise<PveSnapshot[]> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: PveSnapshot[] }>(`/nodes/${node}/qemu/${vmid}/snapshot`);
+  return (res.data.data ?? [])
+    .filter((s) => s.name !== 'current')
+    .sort((a, b) => (b.snaptime ?? 0) - (a.snaptime ?? 0));
+}
+
+/** Create a snapshot (optionally capturing RAM state). Returns the task UPID. */
+export async function createSnapshot(
+  node: string,
+  vmid: number,
+  snapname: string,
+  opts: { description?: string; vmstate?: boolean } = {},
+  client?: AxiosInstance,
+): Promise<string> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams({ snapname });
+  if (opts.description) params.set('description', opts.description);
+  if (opts.vmstate) params.set('vmstate', '1');
+  const res = await c.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/snapshot`, params);
+  return res.data.data;
+}
+
+/** Delete a snapshot by name. Returns the task UPID. */
+export async function deleteSnapshot(
+  node: string,
+  vmid: number,
+  snapname: string,
+  client?: AxiosInstance,
+): Promise<string> {
+  const c = client ?? (await getClient());
+  const res = await c.delete<{ data: string }>(
+    `/nodes/${node}/qemu/${vmid}/snapshot/${encodeURIComponent(snapname)}`,
+  );
+  return res.data.data;
+}
+
+/** Roll the VM back to a snapshot (reverts disk + RAM if captured). Task UPID. */
+export async function rollbackSnapshot(
+  node: string,
+  vmid: number,
+  snapname: string,
+  client?: AxiosInstance,
+): Promise<string> {
+  const c = client ?? (await getClient());
+  const res = await c.post<{ data: string }>(
+    `/nodes/${node}/qemu/${vmid}/snapshot/${encodeURIComponent(snapname)}/rollback`,
+  );
   return res.data.data;
 }
 
@@ -1072,6 +1153,40 @@ export async function getVmStatus(
   const c = client ?? (await getClient());
   const res = await c.get<{ data: PveVmStatus }>(`/nodes/${node}/qemu/${vmid}/status/current`);
   return res.data.data;
+}
+
+export type RrdTimeframe = 'hour' | 'day' | 'week' | 'month' | 'year';
+
+/** One sample from Proxmox's per-VM RRD store. cpu is a 0..1 fraction; mem/maxmem
+ *  are bytes; netin/netout/disk* are per-second rates. Fields are absent when the
+ *  VM wasn't running for that bucket. */
+export interface RrdPoint {
+  time: number; // epoch seconds (bucket start)
+  cpu?: number;
+  mem?: number;
+  maxmem?: number;
+  netin?: number;
+  netout?: number;
+  diskread?: number;
+  diskwrite?: number;
+}
+
+/**
+ * Historical resource usage for a VM from Proxmox's built-in RRD store — the same
+ * data the Proxmox UI graphs. No agent or polling needed; Proxmox keeps hour/day/
+ * week/month/year rollups for every guest. `cf=AVERAGE` is the averaged series.
+ */
+export async function getVmRrdData(
+  node: string,
+  vmid: number,
+  timeframe: RrdTimeframe = 'hour',
+  client?: AxiosInstance,
+): Promise<RrdPoint[]> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: RrdPoint[] }>(`/nodes/${node}/qemu/${vmid}/rrddata`, {
+    params: { timeframe, cf: 'AVERAGE' },
+  });
+  return res.data.data ?? [];
 }
 
 interface AgentNetworkInterface {

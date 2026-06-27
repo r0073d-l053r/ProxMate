@@ -39,6 +39,21 @@ export function formatDate(iso: string): string {
   });
 }
 
+/** Compact relative time, e.g. "just now", "5m ago", "3h ago", "2d ago". */
+export function formatRelative(iso: string): string {
+  const secs = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+  if (secs < 45) return "just now";
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.round(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.round(months / 12)}y ago`;
+}
+
 /** Percentage of quota used, clamped to [0, 100]. */
 export function usedPercent(used: number, max: number): number {
   if (max <= 0) return used > 0 ? 100 : 0;
