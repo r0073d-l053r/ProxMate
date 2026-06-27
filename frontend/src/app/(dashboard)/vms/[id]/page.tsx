@@ -22,13 +22,22 @@ import {
   Hash,
   Lightbulb,
   Package,
+  StickyNote,
+  Check,
+  History,
+  RefreshCw,
+  LineChart,
+  Pencil,
 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
-import type { VmDetail } from "@/lib/types";
-import { formatRam, formatBytes, formatUptime, formatDate } from "@/lib/format";
+import type { VmDetail, VmActivityEntry, VmMetrics, RrdTimeframe } from "@/lib/types";
+import { formatRam, formatBytes, formatUptime, formatDate, formatRelative } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
+import { Sparkline } from "@/components/dashboard/sparkline";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
 import { MateStatesPanel } from "@/components/vm/matestates-panel";
+import { SnapshotsPanel } from "@/components/vm/snapshots-panel";
+import { PowerSchedulePanel } from "@/components/vm/power-schedule-panel";
 import { useAuthStore } from "@/lib/auth-store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -70,6 +79,274 @@ function DetailRow({
   );
 }
 
+/**
+ * Editable free-text notes for a VM ("staging — don't touch", "Minecraft server").
+ * Self-contained: keeps its own draft so the detail page's 2.5 s status poll never
+ * clobbers an in-progress edit. The Save button only enables once the draft differs
+ * from what's stored (max 500 chars, mirrored by the backend).
+ */
+function NotesCard({
+  vmId,
+  initial,
+  onSaved,
+}: {
+  vmId: string;
+  initial: string | null;
+  onSaved: () => void;
+}) {
+  const [value, setValue] = useState(initial ?? "");
+  const [saving, setSaving] = useState(false);
+  const dirty = value !== (initial ?? "");
+
+  async function save() {
+    setSaving(true);
+    try {
+      await api.patch(`/vms/${vmId}`, { description: value });
+      toast.success("Notes saved.");
+      onSaved();
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <StickyNote className="size-4 text-muted-foreground" />
+          Notes
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <textarea
+          value={value}
+          maxLength={500}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="Add a note for this VM — e.g. what it runs, who it's for, or 'staging — don't touch'."
+          className="h-24 w-full resize-none rounded-md border bg-background p-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+        />
+        <div className="mt-2 flex items-center justify-between">
+          <span className="text-xs text-muted-foreground tabular-nums">{value.length}/500</span>
+          <div className="flex gap-2">
+            {dirty && (
+              <Button size="sm" variant="ghost" disabled={saving} onClick={() => setValue(initial ?? "")}>
+                Reset
+              </Button>
+            )}
+            <Button size="sm" disabled={saving || !dirty} onClick={save}>
+              {saving ? <Loader2 className="animate-spin" /> : <Check />} Save
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+const TIMEFRAMES: { key: RrdTimeframe; label: string }[] = [
+  { key: "hour", label: "Hour" },
+  { key: "day", label: "Day" },
+  { key: "week", label: "Week" },
+];
+
+/** A small metric block: label, current + peak %, and a history sparkline. */
+function MetricRow({
+  label,
+  series,
+  color,
+}: {
+  label: string;
+  series: number[];
+  color: string;
+}) {
+  const now = series.length ? series[series.length - 1]! : 0;
+  const peak = series.length ? Math.max(...series) : 0;
+  return (
+    <div>
+      <div className="mb-1 flex items-baseline justify-between text-sm">
+        <span className="font-medium">{label}</span>
+        <span className="text-xs text-muted-foreground tabular-nums">
+          now {now.toFixed(0)}% · peak {peak.toFixed(0)}%
+        </span>
+      </div>
+      <Sparkline data={series} max={100} className={`h-16 w-full ${color}`} />
+    </div>
+  );
+}
+
+/**
+ * Historical CPU + memory for this VM, read from Proxmox's RRD store
+ * (`GET /vms/:id/metrics`). Tenants couldn't see their own VM's trends before —
+ * only the admin monitor did. Hour/Day/Week timeframes; Proxmox builds the
+ * longer rollups over time, so a fresh VM starts mostly flat.
+ */
+function MetricsCard({ vmId }: { vmId: string }) {
+  const [timeframe, setTimeframe] = useState<RrdTimeframe>("hour");
+  const [metrics, setMetrics] = useState<VmMetrics | null>(null);
+  const [error, setError] = useState(false);
+
+  const load = useCallback(
+    async (tf: RrdTimeframe) => {
+      setMetrics(null);
+      setError(false);
+      try {
+        const res = await api.get<VmMetrics>(`/vms/${vmId}/metrics`, { params: { timeframe: tf } });
+        setMetrics(res.data);
+      } catch {
+        setError(true);
+      }
+    },
+    [vmId],
+  );
+
+  useEffect(() => {
+    load(timeframe);
+  }, [load, timeframe]);
+
+  const points = metrics?.points ?? [];
+  const cpu = points.map((p) => (p.cpu ?? 0) * 100);
+  const mem = points.map((p) => (p.maxmem ? ((p.mem ?? 0) / p.maxmem) * 100 : 0));
+  const hasData = cpu.some((v) => v > 0) || mem.some((v) => v > 0);
+
+  return (
+    <Card className="mt-4">
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <LineChart className="size-4 text-muted-foreground" />
+          Resource history
+        </CardTitle>
+        <div className="flex gap-1 rounded-md border p-0.5" role="tablist">
+          {TIMEFRAMES.map((tf) => (
+            <button
+              key={tf.key}
+              type="button"
+              role="tab"
+              aria-selected={timeframe === tf.key}
+              onClick={() => setTimeframe(tf.key)}
+              className={
+                "rounded px-2 py-0.5 text-xs transition-colors " +
+                (timeframe === tf.key
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground")
+              }
+            >
+              {tf.label}
+            </button>
+          ))}
+        </div>
+      </CardHeader>
+      <CardContent>
+        {error ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">
+            Couldn&apos;t load metrics — the VM may be unreachable on Proxmox.
+          </p>
+        ) : metrics === null ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">Loading…</p>
+        ) : !hasData ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">
+            No history for this window yet — Proxmox builds it up while the VM runs.
+          </p>
+        ) : (
+          <div className="grid gap-4">
+            <MetricRow label="CPU" series={cpu} color="text-sky-500" />
+            <MetricRow label="Memory" series={mem} color="text-violet-500" />
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Map a raw audit action to a friendly label + a dot color for the timeline. */
+const ACTIVITY_META: Record<string, { label: string; dot: string }> = {
+  "vm.create": { label: "Created", dot: "bg-emerald-500" },
+  "vm.start": { label: "Started", dot: "bg-emerald-500" },
+  "vm.stop": { label: "Stopped", dot: "bg-amber-500" },
+  "vm.stop_force": { label: "Force-stopped", dot: "bg-red-500" },
+  "vm.restart": { label: "Restarted", dot: "bg-sky-500" },
+  "vm.update": { label: "Notes updated", dot: "bg-muted-foreground" },
+  "vm.delete": { label: "Deleted", dot: "bg-red-500" },
+  "snapshot.create": { label: "Snapshot taken", dot: "bg-sky-500" },
+  "snapshot.rollback": { label: "Rolled back to snapshot", dot: "bg-amber-500" },
+  "snapshot.delete": { label: "Snapshot deleted", dot: "bg-muted-foreground" },
+  "vm.schedule": { label: "Schedule updated", dot: "bg-muted-foreground" },
+};
+
+/**
+ * A compact, owner-visible timeline of this VM's recent lifecycle events, read
+ * from the audit log (`GET /vms/:id/activity`). Refreshes on demand; the actor
+ * email is shown so you can tell whether you or an admin acted.
+ */
+function ActivityCard({ vmId }: { vmId: string }) {
+  const [items, setItems] = useState<VmActivityEntry[] | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await api.get<VmActivityEntry[]>(`/vms/${vmId}/activity`);
+      setItems(res.data);
+    } catch {
+      setItems([]);
+    }
+  }, [vmId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function refresh() {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }
+
+  return (
+    <Card className="mt-4">
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <History className="size-4 text-muted-foreground" />
+          Activity
+        </CardTitle>
+        <Button variant="ghost" size="sm" onClick={refresh} disabled={refreshing} title="Refresh">
+          <RefreshCw className={refreshing ? "animate-spin" : undefined} />
+        </Button>
+      </CardHeader>
+      <CardContent>
+        {items === null ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">Loading…</p>
+        ) : items.length === 0 ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">No activity recorded yet.</p>
+        ) : (
+          <ul className="space-y-3">
+            {items.map((e) => {
+              const meta = ACTIVITY_META[e.action] ?? { label: e.action, dot: "bg-muted-foreground" };
+              return (
+                <li key={e.id} className="flex items-start gap-3 text-sm">
+                  <span className={`mt-1.5 size-2 shrink-0 rounded-full ${meta.dot}`} />
+                  <div className="min-w-0 flex-1">
+                    <span className="font-medium">{meta.label}</span>
+                    {e.actorEmail && (
+                      <span className="text-muted-foreground"> · {e.actorEmail}</span>
+                    )}
+                  </div>
+                  <span
+                    className="shrink-0 text-xs text-muted-foreground tabular-nums"
+                    title={formatDate(e.createdAt)}
+                  >
+                    {formatRelative(e.createdAt)}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function VmDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -81,6 +358,7 @@ export default function VmDetailPage() {
   const [transition, setTransition] = useState<Transition>(null);
   const [elapsed, setElapsed] = useState(0);
   const [tplName, setTplName] = useState("");
+  const [newName, setNewName] = useState("");
 
   const transitionRef = useRef<Transition>(null);
   const startRef = useRef(0);
@@ -170,6 +448,28 @@ export default function VmDetailPage() {
     } catch (err) {
       toast.error(apiError(err));
       setPending("delete-failed");
+    }
+  }
+
+  async function onRename() {
+    const trimmed = newName.trim();
+    if (!trimmed) {
+      toast.error("Give the VM a name.");
+      return;
+    }
+    if (!/^[a-zA-Z0-9-]+$/.test(trimmed)) {
+      toast.error("Use letters, numbers and hyphens only.");
+      return;
+    }
+    setPending("rename");
+    try {
+      await api.patch(`/vms/${id}`, { name: trimmed });
+      toast.success("VM renamed.");
+      await load();
+      setPending(null);
+    } catch (err) {
+      toast.error(apiError(err));
+      setPending(null);
     }
   }
 
@@ -263,6 +563,40 @@ export default function VmDetailPage() {
           <SquareTerminal />
           Text console
         </Button>
+
+        <AlertDialog>
+          <AlertDialogTrigger
+            render={
+              <Button variant="outline" disabled={busy} onClick={() => setNewName(vm.name)}>
+                <Pencil />
+                Rename
+              </Button>
+            }
+          />
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Rename {vm.name}</AlertDialogTitle>
+              <AlertDialogDescription>
+                Changes the VM&apos;s name here and on Proxmox. Letters, numbers and hyphens only.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <FormField label="New name" htmlFor="newName">
+              <Input
+                id="newName"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="e.g. web-server-02"
+              />
+            </FormField>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={onRename} disabled={pending === "rename"}>
+                {pending === "rename" ? <Loader2 className="animate-spin" /> : <Pencil />}
+                Rename
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {isAdmin && (
           <AlertDialog>
@@ -379,6 +713,16 @@ export default function VmDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      <MetricsCard vmId={vm.id} />
+
+      <NotesCard vmId={vm.id} initial={vm.description} onSaved={load} />
+
+      <PowerSchedulePanel vmId={vm.id} />
+
+      <ActivityCard vmId={vm.id} />
+
+      <SnapshotsPanel vmId={vm.id} vmName={vm.name} />
 
       <MateStatesPanel vmId={vm.id} vmName={vm.name} />
 

@@ -5,7 +5,7 @@ vi.mock('../src/lib/prisma.js', () => ({
 }));
 
 import { prisma } from '../src/lib/prisma.js';
-import { recordAudit, listAudit } from '../src/services/audit.service.js';
+import { recordAudit, listAudit, listAuditForTarget } from '../src/services/audit.service.js';
 
 const create = vi.mocked(prisma.auditLog.create);
 const findMany = vi.mocked(prisma.auditLog.findMany);
@@ -71,5 +71,24 @@ describe('listAudit', () => {
     const r = await listAudit();
     expect(r.limit).toBe(100);
     expect(findMany).toHaveBeenCalledWith({ orderBy: { createdAt: 'desc' }, take: 100, skip: 0 });
+  });
+});
+
+describe('listAuditForTarget (per-VM activity feed)', () => {
+  it('filters by targetType + targetId, newest first, default 20', async () => {
+    findMany.mockResolvedValue([{ id: 'a1' }] as never);
+    const items = await listAuditForTarget('vm', 'vm1');
+    expect(findMany).toHaveBeenCalledWith({
+      where: { targetType: 'vm', targetId: 'vm1' },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+    expect(items).toHaveLength(1);
+  });
+
+  it('clamps the limit to [1,100]', async () => {
+    findMany.mockResolvedValue([] as never);
+    await listAuditForTarget('vm', 'vm1', 9999);
+    expect(findMany.mock.calls[0]![0].take).toBe(100);
   });
 });

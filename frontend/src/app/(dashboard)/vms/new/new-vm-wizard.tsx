@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { ArrowLeft, Loader2, Plus, Rocket, HardDrive, KeyRound, Server, Container } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
-import type { MeResponse, ProxmoxIso, Template, VirtualMachine } from "@/lib/types";
+import type { MeResponse, ProxmoxIso, Template, VirtualMachine, SshKey } from "@/lib/types";
 import { formatRam } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,6 +29,15 @@ import {
 const RAM_OPTIONS = [1, 2, 4, 8, 16, 32];
 const CUSTOM = "custom";
 const CUSTOM_DISK_DEFAULT = 20;
+
+/** One-click "T-shirt" sizes that pre-fill cpu/ram/disk; disk is clamped up to a
+ *  template's base. Tweak any field afterwards — these are just sensible starts. */
+const SIZE_PRESETS = [
+  { key: "s", label: "Small", cpu: 1, ramGb: 2, diskGb: 20 },
+  { key: "m", label: "Medium", cpu: 2, ramGb: 4, diskGb: 40 },
+  { key: "l", label: "Large", cpu: 4, ramGb: 8, diskGb: 80 },
+  { key: "xl", label: "X-Large", cpu: 8, ramGb: 16, diskGb: 160 },
+] as const;
 
 /** Snippet filename for a feature combo — must mirror the backend (sorted, hyphen-joined). */
 const cloudSnippetFile = (ids: string[]) => `proxmate-${[...ids].sort().join("-")}.yaml`;
@@ -66,6 +75,7 @@ export default function NewVmWizard() {
   const [os, setOs] = useState("");
   // Cloud-init template deploys only:
   const [sshKey, setSshKey] = useState("");
+  const [savedKeys, setSavedKeys] = useState<SshKey[]>([]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [cloudFeatures, setCloudFeatures] = useState<{ id: string; label: string; hint: string }[]>([]);
@@ -85,13 +95,16 @@ export default function NewVmWizard() {
           "/templates/cloud-init-status",
         )
         .catch(() => ({ data: { features: [], nodes: {} } })),
+      // Saved SSH keys — offered as quick-pick for cloud-init deploys. Never block.
+      api.get<SshKey[]>("/ssh-keys").catch(() => ({ data: [] as SshKey[] })),
     ])
-      .then(([meRes, isosRes, tplRes, extrasRes]) => {
+      .then(([meRes, isosRes, tplRes, extrasRes, keysRes]) => {
         setQuota(meRes.data.user.quota);
         setIsos(isosRes.data);
         setTemplates(tplRes.data);
         setCloudFeatures(extrasRes.data.features ?? []);
         setCloudNodes(extrasRes.data.nodes ?? {});
+        setSavedKeys(keysRes.data ?? []);
 
         // Deep-link preselect: /vms/new?template=<id> (e.g. the store's Deploy button).
         const wanted = searchParams.get("template");
@@ -114,6 +127,18 @@ export default function NewVmWizard() {
   // A combo deploy needs the combined snippet present too (admins place those).
   const bundleReady = selectedFeatures.length === 0 || nodeSnippets.includes(cloudSnippetFile(selectedFeatures));
   const minDisk = template?.diskGb ?? 1;
+
+  // Which preset (if any) the current cpu/ram/disk match, so its chip highlights.
+  const activePreset = SIZE_PRESETS.find(
+    (p) => p.cpu === cpu && p.ramGb === ramGb && storageGb === Math.max(p.diskGb, minDisk),
+  )?.key;
+
+  function applyPreset(p: (typeof SIZE_PRESETS)[number]) {
+    setCpu(p.cpu);
+    setRamGb(p.ramGb);
+    setStorageGb(Math.max(p.diskGb, minDisk));
+    setErrors({});
+  }
 
   const cpuLeft = quota ? quota.cpu.max - quota.cpu.used : 0;
   const ramLeftMb = quota ? quota.ram.max - quota.ram.used : 0;
@@ -280,6 +305,33 @@ export default function NewVmWizard() {
                   <Input id="name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
                 </FormField>
 
+                <FormField label="Size" hint="A quick start — fine-tune any field below.">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {SIZE_PRESETS.map((p) => (
+                      <button
+                        key={p.key}
+                        type="button"
+                        onClick={() => applyPreset(p)}
+                        aria-pressed={activePreset === p.key}
+                        className={
+                          "rounded-lg border p-2.5 text-left transition-colors " +
+                          (activePreset === p.key
+                            ? "border-primary bg-primary/10"
+                            : "hover:border-primary/50 hover:bg-muted")
+                        }
+                      >
+                        <div className="text-sm font-medium">{p.label}</div>
+                        <div className="mt-0.5 text-xs text-muted-foreground">
+                          {p.cpu} vCPU · {p.ramGb} GB
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {Math.max(p.diskGb, minDisk)} GB disk
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </FormField>
+
                 <div className="grid gap-4 sm:grid-cols-2">
                   <FormField label="vCPU cores" htmlFor="cpu" error={errors.cpu}>
                     <Input
@@ -334,6 +386,26 @@ export default function NewVmWizard() {
                       error={errors.sshKey}
                       hint="Injected on first boot so you can SSH in right away — paste the output of `cat ~/.ssh/id_ed25519.pub`."
                     >
+                      {savedKeys.length > 0 && (
+                        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                          <span className="text-xs text-muted-foreground">Use a saved key:</span>
+                          {savedKeys.map((k) => (
+                            <button
+                              key={k.id}
+                              type="button"
+                              onClick={() => setSshKey(k.publicKey)}
+                              className={
+                                "rounded-full border px-2.5 py-0.5 text-xs transition-colors " +
+                                (sshKey === k.publicKey
+                                  ? "border-primary bg-primary/10 text-primary"
+                                  : "hover:bg-muted")
+                              }
+                            >
+                              {k.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                       <textarea
                         id="sshkey"
                         value={sshKey}
@@ -341,6 +413,13 @@ export default function NewVmWizard() {
                         placeholder="ssh-ed25519 AAAA… you@laptop"
                         className="h-20 w-full resize-none rounded-md border bg-background p-2 font-mono text-xs outline-none focus:ring-2 focus:ring-ring"
                       />
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Save keys for reuse in{" "}
+                        <Link href="/security" className="text-primary underline-offset-4 hover:underline">
+                          Security → SSH keys
+                        </Link>
+                        .
+                      </p>
                     </FormField>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <FormField label="Username" htmlFor="ciuser" error={errors.username} hint="The login user to create.">
