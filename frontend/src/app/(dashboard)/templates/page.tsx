@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
@@ -18,6 +18,8 @@ import {
   Cloud,
   Container,
   ImagePlus,
+  Search,
+  ChevronsUpDown,
 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
@@ -419,6 +421,11 @@ function CloudInitExtrasCard() {
   const [extras, setExtras] = useState<CloudInitExtras | null>(null);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  // Searchable snippet picker state.
+  const [query, setQuery] = useState("");
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [comboOpen, setComboOpen] = useState(false);
+  const comboRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(() => {
     api
@@ -427,6 +434,16 @@ function CloudInitExtrasCard() {
       .catch(() => {});
   }, []);
   useEffect(load, [load]);
+
+  // Close the picker dropdown when clicking outside it.
+  useEffect(() => {
+    if (!comboOpen) return;
+    function onDown(e: MouseEvent) {
+      if (comboRef.current && !comboRef.current.contains(e.target as Node)) setComboOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [comboOpen]);
 
   async function enable() {
     setBusy(true);
@@ -447,6 +464,20 @@ function CloudInitExtrasCard() {
   }
 
   if (!extras) return null;
+
+  const selectedBundle = extras.bundles.find((b) => b.file === selectedFile) ?? null;
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? extras.bundles.filter(
+        (b) => b.label.toLowerCase().includes(q) || b.features.some((f) => f.toLowerCase().includes(q)),
+      )
+    : extras.bundles;
+
+  function selectBundle(b: CloudInitBundle) {
+    setSelectedFile(b.file);
+    setQuery(b.label);
+    setComboOpen(false);
+  }
 
   return (
     <Card className="mb-6">
@@ -486,35 +517,97 @@ function CloudInitExtrasCard() {
           )}
           <div className="grid gap-3">
             <p className="text-muted-foreground">
-              {extras.snippetsEnabled ? "" : "Step 2 — "}On <strong>each Proxmox node</strong>, run the command for each
-              option you want to offer. (The combined snippet is needed only if a tenant selects more than one.)
+              {extras.snippetsEnabled ? "" : "Step 2 — "}Pick an option to see its one-time setup command, then run that
+              command on <strong>each Proxmox node</strong> you want to offer it on. (The combined snippet is only needed
+              if a tenant selects more than one option.)
             </p>
-            {extras.bundles.map((b) => {
-              const ready = b.nodesReady.length > 0;
-              return (
-                <div key={b.file} className="rounded-md border p-3">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <span className="font-medium">{b.label}</span>
-                    <Badge variant={ready ? "secondary" : "outline"} className="text-[10px]">
-                      {ready ? `✓ ${b.nodesReady.join(", ")}` : "○ not placed"}
-                    </Badge>
-                  </div>
-                  <div className="relative">
-                    <pre className="max-h-48 overflow-auto rounded-md border bg-muted/60 p-3 pr-16 text-xs">
-                      {b.command}
-                    </pre>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="absolute right-2 top-2"
-                      onClick={() => copy(b.command)}
-                    >
-                      Copy
-                    </Button>
-                  </div>
+
+            {/* Searchable snippet picker */}
+            <div ref={comboRef} className="relative">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={query}
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    setComboOpen(true);
+                    setSelectedFile(null);
+                  }}
+                  onFocus={() => setComboOpen(true)}
+                  placeholder="Search snippets — e.g. Docker, Tailscale…"
+                  className="pl-8 pr-8"
+                  aria-label="Search cloud-init snippets"
+                />
+                <ChevronsUpDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              </div>
+              {comboOpen && (
+                <div className="absolute z-50 mt-1 max-h-56 w-full overflow-auto rounded-lg border bg-popover p-1 shadow-md ring-1 ring-foreground/10">
+                  {filtered.length === 0 ? (
+                    <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+                      No snippet matches &ldquo;{query}&rdquo;.
+                    </p>
+                  ) : (
+                    filtered.map((b) => {
+                      const ready = b.nodesReady.length > 0;
+                      const active = selectedFile === b.file;
+                      return (
+                        <button
+                          key={b.file}
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            selectBundle(b);
+                          }}
+                          className={
+                            "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent " +
+                            (active ? "bg-accent" : "")
+                          }
+                        >
+                          <span className="flex items-center gap-2">
+                            {active ? <Check className="size-3.5" /> : <span className="size-3.5" />}
+                            {b.label}
+                          </span>
+                          <Badge variant={ready ? "secondary" : "outline"} className="text-[10px]">
+                            {ready ? "✓ placed" : "○ not placed"}
+                          </Badge>
+                        </button>
+                      );
+                    })
+                  )}
                 </div>
-              );
-            })}
+              )}
+            </div>
+
+            {/* Selected snippet's setup command */}
+            {selectedBundle && (
+              <div className="rounded-md border p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="font-medium">{selectedBundle.label}</span>
+                  <Badge
+                    variant={selectedBundle.nodesReady.length > 0 ? "secondary" : "outline"}
+                    className="text-[10px]"
+                  >
+                    {selectedBundle.nodesReady.length > 0
+                      ? `✓ ${selectedBundle.nodesReady.join(", ")}`
+                      : "○ not placed"}
+                  </Badge>
+                </div>
+                <div className="relative">
+                  <pre className="max-h-48 overflow-auto rounded-md border bg-muted/60 p-3 pr-16 text-xs">
+                    {selectedBundle.command}
+                  </pre>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="absolute right-2 top-2"
+                    onClick={() => copy(selectedBundle.command)}
+                  >
+                    Copy
+                  </Button>
+                </div>
+              </div>
+            )}
+
             <Button variant="ghost" size="sm" onClick={load}>
               <RefreshCw /> Re-check nodes
             </Button>
