@@ -10,6 +10,7 @@ import proxmoxRoutes from './routes/proxmox.routes.js';
 import userRoutes from './routes/user.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import templateRoutes from './routes/template.routes.js';
+import sshKeyRoutes from './routes/ssh-key.routes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 const app = express();
@@ -42,6 +43,7 @@ app.use('/api/proxmox', proxmoxRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/templates', templateRoutes);
+app.use('/api/ssh-keys', sshKeyRoutes);
 // console.routes (VNC WebSocket proxy) is attached to the HTTP upgrade event in index.ts
 
 // ─── Global Error Handler ─────────────────────────────────────

@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ShieldCheck, ShieldOff, Loader2, KeyRound, Copy, Fingerprint, Plus, Trash2 } from "lucide-react";
+import { ShieldCheck, ShieldOff, Loader2, KeyRound, Copy, Fingerprint, Plus, Trash2, KeySquare } from "lucide-react";
 import { startRegistration } from "@simplewebauthn/browser";
 import { api, apiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 import { useAuthStore } from "@/lib/auth-store";
-import type { MeResponse } from "@/lib/types";
+import type { MeResponse, SshKey } from "@/lib/types";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -28,6 +28,10 @@ export default function SecurityPage() {
   const [passkeyList, setPasskeyList] = useState<Passkey[] | null>(null);
   const [addingPasskey, setAddingPasskey] = useState(false);
   const [mfaRequired, setMfaRequired] = useState(false);
+  const [sshKeys, setSshKeys] = useState<SshKey[] | null>(null);
+  const [keyName, setKeyName] = useState("");
+  const [keyValue, setKeyValue] = useState("");
+  const [savingKey, setSavingKey] = useState(false);
   const setStoreMfa = useAuthStore((s) => s.setMfaSetupRequired);
 
   const load = useCallback(() => {
@@ -39,6 +43,10 @@ export default function SecurityPage() {
       .get<{ passkeys: Passkey[] }>("/auth/passkeys")
       .then((r) => setPasskeyList(r.data.passkeys))
       .catch((e) => toast.error(apiError(e)));
+    api
+      .get<SshKey[]>("/ssh-keys")
+      .then((r) => setSshKeys(r.data))
+      .catch((e) => toast.error(apiError(e)));
     // Keep the admin-required-2FA gate accurate as the user enrols/removes methods.
     api
       .get<MeResponse>("/auth/me")
@@ -49,6 +57,31 @@ export default function SecurityPage() {
       })
       .catch(() => {});
   }, [setStoreMfa]);
+
+  async function saveSshKey() {
+    setSavingKey(true);
+    try {
+      await api.post("/ssh-keys", { name: keyName.trim(), publicKey: keyValue.trim() });
+      setKeyName("");
+      setKeyValue("");
+      toast.success("SSH key saved.");
+      load();
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setSavingKey(false);
+    }
+  }
+
+  async function removeSshKey(id: string) {
+    try {
+      await api.delete(`/ssh-keys/${id}`);
+      toast.success("SSH key removed.");
+      load();
+    } catch (err) {
+      toast.error(apiError(err));
+    }
+  }
 
   async function addPasskey() {
     setAddingPasskey(true);
@@ -316,6 +349,79 @@ export default function SecurityPage() {
               {addingPasskey ? <Loader2 className="animate-spin" /> : <Plus />}
               Add a passkey
             </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* SSH keys (reused on cloud-init VM deploys) */}
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <KeySquare className="size-5 text-primary" /> SSH keys
+          </CardTitle>
+          <CardDescription>
+            Save your SSH public keys here and pick them when deploying a cloud-init VM — no more
+            pasting the same key every time.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          {sshKeys === null ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> Loading…
+            </div>
+          ) : sshKeys.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No saved keys yet.</p>
+          ) : (
+            <ul className="divide-y rounded-md border">
+              {sshKeys.map((k) => (
+                <li key={k.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+                  <div className="min-w-0">
+                    <p className="font-medium">{k.name}</p>
+                    <p className="truncate font-mono text-xs text-muted-foreground" title={k.publicKey}>
+                      {k.publicKey}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => removeSshKey(k.id)}
+                    aria-label={`Remove ${k.name}`}
+                  >
+                    <Trash2 className="text-destructive" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="grid gap-2 border-t pt-3">
+            <FormField label="Key name" htmlFor="keyName">
+              <Input
+                id="keyName"
+                value={keyName}
+                onChange={(e) => setKeyName(e.target.value)}
+                placeholder="e.g. laptop"
+                maxLength={60}
+              />
+            </FormField>
+            <FormField label="Public key" htmlFor="keyValue">
+              <textarea
+                id="keyValue"
+                value={keyValue}
+                onChange={(e) => setKeyValue(e.target.value)}
+                placeholder="ssh-ed25519 AAAA… you@laptop"
+                className="h-20 w-full resize-none rounded-md border bg-background p-2 font-mono text-xs outline-none focus:ring-2 focus:ring-ring"
+              />
+            </FormField>
+            <div>
+              <Button
+                variant="outline"
+                onClick={saveSshKey}
+                disabled={savingKey || !keyName.trim() || !keyValue.trim()}
+              >
+                {savingKey ? <Loader2 className="animate-spin" /> : <Plus />}
+                Save key
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>

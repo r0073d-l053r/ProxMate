@@ -61,3 +61,20 @@ export async function listAudit(opts: { limit?: number; offset?: number } = {}):
   ]);
   return { items, total, limit, offset };
 }
+
+/**
+ * The recent audit entries for one target (e.g. a single VM), newest first.
+ * Powers the per-VM activity feed — scoped to `targetType`/`targetId` so a tenant
+ * only ever sees events for a VM they own (the caller checks ownership first).
+ */
+export async function listAuditForTarget(
+  targetType: string,
+  targetId: string,
+  limit = 20,
+): Promise<AuditLog[]> {
+  return prisma.auditLog.findMany({
+    where: { targetType, targetId },
+    orderBy: { createdAt: 'desc' },
+    take: Math.min(Math.max(limit, 1), 100),
+  });
+}

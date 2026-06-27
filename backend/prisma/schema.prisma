@@ -35,6 +35,22 @@ model User {
   invitesCreated InviteToken[]  @relation("CreatedInvites")
   usedInvite     InviteToken?   @relation("UsedInvite")
   sessions       Session[]
+  sshKeys        SshKey[]
+}
+
+// A reusable SSH public key saved to a user's profile, so cloud-init deploys can
+// pick from a dropdown instead of pasting the key every time (DigitalOcean-style).
+model SshKey {
+  id         String    @id @default(cuid())
+  userId     String
+  name       String                    // user-friendly label, e.g. "laptop"
+  publicKey  String                    // the OpenSSH public key line
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Session {
@@ -87,6 +103,10 @@ model VirtualMachine {
 
   status        String    @default("creating") // creating | running | stopped | error
   ipAddress     String?
+
+  // Optional power schedule (5-field cron, server timezone). Null = no auto action.
+  startCron     String?   // auto-start when this fires
+  stopCron      String?   // auto-shutdown (graceful) when this fires
 
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt

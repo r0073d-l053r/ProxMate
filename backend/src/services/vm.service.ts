@@ -292,6 +292,26 @@ export async function listVms(user: { id: string; role: string }): Promise<Virtu
 }
 
 /**
+ * Update a VM's user-editable metadata: free-text notes (`description`) and/or
+ * its `name`. The notes are ProxMate-only; a name change is pushed to Proxmox by
+ * the route (via `setVmName`) before this writes the new name to our DB.
+ */
+export async function updateVm(
+  vm: VirtualMachine,
+  data: { description?: string | null; name?: string },
+): Promise<VirtualMachine> {
+  return prisma.virtualMachine.update({ where: { id: vm.id }, data });
+}
+
+/** Set (or clear, with nulls) a VM's auto start/stop cron schedule. */
+export async function setPowerSchedule(
+  vm: VirtualMachine,
+  data: { startCron: string | null; stopCron: string | null },
+): Promise<VirtualMachine> {
+  return prisma.virtualMachine.update({ where: { id: vm.id }, data });
+}
+
+/**
  * Ensures the VM's stored node in our database is correct by checking cluster resources.
  * If Proxmox reports the VM is on a different node, we update the DB.
  */

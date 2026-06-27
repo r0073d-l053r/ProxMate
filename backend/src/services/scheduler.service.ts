@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { runScheduledBackups } from './matestate.service.js';
+import { runDuePowerActions } from './power-schedule.service.js';
 
 /**
  * Weekly MateState scheduler. Defaults to Sundays at 03:00 server time;
@@ -9,7 +10,9 @@ import { runScheduledBackups } from './matestate.service.js';
  * tick is wasted Proxmox effort, so a simple lock is plenty.
  */
 let task: ReturnType<typeof cron.schedule> | null = null;
+let powerTask: ReturnType<typeof cron.schedule> | null = null;
 let running = false;
+let powerRunning = false;
 
 const DEFAULT_SCHEDULE = '0 3 * * 0'; // Sun 03:00
 
@@ -38,4 +41,22 @@ export function startScheduler(): void {
   });
 
   console.log(`[scheduler] MateState backups scheduled (${expr})`);
+
+  // Per-minute tick that applies due per-VM power schedules (auto start/stop).
+  powerTask = cron.schedule('* * * * *', async () => {
+    if (powerRunning) return; // a slow tick is still working — skip
+    powerRunning = true;
+    try {
+      const r = await runDuePowerActions(new Date());
+      if (r.started || r.stopped) {
+        console.log(`[scheduler] power schedule: ${r.started} started, ${r.stopped} stopped`);
+      }
+    } catch (err) {
+      console.error('[scheduler] power-schedule tick failed:', err);
+    } finally {
+      powerRunning = false;
+    }
+  });
+
+  console.log('[scheduler] per-VM power schedules active (1-min tick)');
 }
