@@ -661,6 +661,15 @@ export function findPrimaryDisk(config: Record<string, string>): string | undefi
     .find((k) => !config[k]!.includes('media=cdrom'));
 }
 
+/**
+ * Whether a VM config exposes a serial port (e.g. `serial0`), which is required
+ * for the xterm.js text console (Proxmox `termproxy`). ProxMate's cloud-init VMs
+ * are built with `serial0: 'socket'`; ISO VMs typically have none.
+ */
+export function hasSerialConsole(config: Record<string, string>): boolean {
+  return Object.keys(config).some((k) => /^serial\d+$/.test(k));
+}
+
 /** Primary disk size in whole GB (rounded up), from a VM config. 0 if not found. */
 export function primaryDiskSizeGb(config: Record<string, string>): number {
   const key = findPrimaryDisk(config);

@@ -4,8 +4,8 @@ import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { enforceMfaSetup } from '../middleware/mfa.js';
 import { recordAudit } from '../services/audit.service.js';
-import { pveMessage } from '../services/proxmox.service.js';
-import { requestVncProxy } from '../services/vnc-proxy.service.js';
+import { pveMessage, getVmConfig, hasSerialConsole } from '../services/proxmox.service.js';
+import { requestVncProxy, requestTermProxy } from '../services/vnc-proxy.service.js';
 import { convertVmToTemplate } from '../services/template.service.js';
 import {
   listForVm,
@@ -291,6 +291,29 @@ router.post('/:id/console', async (req: Request, res: Response) => {
     vm = await syncVmNode(vm);
     const { ticket, port } = await requestVncProxy(vm.proxmoxNode, vm.proxmoxVmId);
     res.json({ ticket, port });
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── POST /api/vms/:id/serial ─────────────────────────────────
+// Returns a one-time termproxy ticket + port + user for the xterm.js text
+// console. 409 `no_serial` if the VM has no serial port (e.g. an ISO VM).
+
+router.post('/:id/serial', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  let vm = await getOwnedVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+
+  try {
+    vm = await syncVmNode(vm);
+    const config = await getVmConfig(vm.proxmoxNode, vm.proxmoxVmId);
+    if (!hasSerialConsole(config)) {
+      res.status(409).json({ code: 'no_serial', error: 'This VM has no serial/text console.' });
+      return;
+    }
+    const ticket = await requestTermProxy(vm.proxmoxNode, vm.proxmoxVmId);
+    res.json(ticket);
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }
