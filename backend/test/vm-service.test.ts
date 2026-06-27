@@ -5,15 +5,17 @@ vi.mock('../src/lib/prisma.js', () => ({
     virtualMachine: {
       findMany: vi.fn(),
       findUnique: vi.fn(),
+      update: vi.fn(),
     },
   },
 }));
 
 import { prisma } from '../src/lib/prisma.js';
-import { assertWithinQuota, getOwnedVm, QuotaError } from '../src/services/vm.service.js';
+import { assertWithinQuota, getOwnedVm, updateVm, QuotaError } from '../src/services/vm.service.js';
 
 const findMany = vi.mocked(prisma.virtualMachine.findMany);
 const findUnique = vi.mocked(prisma.virtualMachine.findUnique);
+const update = vi.mocked(prisma.virtualMachine.update);
 
 // Minimal stand-ins; assertWithinQuota only reads these fields.
 const user = (over: Record<string, unknown> = {}) =>
@@ -105,5 +107,22 @@ describe('getOwnedVm (ownership / tenant isolation at the data layer)', () => {
     const vm = { id: 'vm1', userId: 'someone-else' };
     findUnique.mockResolvedValue(vm as never);
     expect(await getOwnedVm('vm1', { id: 'admin', role: 'admin' })).toBe(vm);
+  });
+});
+
+describe('updateVm (user-editable notes/description)', () => {
+  it('writes the new description scoped to the VM id', async () => {
+    const vm = { id: 'vm1' } as never;
+    update.mockResolvedValue({ id: 'vm1', description: 'my notes' } as never);
+    const result = await updateVm(vm, { description: 'my notes' });
+    expect(update).toHaveBeenCalledWith({ where: { id: 'vm1' }, data: { description: 'my notes' } });
+    expect(result).toEqual({ id: 'vm1', description: 'my notes' });
+  });
+
+  it('passes a null through to clear the field', async () => {
+    const vm = { id: 'vm1' } as never;
+    update.mockResolvedValue({ id: 'vm1', description: null } as never);
+    await updateVm(vm, { description: null });
+    expect(update).toHaveBeenCalledWith({ where: { id: 'vm1' }, data: { description: null } });
   });
 });

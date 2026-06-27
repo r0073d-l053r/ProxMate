@@ -74,6 +74,60 @@ export interface VmDetail extends VirtualMachine {
   live: VmLiveStatus | null;
 }
 
+/** Owner-facing per-VM activity entry — a sanitized slice of the audit log
+ *  (no IP / internal user id is exposed to the VM owner). */
+export interface VmActivityEntry {
+  id: string;
+  action: string;
+  actorEmail: string | null;
+  detail: string | null;
+  createdAt: string;
+}
+
+export type RrdTimeframe = "hour" | "day" | "week" | "month" | "year";
+
+/** One sample from Proxmox's per-VM RRD store. cpu is a 0..1 fraction; mem/maxmem
+ *  are bytes; net/disk rates are per-second. Fields are absent for buckets where
+ *  the VM wasn't running. */
+export interface RrdPoint {
+  time: number; // epoch seconds
+  cpu?: number;
+  mem?: number;
+  maxmem?: number;
+  netin?: number;
+  netout?: number;
+  diskread?: number;
+  diskwrite?: number;
+}
+
+export interface VmMetrics {
+  timeframe: RrdTimeframe;
+  points: RrdPoint[];
+}
+
+/** A VM's optional auto start/stop schedule, as 5-field cron strings (or null = off). */
+export interface PowerSchedule {
+  startCron: string | null;
+  stopCron: string | null;
+}
+
+/** A live Proxmox snapshot (in-place point-in-time), distinct from a MateState backup. */
+export interface Snapshot {
+  name: string;
+  description?: string;
+  snaptime?: number; // epoch seconds
+  vmstate?: number; // 1 if RAM state captured
+  parent?: string;
+}
+
+export interface SshKey {
+  id: string;
+  name: string;
+  publicKey: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
 export interface Invite {
   id: string;
   token: string;
