@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import axios from 'axios';
 
@@ -155,16 +155,35 @@ export interface UpdateStatus {
   updatedAt?: string;
 }
 
+/**
+ * writeFile that self-heals an ownership skew. The host updater runs as root
+ * and rewrites update-status.json, so on a later request that file (or the
+ * request flag) can be owned by root and unwritable by the unprivileged app
+ * user — `writeFile` would then fail with EACCES/EPERM and the update could
+ * never be queued. We own the control *directory*, so on those errors we unlink
+ * the stale file (allowed regardless of file owner) and write a fresh one.
+ */
+async function writeControlFile(path: string, data: string): Promise<void> {
+  try {
+    await writeFile(path, data);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'EACCES' && code !== 'EPERM') throw err;
+    await rm(path, { force: true });
+    await writeFile(path, data);
+  }
+}
+
 /** Drop a request flag for the host updater to pick up. */
 export async function requestUpdate(tag: string, requestedBy: string): Promise<void> {
   await mkdir(CONTROL_DIR, { recursive: true });
   const payload = JSON.stringify({ tag, requestedBy, requestedAt: new Date().toISOString() }, null, 2);
   // Write a queued status immediately so the UI reflects it before the host runs.
-  await writeFile(
+  await writeControlFile(
     join(CONTROL_DIR, STATUS_FILE),
     JSON.stringify({ state: 'queued', tag, updatedAt: new Date().toISOString() }, null, 2),
   );
-  await writeFile(join(CONTROL_DIR, REQUEST_FILE), payload);
+  await writeControlFile(join(CONTROL_DIR, REQUEST_FILE), payload);
 }
 
 /** The host updater's last-written status (idle when none / not set up). */

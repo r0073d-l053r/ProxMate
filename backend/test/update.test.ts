@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { mkdtempSync, writeFileSync, chmodSync, existsSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { isNewer, isValidTag, currentVersion } from '../src/services/update.service.js';
 
 describe('isNewer (semver compare)', () => {
@@ -39,5 +42,40 @@ describe('isValidTag', () => {
 describe('currentVersion', () => {
   it('reads a semver-ish version from package.json', () => {
     expect(currentVersion()).toMatch(/^\d+\.\d+\.\d+/);
+  });
+});
+
+describe('requestUpdate (self-heals an unwritable status file)', () => {
+  // root ignores the read-only owner bit, so this scenario can't be simulated
+  // as root — skip there (CI runs unprivileged, where it's meaningful).
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+  afterEach(() => {
+    delete process.env['UPDATE_CONTROL_DIR'];
+  });
+
+  it.skipIf(isRoot)('overwrites a stale read-only status file and queues the request', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'proxmate-control-'));
+    // Mimic the status file the root host-updater leaves behind: present, but
+    // unwritable by us — while we still own the directory it lives in.
+    const statusPath = join(dir, 'update-status.json');
+    writeFileSync(statusPath, '{"state":"success","tag":"v0.0.1"}');
+    chmodSync(statusPath, 0o444);
+
+    // CONTROL_DIR is resolved at module load, so import a fresh copy pointed at
+    // our temp dir.
+    vi.resetModules();
+    process.env['UPDATE_CONTROL_DIR'] = dir;
+    const { requestUpdate } = await import('../src/services/update.service.js');
+
+    await expect(requestUpdate('v0.2.4', 'tester')).resolves.toBeUndefined();
+
+    expect(existsSync(join(dir, 'update-request.json'))).toBe(true);
+    const status = JSON.parse(readFileSync(statusPath, 'utf8'));
+    expect(status.state).toBe('queued');
+    expect(status.tag).toBe('v0.2.4');
+    const request = JSON.parse(readFileSync(join(dir, 'update-request.json'), 'utf8'));
+    expect(request.tag).toBe('v0.2.4');
+    expect(request.requestedBy).toBe('tester');
   });
 });
