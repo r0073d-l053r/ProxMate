@@ -82,6 +82,9 @@ services:
         # Baked into the client bundle at build time — must be the API URL the
         # user's browser can reach (e.g. https://proxmate.example.com/api).
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000/api}
+        # Public origin for SEO metadata (OG image / canonical / manifest URLs).
+        # Must be the externally reachable URL link-preview bots can fetch.
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
     image: proxmate-frontend
     restart: unless-stopped
     cap_drop:
