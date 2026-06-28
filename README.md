@@ -15,7 +15,7 @@
 
 **A lightweight, invite-only cloud dashboard built on Proxmox VE.**
 
-ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cluster. Generate invite links with resource quotas, let users spin up VMs from an ISO **or a one-click cloud image** (paste an SSH key → a ready-to-SSH box in ~60s), and access them via an in-browser noVNC console — all without exposing your Proxmox admin panel.
+ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cluster. Generate invite links with resource quotas, let users spin up VMs from an ISO **or a one-click cloud image** (paste an SSH key → a ready-to-SSH box in ~60s), and access them via an in-browser console — **graphical (noVNC)** or a **text console with clickable links, copy/paste & scrollback** — all without exposing your Proxmox admin panel.
 
 </div>
 
@@ -29,12 +29,15 @@ ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cl
 | 🛡️ **Multi-Factor Auth (MFA/2FA)** | Secure accounts via TOTP (authenticator apps) with recovery codes, or passwordless **Passkeys (WebAuthn)** using biometric keys |
 | 🔑 **Single Sign-On (OIDC SSO)** | Bring-your-own SSO (Keycloak, Authentik, etc.) with custom group-to-admin mapping and optional JIT user provisioning |
 | ✉️ **SMTP & Password Recovery** | Email-based secure password resets, with a database-backed "contact admin" request queue if SMTP is disabled |
-| 🖥️ **VM Lifecycle Management** | Create, start, stop, restart, and delete VMs from a sleek dashboard |
-| ☁️ **Cloud-Init Deploys** | One-click cloud images (16 curated distros + custom URLs), imported entirely through the Proxmox API — paste an SSH key for a ready-to-SSH box in ~60s, with optional first-boot **Docker** / **Tailscale** installs |
+| 🖥️ **VM Lifecycle Management** | Create, start, stop, restart, **rename**, and delete VMs — each VM page has editable **notes**, an **activity timeline**, and **CPU/memory history charts**. The create wizard offers one-click **size presets** (Small → X-Large) |
+| ☁️ **Cloud-Init Deploys** | One-click cloud images (16 curated distros + custom URLs), imported entirely through the Proxmox API — paste an SSH key for a ready-to-SSH box in ~60s, with optional first-boot **Docker** / **Tailscale** installs. **Save SSH keys** to your profile and pick them on deploy |
 | 📦 **Template Store** | Publish Proxmox templates as one-click OS builds — cloned and autoscaled on deploy, with OS-matched (or custom-uploaded) icons and admin-authored login notes |
 | ⚖️ **Automatic VM Placement** | Tenants never pick a node — the scheduler auto-places each VM on a node that has the chosen image, with the most free capacity |
-| 🌐 **In-Browser Console** | noVNC remote access in the browser, proxied securely through the backend — with copy-paste into the VM (fixed std VGA console display for Cloud-init templates) |
-| 💾 **MateStates Backups** | Scheduled weekly snapshots + one-click in-place restore, with rolling retention |
+| 🌐 **In-Browser Console** | A **graphical (noVNC)** console *and* an **xterm.js text console** with **Ctrl/⌘-clickable links**, real copy/paste, and scrollback — both proxied securely through the backend, no SSH or open ports |
+| 💾 **MateStates Backups** | Scheduled weekly backups + one-click in-place restore, with rolling retention |
+| 📸 **Quick Snapshots** | Instant Proxmox snapshots — take / roll back / delete, with optional RAM-state capture — for "before I change something" restore points (distinct from durable MateStates backups) |
+| ⏰ **Power Schedule** | Auto start/stop any VM on a weekly schedule — handy for dev boxes that don't need to run overnight |
+| 🔄 **In-App Updates** | Admins check the latest GitHub release, see what's new, and (opt-in) one-click rebuild + restart onto the new version |
 | 📈 **Live Admin Monitor** | Per-VM CPU / memory / network sparklines at 1 Hz, with power controls, grouped by owner |
 | 🛡️ **Tenant Network Isolation** | Per-VM Proxmox firewall — MAC filtering, RFC1918 drop rules, and a configurable DNS allow-list — keeps guests off your LAN, your other VMs, and the host |
 | 📝 **Audit Log** | Who created / deleted / restored / started which VM, plus sign-ins — an admin-viewable activity trail |
@@ -86,7 +89,7 @@ ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cl
 | **Database** | SQLite via Prisma ORM (migrations) |
 | **Auth** | JWT + bcrypt, OIDC SSO (`openid-client`), Passkeys (`@simplewebauthn/server`), TOTP 2FA (`otplib`), SMTP |
 | **Proxmox** | REST API with API Token authentication |
-| **Console** | noVNC WebSocket proxy |
+| **Console** | noVNC (graphical) + xterm.js (text) over a WebSocket proxy |
 | **Testing / CI** | Vitest, GitHub Actions |
 
 ---
