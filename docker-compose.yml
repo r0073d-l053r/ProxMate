@@ -6,10 +6,21 @@ services:
       context: ./backend
     image: proxmate-backend
     restart: unless-stopped
-    # Hardening: no Linux capabilities are needed (binds a high port, file I/O
-    # only) and block privilege escalation via setuid binaries.
+    # Hardening: drop all Linux capabilities, then add back only the few the
+    # entrypoint needs. docker-entrypoint.sh starts as root to make the
+    # (root-owned) data volume writable by the unprivileged `node` user —
+    # `chown -R node:node /data` (CHOWN, plus DAC_OVERRIDE to traverse) — then
+    # `su-exec node:node` (SETUID/SETGID) drops to it. Without these the chown
+    # fails ("Operation not permitted") and the backend crash-loops. They are
+    # used only during the brief root phase; once it re-execs as `node`, the
+    # process holds no capabilities. Also block setuid-binary privilege escalation.
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
     security_opt:
       - no-new-privileges:true
     environment:
