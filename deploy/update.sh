@@ -33,6 +33,12 @@ mkdir -p "$CONTROL_DIR"
 status() {
   printf '{"state":"%s","message":"%s","tag":"%s","updatedAt":"%s"}\n' \
     "$1" "$2" "${3:-${TAG:-}}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATUS_FILE"
+  # This script runs as root, but the app (in its container, as an unprivileged
+  # user) rewrites this same file on the next request. Hand it back to the
+  # control dir's owner so the app can always overwrite it. Best-effort — the
+  # app also self-heals if this is ever skipped.
+  chown --reference="$CONTROL_DIR" "$STATUS_FILE" 2>/dev/null || true
+  chmod 0664 "$STATUS_FILE" 2>/dev/null || true
 }
 
 fail() {
