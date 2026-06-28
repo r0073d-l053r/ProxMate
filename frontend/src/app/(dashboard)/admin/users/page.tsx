@@ -179,8 +179,32 @@ function ResetPasswordButton({ user, onDone }: { user: ManagedUser; onDone: () =
   const [busy, setBusy] = useState(false);
 
   function generate() {
-    const r = () => Math.random().toString(36).slice(2);
-    setPw((r() + r().toUpperCase()).slice(0, 14) + "!7");
+    // Use the Web Crypto CSPRNG (never Math.random) for credential material, and
+    // guarantee one of each character class so the temp password isn't degenerate.
+    const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+    const lower = "abcdefghijkmnopqrstuvwxyz";
+    const digits = "23456789";
+    const symbols = "!@#$%^&*";
+    const pick = (set: string, n: number) => {
+      const buf = new Uint32Array(n);
+      crypto.getRandomValues(buf);
+      return Array.from(buf, (v) => set[v % set.length]).join("");
+    };
+    const chars = (
+      pick(upper, 1) +
+      pick(lower, 1) +
+      pick(digits, 1) +
+      pick(symbols, 1) +
+      pick(upper + lower + digits + symbols, 12)
+    ).split("");
+    // CSPRNG Fisher–Yates shuffle so the guaranteed chars aren't always first.
+    const rnd = new Uint32Array(chars.length);
+    crypto.getRandomValues(rnd);
+    for (let i = chars.length - 1; i > 0; i--) {
+      const j = rnd[i]! % (i + 1);
+      [chars[i], chars[j]] = [chars[j]!, chars[i]!];
+    }
+    setPw(chars.join(""));
   }
 
   async function submit() {
