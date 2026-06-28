@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none" role="img" aria-label="ProxMate">
+  <!-- Badge: matches the header logo (bg-primary, rounded-lg) -->
+  <rect x="3" y="3" width="58" height="58" rx="14" fill="#e2e5e7"/>
+  <!-- lucide "Server" glyph (text-primary-foreground), scaled + centered -->
+  <g transform="translate(12 12) scale(1.6667)" stroke="#15191c" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+    <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+    <line x1="6" y1="6" x2="6.01" y2="6"/>
+    <line x1="6" y1="18" x2="6.01" y2="18"/>
+  </g>
+</svg>
