@@ -480,7 +480,9 @@ function CloudInitExtrasCard() {
   }
 
   return (
-    <Card className="mb-6">
+    // overflow-visible so the snippet picker's dropdown isn't clipped by the
+    // card's rounded-corner overflow-hidden.
+    <Card className="mb-6 overflow-visible">
       <CardHeader>
         <div className="flex items-center justify-between gap-2">
           <div>

@@ -33,8 +33,17 @@ services:
       # Optional auth rate-limit tuning (defaults: 20 req / 15 min / IP).
       AUTH_RATE_LIMIT_MAX: ${AUTH_RATE_LIMIT_MAX:-20}
       AUTH_RATE_LIMIT_WINDOW_MS: ${AUTH_RATE_LIMIT_WINDOW_MS:-900000}
+      # Which GitHub repo the in-app "Check for updates" reads releases from.
+      UPDATE_REPO: ${UPDATE_REPO:-r0073d-l053r/ProxMate}
+      # ── Opt-in one-click self-update ──
+      # The admin "Install update" button only works when this is "true" AND the
+      # host updater (deploy/update.sh + the systemd path unit) is installed.
+      # When enabled, also mount the control dir below. See DEPLOYMENT.md.
+      SELF_UPDATE_ENABLED: ${SELF_UPDATE_ENABLED:-false}
     volumes:
       - proxmate-data:/data
+      # Uncomment to enable one-click updates (the host updater watches this dir):
+      # - ./deploy/update-control:/control
     ports:
       # Bind to 127.0.0.1 in production (BIND_ADDR=127.0.0.1) so only the local
       # reverse proxy can reach the API; default 0.0.0.0 for simple/dev use.

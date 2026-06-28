@@ -1,0 +1,15 @@
+# Watches for an in-app update request flag and starts proxmate-updater.service.
+# The flag appears when an admin clicks "Install update"; update.sh deletes it
+# after handling, which re-arms this watch for the next request.
+#
+# Path must match the host side of the control-dir bind mount in docker-compose
+# (./deploy/update-control → /control in the backend container).
+[Unit]
+Description=Watch for ProxMate in-app update requests
+
+[Path]
+PathExists=/opt/proxmate/deploy/update-control/update-request.json
+Unit=proxmate-updater.service
+
+[Install]
+WantedBy=multi-user.target
