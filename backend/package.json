@@ -1,6 +1,6 @@
 {
   "name": "proxmate-backend",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "ProxMate — Express API backend for Proxmox VE cloud dashboard",
   "private": true,
   "license": "AGPL-3.0-only",
