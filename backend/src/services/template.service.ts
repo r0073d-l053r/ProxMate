@@ -454,17 +454,22 @@ export async function cloudInitStatus(): Promise<CloudInitStatus> {
 
   const cr = await client.get<{ data: Array<{ type: string; status?: string; node?: string }> }>('/cluster/resources');
   const nodeNames = cr.data.data.filter((i) => i.type === 'node' && i.status === 'online' && i.node).map((i) => i.node!);
+  // Snippet listing is an independent READ per node — fetch them concurrently.
+  // The per-node try/catch is kept inside the mapped fn so one node's failure
+  // never rejects the batch (it just yields an empty list for that node).
   const nodes: Record<string, string[]> = {};
-  for (const node of nodeNames) {
-    try {
-      const r = await client.get<{ data: Array<{ volid: string }> }>(
-        `/nodes/${node}/storage/${storage}/content?content=snippets`,
-      );
-      nodes[node] = r.data.data.map((x) => x.volid.split('/').pop()!).filter((f) => f.startsWith('proxmate-'));
-    } catch {
-      nodes[node] = [];
-    }
-  }
+  await Promise.all(
+    nodeNames.map(async (node) => {
+      try {
+        const r = await client.get<{ data: Array<{ volid: string }> }>(
+          `/nodes/${node}/storage/${storage}/content?content=snippets`,
+        );
+        nodes[node] = r.data.data.map((x) => x.volid.split('/').pop()!).filter((f) => f.startsWith('proxmate-'));
+      } catch {
+        nodes[node] = [];
+      }
+    }),
+  );
   return { snippetsEnabled, features, nodes };
 }
 
