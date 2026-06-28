@@ -1,0 +1,18 @@
+# ProxMate in-app updater (triggered by proxmate-updater.path).
+#
+# Install (as root):
+#   cp deploy/proxmate-updater.{service,path} /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now proxmate-updater.path
+#
+# Adjust PROXMATE_DIR below if your checkout isn't /opt/proxmate.
+[Unit]
+Description=ProxMate updater — applies an in-app update request
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=PROXMATE_DIR=/opt/proxmate
+WorkingDirectory=/opt/proxmate
+ExecStart=/opt/proxmate/deploy/update.sh --from-request

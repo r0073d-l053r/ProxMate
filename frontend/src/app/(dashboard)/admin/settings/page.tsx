@@ -8,6 +8,7 @@ import { copyText } from "@/lib/clipboard";
 import type { AdminSettings, ProxmoxResources, IsolationStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/dashboard/page-header";
+import { UpdatesCard } from "@/components/admin/updates-card";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -348,6 +349,11 @@ export default function SettingsPage() {
   return (
     <div className="mx-auto max-w-2xl">
       <PageHeader title="Settings" description="Reconfigure the Proxmox connection and VM defaults." />
+
+      {/* Updates */}
+      <div className="mb-6">
+        <UpdatesCard />
+      </div>
 
       {/* Network isolation */}
       {isolation && (
