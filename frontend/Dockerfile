@@ -26,5 +26,9 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 
+# Drop privileges: the Next standalone server only reads these files and binds a
+# high port (3000), so the built-in non-root `node` user is sufficient.
+USER node
+
 EXPOSE 3000
 CMD ["node", "server.js"]

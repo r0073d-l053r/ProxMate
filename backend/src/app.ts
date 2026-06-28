@@ -27,7 +27,9 @@ app.use(cors({
   credentials: true,
 }));
 app.use(cookieParser());
-app.use(express.json());
+// Explicit body cap: bounds request size (DoS) and is large enough for the
+// admin template-icon data-URI (~400 KB) that the default 100 KB silently rejected.
+app.use(express.json({ limit: '1mb' }));
 
 // ─── Health Check ─────────────────────────────────────────────
 app.get('/api/health', (_req, res) => {

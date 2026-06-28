@@ -23,6 +23,10 @@ FROM node:20-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
+# su-exec lets the entrypoint start as root (to chown the data volume), then
+# drop to the unprivileged `node` user before running any app code.
+RUN apk add --no-cache su-exec
+
 # node_modules from build includes the generated Prisma client + prisma CLI
 # (needed to run migrations at startup).
 COPY --from=build /app/node_modules ./node_modules

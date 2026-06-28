@@ -6,6 +6,12 @@ services:
       context: ./backend
     image: proxmate-backend
     restart: unless-stopped
+    # Hardening: no Linux capabilities are needed (binds a high port, file I/O
+    # only) and block privilege escalation via setuid binaries.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       PORT: "4000"
       NODE_ENV: production
@@ -33,6 +39,13 @@ services:
       # Optional auth rate-limit tuning (defaults: 20 req / 15 min / IP).
       AUTH_RATE_LIMIT_MAX: ${AUTH_RATE_LIMIT_MAX:-20}
       AUTH_RATE_LIMIT_WINDOW_MS: ${AUTH_RATE_LIMIT_WINDOW_MS:-900000}
+      # Per-account brute-force lockout (defaults: 10 failed logins → 15 min
+      # auto-unlock). Admins are emailed on lockout when SMTP is configured.
+      AUTH_LOCKOUT_MAX: ${AUTH_LOCKOUT_MAX:-10}
+      AUTH_LOCKOUT_MINUTES: ${AUTH_LOCKOUT_MINUTES:-15}
+      # Keep Proxmox TLS verification ON against a PRIVATE CA instead of disabling
+      # it: mount the CA PEM (see volumes) and point this at it.
+      PROXMOX_CA_CERT_FILE: ${PROXMOX_CA_CERT_FILE:-}
       # Which GitHub repo the in-app "Check for updates" reads releases from.
       UPDATE_REPO: ${UPDATE_REPO:-r0073d-l053r/ProxMate}
       # ── Opt-in one-click self-update ──
@@ -44,6 +57,8 @@ services:
       - proxmate-data:/data
       # Uncomment to enable one-click updates (the host updater watches this dir):
       # - ./deploy/update-control:/control
+      # Uncomment to trust a private Proxmox CA (set PROXMOX_CA_CERT_FILE=/certs/pve-ca.pem):
+      # - ./deploy/pve-ca.pem:/certs/pve-ca.pem:ro
     ports:
       # Bind to 127.0.0.1 in production (BIND_ADDR=127.0.0.1) so only the local
       # reverse proxy can reach the API; default 0.0.0.0 for simple/dev use.
@@ -58,6 +73,15 @@ services:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000/api}
     image: proxmate-frontend
     restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # Optional: pin the CSP connect-src to your exact API + WebSocket origin,
+      # e.g. "'self' https://proxmate.example.com wss://proxmate.example.com".
+      # Blank = a safe default ('self' https: wss:). See frontend/src/proxy.ts.
+      CSP_CONNECT_SRC: ${CSP_CONNECT_SRC:-}
     depends_on:
       - backend
     ports:
