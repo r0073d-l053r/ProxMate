@@ -133,7 +133,13 @@ router.post('/cloud-init-extras/enable', requireAdmin, async (_req: Request, res
 // Long-running: the image download is hundreds of MB.
 const CloudImageSchema = z.object({
   name: z.string().min(1).max(100),
-  imageUrl: z.string().url().refine((u) => /\.(qcow2|img|raw)(\?.*)?$/i.test(u), 'URL must point to a .qcow2/.img/.raw image'),
+  imageUrl: z
+    .string()
+    .url()
+    // Only http(s) — block ftp:/file:/data: and other schemes Proxmox's
+    // download-url might otherwise follow from the host's network position.
+    .refine((u) => /^https?:\/\//i.test(u), 'URL must start with http:// or https://')
+    .refine((u) => /\.(qcow2|img|raw)(\?.*)?$/i.test(u), 'URL must point to a .qcow2/.img/.raw image'),
   os: z.string().max(100).optional(),
   description: z.string().max(500).optional(),
   node: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid node name').optional(),
@@ -188,11 +194,13 @@ router.post('/', requireAdmin, async (req: Request, res: Response) => {
 const UpdateSchema = z.object({
   notes: z.string().max(2000).nullable().optional(),
   description: z.string().max(500).nullable().optional(),
-  // Custom icon as a small image data-URI (admin upload). Cap ~300 KB encoded.
+  // Custom icon as a small RASTER image data-URI (admin upload). Cap ~300 KB
+  // encoded. SVG is intentionally excluded: an inline-rendered SVG can carry
+  // script, so we only accept raster formats that can't execute.
   icon: z
     .string()
     .max(400_000)
-    .regex(/^data:image\/(png|jpeg|webp|svg\+xml);base64,/, 'Must be an image data URI')
+    .regex(/^data:image\/(png|jpeg|webp|gif);base64,/, 'Must be a PNG/JPEG/WebP/GIF data URI')
     .nullable()
     .optional(),
 });

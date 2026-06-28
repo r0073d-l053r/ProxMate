@@ -70,7 +70,8 @@ export async function verifySession(
 ): Promise<{ user: AuthUser; csrfToken: string | null } | null> {
   try {
     const secret = await getJwtSecret();
-    const payload = jwt.verify(token, secret) as { sub: string };
+    // Pin the algorithm — never let a token dictate its own verification alg.
+    const payload = jwt.verify(token, secret, { algorithms: ['HS256'] }) as { sub: string };
 
     const session = await prisma.session.findUnique({ where: { token } });
     if (!session || session.expiresAt < new Date()) return null;
@@ -109,7 +110,7 @@ export async function signChallenge(userId: string): Promise<string> {
 export async function verifyChallenge(token: string): Promise<string | null> {
   try {
     const secret = await getJwtSecret();
-    const payload = jwt.verify(token, secret) as { sub: string; twofa?: boolean };
+    const payload = jwt.verify(token, secret, { algorithms: ['HS256'] }) as { sub: string; twofa?: boolean };
     return payload.twofa ? payload.sub : null;
   } catch {
     return null;
@@ -133,7 +134,7 @@ export async function signEnrollment(userId: string): Promise<string> {
 export async function verifyEnrollment(token: string): Promise<string | null> {
   try {
     const secret = await getJwtSecret();
-    const payload = jwt.verify(token, secret) as { sub: string; enroll?: boolean };
+    const payload = jwt.verify(token, secret, { algorithms: ['HS256'] }) as { sub: string; enroll?: boolean };
     return payload.enroll ? payload.sub : null;
   } catch {
     return null;

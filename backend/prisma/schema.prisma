@@ -23,6 +23,11 @@ model User {
   // Admin-enforced (via the invite): user must set up a 2FA method before using ProxMate.
   require2fa       Boolean  @default(false)
 
+  // Brute-force lockout: consecutive failed-password count + a temporary lock
+  // window. Reset on any successful password verification; auto-expires.
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+
   // Resource Quotas (set from invite token at registration)
   maxCpu        Int       @default(0)      // total vCPU cores allowed
   maxRam        Int       @default(0)      // total RAM in MB

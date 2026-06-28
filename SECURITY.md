@@ -132,14 +132,17 @@ apply to containers if added; LXC additionally benefits from running **unprivile
 | Proxmox API token | Stored AES-256-GCM encrypted in the DB; never sent to the browser. **Scope it down** — see below. |
 | Secrets at rest | `proxmox_token_secret` and `jwt_secret` are encrypted with `ENCRYPTION_KEY` (AES-256-GCM, random IV + auth tag). |
 | Passwords | bcrypt (cost 12). Login runs bcrypt even for unknown emails to prevent timing-based account enumeration. |
-| Sessions / JWT | 24h JWTs with a random `jti`; every token is backed by a `Session` row, so logout / revocation is server-side. |
+| Sessions / JWT | 24h JWTs with a random `jti`, **verified with a pinned `HS256` algorithm**; every token is backed by a `Session` row, so logout / revocation is server-side. |
+| Brute-force lockout | After `AUTH_LOCKOUT_MAX` (default 10) consecutive failed passwords an account is locked for `AUTH_LOCKOUT_MINUTES` (default 15), auto-unlocking. The locked response is identical to a normal failure (no enumeration), and admins are emailed when SMTP is configured. Complements the IP rate limiter (targeted vs. noisy-source protection). |
 | Invites | 32-byte URL-safe random tokens, single-use (claimed atomically), with an expiry. |
-| Input validation | All request bodies validated with Zod; Prisma parameterizes all queries. |
-| Transport | Run ProxMate behind HTTPS in production (reverse proxy). Set `verifySsl=true` once Proxmox has a valid cert. |
+| Input validation | All request bodies validated with Zod; Prisma parameterizes all queries. Request bodies are capped (1 MB). |
+| Transport | Run ProxMate behind HTTPS in production (reverse proxy). Set `verifySsl=true` once Proxmox has a valid cert — or keep verification **on** against a private CA via `PROXMOX_CA_CERT_FILE`/`PROXMOX_CA_CERT` (preferred over disabling it). |
+| Browser headers | The frontend sends `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`, HSTS, and a strict **nonce-based Content-Security-Policy** (`script-src 'self' 'nonce-…' 'strict-dynamic'`) so injected inline scripts can't execute. |
 | CORS | Restricted to `FRONTEND_URL`. |
-| Console tickets | One-time, short-lived Proxmox VNC tickets; the console WebSocket verifies JWT + VM ownership before relaying. |
+| Console tickets | One-time, short-lived Proxmox VNC tickets; the console WebSocket verifies JWT + VM ownership + Origin before relaying. |
 | Rate limiting | Built-in `express-rate-limit` on `/auth/login`, `/auth/register`, `/auth/invite/:token` (env-tunable). Honors `trust proxy`. |
-| Audit log | VM lifecycle (create/delete/start/stop/restart/restore) and auth events are recorded with actor + client IP; admin-viewable at `/admin/audit`. |
+| Containers | Both images run with **all Linux capabilities dropped** and `no-new-privileges`; the frontend runs as a non-root user and the backend drops to the unprivileged `node` user after fixing data-volume ownership. |
+| Audit log | VM lifecycle (create/delete/start/stop/restart/restore), auth events, and **account lockouts** are recorded with actor + client IP; admin-viewable at `/admin/audit`. |
 
 ### Recommended: scope the Proxmox API token
 
@@ -161,4 +164,8 @@ firewall) on the relevant nodes/pool, and use that token instead. ProxMate needs
 - [ ] Prefer a **dedicated tenant VLAN/SDN** (§ Gold-standard).
 - [ ] Use a **least-privilege** Proxmox token, not `root@pam`.
 - [x] **Rate limiting** on login/register/invite is **built in** (`express-rate-limit`). Behind a reverse proxy, set `TRUST_PROXY` to the trusted hop count so it keys on the real client IP.
+- [x] **Per-account brute-force lockout** is built in (env-tunable; admin email alerts when SMTP is set).
+- [x] **Browser security headers + nonce CSP** ship by default; pin `CSP_CONNECT_SRC` to your exact API origin to tighten `connect-src`.
+- [x] **Hardened containers** (cap-drop, no-new-privileges, non-root) ship by default. The backend auto-`chown`s its data volume on start, so existing deployments need no manual migration.
+- [ ] Prefer a private-CA `PROXMOX_CA_CERT_FILE` over `verifySsl=false` so the API token can't be MITM'd on an untrusted segment.
 - [ ] Keep Proxmox VE patched (guest→host isolation ultimately depends on the hypervisor).
