@@ -202,6 +202,27 @@ export interface ProxmoxResources {
   isoStorages: Array<{ name: string; type: string }>;
 }
 
+export interface UpdateCheck {
+  repo: string;
+  current: string;
+  latest: string | null;
+  tag: string | null;
+  updateAvailable: boolean;
+  name: string | null;
+  notes: string | null;
+  url: string | null;
+  publishedAt: string | null;
+}
+
+export interface UpdateStatus {
+  enabled: boolean;
+  current: string;
+  state: "idle" | "queued" | "running" | "success" | "error";
+  message?: string;
+  tag?: string;
+  updatedAt?: string;
+}
+
 export interface AdminSettings {
   proxmox: { host: string | null; tokenId: string | null; verifySsl: boolean; hasSecret: boolean };
   defaults: { storage: string | null; bridge: string | null; isoStorage: string | null };

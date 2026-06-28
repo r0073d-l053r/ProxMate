@@ -302,7 +302,85 @@ Run these against the production HTTPS site (passkeys won't work otherwise).
 
 ---
 
-## 13. Troubleshooting
+## 13. Updating ProxMate
+
+ProxMate ships an in-app updater. **Admin ▸ Settings ▸ Updates** shows your running
+version and a **Check for updates** button that reads the latest **GitHub Release**;
+if a newer one exists it shows the release notes and lets you decide whether to apply it.
+
+Because a container can't rebuild and restart itself, the actual update is done by a
+**host-side script** (`deploy/update.sh`). You can run that by hand, or wire up the
+**opt-in one-click** button which hands the job to the host via a systemd unit.
+
+```mermaid
+flowchart TD
+  admin([Admin]) -->|Check for updates| app[ProxMate backend]
+  app -->|GET releases/latest| gh[(GitHub Releases)]
+  admin -->|Install update| app
+  app -->|write update-request.json| ctrl[/control dir<br/>bind mount/]
+  ctrl -. watched by .-> pathunit[systemd .path]
+  pathunit -->|flag appeared| svc[proxmate-updater.service]
+  svc -->|deploy/update.sh| steps["git checkout TAG<br/>docker compose build<br/>docker compose up -d<br/>(migrations run on boot)"]
+  steps -->|write update-status.json| ctrl
+  app -->|poll status| ctrl
+```
+
+### 13.1 Publishing a release (so there's a "Latest" to find)
+
+The check compares `backend/package.json`'s `version` against the latest GitHub Release tag.
+To cut one:
+
+```bash
+# bump backend/package.json "version" (e.g. 0.2.0), then:
+git commit -am "release: v0.2.0"
+git tag v0.2.0
+git push origin main --tags
+```
+
+`.github/workflows/release.yml` turns the pushed `v*` tag into a published Release with
+auto-generated notes. (Manual alternative: `gh release create v0.2.0 --generate-notes`.)
+
+> Set `UPDATE_REPO` in `.env` if you track a fork instead of the upstream repo.
+
+### 13.2 Manual update (no host changes needed)
+
+```bash
+cd /opt/proxmate
+git fetch --tags
+./deploy/update.sh            # newest vX.Y.Z tag
+./deploy/update.sh v0.2.0     # or a specific tag
+```
+
+The script checks out the tag, runs `docker compose build` + `up -d`, and the backend
+applies DB migrations on boot (`docker-entrypoint.sh`). **Back up the DB first** (the
+`proxmate-data` volume) so you can roll back. Rollback = `./deploy/update.sh <previous-tag>`.
+
+### 13.3 Enabling the one-click "Install update" button
+
+1. **Mount the control dir + enable the flag** — in `docker-compose.yml`, uncomment
+   `- ./deploy/update-control:/control` under the backend `volumes`, and in `.env` set:
+   ```
+   SELF_UPDATE_ENABLED=true
+   ```
+   Then `docker compose up -d` to apply.
+2. **Install the host updater unit** (as root; edit `PROXMATE_DIR` in the unit if your
+   checkout isn't `/opt/proxmate`):
+   ```bash
+   cp deploy/proxmate-updater.service deploy/proxmate-updater.path /etc/systemd/system/
+   systemctl daemon-reload
+   systemctl enable --now proxmate-updater.path
+   ```
+3. Now **Install update** in the UI drops a request flag the unit picks up; the card polls
+   the host's status file and shows progress, then a **Reload** when it's done.
+
+> **Security note:** the app itself never runs Docker or git — it only writes one JSON
+> flag in the bind-mounted control dir. All privileged work lives in `update.sh`, run by
+> the host's systemd. Leave `SELF_UPDATE_ENABLED=false` (the default) to keep the apply
+> path entirely manual.
+
+---
+
+## 14. Troubleshooting
 
 | Symptom | Likely cause / fix |
 |---|---|

@@ -15,6 +15,14 @@ import {
   pveMessage,
 } from '../services/proxmox.service.js';
 import { listAudit, recordAudit } from '../services/audit.service.js';
+import {
+  checkForUpdate,
+  getUpdateStatus,
+  requestUpdate,
+  selfUpdateEnabled,
+  currentVersion,
+  isValidTag,
+} from '../services/update.service.js';
 import { getMailConfig, saveMailConfig, verifyMailConfig } from '../services/mail.service.js';
 import * as sso from '../services/sso.service.js';
 import { listResetRequests, adminResetPassword } from '../services/password-reset.service.js';
@@ -394,6 +402,53 @@ router.get('/live-stats', async (_req: Request, res: Response) => {
     res.json(stats);
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── Updates ──────────────────────────────────────────────────
+// Check GitHub Releases for a newer version, surface what's new, and (opt-in)
+// hand a one-click apply off to the host-side updater. See update.service.ts.
+
+router.get('/updates/check', async (req: Request, res: Response) => {
+  const force = req.query['force'] === 'true';
+  try {
+    res.json(await checkForUpdate(force));
+  } catch {
+    res.status(502).json({ error: 'Could not reach GitHub to check for updates. Try again shortly.' });
+  }
+});
+
+router.get('/updates/status', async (_req: Request, res: Response) => {
+  res.json({ enabled: selfUpdateEnabled(), current: currentVersion(), ...(await getUpdateStatus()) });
+});
+
+const ApplyUpdateSchema = z.object({ tag: z.string().min(1).max(64) });
+
+router.post('/updates/apply', async (req: Request, res: Response) => {
+  if (!selfUpdateEnabled()) {
+    res.status(409).json({
+      code: 'not_enabled',
+      error:
+        'One-click updates are not enabled on this server. Set up the host updater (deploy/update.sh) ' +
+        'and set SELF_UPDATE_ENABLED=true, or update manually.',
+    });
+    return;
+  }
+  const parsed = ApplyUpdateSchema.safeParse(req.body);
+  if (!parsed.success || !isValidTag(parsed.data.tag)) {
+    res.status(400).json({ error: 'Invalid release tag.' });
+    return;
+  }
+  const user = (req as AuthRequest).user;
+  try {
+    await requestUpdate(parsed.data.tag, user.email);
+    await recordAudit({
+      action: 'admin.update_requested', actor: user, targetType: 'system', targetId: parsed.data.tag,
+      detail: `requested update to ${parsed.data.tag}`, req,
+    });
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Could not queue the update — the control directory may be unwritable.' });
   }
 });
 
