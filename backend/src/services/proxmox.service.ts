@@ -1,4 +1,5 @@
 import https from 'node:https';
+import { readFileSync } from 'node:fs';
 import axios, { AxiosError, type AxiosInstance } from 'axios';
 import { getConfig } from './config.service.js';
 
@@ -9,13 +10,37 @@ export function buildClient(
   tokenId: string,
   tokenSecret: string,
   verifySsl: boolean,
+  ca?: string,
 ): AxiosInstance {
   return axios.create({
     baseURL: `${host}/api2/json`,
     headers: { Authorization: `PVEAPIToken=${tokenId}=${tokenSecret}` },
-    httpsAgent: new https.Agent({ rejectUnauthorized: verifySsl }),
+    // When a custom CA is supplied we keep verification ON and trust that CA —
+    // the enterprise-correct alternative to disabling verification for a private
+    // Proxmox cert. `ca` is ignored when rejectUnauthorized is false.
+    httpsAgent: new https.Agent({ rejectUnauthorized: verifySsl, ...(ca ? { ca } : {}) }),
     timeout: 15_000,
   });
+}
+
+/**
+ * Optional custom CA (PEM) so admins can keep TLS verification ON against a
+ * private Proxmox CA instead of turning verification off. Sourced from
+ * `PROXMOX_CA_CERT` (inline PEM) or `PROXMOX_CA_CERT_FILE` (path to a mounted
+ * PEM). Returns undefined when neither is set/readable.
+ */
+export function getProxmoxCa(): string | undefined {
+  const inline = process.env.PROXMOX_CA_CERT;
+  if (inline && inline.includes('BEGIN CERTIFICATE')) return inline;
+  const file = process.env.PROXMOX_CA_CERT_FILE;
+  if (file) {
+    try {
+      return readFileSync(file, 'utf8');
+    } catch {
+      /* unreadable path → fall through to default trust store */
+    }
+  }
+  return undefined;
 }
 
 export interface ProxmoxConnection {
@@ -23,6 +48,7 @@ export interface ProxmoxConnection {
   tokenId: string;
   tokenSecret: string;
   verifySsl: boolean;
+  ca?: string;
 }
 
 /** Read the Proxmox connection config from SystemConfig. */
@@ -34,13 +60,13 @@ export async function getConnectionConfig(): Promise<ProxmoxConnection> {
     getConfig('proxmox_verify_ssl'),
   ]);
   if (!host || !tokenId || !tokenSecret) throw new Error('Proxmox is not configured');
-  return { host, tokenId, tokenSecret, verifySsl: verifySslStr === 'true' };
+  return { host, tokenId, tokenSecret, verifySsl: verifySslStr === 'true', ca: getProxmoxCa() };
 }
 
 /** Build a client from the Proxmox connection config stored in SystemConfig. */
 export async function getClient(): Promise<AxiosInstance> {
   const c = await getConnectionConfig();
-  return buildClient(c.host, c.tokenId, c.tokenSecret, c.verifySsl);
+  return buildClient(c.host, c.tokenId, c.tokenSecret, c.verifySsl, c.ca);
 }
 
 /** Extract a human-readable message from a Proxmox/axios error. */
