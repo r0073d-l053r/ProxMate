@@ -129,3 +129,9 @@
     @apply font-sans;
   }
 }
+
+/* Indeterminate progress bar (e.g. the in-app update "rebuilding…" indicator). */
+@keyframes progress-indeterminate {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}

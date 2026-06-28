@@ -40,6 +40,7 @@ export function UpdatesCard() {
   const [check, setCheck] = useState<UpdateCheck | null>(null);
   const [checking, setChecking] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const mounted = useRef(true);
 
   const refreshStatus = useCallback(async () => {
@@ -80,14 +81,28 @@ export function UpdatesCard() {
   }
 
   async function apply() {
-    if (!check?.tag) return;
+    const tag = check?.tag;
+    if (!tag) return;
+    // Close the confirm dialog right away so it doesn't sit on top of the
+    // progress card (the Base UI action button doesn't auto-close like Radix).
+    setConfirmOpen(false);
     setApplying(true);
+    // Show progress immediately — the host updater takes a moment to write its
+    // first real status, and we don't want a dead gap where nothing is happening.
+    setStatus((s) => ({
+      enabled: s?.enabled ?? true,
+      current: check?.current ?? s?.current ?? "…",
+      state: "queued",
+      tag,
+      message: "Queued — the host updater will pick this up shortly.",
+    }));
     try {
-      await api.post("/admin/updates/apply", { tag: check.tag });
+      await api.post("/admin/updates/apply", { tag });
       toast.success("Update queued — ProxMate will rebuild and restart.");
       await refreshStatus();
     } catch (err) {
       toast.error(apiError(err));
+      await refreshStatus(); // re-sync to the real state if queuing failed
     } finally {
       setApplying(false);
     }
@@ -130,9 +145,14 @@ export function UpdatesCard() {
             </div>
             {status.message && <p className="mt-1 text-xs text-muted-foreground">{status.message}</p>}
             {(status.state === "queued" || status.state === "running") && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                ProxMate is rebuilding and restarting — this page may briefly disconnect.
-              </p>
+              <>
+                <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-muted">
+                  <div className="h-full w-1/3 rounded-full bg-primary [animation:progress-indeterminate_1.4s_ease-in-out_infinite]" />
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  ProxMate is rebuilding and restarting — this page may briefly disconnect.
+                </p>
+              </>
             )}
             {status.state === "success" && (
               <Button size="sm" className="mt-2" onClick={() => window.location.reload()}>
@@ -181,7 +201,7 @@ export function UpdatesCard() {
             )}
 
             {enabled ? (
-              <AlertDialog>
+              <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
                 <AlertDialogTrigger
                   render={
                     <Button size="sm" disabled={applying || busyState}>
