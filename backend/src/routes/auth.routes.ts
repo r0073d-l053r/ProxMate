@@ -27,6 +27,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireAuthOrEnrollment } from '../middleware/enrollment.js';
 import { authLimiter } from '../middleware/rate-limit.js';
 import { recordAudit } from '../services/audit.service.js';
+import { isAccountLocked, registerFailedLogin, clearFailedLogins } from '../services/account-lockout.service.js';
 import { requestReset, resetWithToken } from '../services/password-reset.service.js';
 import type { AuthRequest } from '../types/index.js';
 
@@ -121,14 +122,30 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
   const { email, password } = parsed.data;
 
   const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+
+  // Brute-force lockout: a locked account short-circuits with the SAME generic
+  // response (and a dummy bcrypt for timing parity) so neither the lock nor the
+  // account's existence leaks. The lock auto-expires (see account-lockout.service).
+  if (user && isAccountLocked(user)) {
+    await verifyPasswordSafe(password, null);
+    await recordAudit({ action: 'auth.login_blocked', actor: user, detail: 'account locked', req });
+    res.status(401).json({ error: 'Invalid email or password' });
+    return;
+  }
+
   // Always runs bcrypt (dummy hash when no user) so timing can't enumerate accounts.
   const valid = await verifyPasswordSafe(password, user?.passwordHash);
 
   if (!user || !valid) {
+    // Count the failure against the (real) account; may lock it + alert admins.
+    if (user) await registerFailedLogin(user, req.ip ?? null);
     await recordAudit({ action: 'auth.login_failed', targetType: 'email', targetId: email.toLowerCase(), req });
     res.status(401).json({ error: 'Invalid email or password' });
     return;
   }
+
+  // Correct password — clear any prior failure streak before continuing.
+  await clearFailedLogins(user);
 
   // Required 2FA but no factor enrolled yet → no session. Hand back an enrollment
   // token so an interrupted setup resumes here (a correct password never yields a
