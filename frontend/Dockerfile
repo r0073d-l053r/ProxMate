@@ -12,6 +12,11 @@ COPY . .
 ARG NEXT_PUBLIC_API_URL=http://localhost:4000/api
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
+# Public origin for SEO metadata (OG image + canonical + manifest URLs). Must be
+# the externally reachable URL — override per deployment (e.g. https://proxmate.example.com).
+ARG NEXT_PUBLIC_SITE_URL=http://localhost:3000
+ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
+
 RUN npm run build
 
 # ─── Runtime stage ────────────────────────────────────────────
