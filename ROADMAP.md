@@ -71,3 +71,39 @@ rough priority bands, not commitments. Have an idea? Open a
 - **Built-in public ingress** — a managed reverse proxy / per-VM Cloudflare tunnel so
   tenants get `name.proxmate.example.com` without manual setup.
 - **GPU / PCI passthrough requests.**
+
+## Candidate ideas — proposed 2026-06-29 (post-audit)
+
+Fresh ideas for future updates. Each builds on something already shipped; roughly
+ordered high-value/low-risk → larger bets.
+
+1. **Usage-based billing & showback.** Turn the v0.3.1 `ResourceSample` history into
+   per-tenant monthly cost/showback reports (configurable $/vCPU-hr, $/GB-RAM, $/GB-disk)
+   with CSV/PDF export. _Builds on:_ per-tenant resource history. Natural fit for the EDU /
+   commercial edition.
+2. **Ephemeral / TTL VMs (auto-expiry).** A VM (or an invite's VMs) gets a lifetime —
+   auto-stop, then auto-delete at expiry, with warning emails first. Ideal for classes,
+   labs, and demos. _Builds on:_ invites + power schedules + notifications.
+3. **Tenant self-service firewall rules.** Let tenants open specific inbound ports on their
+   own VMs within an admin-set allow-list (ports/protocols), layered on the existing per-VM
+   Proxmox firewall. _Builds on:_ the tenant-isolation model.
+4. **Off-cluster backup targets (S3 / restic) + restore-elsewhere.** Push MateStates to
+   object storage or a remote restic repo for real disaster recovery, plus download. _Builds
+   on:_ MateStates. Removes the single-cluster-failure risk.
+5. **VM migration between nodes.** Admin-triggered live/offline migrate to another cluster
+   node (Proxmox `migrate`) for balancing and maintenance/drain. _Builds on:_ the arch-aware
+   placement guardrail.
+6. **Custom cloud-init user-data editor.** A validated field for extra cloud-init (packages,
+   `runcmd`) at create time, beyond the SSH-key + Docker/Tailscale toggles. _Builds on:_
+   cloud-init deploys.
+7. **Additional data disks / volume management.** Attach / detach / resize extra disks per
+   VM, not just grow the root. _Builds on:_ live resize.
+8. **Quota-increase request workflow.** A tenant requests more quota → an admin approves or
+   denies in-app (notified + audited), instead of out-of-band asks. _Builds on:_ editable
+   quotas + notifications.
+9. **Push live updates over WebSocket.** Replace the dashboard/monitor polling with a single
+   cluster poll fanned out to all clients as state/stat deltas — lower Proxmox load and
+   latency. _Builds on:_ the console-WS infra + the `/admin/live-stats` cache.
+10. **Audit-log retention, export & SIEM streaming.** Configurable retention/pruning, CSV/JSON
+    export, and optional streaming of audit events to a SIEM/webhook for compliance. _Builds
+    on:_ the audit log (its note already flags "log retention") + the notification webhook.
