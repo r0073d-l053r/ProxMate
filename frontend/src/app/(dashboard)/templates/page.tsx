@@ -20,6 +20,7 @@ import {
   ImagePlus,
   Search,
   ChevronsUpDown,
+  Cpu,
 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
@@ -153,6 +154,11 @@ function TemplateCard({
           {t.cloudInit && (
             <Badge variant="secondary" className="gap-1 text-[10px]">
               <Cloud className="size-3" /> Cloud-init
+            </Badge>
+          )}
+          {t.arch && (
+            <Badge variant="outline" className="gap-1 text-[10px]">
+              <Cpu className="size-3" /> {t.arch === "arm64" ? "ARM64" : "x86-64"}
             </Badge>
           )}
         </CardTitle>
@@ -656,6 +662,9 @@ function AddCloudImagePanel({ onChange }: { onChange: () => void }) {
   async function add() {
     const imageUrl = isCustom ? customUrl.trim() : selected?.url;
     const os = isCustom ? customOs.trim() || undefined : selected?.os;
+    // Curated images know their arch; for a custom URL the backend infers it
+    // from the filename (…-arm64.img / …-amd64.qcow2).
+    const arch = isCustom ? undefined : selected?.arch;
     if (!imageUrl || !name.trim()) {
       toast.error("Pick an image and give it a name.");
       return;
@@ -663,7 +672,7 @@ function AddCloudImagePanel({ onChange }: { onChange: () => void }) {
     setBuilding(true);
     try {
       // The image download + import takes minutes, so allow a long timeout.
-      await api.post("/templates/cloud-image", { name: name.trim(), imageUrl, os }, { timeout: 20 * 60 * 1000 });
+      await api.post("/templates/cloud-image", { name: name.trim(), imageUrl, os, arch }, { timeout: 20 * 60 * 1000 });
       toast.success(`"${name}" built and added to the store.`);
       setChoice("");
       setName("");

@@ -14,7 +14,7 @@ import {
   unregister,
   updateTemplate,
   addCloudImage,
-  CURATED_IMAGES,
+  curatedImagesWithArch,
   getCloudInitExtras,
   enableCloudInitSnippets,
   cloudInitStatus,
@@ -108,7 +108,7 @@ router.get('/all', requireAdmin, async (_req: Request, res: Response) => {
 
 // Curated cloud images the admin can one-click add.
 router.get('/cloud-images', requireAdmin, (_req: Request, res: Response) => {
-  res.json(CURATED_IMAGES);
+  res.json(curatedImagesWithArch());
 });
 
 // Cloud-init "extras" (Docker / Tailscale) setup: status + snippet bundles to place.
@@ -143,6 +143,7 @@ const CloudImageSchema = z.object({
   os: z.string().max(100).optional(),
   description: z.string().max(500).optional(),
   node: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid node name').optional(),
+  arch: z.enum(['amd64', 'arm64']).optional(),
 });
 
 router.post('/cloud-image', requireAdmin, async (req: Request, res: Response) => {
@@ -175,6 +176,7 @@ const RegisterSchema = z.object({
   os: z.string().max(100).optional(),
   diskGb: z.number().int().nonnegative().optional(),
   notes: z.string().max(2000).optional(),
+  arch: z.enum(['amd64', 'arm64']).optional(),
 });
 
 router.post('/', requireAdmin, async (req: Request, res: Response) => {
