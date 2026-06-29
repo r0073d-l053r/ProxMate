@@ -2,6 +2,7 @@ import type { User } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { recordAudit } from './audit.service.js';
 import { getMailConfig, sendMail } from './mail.service.js';
+import { notifyWebhook } from './notify.service.js';
 
 /**
  * Per-account brute-force lockout. The IP rate limiter (rate-limit.ts) blocks a
@@ -51,6 +52,14 @@ export async function registerFailedLogin(user: LockFields, ip: string | null): 
       detail: `locked ${LOCK_MINUTES}m after ${attempts} failed logins${ip ? ` from ${ip}` : ''}`,
     });
     await alertAdmins(user, attempts, ip, lockedUntil).catch(() => {});
+    // Webhook-only here — admins are already emailed by alertAdmins above.
+    await notifyWebhook({
+      event: 'auth.lockout',
+      title: user.email,
+      message:
+        `Account "${user.email}" was locked after ${attempts} failed login attempts` +
+        `${ip ? ` from ${ip}` : ''}. Unlocks at ${lockedUntil.toISOString()}.`,
+    }).catch(() => {});
     return true;
   }
   await prisma.user.update({ where: { id: user.id }, data: { failedLoginAttempts: attempts } });

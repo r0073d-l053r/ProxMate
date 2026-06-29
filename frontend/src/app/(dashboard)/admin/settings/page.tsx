@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Plug, Save, RefreshCw, ShieldCheck, ShieldAlert, Mail, Building2, Copy } from "lucide-react";
+import { Loader2, Plug, Save, RefreshCw, ShieldCheck, ShieldAlert, Mail, Building2, Copy, Bell } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
-import type { AdminSettings, ProxmoxResources, IsolationStatus } from "@/lib/types";
+import type { AdminSettings, ProxmoxResources, IsolationStatus, NotifyEvent } from "@/lib/types";
+import { NOTIFY_EVENT_LABELS } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { UpdatesCard } from "@/components/admin/updates-card";
@@ -62,6 +63,14 @@ export default function SettingsPage() {
   const [smtpHasPass, setSmtpHasPass] = useState(false);
   const [savingSmtp, setSavingSmtp] = useState(false);
   const [testingSmtp, setTestingSmtp] = useState(false);
+
+  // Notifications (webhook + email) — optional
+  const [notifyWebhook, setNotifyWebhook] = useState("");
+  const [notifyEmailEnabled, setNotifyEmailEnabled] = useState(false);
+  const [notifyEmailTo, setNotifyEmailTo] = useState("");
+  const [notifyEvents, setNotifyEvents] = useState<NotifyEvent[]>([]);
+  const [savingNotify, setSavingNotify] = useState(false);
+  const [testingNotify, setTestingNotify] = useState(false);
 
   // SSO (OIDC) — optional
   const [ssoEnabled, setSsoEnabled] = useState(false);
@@ -183,6 +192,13 @@ export default function SettingsPage() {
           setSmtpFrom(s.from);
           setSmtpHasPass(s.hasPass);
         }
+        if (res.data.notify) {
+          const n = res.data.notify;
+          setNotifyWebhook(n.webhookUrl);
+          setNotifyEmailEnabled(n.emailEnabled);
+          setNotifyEmailTo(n.emailTo);
+          setNotifyEvents(n.events);
+        }
         setSsoCallbackUrl(res.data.sso.callbackUrl);
         if (res.data.sso.configured) {
           const s = res.data.sso;
@@ -290,6 +306,40 @@ export default function SettingsPage() {
       toast.error(apiError(err));
     } finally {
       setTestingSmtp(false);
+    }
+  }
+
+  function toggleNotifyEvent(event: NotifyEvent) {
+    setNotifyEvents((evs) => (evs.includes(event) ? evs.filter((e) => e !== event) : [...evs, event]));
+  }
+
+  async function saveNotify(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingNotify(true);
+    try {
+      await api.put("/admin/settings/notifications", {
+        webhookUrl: notifyWebhook.trim() || undefined,
+        emailEnabled: notifyEmailEnabled,
+        emailTo: notifyEmailTo.trim() || undefined,
+        events: notifyEvents,
+      });
+      toast.success("Notification settings saved.");
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setSavingNotify(false);
+    }
+  }
+
+  async function testNotify() {
+    setTestingNotify(true);
+    try {
+      const res = await api.post<{ channels: string[] }>("/admin/settings/notifications/test");
+      toast.success(`Test sent via ${res.data.channels.join(" + ") || "no channel"}.`);
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setTestingNotify(false);
     }
   }
 
@@ -617,6 +667,80 @@ export default function SettingsPage() {
               <Button type="button" variant="outline" onClick={testSmtp} disabled={testingSmtp}>
                 {testingSmtp ? <Loader2 className="animate-spin" /> : <Plug />}
                 Test
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Bell className="size-4" /> Notifications
+          </CardTitle>
+          <CardDescription>
+            Optional. Get alerted when something needs attention. The webhook works with Discord,
+            Slack, Mattermost, or any JSON receiver; email reuses the SMTP settings above.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={saveNotify} className="grid gap-4">
+            <FormField
+              label="Webhook URL"
+              htmlFor="notifyWebhook"
+              hint="Paste a Discord/Slack incoming-webhook URL. Leave blank to disable the webhook."
+            >
+              <Input
+                id="notifyWebhook"
+                value={notifyWebhook}
+                onChange={(e) => setNotifyWebhook(e.target.value)}
+                placeholder="https://discord.com/api/webhooks/…"
+              />
+            </FormField>
+
+            <label className="flex items-center gap-2 text-sm select-none">
+              <input
+                type="checkbox"
+                checked={notifyEmailEnabled}
+                onChange={(e) => setNotifyEmailEnabled(e.target.checked)}
+                className="size-4 rounded border-input accent-primary"
+              />
+              Also send email (requires SMTP configured above)
+            </label>
+            {notifyEmailEnabled && (
+              <FormField label="Email recipient" htmlFor="notifyEmailTo" hint="Blank = all admins.">
+                <Input
+                  id="notifyEmailTo"
+                  value={notifyEmailTo}
+                  onChange={(e) => setNotifyEmailTo(e.target.value)}
+                  placeholder="ops@example.com"
+                />
+              </FormField>
+            )}
+
+            <div className="grid gap-2">
+              <span className="text-sm font-medium">Notify me about</span>
+              {(Object.keys(NOTIFY_EVENT_LABELS) as NotifyEvent[]).map((ev) => (
+                <label key={ev} className="flex items-center gap-2 text-sm select-none">
+                  <input
+                    type="checkbox"
+                    checked={notifyEvents.includes(ev)}
+                    onChange={() => toggleNotifyEvent(ev)}
+                    className="size-4 rounded border-input accent-primary"
+                  />
+                  {NOTIFY_EVENT_LABELS[ev]}
+                </label>
+              ))}
+            </div>
+
+            <div className="flex gap-2">
+              <Button type="submit" disabled={savingNotify}>
+                {savingNotify ? <Loader2 className="animate-spin" /> : <Save />}
+                Save notifications
+              </Button>
+              <Button type="button" variant="outline" onClick={testNotify} disabled={testingNotify}>
+                {testingNotify ? <Loader2 className="animate-spin" /> : <Plug />}
+                Send test
               </Button>
             </div>
           </form>
