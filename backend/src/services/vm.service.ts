@@ -319,7 +319,7 @@ export async function deployFromTemplate(
   }
 }
 
-/** Fetch a VM the caller is allowed to see (owner, or any VM for admins). */
+/** Owner-or-admin only (owner-exclusive actions: delete, share management, convert). */
 export async function getOwnedVm(
   vmId: string,
   user: { id: string; role: string },
@@ -330,11 +330,61 @@ export async function getOwnedVm(
   return vm;
 }
 
-/** List VMs for a user (all VMs for admins). */
+export type VmAccess = 'owner' | 'admin' | 'co-owner' | 'read-only';
+
+/** Resolve the caller's access level to a VM, or null if they can't see it. */
+export async function resolveVmAccess(
+  vmId: string,
+  user: { id: string; role: string },
+): Promise<{ vm: VirtualMachine; access: VmAccess } | null> {
+  const vm = await prisma.virtualMachine.findUnique({ where: { id: vmId } });
+  if (!vm) return null;
+  if (vm.userId === user.id) return { vm, access: 'owner' };
+  if (user.role === 'admin') return { vm, access: 'admin' };
+  const share = await prisma.vmShare.findUnique({ where: { vmId_userId: { vmId, userId: user.id } } });
+  if (!share) return null;
+  return { vm, access: share.role === 'co-owner' ? 'co-owner' : 'read-only' };
+}
+
+/** A VM the caller may VIEW (owner / admin / co-owner / read-only), else null. */
+export async function getViewableVm(vmId: string, user: { id: string; role: string }): Promise<VirtualMachine | null> {
+  return (await resolveVmAccess(vmId, user))?.vm ?? null;
+}
+
+/** A VM the caller may OPERATE (owner / admin / co-owner). A read-only share → null. */
+export async function getWritableVm(vmId: string, user: { id: string; role: string }): Promise<VirtualMachine | null> {
+  const r = await resolveVmAccess(vmId, user);
+  return r && r.access !== 'read-only' ? r.vm : null;
+}
+
+/** List VMs the user owns OR has been shared (all VMs for admins). */
 export async function listVms(user: { id: string; role: string }): Promise<VirtualMachine[]> {
+  if (user.role === 'admin') return prisma.virtualMachine.findMany({ orderBy: { createdAt: 'desc' } });
+  const shares = await prisma.vmShare.findMany({ where: { userId: user.id }, select: { vmId: true } });
   return prisma.virtualMachine.findMany({
-    where: user.role === 'admin' ? {} : { userId: user.id },
+    where: { OR: [{ userId: user.id }, { id: { in: shares.map((s) => s.vmId) } }] },
     orderBy: { createdAt: 'desc' },
+  });
+}
+
+/** Tag each VM with the caller's access level (for list/detail responses). */
+export async function annotateAccess<T extends { id: string; userId: string }>(
+  vms: T[],
+  user: { id: string; role: string },
+): Promise<(T & { access: VmAccess })[]> {
+  const sharedRoles = new Map<string, string>();
+  if (user.role !== 'admin' && vms.some((v) => v.userId !== user.id)) {
+    const shares = await prisma.vmShare.findMany({
+      where: { userId: user.id, vmId: { in: vms.map((v) => v.id) } },
+    });
+    for (const s of shares) sharedRoles.set(s.vmId, s.role);
+  }
+  return vms.map((v) => {
+    const access: VmAccess =
+      v.userId === user.id ? 'owner'
+        : user.role === 'admin' ? 'admin'
+          : sharedRoles.get(v.id) === 'co-owner' ? 'co-owner' : 'read-only';
+    return { ...v, access };
   });
 }
 

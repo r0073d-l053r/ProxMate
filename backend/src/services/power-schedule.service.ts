@@ -59,6 +59,26 @@ export function cronMatches(expr: string, date: Date): boolean {
   );
 }
 
+/**
+ * The most recent minute at or before `now` when `expr` fired, or null if none
+ * within `maxLookbackMinutes` (default 8 days — enough to cover a weekly schedule).
+ * Scans backwards a minute at a time; used by the scheduler to detect a backup
+ * window that was missed because the backend was down at the scheduled time.
+ */
+export function previousCronOccurrence(
+  expr: string,
+  now: Date = new Date(),
+  maxLookbackMinutes = 8 * 24 * 60,
+): Date | null {
+  const d = new Date(now);
+  d.setSeconds(0, 0);
+  for (let i = 0; i <= maxLookbackMinutes; i++) {
+    if (cronMatches(expr, d)) return new Date(d);
+    d.setMinutes(d.getMinutes() - 1);
+  }
+  return null;
+}
+
 /** Validate a schedule cron string against the grammar `cronMatches` supports. */
 export function isValidCron(expr: string): boolean {
   const parts = expr.trim().split(/\s+/);

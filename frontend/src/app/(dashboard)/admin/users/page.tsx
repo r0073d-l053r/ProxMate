@@ -233,14 +233,14 @@ function EditQuotaDialog({ user, onDone }: { user: ManagedUser; onDone: () => vo
             the cluster this user may provision. Existing VMs aren&apos;t changed.
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <div className="grid gap-3 py-1 sm:grid-cols-3">
-          <FormField label="Max vCPU" htmlFor="q-cpu" hint={`in use: ${user.quota.cpu.used}`}>
+        <div className="grid items-start gap-3 py-1 sm:grid-cols-3">
+          <FormField label="vCPU" htmlFor="q-cpu" hint={`in use: ${user.quota.cpu.used}`}>
             <Input id="q-cpu" type="number" min={0} value={cpu} onChange={(e) => setCpu(num(e.target.value))} />
           </FormField>
-          <FormField label="Max RAM (GB)" htmlFor="q-ram" hint={`in use: ${formatRam(user.quota.ram.used)}`}>
+          <FormField label="RAM (GB)" htmlFor="q-ram" hint={`in use: ${formatRam(user.quota.ram.used)}`}>
             <Input id="q-ram" type="number" min={0} value={ramGb} onChange={(e) => setRamGb(num(e.target.value))} />
           </FormField>
-          <FormField label="Max storage (GB)" htmlFor="q-storage" hint={`in use: ${user.quota.storage.used} GB`}>
+          <FormField label="Storage (GB)" htmlFor="q-storage" hint={`in use: ${user.quota.storage.used} GB`}>
             <Input
               id="q-storage"
               type="number"

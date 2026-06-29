@@ -33,6 +33,9 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
+// Sentinel for "let the backend auto-pick the first backup-capable storage".
+const BACKUP_AUTO = "__auto__";
+
 export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [resources, setResources] = useState<ProxmoxResources | null>(null);
@@ -51,6 +54,7 @@ export default function SettingsPage() {
   const [storage, setStorage] = useState("");
   const [bridge, setBridge] = useState("");
   const [isoStorage, setIsoStorage] = useState("");
+  const [backupStorage, setBackupStorage] = useState(BACKUP_AUTO);
   const [savingDefaults, setSavingDefaults] = useState(false);
 
   // SMTP (email) — optional
@@ -183,6 +187,7 @@ export default function SettingsPage() {
         setStorage(defaults.storage ?? "");
         setBridge(defaults.bridge ?? "");
         setIsoStorage(defaults.isoStorage ?? "");
+        setBackupStorage(defaults.backupStorage || BACKUP_AUTO);
         if (res.data.smtp.configured) {
           const s = res.data.smtp;
           setSmtpHost(s.host);
@@ -262,7 +267,12 @@ export default function SettingsPage() {
     }
     setSavingDefaults(true);
     try {
-      await api.put("/admin/settings/defaults", { storage, bridge, isoStorage });
+      await api.put("/admin/settings/defaults", {
+        storage,
+        bridge,
+        isoStorage,
+        backupStorage: backupStorage === BACKUP_AUTO ? "" : backupStorage,
+      });
       toast.success("Defaults saved.");
     } catch (err) {
       toast.error(apiError(err));
@@ -943,6 +953,25 @@ export default function SettingsPage() {
                   </SelectTrigger>
                   <SelectContent>
                     {resources.isoStorages.map((s) => (
+                      <SelectItem key={s.name} value={s.name}>
+                        {s.name}
+                        <span className="text-muted-foreground"> · {s.type}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FormField>
+              <FormField
+                label="Backup storage"
+                hint="Where MateState backups are written. Auto picks the first backup-capable storage."
+              >
+                <Select value={backupStorage} onValueChange={(v) => setBackupStorage(v as string)}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={BACKUP_AUTO}>Auto (first backup-capable)</SelectItem>
+                    {resources.backupStorages.map((s) => (
                       <SelectItem key={s.name} value={s.name}>
                         {s.name}
                         <span className="text-muted-foreground"> · {s.type}</span>

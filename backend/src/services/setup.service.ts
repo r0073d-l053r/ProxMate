@@ -111,10 +111,14 @@ export async function saveDefaults(data: {
   storage: string;
   bridge: string;
   isoStorage: string;
+  backupStorage?: string;
 }): Promise<void> {
   await setConfig('default_storage', data.storage);
   await setConfig('default_bridge', data.bridge);
   await setConfig('iso_storage', data.isoStorage);
+  // Optional: which storage MateState backups land on. Empty = let the backend
+  // auto-pick the first backup-capable storage (getBackupStorage).
+  if (data.backupStorage !== undefined) await setConfig('backup_storage', data.backupStorage);
 }
 
 // ─── Step 4: Finalize setup ───────────────────────────────────
