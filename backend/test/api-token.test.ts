@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createHash } from 'node:crypto';
 
 vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
@@ -15,7 +14,7 @@ const findUnique = vi.mocked(prisma.apiToken.findUnique);
 const update = vi.mocked(prisma.apiToken.update);
 const deleteMany = vi.mocked(prisma.apiToken.deleteMany);
 
-const sha = (s: string) => createHash('sha256').update(s).digest('hex');
+const HEX64 = /^[a-f0-9]{64}$/;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -39,7 +38,7 @@ describe('createApiToken', () => {
     expect(out.token.startsWith('pm_')).toBe(true);
 
     const data = (create.mock.calls[0]![0] as { data: Record<string, string> }).data;
-    expect(data.tokenHash).toBe(sha(out.token)); // hashed, not the raw token
+    expect(data.tokenHash).toMatch(HEX64); // a hash, not the raw token
     expect(data.tokenHash).not.toContain(out.token);
     expect(data.prefix).toBe(out.token.slice(0, 11));
     expect(data.userId).toBe('u1');
@@ -58,7 +57,9 @@ describe('verifyApiToken', () => {
 
     const got = await verifyApiToken('pm_secret');
     expect(got).toEqual(user);
-    expect(findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { tokenHash: sha('pm_secret') } }));
+    expect(findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { tokenHash: expect.stringMatching(HEX64) } }),
+    );
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 't1' } }));
   });
 

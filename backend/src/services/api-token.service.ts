@@ -1,12 +1,20 @@
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHmac } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import type { AuthUser } from '../types/index.js';
 
 const PREFIX = 'pm_';
 const DISPLAY_PREFIX_LEN = 11; // `pm_` + 8 chars
 
+/**
+ * Keyed (HMAC-SHA256) hash of a token, peppered with the server's ENCRYPTION_KEY.
+ * The token itself is a 192-bit random secret, so a fast hash is appropriate — but
+ * it must be *deterministic* to look a token up by value (a salted KDF can't), and
+ * the pepper means a DB-only leak can't recover or precompute hashes. Real passwords
+ * are hashed with bcrypt elsewhere.
+ */
 function hashToken(raw: string): string {
-  return createHash('sha256').update(raw).digest('hex');
+  const pepper = process.env['ENCRYPTION_KEY'] ?? 'proxmate-token-pepper';
+  return createHmac('sha256', pepper).update(raw).digest('hex');
 }
 
 /** True if a bearer value looks like a ProxMate API token (vs a session JWT). */
