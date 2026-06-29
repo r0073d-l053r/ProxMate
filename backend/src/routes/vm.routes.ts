@@ -31,6 +31,7 @@ import {
   ResizeError,
   createVm,
   resizeVm,
+  rebuildVm,
   listVms,
   refreshVmIps,
   getLiveUsage,
@@ -44,6 +45,7 @@ import {
   restartVm,
   syncVmNode,
 } from '../services/vm.service.js';
+import type { RebuildSource } from '../services/vm.service.js';
 import type { AuthRequest } from '../types/index.js';
 
 const router = Router();
@@ -375,6 +377,84 @@ router.post('/:id/restart', async (req: Request, res: Response) => {
     await recordAudit({ action: 'vm.restart', actor: user, targetType: 'vm', targetId: vm.id, detail: vm.name, req });
     res.json({ success: true, status: 'running' });
   } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── POST /api/vms/:id/rebuild ────────────────────────────────
+// Re-image a VM in place from a fresh ISO or a template/cloud image. Destructive:
+// the current disk is wiped, but the VM keeps its id/VMID/name/owner and resources.
+
+const RebuildSchema = z
+  .object({
+    // Provide exactly one source — an ISO/IMG filename, or a published template id.
+    os: z
+      .string()
+      .max(255)
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*\.(iso|img)$/i, 'Must be an ISO/IMG filename')
+      .optional(),
+    templateId: z.string().min(1).optional(),
+    // Cloud-init templates only (re-supplied each rebuild — never stored):
+    sshKey: z
+      .string()
+      .max(4000)
+      .optional()
+      .refine(
+        (v) => !v || /^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-|sk-)/m.test(v.trim()),
+        'Must be an OpenSSH public key',
+      ),
+    username: z.string().regex(/^[a-z_][a-z0-9_-]{0,31}$/, 'Lowercase letters, digits, _ and - only').optional(),
+    password: z.string().min(1).max(128).optional(),
+    installDocker: z.boolean().optional(),
+    installTailscale: z.boolean().optional(),
+    installGuestAgent: z.boolean().optional(),
+  })
+  .refine((d) => !!d.os !== !!d.templateId, {
+    message: 'Provide either an ISO (os) or a templateId, not both.',
+  });
+
+router.post('/:id/rebuild', async (req: Request, res: Response) => {
+  const authUser = (req as AuthRequest).user;
+  const vm = await getOwnedVm(req.params['id'] as string, authUser);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+
+  const parsed = RebuildSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: authUser.id } });
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+
+  try {
+    let source: RebuildSource;
+    let sourceLabel: string;
+    if (parsed.data.templateId) {
+      const template = await prisma.template.findUnique({ where: { id: parsed.data.templateId } });
+      if (!template || !template.published) { res.status(404).json({ error: 'Template not found' }); return; }
+      if (template.cloudInit && !parsed.data.sshKey && !parsed.data.password) {
+        res.status(400).json({ error: 'This cloud image needs an SSH public key or a password to log in.' });
+        return;
+      }
+      source = { kind: 'template', template, cloud: parsed.data };
+      sourceLabel = template.name;
+    } else {
+      source = { kind: 'iso', os: parsed.data.os! };
+      sourceLabel = parsed.data.os!;
+    }
+
+    const rebuilt = await rebuildVm(user, vm, source);
+    await recordAudit({
+      action: 'vm.rebuild', actor: authUser, targetType: 'vm', targetId: vm.id,
+      detail: `${vm.name} rebuilt from ${sourceLabel}`, req,
+    });
+    res.json(rebuilt);
+  } catch (err) {
+    if (err instanceof QuotaError) {
+      res.status(403).json({ error: 'Quota exceeded', details: err.details });
+      return;
+    }
     res.status(502).json({ error: pveMessage(err) });
   }
 });
