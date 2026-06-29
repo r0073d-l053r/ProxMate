@@ -163,6 +163,91 @@ export interface DeployTemplateInput {
   installGuestAgent?: boolean; // installs qemu-guest-agent so the VM reports its IP
 }
 
+/** Cloud-init knobs shared by template deploys and rebuilds. */
+type CloudInitInput = Pick<
+  DeployTemplateInput,
+  'sshKey' | 'username' | 'password' | 'installDocker' | 'installTailscale' | 'installGuestAgent'
+>;
+
+/**
+ * Configure a freshly-cloned VM in place: autoscale cores/memory, grow the primary
+ * disk if needed, inject cloud-init (login user + SSH key + DHCP, optional first-boot
+ * extras), and apply tenant firewall isolation. Shared by deployFromTemplate and
+ * rebuildVm so the cloud-image setup stays identical on both paths.
+ */
+async function configureClonedVm(
+  cfg: {
+    node: string;
+    vmid: number;
+    template: Template;
+    cpu: number;
+    ram: number;
+    diskGb: number;
+    isolate: boolean;
+    cloud: CloudInitInput;
+  },
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<void> {
+  const { node, vmid, template, cpu, ram, diskGb, isolate, cloud } = cfg;
+
+  // Autoscale: set cores/memory, then grow the primary disk if needed.
+  await pve.setVmResources(node, vmid, cpu, ram, client);
+  const vmCfg = await pve.getVmConfig(node, vmid, client);
+  const disk = pve.findPrimaryDisk(vmCfg);
+  if (disk && diskGb > (template.diskGb || 0)) {
+    await pve.resizeDisk(node, vmid, disk, diskGb, client);
+  }
+
+  // Cloud-init: inject the login user + SSH key + DHCP so the box is immediately
+  // reachable on first boot (no installer). Hostname = VM name.
+  if (template.cloudInit) {
+    let vendorSnippet: string | undefined;
+    const features: string[] = [];
+    if (cloud.installDocker) features.push('docker');
+    if (cloud.installTailscale) features.push('tailscale');
+    if (cloud.installGuestAgent) features.push('guest-agent');
+    if (features.length > 0) {
+      // The matching snippet (combined for multiple features) must already be on
+      // this node — admins place it; the API can't write snippets. Fail clearly
+      // rather than letting cloud-init reference a missing file.
+      const snippetStorage = (await getConfig('iso_storage')) ?? 'local';
+      const file = pve.cloudInitSnippetFile(features);
+      const ready = await pve.nodesWithSnippet(snippetStorage, file, client);
+      if (!ready.includes(node)) {
+        throw new Error(
+          `The selected setup (${features.join(' + ')}) isn't installed on node "${node}" — ` +
+            `an admin needs to add its snippet (Template Store → Cloud-init extras).`,
+        );
+      }
+      vendorSnippet = `${snippetStorage}:snippets/${file}`;
+    }
+    await pve.setCloudInitConfig(
+      node,
+      vmid,
+      {
+        ciuser: cloud.username || 'debian',
+        cipassword: cloud.password,
+        sshKeys: cloud.sshKey,
+        ipConfig: 'ip=dhcp',
+        vendorSnippet,
+      },
+      client,
+    );
+
+    // Cloud-image templates default to a serial display (`vga=serial0`), which makes
+    // ProxMate's noVNC console show the "starting serial terminal" placeholder. Force
+    // a normal VGA console; the serial port stays available for boot logs.
+    await client.put(`/nodes/${node}/qemu/${vmid}/config`, new URLSearchParams({ vga: 'std' }));
+  }
+
+  // Tenant isolation (cloned NICs may lack the per-NIC firewall flag).
+  if (isolate) {
+    await pve.ensureNicFirewall(node, vmid, client);
+    const dnsServers = ((await getConfig('isolation_dns_servers')) ?? '').split(/[,\s]+/).filter(Boolean);
+    await pve.configureVmIsolation(node, vmid, { dnsServers }, client);
+  }
+}
+
 /**
  * Deploy a new VM from a published template: quota check → linked-clone the
  * template → autoscale (cores/memory + grow disk) → isolate → start.
@@ -206,63 +291,11 @@ export async function deployFromTemplate(
     );
     await pve.waitForTask(node, upid, client, 600_000);
 
-    // Autoscale: set cores/memory, then grow the primary disk if needed.
-    await pve.setVmResources(node, vmid, input.cpu, input.ram, client);
-    const cfg = await pve.getVmConfig(node, vmid, client);
-    const disk = pve.findPrimaryDisk(cfg);
-    if (disk && diskGb > (template.diskGb || 0)) {
-      await pve.resizeDisk(node, vmid, disk, diskGb, client);
-    }
-
-    // Cloud-init: inject the login user + SSH key + DHCP so the box is
-    // immediately reachable on first boot (no installer). Hostname = VM name.
-    if (template.cloudInit) {
-      let vendorSnippet: string | undefined;
-      const features: string[] = [];
-      if (input.installDocker) features.push('docker');
-      if (input.installTailscale) features.push('tailscale');
-      if (input.installGuestAgent) features.push('guest-agent');
-      if (features.length > 0) {
-        // The matching snippet (combined for multiple features) must already be on
-        // this node — admins place it; the API can't write snippets. Fail clearly
-        // rather than letting cloud-init reference a missing file.
-        const snippetStorage = (await getConfig('iso_storage')) ?? 'local';
-        const file = pve.cloudInitSnippetFile(features);
-        const ready = await pve.nodesWithSnippet(snippetStorage, file, client);
-        if (!ready.includes(node)) {
-          throw new Error(
-            `The selected setup (${features.join(' + ')}) isn't installed on node "${node}" — ` +
-              `an admin needs to add its snippet (Template Store → Cloud-init extras).`,
-          );
-        }
-        vendorSnippet = `${snippetStorage}:snippets/${file}`;
-      }
-      await pve.setCloudInitConfig(
-        node,
-        vmid,
-        {
-          ciuser: input.username || 'debian',
-          cipassword: input.password,
-          sshKeys: input.sshKey,
-          ipConfig: 'ip=dhcp',
-          vendorSnippet,
-        },
-        client,
-      );
-
-      // Cloud-image templates default to a serial display (`vga=serial0`), which
-      // makes ProxMate's noVNC console show the "starting serial terminal"
-      // placeholder. Force a normal VGA console so the web console is usable;
-      // the serial port stays available for boot logs via Proxmox.
-      await client.put(`/nodes/${node}/qemu/${vmid}/config`, new URLSearchParams({ vga: 'std' }));
-    }
-
-    // Tenant isolation (cloned NICs may lack the per-NIC firewall flag).
-    if (isolate) {
-      await pve.ensureNicFirewall(node, vmid, client);
-      const dnsServers = ((await getConfig('isolation_dns_servers')) ?? '').split(/[,\s]+/).filter(Boolean);
-      await pve.configureVmIsolation(node, vmid, { dnsServers }, client);
-    }
+    // Autoscale (cores/memory/disk) + cloud-init + tenant isolation on the clone.
+    await configureClonedVm(
+      { node, vmid, template, cpu: input.cpu, ram: input.ram, diskGb, isolate, cloud: input },
+      client,
+    );
 
     await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
     // Wait for the start task so "running" reflects reality (matches createVm).
@@ -560,30 +593,167 @@ async function waitForStopped(
   }
 }
 
-export async function destroyVm(vm: VirtualMachine): Promise<void> {
-  const currentVm = await syncVmNode(vm);
-  const client = await pve.getClient();
-
+/**
+ * Hard-stop (if needed) and delete a VM on Proxmox, leaving our DB row untouched.
+ * A VM that no longer exists on Proxmox is treated as already gone (not an error),
+ * so callers can clean up / re-provide regardless. Shared by destroyVm and rebuildVm.
+ */
+async function stopAndDeleteProxmoxVm(
+  node: string,
+  vmid: number,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<void> {
   // Proxmox refuses to delete a running VM, and stop is an async task — so
   // hard-stop first and wait until it's actually stopped before deleting.
   try {
-    const status = await pve.getVmStatus(currentVm.proxmoxNode, currentVm.proxmoxVmId, client);
+    const status = await pve.getVmStatus(node, vmid, client);
     if (status.status !== 'stopped') {
-      await pve.stopVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client);
-      await waitForStopped(currentVm.proxmoxNode, currentVm.proxmoxVmId, client);
+      await pve.stopVm(node, vmid, client);
+      await waitForStopped(node, vmid, client);
     }
   } catch {
     /* status unavailable or VM already gone — fall through to delete */
   }
 
   try {
-    await pve.deleteVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client);
+    await pve.deleteVm(node, vmid, client);
   } catch (err) {
-    // If the VM no longer exists on Proxmox, still clean up our record.
+    // If the VM no longer exists on Proxmox, treat it as already deleted.
     const msg = pve.pveMessage(err);
     if (!/does not exist|not found/i.test(msg)) throw err;
   }
+}
+
+export async function destroyVm(vm: VirtualMachine): Promise<void> {
+  const currentVm = await syncVmNode(vm);
+  const client = await pve.getClient();
+  await stopAndDeleteProxmoxVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client);
   await prisma.virtualMachine.delete({ where: { id: currentVm.id } });
+}
+
+/**
+ * Source for a rebuild: either a fresh ISO install or a redeploy from a published
+ * template / cloud image (with the cloud-init login details re-supplied).
+ */
+export type RebuildSource =
+  | { kind: 'iso'; os: string }
+  | { kind: 'template'; template: Template; cloud: CloudInitInput };
+
+/**
+ * Re-image an existing VM in place: destroy its current Proxmox VM (keeping our DB
+ * row and its VMID/name/owner), then re-provision into the SAME VMID from the chosen
+ * source and start it. Resources (cpu/ram) are preserved; a template whose base disk
+ * is larger than the VM's current disk grows it (quota-checked). This is destructive
+ * — the old disk and all its data are gone. On a mid-way failure the DB row is left
+ * in `error`, matching createVm/deployFromTemplate.
+ */
+export async function rebuildVm(
+  user: User,
+  vm: VirtualMachine,
+  source: RebuildSource,
+): Promise<VirtualMachine> {
+  const client = await pve.getClient();
+  const current = await syncVmNode(vm);
+  const vmid = current.proxmoxVmId;
+  const isolate = (await getConfig('isolation_enabled')) !== 'false';
+
+  // Decide the target node + final disk size + the OS label we'll store, and run a
+  // quota check if a template's base disk would grow this VM's allocation.
+  let targetNode = current.proxmoxNode;
+  let diskGb = current.storage;
+  let osLabel: string;
+  let storage: string | undefined;
+  let bridge: string | undefined;
+  let isoStorage: string | undefined;
+
+  if (source.kind === 'iso') {
+    const cfg = await Promise.all([
+      getConfig('default_storage'),
+      getConfig('default_bridge'),
+      getConfig('iso_storage'),
+    ]);
+    [storage, bridge, isoStorage] = cfg as [string, string, string];
+    if (!storage || !bridge || !isoStorage) {
+      throw new Error('Server defaults are not configured — finish setup first');
+    }
+    // The VM must be rebuilt on a node that actually holds the ISO. Prefer the
+    // current node; otherwise place it where the ISO lives with the most capacity.
+    const isoNodes = await pve.getIsoNodes(isoStorage, source.os, client);
+    if (isoNodes.length === 0) {
+      throw new Error(
+        `Install ISO "${source.os}" isn't available on any node's "${isoStorage}" storage.`,
+      );
+    }
+    targetNode = isoNodes.includes(current.proxmoxNode)
+      ? current.proxmoxNode
+      : await pve.pickBestNode(
+          { cpu: current.cpu, ramMb: current.ram, storageGb: current.storage },
+          storage,
+          client,
+          isoNodes,
+          'amd64',
+        );
+    osLabel = source.os;
+  } else {
+    const { template } = source;
+    targetNode = template.proxmoxNode; // a clone stays on the template's node
+    diskGb = Math.max(current.storage, template.diskGb || current.storage);
+    osLabel = template.os ?? template.name;
+    if (diskGb !== current.storage) {
+      await assertResizeWithinQuota(user, current, { cpu: current.cpu, ram: current.ram, storage: diskGb });
+    }
+  }
+
+  // Point of no return: tear down the existing VM, then mark the row rebuilding.
+  await stopAndDeleteProxmoxVm(current.proxmoxNode, vmid, client);
+  await prisma.virtualMachine.update({
+    where: { id: current.id },
+    data: { status: 'creating', ipAddress: null, proxmoxNode: targetNode, os: osLabel, storage: diskGb },
+  });
+
+  try {
+    if (source.kind === 'iso') {
+      const createUpid = await pve.createVm(
+        {
+          node: targetNode,
+          vmid,
+          name: current.name,
+          cores: current.cpu,
+          memory: current.ram,
+          diskGb: current.storage,
+          storage: storage!,
+          bridge: bridge!,
+          isoStorage: isoStorage!,
+          iso: source.os,
+        },
+        client,
+      );
+      await pve.waitForTask(targetNode, createUpid, client);
+      if (isolate) {
+        const dnsServers = ((await getConfig('isolation_dns_servers')) ?? '').split(/[,\s]+/).filter(Boolean);
+        await pve.configureVmIsolation(targetNode, vmid, { dnsServers }, client);
+      }
+    } else {
+      const { template } = source;
+      const upid = await pve.cloneVm(
+        { node: targetNode, templateVmid: template.proxmoxVmId, newVmid: vmid, name: current.name, full: template.cloudInit },
+        client,
+      );
+      await pve.waitForTask(targetNode, upid, client, 600_000);
+      await configureClonedVm(
+        { node: targetNode, vmid, template, cpu: current.cpu, ram: current.ram, diskGb, isolate, cloud: source.cloud },
+        client,
+      );
+    }
+
+    await prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'stopped' } });
+    const startUpid = await pve.startVm(targetNode, vmid, client);
+    await pve.waitForTask(targetNode, startUpid, client);
+    return prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'running' } });
+  } catch (err) {
+    await prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'error' } });
+    throw err;
+  }
 }
 
 export async function startVm(vm: VirtualMachine): Promise<void> {
