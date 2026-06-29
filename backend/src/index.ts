@@ -20,6 +20,7 @@ if (!process.env.ENCRYPTION_KEY) {
 
 import http from 'node:http';
 import { app } from './app.js';
+import { logger } from './lib/logger.js';
 import { setupConsoleWebSocket } from './routes/console.routes.js';
 import { startScheduler } from './services/scheduler.service.js';
 
@@ -29,7 +30,6 @@ const server = http.createServer(app);
 setupConsoleWebSocket(server);
 
 server.listen(PORT, () => {
-  console.log(`\n🚀 ProxMate API running on http://localhost:${PORT}`);
-  console.log(`   Environment: ${process.env.NODE_ENV || 'development'}\n`);
+  logger.info({ port: PORT, env: process.env.NODE_ENV || 'development' }, `ProxMate API running on http://localhost:${PORT}`);
   startScheduler();
 });
