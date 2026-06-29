@@ -71,12 +71,21 @@ export async function saveNotifyConfig(cfg: {
 async function postWebhook(url: string, p: NotifyPayload): Promise<void> {
   const text = `**ProxMate — ${NOTIFY_EVENT_LABEL[p.event]}**\n${p.title}\n${p.message}`;
   const body = JSON.stringify({ content: text, text, title: p.title, message: p.message, event: p.event });
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body,
-    signal: AbortSignal.timeout(10_000),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (e) {
+    // DNS / connection / timeout failures throw here. Surface the underlying
+    // cause (e.g. ENOTFOUND, ECONNREFUSED, TimeoutError) so the admin can tell a
+    // bad/typo'd URL or an unreachable host from a server bug.
+    const code = (e as { cause?: { code?: string } }).cause?.code ?? (e as Error).name;
+    throw new Error(`couldn't reach the webhook URL${code ? ` (${code})` : ''}`);
+  }
   if (!res.ok) throw new Error(`webhook responded ${res.status}`);
 }
 
@@ -88,7 +97,9 @@ async function emailNotice(cfg: NotifyConfig, p: NotifyPayload): Promise<void> {
     : (await prisma.user.findMany({ where: { role: 'admin' }, select: { email: true } })).map((a) => a.email);
   const subject = `[ProxMate] ${NOTIFY_EVENT_LABEL[p.event]}: ${p.title}`;
   for (const to of recipients) {
-    await sendMail({ to, subject, text: p.message }).catch(() => undefined);
+    // Let send failures propagate. The real dispatch paths (notify/notifyWebhook)
+    // wrap this in .catch() to stay best-effort; the "send test" path surfaces it.
+    await sendMail({ to, subject, text: p.message });
   }
 }
 
@@ -113,25 +124,47 @@ export async function notifyWebhook(payload: NotifyPayload): Promise<void> {
   await postWebhook(cfg.webhookUrl, payload).catch((e) => console.warn('[notify] webhook failed:', e));
 }
 
-/** Fire a test notification to every enabled channel (admin "Send test" button). */
-export async function sendTestNotification(): Promise<{ ok: true; channels: string[] }> {
+export interface TestChannelResult {
+  channel: 'webhook' | 'email';
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Fire a test notification to every enabled channel (admin "Send test" button).
+ * Each channel is attempted independently and its outcome reported — a failing
+ * channel does NOT throw (so one bad webhook can't mask a working email, and the
+ * caller gets the real per-channel error instead of an opaque 5xx).
+ */
+export async function sendTestNotification(): Promise<{ ok: boolean; results: TestChannelResult[] }> {
   const cfg = await getNotifyConfig();
   const payload: NotifyPayload = {
     event: 'backup.failed',
     title: 'Test notification',
     message: 'If you can read this, ProxMate notifications are working.',
   };
-  const channels: string[] = [];
+  const msg = (e: unknown) => (e instanceof Error ? e.message : 'failed');
+  const results: TestChannelResult[] = [];
+
   if (cfg.webhookUrl) {
-    await postWebhook(cfg.webhookUrl, payload);
-    channels.push('webhook');
+    try {
+      await postWebhook(cfg.webhookUrl, payload);
+      results.push({ channel: 'webhook', ok: true });
+    } catch (e) {
+      results.push({ channel: 'webhook', ok: false, error: msg(e) });
+    }
   }
   if (cfg.emailEnabled) {
-    await emailNotice(cfg, payload);
-    channels.push('email');
+    try {
+      if (!(await getMailConfig())) throw new Error('SMTP is not configured');
+      await emailNotice(cfg, payload);
+      results.push({ channel: 'email', ok: true });
+    } catch (e) {
+      results.push({ channel: 'email', ok: false, error: msg(e) });
+    }
   }
-  if (channels.length === 0) {
+  if (results.length === 0) {
     throw new Error('No notification channel is enabled — set a webhook URL or enable email first.');
   }
-  return { ok: true, channels };
+  return { ok: results.every((r) => r.ok), results };
 }
