@@ -58,6 +58,7 @@ export interface VirtualMachine {
   os: string;
   status: VmStatus;
   ipAddress: string | null;
+  tags: string | null;
   createdAt: string;
   updatedAt: string;
 }

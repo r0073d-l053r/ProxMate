@@ -345,9 +345,15 @@ export async function listVms(user: { id: string; role: string }): Promise<Virtu
  */
 export async function updateVm(
   vm: VirtualMachine,
-  data: { description?: string | null; name?: string },
+  data: { description?: string | null; name?: string; tags?: string | null },
 ): Promise<VirtualMachine> {
   return prisma.virtualMachine.update({ where: { id: vm.id }, data });
+}
+
+/** Normalize a list of tags to the stored CSV form: lowercase, trimmed, deduped. */
+export function normalizeTags(tags: string[]): string {
+  const clean = tags.map((t) => t.trim().toLowerCase()).filter(Boolean);
+  return [...new Set(clean)].join(',');
 }
 
 /** Thrown when a resize can't be applied (e.g. shrinking a disk, which Proxmox forbids). */
