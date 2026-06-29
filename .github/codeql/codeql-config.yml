@@ -1,0 +1,30 @@
+name: ProxMate CodeQL config
+
+# Test fixtures and e2e specs aren't shipped code — don't scan them.
+paths-ignore:
+  - backend/test/**
+  - frontend/e2e/**
+  - '**/*.test.ts'
+  - '**/*.test.tsx'
+
+query-filters:
+  # `js/insufficient-password-hash` flags fast hashing of "passwords". ProxMate
+  # hashes real passwords with bcrypt (see auth.service / bcryptjs); the only
+  # SHA-256 hashing is of HIGH-ENTROPY secrets — API tokens, password-reset
+  # tokens, 2FA recovery codes — which must be a *deterministic* hash so they can
+  # be looked up by value (a salted KDF can't). A fast hash of a 192-bit random
+  # secret is correct and standard (GitHub/Stripe do the same), so this query
+  # only produces false positives here.
+  - exclude:
+      id: js/insufficient-password-hash
+  # `js/missing-token-validation` ("Missing CSRF middleware") flags every request
+  # handler downstream of cookie-parser because it only recognizes named CSRF
+  # libraries (e.g. csurf). ProxMate enforces CSRF with a custom, centralized
+  # double-submit token in requireAuth (middleware/auth.ts): a cookie-authenticated
+  # MUTATING request must echo the session's csrfToken in the `x-csrf-token` header
+  # (rejected 403 otherwise), while Bearer / `pm_…` API-token clients send no cookie
+  # and therefore have no CSRF surface. The protection is real and applied to every
+  # router via requireAuth; CodeQL just can't model the custom middleware, so this
+  # query is a false positive across the whole API.
+  - exclude:
+      id: js/missing-token-validation

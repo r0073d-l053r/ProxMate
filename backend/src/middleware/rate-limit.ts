@@ -26,3 +26,20 @@ export function createRateLimiter(opts?: {
  * honor `trust proxy` (set in app.ts) when behind a reverse proxy / tunnel.
  */
 export const authLimiter = createRateLimiter();
+
+const API_WRITE_WINDOW_MS = Number(process.env.API_WRITE_RATE_LIMIT_WINDOW_MS ?? 60 * 1000);
+const API_WRITE_MAX = Number(process.env.API_WRITE_RATE_LIMIT_MAX ?? 60);
+
+/**
+ * Throttle for *mutating* API requests (anything that isn't a safe GET/HEAD/OPTIONS).
+ * The auth limiter only guards the login surface; without this a logged-in tenant
+ * could spam `POST /api/vms` and hammer Proxmox. Reads/polling are never limited.
+ */
+export const apiWriteLimiter = rateLimit({
+  windowMs: API_WRITE_WINDOW_MS,
+  limit: API_WRITE_MAX,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  skip: (req) => req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS',
+  message: { error: 'Too many requests — please slow down and try again later.' },
+});

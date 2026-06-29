@@ -6,8 +6,8 @@ import { startVm, stopVm } from './vm.service.js';
 /**
  * Minimal 5-field cron evaluation (minute resolution) — enough for ProxMate's
  * power schedules, which are simple "at HH:MM on these weekdays" expressions.
- * Supports `*`, single numbers, lists `a,b`, ranges `a-b`, and steps `*​/n` /
- * `a-b/n`. Names (mon/jan) are intentionally NOT supported — schedules are
+ * Supports `*`, single numbers, lists `a,b`, ranges `a-b`, and steps (`*` slash n
+ * or `a-b` slash n). Names (mon/jan) are intentionally NOT supported — schedules are
  * generated numerically by the UI, and we validate to the same grammar.
  */
 function fieldMatches(field: string, value: number, min: number, max: number): boolean {

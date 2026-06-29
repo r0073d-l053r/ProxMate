@@ -1,9 +1,49 @@
 import https from 'node:https';
 import { readFileSync } from 'node:fs';
-import axios, { AxiosError, type AxiosInstance } from 'axios';
+import axios, { AxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios';
 import { getConfig } from './config.service.js';
+import { proxmoxApiErrors } from '../lib/metrics.js';
 
 // ─── Client builder ───────────────────────────────────────────
+
+const TIMEOUT_MS = Number(process.env['PROXMOX_TIMEOUT_MS'] ?? 15_000);
+// How many times to retry a *transient* failure. Only idempotent reads are retried
+// (see below) so this can never double-submit a VM create/delete.
+const MAX_RETRIES = Math.max(0, Number(process.env['PROXMOX_RETRIES'] ?? 2));
+const IDEMPOTENT = new Set(['get', 'head', 'options']);
+
+type RetryConfig = InternalAxiosRequestConfig & { _retryCount?: number };
+
+function classifyError(err: AxiosError): 'timeout' | 'network' | 'http' | 'other' {
+  if (err.code === 'ECONNABORTED' || /timeout/i.test(err.message)) return 'timeout';
+  if (!err.response) return 'network';
+  if (err.response) return 'http';
+  return 'other';
+}
+
+/**
+ * Retry transient Proxmox failures (timeouts, connection errors, 5xx, 429) with
+ * exponential backoff. Mutations (POST/PUT/DELETE) are NOT retried — re-sending a
+ * VM-create could provision a duplicate — only idempotent reads, which are the bulk
+ * of traffic (status polling, resource listing). Genuine API failures are counted
+ * for /metrics; expected 4xx client errors are not.
+ */
+function attachRetry(client: AxiosInstance): void {
+  client.interceptors.response.use(undefined, async (error: AxiosError) => {
+    const cfg = error.config as RetryConfig | undefined;
+    const kind = classifyError(error);
+    const status = error.response?.status;
+    const transient = kind === 'timeout' || kind === 'network' || (status !== undefined && (status >= 500 || status === 429));
+    if (transient) proxmoxApiErrors.inc({ kind });
+
+    if (!cfg || !transient || !IDEMPOTENT.has((cfg.method ?? 'get').toLowerCase())) throw error;
+    const attempt = (cfg._retryCount ?? 0) + 1;
+    if (attempt > MAX_RETRIES) throw error;
+    cfg._retryCount = attempt;
+    await new Promise((r) => setTimeout(r, Math.min(2_000, 250 * 2 ** (attempt - 1))));
+    return client.request(cfg);
+  });
+}
 
 export function buildClient(
   host: string,
@@ -12,15 +52,17 @@ export function buildClient(
   verifySsl: boolean,
   ca?: string,
 ): AxiosInstance {
-  return axios.create({
+  const client = axios.create({
     baseURL: `${host}/api2/json`,
     headers: { Authorization: `PVEAPIToken=${tokenId}=${tokenSecret}` },
     // When a custom CA is supplied we keep verification ON and trust that CA —
     // the enterprise-correct alternative to disabling verification for a private
     // Proxmox cert. `ca` is ignored when rejectUnauthorized is false.
     httpsAgent: new https.Agent({ rejectUnauthorized: verifySsl, ...(ca ? { ca } : {}) }),
-    timeout: 15_000,
+    timeout: TIMEOUT_MS,
   });
+  attachRetry(client);
+  return client;
 }
 
 /**
