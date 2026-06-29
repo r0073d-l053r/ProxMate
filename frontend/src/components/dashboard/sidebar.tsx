@@ -21,7 +21,11 @@ const ADMIN_NAV = [
   { href: "/admin/settings", label: "Settings", icon: Settings },
 ];
 
-export function Sidebar() {
+/**
+ * The shared sidebar contents (brand header + nav), used by both the desktop
+ * `Sidebar` and the mobile drawer (`MobileSidebar`) so the two never drift.
+ */
+export function SidebarNav() {
   const pathname = usePathname();
   const role = useAuthStore((s) => s.user?.role);
 
@@ -30,7 +34,7 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="hidden w-60 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground md:flex">
+    <>
       <div className="flex h-14 items-center gap-2 border-b px-4">
         <div className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
           <Server className="size-4" />
@@ -38,7 +42,7 @@ export function Sidebar() {
         <span className="font-semibold">ProxMate</span>
       </div>
 
-      <nav className="flex flex-1 flex-col gap-1 p-3">
+      <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-3">
         {NAV.map((item) => (
           <SidebarLink key={item.href} {...item} active={isActive(item.href, item.exact)} />
         ))}
@@ -47,15 +51,19 @@ export function Sidebar() {
           <>
             <div className="mt-4 mb-1 px-3 text-xs font-medium text-muted-foreground">Admin</div>
             {ADMIN_NAV.map((item) => (
-              <SidebarLink
-                key={item.href}
-                {...item}
-                active={isActive(item.href, false)}
-              />
+              <SidebarLink key={item.href} {...item} active={isActive(item.href, false)} />
             ))}
           </>
         )}
       </nav>
+    </>
+  );
+}
+
+export function Sidebar() {
+  return (
+    <aside className="hidden w-60 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground md:flex">
+      <SidebarNav />
     </aside>
   );
 }
