@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Ticket, Loader2, Copy, Trash2, Check } from "lucide-react";
+import { Ticket, Loader2, Copy, Trash2, Check, Mail, Send } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import type { Invite, CreatedInvite } from "@/lib/types";
 import { formatRam, formatDate } from "@/lib/format";
@@ -46,6 +46,82 @@ const EXPIRY_OPTIONS = [
   { value: "90d", label: "90 days" },
 ];
 
+const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
+
+/** Per-row dialog: (re)send an existing active invite link to an email address. */
+function SendInviteDialog({ invite, onSent }: { invite: Invite; onSent: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState(invite.email ?? "");
+  const [sending, setSending] = useState(false);
+  const valid = isEmail(email);
+
+  async function send() {
+    setSending(true);
+    try {
+      const res = await api.post<{ ok: boolean; email: string; error?: string }>(
+        `/invites/${invite.id}/send`,
+        { email: email.trim() },
+      );
+      if (res.data.ok) {
+        toast.success(`Invite emailed to ${res.data.email}.`);
+        setOpen(false);
+        onSent();
+      } else {
+        toast.error(res.data.error ?? "Could not send the invite email.");
+      }
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={(o: boolean) => {
+        setOpen(o);
+        if (!o) setEmail(invite.email ?? "");
+      }}
+    >
+      <AlertDialogTrigger
+        render={
+          <Button size="sm" variant="ghost" title="Send invite by email">
+            <Mail />
+          </Button>
+        }
+      />
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Email this invite</AlertDialogTitle>
+          <AlertDialogDescription>
+            Send the invite link to an email address. They&apos;ll get a branded message with the link,
+            their quota, and the expiry.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <Input
+          autoFocus
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="person@example.com"
+          aria-label="Recipient email address"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && valid && !sending) send();
+          }}
+        />
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <Button disabled={!valid || sending} onClick={send}>
+            {sending ? <Loader2 className="animate-spin" /> : <Send />}
+            Send invite
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 export default function InvitesPage() {
   const [invites, setInvites] = useState<Invite[] | null>(null);
 
@@ -53,6 +129,7 @@ export default function InvitesPage() {
   const [ramGb, setRamGb] = useState(8);
   const [storage, setStorage] = useState(100);
   const [label, setLabel] = useState("");
+  const [email, setEmail] = useState("");
   const [expiresIn, setExpiresIn] = useState("7d");
   const [require2fa, setRequire2fa] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -70,6 +147,11 @@ export default function InvitesPage() {
 
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
+    const to = email.trim();
+    if (to && !isEmail(to)) {
+      toast.error("Enter a valid email address, or leave it blank to just copy the link.");
+      return;
+    }
     setCreating(true);
     try {
       const res = await api.post<CreatedInvite>("/invites", {
@@ -77,12 +159,22 @@ export default function InvitesPage() {
         maxRam: ramGb * 1024,
         maxStorage: storage,
         label: label.trim() || undefined,
+        email: to || undefined,
         expiresIn,
         require2fa,
       });
       setLastUrl(res.data.inviteUrl);
       setLabel("");
-      toast.success("Invite created.");
+      setEmail("");
+      if (res.data.emailed) {
+        toast.success(`Invite created and emailed to ${res.data.email}.`);
+      } else if (to) {
+        toast.warning(
+          `Invite created, but the email couldn't be sent${res.data.emailError ? `: ${res.data.emailError}` : "."} You can still copy the link below.`,
+        );
+      } else {
+        toast.success("Invite created.");
+      }
       load();
     } catch (err) {
       toast.error(apiError(err));
@@ -155,9 +247,24 @@ export default function InvitesPage() {
                 </Select>
               </FormField>
             </div>
-            <FormField label="Label (optional)" htmlFor="label" hint="A note to help you remember who this is for">
-              <Input id="label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Dev team member" />
-            </FormField>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField label="Label (optional)" htmlFor="label" hint="A note to help you remember who this is for">
+                <Input id="label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Dev team member" />
+              </FormField>
+              <FormField
+                label="Email invite to (optional)"
+                htmlFor="email"
+                hint="We'll email the invite link here. Leave blank to just copy the link."
+              >
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="person@example.com"
+                />
+              </FormField>
+            </div>
             <label className="flex items-start gap-2 text-sm select-none">
               <input
                 type="checkbox"
@@ -218,6 +325,12 @@ export default function InvitesPage() {
                           2FA
                         </Badge>
                       )}
+                      {inv.email && (
+                        <span className="mt-0.5 flex items-center gap-1 text-xs font-normal text-muted-foreground">
+                          <Mail className="size-3 shrink-0" />
+                          <span className="truncate">{inv.email}</span>
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {inv.maxCpu} vCPU · {formatRam(inv.maxRam)} · {inv.maxStorage} GB
@@ -227,21 +340,23 @@ export default function InvitesPage() {
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
                         {!inv.used && !inv.expired && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() =>
-                              copy(`${window.location.origin}/register/${inv.token}`)
-                            }
-                          >
-                            <Copy />
-                          </Button>
+                          <>
+                            <SendInviteDialog invite={inv} onSent={load} />
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              title="Copy invite link"
+                              onClick={() => copy(`${window.location.origin}/register/${inv.token}`)}
+                            >
+                              <Copy />
+                            </Button>
+                          </>
                         )}
                         {!inv.used && (
                           <AlertDialog>
                             <AlertDialogTrigger
                               render={
-                                <Button size="sm" variant="ghost">
+                                <Button size="sm" variant="ghost" title="Revoke invite">
                                   <Trash2 />
                                 </Button>
                               }

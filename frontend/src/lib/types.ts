@@ -158,6 +158,7 @@ export interface Invite {
   id: string;
   token: string;
   label: string | null;
+  email: string | null;
   maxCpu: number;
   maxRam: number;
   maxStorage: number;
@@ -174,11 +175,14 @@ export interface CreatedInvite {
   token: string;
   inviteUrl: string;
   label: string | null;
+  email: string | null;
   maxCpu: number;
   maxRam: number;
   maxStorage: number;
   require2fa: boolean;
   expiresAt: string;
+  emailed: boolean;
+  emailError?: string;
 }
 
 export interface InviteValidation {
