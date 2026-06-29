@@ -100,11 +100,41 @@ describe('sendTestNotification', () => {
     await expect(sendTestNotification()).rejects.toThrow(/No notification channel/);
   });
 
-  it('reports the channels it reached', async () => {
+  it('reports per-channel success for the channels it reached', async () => {
     configure({ notify_webhook_url: 'https://hook', notify_email_enabled: 'true' });
     getMailConfigMock.mockResolvedValue({ host: 'smtp' } as never);
     const r = await sendTestNotification();
-    expect(r.channels).toEqual(['webhook', 'email']);
+    expect(r.ok).toBe(true);
+    expect(r.results.map((c) => c.channel)).toEqual(['webhook', 'email']);
+    expect(r.results.every((c) => c.ok)).toBe(true);
+  });
+
+  it('reports a failing webhook instead of throwing (so the route never 502s)', async () => {
+    configure({ notify_webhook_url: 'https://hook' });
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+    const r = await sendTestNotification();
+    expect(r.ok).toBe(false);
+    expect(r.results.find((c) => c.channel === 'webhook')).toMatchObject({ ok: false });
+    expect(r.results.find((c) => c.channel === 'webhook')?.error).toContain('404');
+  });
+
+  it('surfaces an unreachable webhook cause (DNS/network)', async () => {
+    configure({ notify_webhook_url: 'https://nope.invalid' });
+    fetchMock.mockRejectedValue(Object.assign(new Error('fetch failed'), { cause: { code: 'ENOTFOUND' } }));
+    const r = await sendTestNotification();
+    const wh = r.results.find((c) => c.channel === 'webhook');
+    expect(wh?.ok).toBe(false);
+    expect(wh?.error).toContain('ENOTFOUND');
+  });
+
+  it('isolates channels: a failing email does not mask a working webhook', async () => {
+    configure({ notify_webhook_url: 'https://hook', notify_email_enabled: 'true' });
+    getMailConfigMock.mockResolvedValue({ host: 'smtp' } as never);
+    sendMailMock.mockRejectedValue(new Error('SMTP auth failed'));
+    const r = await sendTestNotification();
+    expect(r.ok).toBe(false);
+    expect(r.results.find((c) => c.channel === 'webhook')?.ok).toBe(true);
+    expect(r.results.find((c) => c.channel === 'email')?.ok).toBe(false);
   });
 });
 
