@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Plus, MonitorPlay, Play, Square, RotateCw, Trash2, Loader2, X } from "lucide-react";
+import { Plus, MonitorPlay, Play, Square, RotateCw, X } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import type { VirtualMachine, UserGroup } from "@/lib/types";
@@ -22,17 +22,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 
 export function parseTags(csv: string | null): string[] {
   return (csv ?? "").split(",").map((t) => t.trim()).filter(Boolean);
@@ -146,7 +135,7 @@ function OwnVmList({ vms, reload }: { vms: VirtualMachine[]; reload: () => Promi
     });
   }, []);
 
-  async function runBulk(action: "start" | "stop" | "restart" | "delete") {
+  async function runBulk(action: "start" | "stop" | "restart") {
     const ids = [...selected];
     if (ids.length === 0) return;
     setBusy(true);
@@ -203,29 +192,8 @@ function OwnVmList({ vms, reload }: { vms: VirtualMachine[]; reload: () => Promi
           <Button size="sm" variant="outline" disabled={busy} onClick={() => runBulk("restart")}>
             <RotateCw /> Restart
           </Button>
-          <AlertDialog>
-            <AlertDialogTrigger
-              render={
-                <Button size="sm" variant="destructive" disabled={busy}>
-                  <Trash2 /> Delete
-                </Button>
-              }
-            />
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Delete {selected.size} VM(s)?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This permanently destroys each selected VM and its disk on Proxmox. This cannot be undone.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction variant="destructive" onClick={() => runBulk("delete")} disabled={busy}>
-                  {busy ? <Loader2 className="animate-spin" /> : <Trash2 />} Delete
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+          {/* Bulk delete intentionally omitted — deleting multiple VMs at once is too easy
+              to trigger by accident; deletion stays a deliberate per-VM action. */}
           <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
             Clear
           </Button>
