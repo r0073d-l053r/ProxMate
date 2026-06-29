@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { MobileSidebar } from "@/components/dashboard/mobile-sidebar";
 
 function initials(name: string): string {
   return name
@@ -41,9 +42,11 @@ export function Topbar() {
   }
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-end gap-1 border-b bg-background px-4">
-      <ThemeToggle />
-      <DropdownMenu>
+    <header className="flex h-14 shrink-0 items-center gap-1 border-b bg-background px-4">
+      <MobileSidebar />
+      <div className="ml-auto flex items-center gap-1">
+        <ThemeToggle />
+        <DropdownMenu>
         <DropdownMenuTrigger
           render={
             <Button variant="ghost" className="h-9 gap-2">
@@ -76,8 +79,9 @@ export function Topbar() {
             <LogOut />
             Sign out
           </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </header>
   );
 }
