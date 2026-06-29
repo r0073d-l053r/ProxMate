@@ -96,6 +96,7 @@ model InviteToken {
   token       String    @unique
   createdById String
   label       String?
+  email       String?   // address the invite link was emailed to, if any
 
   maxCpu      Int
   maxRam      Int

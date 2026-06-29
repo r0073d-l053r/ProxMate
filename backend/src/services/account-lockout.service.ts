@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { recordAudit } from './audit.service.js';
 import { getMailConfig, sendMail } from './mail.service.js';
 import { notifyWebhook } from './notify.service.js';
+import { accountLockedEmail } from '../lib/email-templates.js';
 
 /**
  * Per-account brute-force lockout. The IP rate limiter (rate-limit.ts) blocks a
@@ -81,14 +82,14 @@ async function alertAdmins(
   if (!(await getMailConfig())) return;
   const admins = await prisma.user.findMany({ where: { role: 'admin' }, select: { email: true } });
   if (admins.length === 0) return;
-  const subject = `[ProxMate] Account locked after failed logins: ${user.email}`;
-  const text =
-    `The account "${user.email}" was locked after ${attempts} consecutive failed login attempts` +
-    `${ip ? ` from IP ${ip}` : ''}.\n\n` +
-    `It unlocks automatically at ${lockedUntil.toISOString()} (${LOCK_MINUTES} minutes).\n\n` +
-    `If this wasn't the account owner mistyping their password, someone may be ` +
-    `attempting to brute-force this account. Review the audit log in ProxMate.`;
+  const { subject, text, html } = accountLockedEmail({
+    email: user.email,
+    attempts,
+    ip,
+    lockedUntil,
+    lockMinutes: LOCK_MINUTES,
+  });
   for (const a of admins) {
-    await sendMail({ to: a.email, subject, text }).catch(() => undefined);
+    await sendMail({ to: a.email, subject, text, html }).catch(() => undefined);
   }
 }
