@@ -144,6 +144,17 @@ export default function NewVmWizard() {
   const ramLeftMb = quota ? quota.ram.max - quota.ram.used : 0;
   const storageLeft = quota ? quota.storage.max - quota.storage.used : 0;
 
+  // A preset is selectable only if the user's *remaining* quota can fit it (admins
+  // are bounded by cluster capacity, not quota). Over-quota presets are disabled.
+  const presetFits = (p: (typeof SIZE_PRESETS)[number]) => {
+    if (isAdmin) return true;
+    return (
+      p.cpu <= cpuLeft &&
+      p.ramGb * 1024 <= ramLeftMb &&
+      Math.max(p.diskGb, minDisk) <= storageLeft
+    );
+  };
+
   function onSourceChange(v: string) {
     setSource(v);
     setErrors({});
@@ -307,28 +318,35 @@ export default function NewVmWizard() {
 
                 <FormField label="Size" hint="A quick start — fine-tune any field below.">
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {SIZE_PRESETS.map((p) => (
-                      <button
-                        key={p.key}
-                        type="button"
-                        onClick={() => applyPreset(p)}
-                        aria-pressed={activePreset === p.key}
-                        className={
-                          "rounded-lg border p-2.5 text-left transition-colors " +
-                          (activePreset === p.key
-                            ? "border-primary bg-primary/10"
-                            : "hover:border-primary/50 hover:bg-muted")
-                        }
-                      >
-                        <div className="text-sm font-medium">{p.label}</div>
-                        <div className="mt-0.5 text-xs text-muted-foreground">
-                          {p.cpu} vCPU · {p.ramGb} GB
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          {Math.max(p.diskGb, minDisk)} GB disk
-                        </div>
-                      </button>
-                    ))}
+                    {SIZE_PRESETS.map((p) => {
+                      const fits = presetFits(p);
+                      return (
+                        <button
+                          key={p.key}
+                          type="button"
+                          onClick={() => applyPreset(p)}
+                          disabled={!fits}
+                          aria-pressed={activePreset === p.key}
+                          title={fits ? undefined : "Exceeds your remaining quota"}
+                          className={
+                            "rounded-lg border p-2.5 text-left transition-colors " +
+                            (!fits
+                              ? "cursor-not-allowed opacity-40"
+                              : activePreset === p.key
+                                ? "border-primary bg-primary/10"
+                                : "hover:border-primary/50 hover:bg-muted")
+                          }
+                        >
+                          <div className="text-sm font-medium">{p.label}</div>
+                          <div className="mt-0.5 text-xs text-muted-foreground">
+                            {p.cpu} vCPU · {p.ramGb} GB
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {Math.max(p.diskGb, minDisk)} GB disk
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </FormField>
 

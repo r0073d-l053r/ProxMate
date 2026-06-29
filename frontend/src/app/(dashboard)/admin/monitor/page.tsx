@@ -11,10 +11,29 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { LiveVmCard } from "@/components/admin/live-vm-card";
 
-/** Polling cadence for live metrics. Single shared loop across all cards. */
-const POLL_MS = 1000;
+/** Selectable refresh cadences for the live feed — crank it down for a btop-style,
+ *  visibly-active stream. A short server-side cache on /admin/live-stats keeps the
+ *  fast rates from hammering Proxmox. Single shared loop across all cards. */
+const POLL_OPTIONS = [
+  { ms: 100, label: "0.1s" },
+  { ms: 250, label: "0.25s" },
+  { ms: 500, label: "0.5s" },
+  { ms: 1000, label: "1s" },
+  { ms: 2000, label: "2s" },
+  { ms: 5000, label: "5s" },
+] as const;
+const DEFAULT_POLL_MS = 100;
+const POLL_STORAGE_KEY = "proxmate.monitor.pollMs";
+const rateLabel = (ms: number) => POLL_OPTIONS.find((o) => o.ms === ms)?.label ?? `${ms}ms`;
 
 export default function AdminMonitorPage() {
   const router = useRouter();
@@ -22,8 +41,21 @@ export default function AdminMonitorPage() {
   const [stats, setStats] = useState<LiveStats>({});
   const [groupsError, setGroupsError] = useState<string | null>(null);
   const [statsError, setStatsError] = useState<string | null>(null);
-  const [lastTick, setLastTick] = useState<number | null>(null);
+  const [pollMs, setPollMs] = useState<number>(DEFAULT_POLL_MS);
   const inFlight = useRef(false);
+
+  // Restore the saved cadence after mount (avoids an SSR/hydration mismatch), and
+  // persist any change.
+  useEffect(() => {
+    const saved = Number(localStorage.getItem(POLL_STORAGE_KEY));
+    // One-time restore after mount — done in an effect (not a lazy initializer) so
+    // the server/first-client render match the default and there's no hydration skew.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (saved && POLL_OPTIONS.some((o) => o.ms === saved)) setPollMs(saved);
+  }, []);
+  useEffect(() => {
+    localStorage.setItem(POLL_STORAGE_KEY, String(pollMs));
+  }, [pollMs]);
 
   const loadGroups = useCallback(() => {
     api
@@ -37,7 +69,7 @@ export default function AdminMonitorPage() {
 
   useEffect(loadGroups, [loadGroups]);
 
-  // Single shared 1Hz poll loop for live stats.
+  // Single shared poll loop for live stats, at the chosen cadence.
   useEffect(() => {
     let cancelled = false;
 
@@ -51,7 +83,6 @@ export default function AdminMonitorPage() {
         const res = await api.get<LiveStats>("/admin/live-stats");
         if (!cancelled) {
           setStats(res.data);
-          setLastTick(Date.now());
           setStatsError(null);
         }
       } catch (err) {
@@ -62,12 +93,12 @@ export default function AdminMonitorPage() {
     };
 
     tick();
-    const id = setInterval(tick, POLL_MS);
+    const id = setInterval(tick, pollMs);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, []);
+  }, [pollMs]);
 
   const totalVms = groups?.reduce((n, g) => n + g.vms.length, 0) ?? 0;
 
@@ -89,11 +120,23 @@ export default function AdminMonitorPage() {
         description="Live CPU, memory, and network for every VM on the cluster, grouped by owner."
       >
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Activity className={statsError ? "size-3 text-destructive" : "size-3 text-emerald-500"} />
-          {statsError
-            ? "metrics unreachable"
-            : `live · last ${lastTick ? Math.round((Date.now() - lastTick) / 1000) : "—"}s ago`}
+          <Activity
+            className={statsError ? "size-3 text-destructive" : "size-3 animate-pulse text-emerald-500"}
+          />
+          {statsError ? "metrics unreachable" : `live · ${rateLabel(pollMs)}`}
         </div>
+        <Select value={String(pollMs)} onValueChange={(v) => setPollMs(Number(v))}>
+          <SelectTrigger className="h-8 w-[120px] text-xs" title="Live refresh rate">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {POLL_OPTIONS.map((o) => (
+              <SelectItem key={o.ms} value={String(o.ms)}>
+                {o.label} refresh
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Button variant="outline" size="sm" onClick={enterKiosk}>
           <Maximize /> Kiosk mode
         </Button>

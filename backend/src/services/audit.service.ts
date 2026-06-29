@@ -16,9 +16,25 @@ export interface AuditInput {
   req?: Request; // used to capture client IP
 }
 
-/** Best-effort client IP (honors `trust proxy` set in app.ts). */
+/**
+ * Best-effort client IP. Behind a reverse proxy / tunnel (Cloudflare, nginx),
+ * the TCP peer (`req.socket`) is the proxy, so `req.ip` is the *same* address for
+ * every request unless `TRUST_PROXY` is configured — which is why the audit log
+ * showed one IP for everyone. We therefore prefer the real-client header the edge
+ * stamps on each request: Cloudflare's `CF-Connecting-IP` by default (override via
+ * `REAL_IP_HEADER`, or set it empty to disable and fall back to `req.ip`). In a
+ * tunnel deploy that header is only reachable through the edge, so it isn't
+ * client-spoofable; for direct/dev connections it's absent and we use `req.ip`.
+ */
 function clientIp(req?: Request): string | null {
   if (!req) return null;
+  const headerName = (process.env['REAL_IP_HEADER'] ?? 'cf-connecting-ip').toLowerCase();
+  if (headerName) {
+    const raw = req.headers?.[headerName];
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    const ip = value?.split(',')[0]?.trim();
+    if (ip) return ip;
+  }
   return req.ip ?? req.socket?.remoteAddress ?? null;
 }
 

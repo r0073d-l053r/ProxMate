@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { DatabaseBackup, Loader2, Save } from "lucide-react";
 import { api, apiError } from "@/lib/api";
+import { useAuthStore } from "@/lib/auth-store";
 import type { BackupPolicy } from "@/lib/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -47,6 +48,9 @@ function parseCron(cron: string | null): { freq: Freq; time: string; dow: number
  * frequency gives it its own schedule + retention. Times use the server's timezone.
  */
 export function BackupPolicyPanel({ vmId }: { vmId: string }) {
+  // Backup *retention* (how many to keep) is an admin-only control — regular users
+  // always get the cluster default of two. The backend enforces this too.
+  const isAdmin = useAuthStore((s) => s.user?.role === "admin");
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -84,7 +88,8 @@ export function BackupPolicyPanel({ vmId }: { vmId: string }) {
       const backupCron = buildCron(freq, time, dow, dom);
       await api.put(`/vms/${vmId}/backup-policy`, {
         backupCron,
-        backupKeep: backupCron ? keep : null,
+        // Only admins set retention; users always fall back to the default (2).
+        backupKeep: backupCron && isAdmin ? keep : null,
       });
       toast.success("Backup policy saved.");
     } catch (err) {
@@ -146,15 +151,21 @@ export function BackupPolicyPanel({ vmId }: { vmId: string }) {
                   </div>
                   <div className="grid gap-1.5">
                     <label className="text-xs text-muted-foreground" htmlFor="bk-keep">Keep (most recent)</label>
-                    <Input
-                      id="bk-keep"
-                      type="number"
-                      min={1}
-                      max={14}
-                      value={keep}
-                      onChange={(e) => setKeep(Math.min(14, Math.max(1, Math.floor(Number(e.target.value) || 1))))}
-                      className="w-24"
-                    />
+                    {isAdmin ? (
+                      <Input
+                        id="bk-keep"
+                        type="number"
+                        min={1}
+                        max={14}
+                        value={keep}
+                        onChange={(e) => setKeep(Math.min(14, Math.max(1, Math.floor(Number(e.target.value) || 1))))}
+                        className="w-24"
+                      />
+                    ) : (
+                      <p className="flex h-9 items-center text-sm text-muted-foreground">
+                        {DEFAULT_KEEP} <span className="ml-1 text-xs">· set by your administrator</span>
+                      </p>
+                    )}
                   </div>
                 </div>
 
