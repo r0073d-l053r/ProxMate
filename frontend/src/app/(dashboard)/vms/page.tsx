@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Plus, MonitorPlay, Play, Square, RotateCw, X } from "lucide-react";
+import { Plus, MonitorPlay, Play, Square, RotateCw, X, Trash2, Loader2 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import type { VirtualMachine, UserGroup } from "@/lib/types";
@@ -22,9 +22,70 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Input } from "@/components/ui/input";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 export function parseTags(csv: string | null): string[] {
   return (csv ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+}
+
+/**
+ * Bulk-delete confirmation. Destroying several VMs at once is a footgun, so this
+ * gates it behind a *typed* confirmation: the Delete button stays disabled until
+ * the user types the exact number of selected VMs.
+ */
+function BulkDeleteDialog({ count, busy, onConfirm }: { count: number; busy: boolean; onConfirm: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const ready = text.trim() === String(count);
+  return (
+    <AlertDialog open={open} onOpenChange={(o: boolean) => { setOpen(o); if (!o) setText(""); }}>
+      <AlertDialogTrigger
+        render={
+          <Button size="sm" variant="destructive" disabled={busy}>
+            <Trash2 /> Delete
+          </Button>
+        }
+      />
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete {count} VM{count === 1 ? "" : "s"}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This permanently destroys each selected VM and its disk on Proxmox — this cannot be undone.
+            Type <strong>{count}</strong> below to confirm.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <Input
+          autoFocus
+          inputMode="numeric"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder={`Type ${count} to confirm`}
+          aria-label="Type the number of VMs to confirm deletion"
+        />
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={busy || !ready}
+            onClick={() => { onConfirm(); setOpen(false); }}
+          >
+            {busy ? <Loader2 className="animate-spin" /> : <Trash2 />} Delete {count}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
 }
 
 function TagChips({ tags, onClick }: { tags: string[]; onClick?: (t: string) => void }) {
@@ -135,7 +196,7 @@ function OwnVmList({ vms, reload }: { vms: VirtualMachine[]; reload: () => Promi
     });
   }, []);
 
-  async function runBulk(action: "start" | "stop" | "restart") {
+  async function runBulk(action: "start" | "stop" | "restart" | "delete") {
     const ids = [...selected];
     if (ids.length === 0) return;
     setBusy(true);
@@ -192,8 +253,7 @@ function OwnVmList({ vms, reload }: { vms: VirtualMachine[]; reload: () => Promi
           <Button size="sm" variant="outline" disabled={busy} onClick={() => runBulk("restart")}>
             <RotateCw /> Restart
           </Button>
-          {/* Bulk delete intentionally omitted — deleting multiple VMs at once is too easy
-              to trigger by accident; deletion stays a deliberate per-VM action. */}
+          <BulkDeleteDialog count={selected.size} busy={busy} onConfirm={() => runBulk("delete")} />
           <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
             Clear
           </Button>
