@@ -269,7 +269,14 @@ We are committed to building a welcoming and collaborative space. Please check o
 
 ## License
 
-GNU Affero General Public License v3.0 (AGPLv3) — see the [LICENSE](./LICENSE) file for details.
+Copyright © 2026 Brandon Jewell.
+
+ProxMate is **open core**:
+
+- **Community Edition** (this repository) — free and open source under the **GNU Affero General Public License v3.0 (AGPLv3)**; see [LICENSE](./LICENSE).
+- **EDU Edition** — organization-scale features for schools and institutions, offered under a separate [commercial license](./COMMERCIAL-LICENSE.md).
+
+See [LICENSING.md](./LICENSING.md) for the full picture, including dual-licensing options for businesses. "ProxMate" is a trademark of Brandon Jewell.
 
 ---
 
