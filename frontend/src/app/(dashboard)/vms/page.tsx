@@ -155,6 +155,11 @@ function VmTable({
               <Link href={`/vms/${vm.id}`} className="font-medium hover:underline">
                 {vm.name}
               </Link>
+              {(vm.access === "co-owner" || vm.access === "read-only") && (
+                <span className="ml-2 align-middle rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  Shared · {vm.access}
+                </span>
+              )}
               <TagChips tags={parseTags(vm.tags)} onClick={onTagClick} />
             </TableCell>
             <TableCell>

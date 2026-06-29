@@ -54,6 +54,7 @@ import { MateStatesPanel } from "@/components/vm/matestates-panel";
 import { SnapshotsPanel } from "@/components/vm/snapshots-panel";
 import { PowerSchedulePanel } from "@/components/vm/power-schedule-panel";
 import { BackupPolicyPanel } from "@/components/vm/backup-policy-panel";
+import { SharePanel } from "@/components/vm/share-panel";
 import { useAuthStore } from "@/lib/auth-store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -1015,6 +1016,10 @@ export default function VmDetailPage() {
   const busy = acting || (pending !== null && pending !== "delete-failed");
   const running = vm.status === "running";
   const stopped = vm.status === "stopped" || vm.status === "error";
+  // Access: owners/admins manage shares; co-owners can operate; read-only can only
+  // view (the API enforces all of this — the UI just hides what won't work).
+  const canWrite = vm.access !== "read-only";
+  const isManager = vm.access === "owner" || vm.access === "admin" || isAdmin;
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -1036,7 +1041,17 @@ export default function VmDetailPage() {
         </div>
       </PageHeader>
 
-      {/* Power controls */}
+      {!canWrite && (
+        <Card className="mb-6 border-amber-500/40 bg-amber-500/5">
+          <CardContent className="py-3 text-sm text-muted-foreground">
+            You have <span className="font-medium text-foreground">read-only</span> access to this VM,
+            shared by its owner. You can view its details and activity, but not operate or change it.
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Power controls — hidden for read-only shares (the API enforces it too). */}
+      {canWrite && (
       <div className="mb-6 flex flex-wrap gap-2">
         <Button onClick={() => action("start", "start")} disabled={busy || running} variant="outline">
           {transition === "starting" ? <Loader2 className="animate-spin" /> : <Play />}
@@ -1167,6 +1182,7 @@ export default function VmDetailPage() {
           </AlertDialog>
         </div>
       </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
@@ -1220,19 +1236,21 @@ export default function VmDetailPage() {
 
       <MetricsCard vmId={vm.id} />
 
-      <NotesCard vmId={vm.id} initial={vm.description} onSaved={load} />
+      {canWrite && <NotesCard vmId={vm.id} initial={vm.description} onSaved={load} />}
 
-      <TagsCard vmId={vm.id} initial={vm.tags} onSaved={load} />
+      {canWrite && <TagsCard vmId={vm.id} initial={vm.tags} onSaved={load} />}
 
-      <PowerSchedulePanel vmId={vm.id} />
+      {canWrite && <PowerSchedulePanel vmId={vm.id} />}
 
       <ActivityCard vmId={vm.id} />
 
-      <SnapshotsPanel vmId={vm.id} vmName={vm.name} />
+      {canWrite && <SnapshotsPanel vmId={vm.id} vmName={vm.name} />}
 
-      <MateStatesPanel vmId={vm.id} vmName={vm.name} />
+      {canWrite && <MateStatesPanel vmId={vm.id} vmName={vm.name} />}
 
-      <BackupPolicyPanel vmId={vm.id} />
+      {canWrite && <BackupPolicyPanel vmId={vm.id} />}
+
+      {isManager && <SharePanel vmId={vm.id} />}
 
       <Card className="mt-4">
         <CardHeader>
