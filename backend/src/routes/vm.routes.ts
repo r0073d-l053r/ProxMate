@@ -25,6 +25,7 @@ import {
   createMateState,
   restoreFromMateState,
   deleteMateState,
+  setBackupPolicy,
 } from '../services/matestate.service.js';
 import {
   QuotaError,
@@ -312,6 +313,46 @@ router.put('/:id/schedule', async (req: Request, res: Response) => {
     detail: `${vm.name}: start=${startCron ?? 'off'} stop=${stopCron ?? 'off'}`, req,
   });
   res.json({ startCron: updated.startCron, stopCron: updated.stopCron });
+});
+
+// ─── Per-VM backup policy (schedule + retention) ──────────────
+
+router.get('/:id/backup-policy', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getOwnedVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  res.json({ backupCron: vm.backupCron, backupKeep: vm.backupKeep });
+});
+
+const BackupPolicySchema = z.object({
+  // null = fall back to the cluster-wide weekly default.
+  backupCron: z.string().max(120).nullable(),
+  // null = default rolling retention; otherwise keep between 1 and 14.
+  backupKeep: z.number().int().min(1).max(14).nullable(),
+});
+
+router.put('/:id/backup-policy', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getOwnedVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+
+  const parsed = BackupPolicySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  const { backupCron, backupKeep } = parsed.data;
+  if (backupCron !== null && !isValidCron(backupCron)) {
+    res.status(400).json({ error: 'Invalid backup schedule.' });
+    return;
+  }
+
+  const updated = await setBackupPolicy(vm, { backupCron, backupKeep });
+  await recordAudit({
+    action: 'vm.backup_policy', actor: user, targetType: 'vm', targetId: vm.id,
+    detail: `${vm.name}: backup=${backupCron ?? 'default'} keep=${backupKeep ?? 'default'}`, req,
+  });
+  res.json({ backupCron: updated.backupCron, backupKeep: updated.backupKeep });
 });
 
 // ─── DELETE /api/vms/:id ──────────────────────────────────────

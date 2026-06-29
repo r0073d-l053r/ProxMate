@@ -1,6 +1,7 @@
 import type { MateState, VirtualMachine } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { getConfig, setConfig } from './config.service.js';
+import { cronMatches } from './power-schedule.service.js';
 import * as pve from './proxmox.service.js';
 
 /** Rolling retention: only this many MateStates are kept per VM. */
@@ -102,7 +103,7 @@ export async function createMateState(
       data: { volid: fresh.volid, size: fresh.size, status: 'ready' },
     });
 
-    await pruneOldMateStates(vm.id);
+    await pruneOldMateStates(vm.id, vm.backupKeep ?? MATESTATE_RETENTION);
     return updated;
   } catch (err) {
     await prisma.mateState.update({ where: { id: placeholder.id }, data: { status: 'error' } });
@@ -179,9 +180,35 @@ export async function deleteMateState(mateState: MateState): Promise<void> {
   await prisma.mateState.delete({ where: { id: mateState.id } });
 }
 
-/** Run a scheduled-backup tick: back up every VM, oldest-touched first. */
+/**
+ * Cluster-wide weekly tick: back up every VM that does NOT have its own per-VM
+ * schedule (those are handled by runDueBackups, so we never double-back-up).
+ */
 export async function runScheduledBackups(): Promise<{ ran: number; failed: number }> {
-  const vms = await prisma.virtualMachine.findMany({ where: { status: { not: 'creating' } } });
+  const vms = await prisma.virtualMachine.findMany({
+    where: { status: { not: 'creating' }, backupCron: null },
+  });
+  return backupEach(vms);
+}
+
+/** Whether a VM's own backup schedule fires at the given minute. */
+export function isBackupDue(vm: Pick<VirtualMachine, 'backupCron'>, now: Date): boolean {
+  return !!vm.backupCron && cronMatches(vm.backupCron, now);
+}
+
+/**
+ * Per-minute tick for VMs with their own backup schedule: back up each one whose
+ * `backupCron` fires this minute (retention honors its `backupKeep`).
+ */
+export async function runDueBackups(now: Date = new Date()): Promise<{ ran: number; failed: number }> {
+  const vms = await prisma.virtualMachine.findMany({
+    where: { status: { not: 'creating' }, backupCron: { not: null } },
+  });
+  return backupEach(vms.filter((vm) => isBackupDue(vm, now)));
+}
+
+/** Back up a list of VMs sequentially, isolating per-VM failures. */
+async function backupEach(vms: VirtualMachine[]): Promise<{ ran: number; failed: number }> {
   let ran = 0;
   let failed = 0;
   for (const vm of vms) {
@@ -194,4 +221,12 @@ export async function runScheduledBackups(): Promise<{ ran: number; failed: numb
     }
   }
   return { ran, failed };
+}
+
+/** Set (or clear, with nulls) a VM's per-VM backup schedule + retention. */
+export async function setBackupPolicy(
+  vm: VirtualMachine,
+  data: { backupCron: string | null; backupKeep: number | null },
+): Promise<VirtualMachine> {
+  return prisma.virtualMachine.update({ where: { id: vm.id }, data });
 }

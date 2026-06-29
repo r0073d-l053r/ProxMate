@@ -1,5 +1,5 @@
 import cron from 'node-cron';
-import { runScheduledBackups } from './matestate.service.js';
+import { runScheduledBackups, runDueBackups } from './matestate.service.js';
 import { runDuePowerActions } from './power-schedule.service.js';
 
 /**
@@ -11,8 +11,10 @@ import { runDuePowerActions } from './power-schedule.service.js';
  */
 let task: ReturnType<typeof cron.schedule> | null = null;
 let powerTask: ReturnType<typeof cron.schedule> | null = null;
+let backupTask: ReturnType<typeof cron.schedule> | null = null;
 let running = false;
 let powerRunning = false;
+let backupRunning = false;
 
 const DEFAULT_SCHEDULE = '0 3 * * 0'; // Sun 03:00
 
@@ -59,4 +61,23 @@ export function startScheduler(): void {
   });
 
   console.log('[scheduler] per-VM power schedules active (1-min tick)');
+
+  // Per-minute tick that takes per-VM scheduled backups as their cron fires.
+  // Separate lock from power actions: a slow vzdump must never block start/stop.
+  backupTask = cron.schedule('* * * * *', async () => {
+    if (backupRunning) return; // a previous (slow) backup tick is still working — skip
+    backupRunning = true;
+    try {
+      const r = await runDueBackups(new Date());
+      if (r.ran || r.failed) {
+        console.log(`[scheduler] per-VM backups: ${r.ran} ok, ${r.failed} failed`);
+      }
+    } catch (err) {
+      console.error('[scheduler] per-VM backup tick failed:', err);
+    } finally {
+      backupRunning = false;
+    }
+  });
+
+  console.log('[scheduler] per-VM backup schedules active (1-min tick)');
 }
