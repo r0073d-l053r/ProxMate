@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Trash2, KeyRound, Loader2, RefreshCw } from "lucide-react";
+import { Trash2, KeyRound, Loader2, RefreshCw, Save } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import type { ManagedUser, PasswordResetRequest } from "@/lib/types";
 import { formatRam, formatDate } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
+import { FormField } from "@/components/form-field";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -108,8 +109,8 @@ export default function UsersPage() {
                 {users.map((u) => (
                   <TableRow key={u.id}>
                     <TableCell>
-                      <div className="flex items-center gap-2 font-medium">
-                        {u.displayName}
+                      <div className="flex items-center gap-2">
+                        <EditQuotaDialog user={u} onDone={load} />
                         {pendingByUser.has(u.id) && (
                           <Badge variant="destructive" className="text-[10px]">
                             reset requested
@@ -170,6 +171,94 @@ export default function UsersPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/**
+ * Click a user's name to open their profile and re-provision how much of the
+ * cluster they can use. Existing VMs are left alone — quotas bind at create/resize
+ * time, so the current usage is shown for context.
+ */
+function EditQuotaDialog({ user, onDone }: { user: ManagedUser; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [cpu, setCpu] = useState(user.quota.cpu.max);
+  const [ramGb, setRamGb] = useState(Math.round(user.quota.ram.max / 1024));
+  const [storage, setStorage] = useState(user.quota.storage.max);
+  const [busy, setBusy] = useState(false);
+
+  const num = (v: string) => Math.max(0, Math.floor(Number(v) || 0));
+
+  // Seed the fields from the latest values each time the dialog opens.
+  function onOpenChange(o: boolean) {
+    setOpen(o);
+    if (o) {
+      setCpu(user.quota.cpu.max);
+      setRamGb(Math.round(user.quota.ram.max / 1024));
+      setStorage(user.quota.storage.max);
+    }
+  }
+
+  async function save() {
+    setBusy(true);
+    try {
+      await api.patch(`/users/${user.id}`, {
+        maxCpu: cpu,
+        maxRam: ramGb * 1024,
+        maxStorage: storage,
+      });
+      toast.success(`Updated ${user.displayName}'s quota.`);
+      setOpen(false);
+      onDone();
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogTrigger
+        render={
+          <button type="button" className="text-left font-medium hover:underline" title="Edit profile & quota">
+            {user.displayName}
+          </button>
+        }
+      />
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{user.displayName}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {user.email} · {user.role} · {user.vmCount} VM{user.vmCount === 1 ? "" : "s"}. Set how much of
+            the cluster this user may provision. Existing VMs aren&apos;t changed.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <div className="grid gap-3 py-1 sm:grid-cols-3">
+          <FormField label="Max vCPU" htmlFor="q-cpu" hint={`in use: ${user.quota.cpu.used}`}>
+            <Input id="q-cpu" type="number" min={0} value={cpu} onChange={(e) => setCpu(num(e.target.value))} />
+          </FormField>
+          <FormField label="Max RAM (GB)" htmlFor="q-ram" hint={`in use: ${formatRam(user.quota.ram.used)}`}>
+            <Input id="q-ram" type="number" min={0} value={ramGb} onChange={(e) => setRamGb(num(e.target.value))} />
+          </FormField>
+          <FormField label="Max storage (GB)" htmlFor="q-storage" hint={`in use: ${user.quota.storage.used} GB`}>
+            <Input
+              id="q-storage"
+              type="number"
+              min={0}
+              value={storage}
+              onChange={(e) => setStorage(num(e.target.value))}
+            />
+          </FormField>
+        </div>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <Button onClick={save} disabled={busy}>
+            {busy ? <Loader2 className="animate-spin" /> : <Save />}
+            Save quota
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
