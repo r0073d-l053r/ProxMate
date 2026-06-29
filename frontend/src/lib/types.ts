@@ -111,6 +111,13 @@ export interface PowerSchedule {
   stopCron: string | null;
 }
 
+/** Per-VM backup policy. backupCron null = cluster-wide weekly default;
+ *  backupKeep null = default rolling retention. */
+export interface BackupPolicy {
+  backupCron: string | null;
+  backupKeep: number | null;
+}
+
 /** A live Proxmox snapshot (in-place point-in-time), distinct from a MateState backup. */
 export interface Snapshot {
   name: string;
