@@ -11,7 +11,6 @@ import userRoutes from './routes/user.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import templateRoutes from './routes/template.routes.js';
 import sshKeyRoutes from './routes/ssh-key.routes.js';
-import apiTokenRoutes from './routes/api-token.routes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 const app = express();
@@ -47,7 +46,6 @@ app.use('/api/users', userRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/templates', templateRoutes);
 app.use('/api/ssh-keys', sshKeyRoutes);
-app.use('/api/api-tokens', apiTokenRoutes);
 // console.routes (VNC WebSocket proxy) is attached to the HTTP upgrade event in index.ts
 
 // ─── Global Error Handler ─────────────────────────────────────
