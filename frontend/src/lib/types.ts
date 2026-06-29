@@ -272,11 +272,14 @@ export interface MateState {
   updatedAt: string;
 }
 
+export type Arch = "amd64" | "arm64";
+
 export interface Template {
   id: string;
   name: string;
   description: string | null;
   os: string | null;
+  arch: Arch | null;
   proxmoxVmId: number;
   proxmoxNode: string;
   diskGb: number;
@@ -293,6 +296,7 @@ export interface CuratedImage {
   url: string;
   os: string;
   defaultUser: string;
+  arch: Arch;
 }
 
 export interface DiscoveredTemplate {
@@ -300,6 +304,7 @@ export interface DiscoveredTemplate {
   node: string;
   name: string;
   diskGb: number;
+  arch: Arch;
 }
 
 export interface ClusterStats {

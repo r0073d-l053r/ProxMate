@@ -90,6 +90,9 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
       storage,
       client,
       isoNodes,
+      // ISO installs are x86 today, so keep custom VMs on amd64 nodes (an ARM
+      // node would only TCG-emulate them). An arch picker for ARM ISOs is Phase 2.
+      'amd64',
     );
   }
   const vmid = await pve.getNextVmId(client);

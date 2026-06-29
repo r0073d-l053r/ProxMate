@@ -112,6 +112,61 @@ export async function getDefaultNode(client?: AxiosInstance): Promise<string> {
   return node;
 }
 
+export type Arch = 'amd64' | 'arm64';
+
+/** Normalize a `uname -m` machine string to our coarse arch buckets. */
+export function normalizeArch(machine?: string): Arch | 'unknown' {
+  const m = (machine ?? '').toLowerCase();
+  if (m === 'x86_64' || m === 'amd64') return 'amd64';
+  if (m === 'aarch64' || m === 'arm64') return 'arm64';
+  return 'unknown';
+}
+
+interface NodeStatus {
+  'current-kernel'?: { machine?: string };
+}
+
+const archCache = new Map<string, Arch | 'unknown'>();
+let archCacheAt = 0;
+const ARCH_TTL_MS = 5 * 60_000;
+
+/**
+ * Map of node → CPU architecture (amd64 / arm64 / unknown), from each online
+ * node's `current-kernel.machine`. Node arch is static, so the production path
+ * (no explicit client) caches it for a few minutes. Used to keep a guest off a
+ * node of the wrong architecture — running an x86 image on an ARM host (or vice
+ * versa) falls back to glacial TCG emulation, or simply won't boot.
+ */
+export async function getNodeArchMap(client?: AxiosInstance): Promise<Map<string, Arch | 'unknown'>> {
+  const useCache = !client;
+  if (useCache && archCache.size > 0 && Date.now() - archCacheAt < ARCH_TTL_MS) return new Map(archCache);
+
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources');
+  const nodes = res.data.data
+    .filter((i) => i.type === 'node' && i.status === 'online' && i.node)
+    .map((i) => i.node!);
+
+  const map = new Map<string, Arch | 'unknown'>();
+  await Promise.all(
+    nodes.map(async (node) => {
+      try {
+        const st = await c.get<{ data: NodeStatus }>(`/nodes/${node}/status`);
+        map.set(node, normalizeArch(st.data.data['current-kernel']?.machine));
+      } catch {
+        map.set(node, 'unknown'); // detection failure → don't block placement on it
+      }
+    }),
+  );
+
+  if (useCache) {
+    archCache.clear();
+    for (const [k, v] of map) archCache.set(k, v);
+    archCacheAt = Date.now();
+  }
+  return map;
+}
+
 export interface NodePlacement {
   node: string;
   score: number;
@@ -134,6 +189,7 @@ export async function pickBestNode(
   storagePool?: string,
   client?: AxiosInstance,
   candidateNodes?: string[],
+  arch?: Arch,
 ): Promise<string> {
   const c = client ?? (await getClient());
   const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources');
@@ -163,6 +219,22 @@ export async function pickBestNode(
   if (storagePool && poolByNode.size > 0) nodes = nodes.filter((n) => poolByNode.has(n.node!));
   if (nodes.length === 0) {
     throw new Error('No eligible node has both the install ISO and the configured disk pool');
+  }
+
+  // Architecture guardrail: never place a guest on a node of the wrong CPU arch.
+  // Nodes whose arch can't be detected are left in (fail-open); we only error
+  // when every remaining candidate is a *known* mismatch.
+  if (arch) {
+    const archMap = await getNodeArchMap(c);
+    const matching = nodes.filter((n) => {
+      const a = archMap.get(n.node!);
+      return a === arch || a === 'unknown' || a === undefined;
+    });
+    if (matching.length === 0) {
+      const detail = nodes.map((n) => `${n.node}=${archMap.get(n.node!) ?? 'unknown'}`).join(', ');
+      throw new Error(`No ${arch} node is available to run this image (candidates: ${detail}).`);
+    }
+    nodes = matching;
   }
 
   const scored: NodePlacement[] = nodes.map((n) => {
