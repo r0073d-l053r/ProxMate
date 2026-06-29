@@ -1016,6 +1016,16 @@ interface ClusterResource {
   mem?: number;
   maxdisk?: number;
   disk?: number;
+  uptime?: number;
+}
+
+/** An entry from /cluster/status (either the cluster summary or a node). */
+interface ClusterStatusEntry {
+  type: string; // 'cluster' | 'node'
+  name?: string;
+  quorate?: number; // cluster entry only: 1 = quorate
+  nodes?: number; // cluster entry only: configured node count
+  online?: number; // node entry only: 1 = online
 }
 
 /** Live cluster-wide capacity + usage, aggregated from /cluster/resources. */
@@ -1054,6 +1064,63 @@ export async function getClusterStats(
     memory: { total: memTotal, used: memUsed },
     storage: { total: stTotal, used: stUsed },
     vmCount,
+  };
+}
+
+export interface NodeHealth {
+  name: string;
+  online: boolean;
+  cpu: number; // 0..1 load fraction
+  mem: { used: number; total: number };
+  uptime: number; // seconds
+}
+
+export interface ClusterHealth {
+  quorate: boolean;
+  expected: number; // configured node count
+  online: number;
+  nodes: NodeHealth[];
+}
+
+/**
+ * Per-node health + cluster quorum for the kiosk command center. Merges
+ * /cluster/status (authoritative quorum + online flags) with /cluster/resources
+ * (per-node CPU/mem/uptime). On a standalone (non-clustered) node, /cluster/status
+ * has no `cluster` entry, so quorum falls back to "any node online".
+ */
+export async function getNodesHealth(client?: AxiosInstance): Promise<ClusterHealth> {
+  const c = client ?? (await getClient());
+  const [statusRes, resourceRes] = await Promise.all([
+    c.get<{ data: ClusterStatusEntry[] }>('/cluster/status'),
+    c.get<{ data: ClusterResource[] }>('/cluster/resources?type=node'),
+  ]);
+
+  const status = statusRes.data.data;
+  const cluster = status.find((s) => s.type === 'cluster');
+  const nodeEntries = status.filter((s) => s.type === 'node');
+  const byName = new Map(
+    resourceRes.data.data.filter((r) => r.type === 'node' && r.node).map((r) => [r.node!, r]),
+  );
+
+  const nodes: NodeHealth[] = nodeEntries
+    .map((n) => {
+      const r = n.name ? byName.get(n.name) : undefined;
+      return {
+        name: n.name ?? 'unknown',
+        online: n.online === 1,
+        cpu: r?.cpu ?? 0,
+        mem: { used: r?.mem ?? 0, total: r?.maxmem ?? 0 },
+        uptime: r?.uptime ?? 0,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+  const online = nodes.filter((n) => n.online).length;
+  return {
+    quorate: cluster ? cluster.quorate === 1 : online > 0,
+    expected: cluster?.nodes ?? nodes.length,
+    online,
+    nodes,
   };
 }
 

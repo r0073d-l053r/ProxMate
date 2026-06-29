@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Crown, User, Activity, ServerOff } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Crown, User, Activity, ServerOff, Maximize } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import type { UserGroup, LiveStats } from "@/lib/types";
 import { formatRam } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,6 +17,7 @@ import { LiveVmCard } from "@/components/admin/live-vm-card";
 const POLL_MS = 1000;
 
 export default function AdminMonitorPage() {
+  const router = useRouter();
   const [groups, setGroups] = useState<UserGroup[] | null>(null);
   const [stats, setStats] = useState<LiveStats>({});
   const [groupsError, setGroupsError] = useState<string | null>(null);
@@ -68,6 +71,17 @@ export default function AdminMonitorPage() {
 
   const totalVms = groups?.reduce((n, g) => n + g.vms.length, 0) ?? 0;
 
+  // Enter the full-screen, touch-friendly rack kiosk. Fullscreen needs a user
+  // gesture — this click is it — then we route to the chromeless kiosk shell.
+  const enterKiosk = async () => {
+    try {
+      await document.documentElement.requestFullscreen();
+    } catch {
+      /* unsupported / denied — the kiosk route still works, just not fullscreen */
+    }
+    router.push("/kiosk");
+  };
+
   return (
     <div className="mx-auto max-w-6xl">
       <PageHeader
@@ -80,6 +94,9 @@ export default function AdminMonitorPage() {
             ? "metrics unreachable"
             : `live · last ${lastTick ? Math.round((Date.now() - lastTick) / 1000) : "—"}s ago`}
         </div>
+        <Button variant="outline" size="sm" onClick={enterKiosk}>
+          <Maximize /> Kiosk mode
+        </Button>
       </PageHeader>
 
       {groupsError && (
