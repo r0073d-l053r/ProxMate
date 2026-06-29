@@ -38,6 +38,35 @@ describe('recordAudit', () => {
     });
   });
 
+  it('prefers the real-client header (CF-Connecting-IP) over the proxy socket req.ip', async () => {
+    // Behind Cloudflare Tunnel, req.ip is the tunnel for every request — the real
+    // client is in CF-Connecting-IP. Without this, the audit log shows one IP for all.
+    await recordAudit({
+      action: 'auth.login',
+      actor: { id: 'u1' },
+      req: { ip: '127.0.0.1', headers: { 'cf-connecting-ip': '198.51.100.9' } } as never,
+    });
+    expect(create.mock.calls[0]![0].data.ip).toBe('198.51.100.9');
+  });
+
+  it('takes the first hop of a comma-listed forwarded header', async () => {
+    await recordAudit({
+      action: 'auth.login',
+      actor: { id: 'u1' },
+      req: { ip: '127.0.0.1', headers: { 'cf-connecting-ip': '198.51.100.9, 10.0.0.1' } } as never,
+    });
+    expect(create.mock.calls[0]![0].data.ip).toBe('198.51.100.9');
+  });
+
+  it('falls back to req.ip when no real-client header is present', async () => {
+    await recordAudit({
+      action: 'auth.login',
+      actor: { id: 'u1' },
+      req: { ip: '203.0.113.5', headers: {} } as never,
+    });
+    expect(create.mock.calls[0]![0].data.ip).toBe('203.0.113.5');
+  });
+
   it('records anonymous actions with null actor (e.g. failed login)', async () => {
     await recordAudit({ action: 'auth.login_failed', targetType: 'email', targetId: 'x@y.z' });
     const data = create.mock.calls[0]![0].data;

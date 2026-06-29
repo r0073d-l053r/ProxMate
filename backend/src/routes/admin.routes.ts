@@ -427,35 +427,62 @@ interface PveResource {
   netout?: number;
 }
 
+type LiveStat = {
+  status: string;
+  cpu: number; maxcpu: number;
+  mem: number; maxmem: number;
+  disk: number; maxdisk: number;
+  uptime: number;
+  netin: number; netout: number;
+};
+
+// Tiny in-process cache so the live monitor can poll at a fast, "btop-like"
+// cadence without multiplying load on Proxmox: every client/tab shares one
+// `/cluster/resources` call per window. Proxmox only samples guest stats every
+// few seconds anyway, so a sub-second TTL loses nothing real while capping us at
+// a couple of upstream calls per second no matter how fast the UI refreshes.
+const LIVE_STATS_TTL_MS = 750;
+let liveStatsCache: { at: number; data: Record<number, LiveStat> } | null = null;
+let liveStatsInflight: Promise<Record<number, LiveStat>> | null = null;
+
+async function fetchLiveStats(): Promise<Record<number, LiveStat>> {
+  const client = await getClient();
+  const r = await client.get<{ data: PveResource[] }>('/cluster/resources');
+  const stats: Record<number, LiveStat> = {};
+  for (const item of r.data.data) {
+    if ((item.type === 'qemu' || item.type === 'lxc') && item.vmid !== undefined) {
+      stats[item.vmid] = {
+        status: item.status ?? 'unknown',
+        cpu: item.cpu ?? 0,
+        maxcpu: item.maxcpu ?? 0,
+        mem: item.mem ?? 0,
+        maxmem: item.maxmem ?? 0,
+        disk: item.disk ?? 0,
+        maxdisk: item.maxdisk ?? 0,
+        uptime: item.uptime ?? 0,
+        netin: item.netin ?? 0,
+        netout: item.netout ?? 0,
+      };
+    }
+  }
+  return stats;
+}
+
 router.get('/live-stats', async (_req: Request, res: Response) => {
   try {
-    const client = await getClient();
-    const r = await client.get<{ data: PveResource[] }>('/cluster/resources');
-    const stats: Record<number, {
-      status: string;
-      cpu: number; maxcpu: number;
-      mem: number; maxmem: number;
-      disk: number; maxdisk: number;
-      uptime: number;
-      netin: number; netout: number;
-    }> = {};
-    for (const item of r.data.data) {
-      if ((item.type === 'qemu' || item.type === 'lxc') && item.vmid !== undefined) {
-        stats[item.vmid] = {
-          status: item.status ?? 'unknown',
-          cpu: item.cpu ?? 0,
-          maxcpu: item.maxcpu ?? 0,
-          mem: item.mem ?? 0,
-          maxmem: item.maxmem ?? 0,
-          disk: item.disk ?? 0,
-          maxdisk: item.maxdisk ?? 0,
-          uptime: item.uptime ?? 0,
-          netin: item.netin ?? 0,
-          netout: item.netout ?? 0,
-        };
-      }
+    if (liveStatsCache && Date.now() - liveStatsCache.at < LIVE_STATS_TTL_MS) {
+      res.json(liveStatsCache.data);
+      return;
     }
-    res.json(stats);
+    // Coalesce concurrent misses onto a single upstream request.
+    if (!liveStatsInflight) {
+      liveStatsInflight = fetchLiveStats().finally(() => {
+        liveStatsInflight = null;
+      });
+    }
+    const data = await liveStatsInflight;
+    liveStatsCache = { at: Date.now(), data };
+    res.json(data);
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }
