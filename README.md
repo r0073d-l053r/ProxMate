@@ -233,6 +233,8 @@ cluster-firewall step, least-privilege API tokens, and a production hardening ch
 
 All of these are also surfaced inside the app under **Help & Docs** in the sidebar.
 
+See **[ROADMAP.md](./ROADMAP.md)** for planned and proposed features.
+
 ---
 
 ## 📁 Project Structure
