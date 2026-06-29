@@ -2,6 +2,7 @@ import type { MateState, VirtualMachine } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { getConfig, setConfig } from './config.service.js';
 import { cronMatches } from './power-schedule.service.js';
+import { notify } from './notify.service.js';
 import * as pve from './proxmox.service.js';
 
 /** Rolling retention: only this many MateStates are kept per VM. */
@@ -218,6 +219,11 @@ async function backupEach(vms: VirtualMachine[]): Promise<{ ran: number; failed:
     } catch (err) {
       console.error(`[matestate] scheduled backup failed for VM ${vm.proxmoxVmId}:`, err);
       failed++;
+      await notify({
+        event: 'backup.failed',
+        title: vm.name,
+        message: `Scheduled backup of "${vm.name}" (VMID ${vm.proxmoxVmId}) failed: ${pve.pveMessage(err)}`,
+      }).catch(() => undefined);
     }
   }
   return { ran, failed };
