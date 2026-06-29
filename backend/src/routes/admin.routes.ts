@@ -146,9 +146,13 @@ router.put('/settings/notifications', async (req: Request, res: Response) => {
 
 router.post('/settings/notifications/test', async (_req: Request, res: Response) => {
   try {
+    // The test reports per-channel success/failure in the body (200) — a failing
+    // webhook/email is data, not a server error. Returning 5xx here would let the
+    // edge proxy (e.g. Cloudflare) swap the body for its own error page, hiding the
+    // real reason. Only a config error (no channel enabled) is a 400.
     res.json(await sendTestNotification());
   } catch (err) {
-    res.status(502).json({ ok: false, error: err instanceof Error ? err.message : 'Test failed' });
+    res.status(400).json({ ok: false, error: err instanceof Error ? err.message : 'Test failed' });
   }
 });
 
