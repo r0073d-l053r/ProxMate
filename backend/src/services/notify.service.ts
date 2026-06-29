@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { getConfig, setConfig } from './config.service.js';
 import { getMailConfig, sendMail } from './mail.service.js';
+import { notificationEmail } from '../lib/email-templates.js';
 
 /**
  * Event notifications. A single admin-configured fan-out to two optional channels:
@@ -95,11 +96,11 @@ async function emailNotice(cfg: NotifyConfig, p: NotifyPayload): Promise<void> {
   const recipients = cfg.emailTo
     ? [cfg.emailTo]
     : (await prisma.user.findMany({ where: { role: 'admin' }, select: { email: true } })).map((a) => a.email);
-  const subject = `[ProxMate] ${NOTIFY_EVENT_LABEL[p.event]}: ${p.title}`;
+  const { subject, text, html } = notificationEmail(NOTIFY_EVENT_LABEL[p.event], p.title, p.message);
   for (const to of recipients) {
     // Let send failures propagate. The real dispatch paths (notify/notifyWebhook)
     // wrap this in .catch() to stay best-effort; the "send test" path surfaces it.
-    await sendMail({ to, subject, text: p.message });
+    await sendMail({ to, subject, text, html });
   }
 }
 
