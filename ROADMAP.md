@@ -36,14 +36,13 @@ rough priority bands, not commitments. Have an idea? Open a
 
 ## Tier 3 — API & scale
 
-- **Public REST API + per-user API tokens** — `pm_…` Bearer tokens resolved alongside the session
-  cookie. _Deferred_ — built and verified, but held back from release to land on its own with a
-  focused security review (it adds a second authentication path with full user privileges, which an
-  invite-only deployment doesn't need yet). Tracked in PR #34.
+- **Public REST API + per-user API tokens** — ❌ **Not adopted / removed.** A `pm_…` Bearer-token
+  path was prototyped but **deliberately removed** from the repo: per-user API tokens are out of
+  scope for this invite-only deployment — a second authentication path acting with full user
+  privileges is unwanted attack surface. **Do not re-add.**
 - **OpenAPI / Swagger spec** ✅ — served at `GET /api/openapi.json`. _Done._
-- **PostgreSQL option** — documented switch + portable Prisma queries. _Deferred_ — the prose docs
-  (`docs/api.md`) ride with the API-tokens PR (#34); the queries are already portable and SQLite
-  stays the default.
+- **PostgreSQL option** — Prisma queries are portable and a switch is feasible, but **SQLite stays
+  the default** and is the only supported datasource for now.
 
 ## Tier 4 — Reliability & observability ✅
 
