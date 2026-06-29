@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ShieldCheck, ShieldOff, Loader2, KeyRound, Copy, Fingerprint, Plus, Trash2, KeySquare } from "lucide-react";
+import { ShieldCheck, ShieldOff, Loader2, KeyRound, Copy, Fingerprint, Plus, Trash2, KeySquare, Terminal } from "lucide-react";
 import { startRegistration } from "@simplewebauthn/browser";
 import { api, apiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 import { useAuthStore } from "@/lib/auth-store";
-import type { MeResponse, SshKey } from "@/lib/types";
+import type { MeResponse, SshKey, ApiTokenInfo, CreatedApiToken } from "@/lib/types";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -32,6 +32,10 @@ export default function SecurityPage() {
   const [keyName, setKeyName] = useState("");
   const [keyValue, setKeyValue] = useState("");
   const [savingKey, setSavingKey] = useState(false);
+  const [apiTokens, setApiTokens] = useState<ApiTokenInfo[] | null>(null);
+  const [tokenName, setTokenName] = useState("");
+  const [creatingToken, setCreatingToken] = useState(false);
+  const [newToken, setNewToken] = useState<string | null>(null);
   const setStoreMfa = useAuthStore((s) => s.setMfaSetupRequired);
 
   const load = useCallback(() => {
@@ -46,6 +50,10 @@ export default function SecurityPage() {
     api
       .get<SshKey[]>("/ssh-keys")
       .then((r) => setSshKeys(r.data))
+      .catch((e) => toast.error(apiError(e)));
+    api
+      .get<ApiTokenInfo[]>("/api-tokens")
+      .then((r) => setApiTokens(r.data))
       .catch((e) => toast.error(apiError(e)));
     // Keep the admin-required-2FA gate accurate as the user enrols/removes methods.
     api
@@ -78,6 +86,33 @@ export default function SecurityPage() {
       await api.delete(`/ssh-keys/${id}`);
       toast.success("SSH key removed.");
       load();
+    } catch (err) {
+      toast.error(apiError(err));
+    }
+  }
+
+  async function createToken() {
+    if (!tokenName.trim()) return;
+    setCreatingToken(true);
+    try {
+      const r = await api.post<CreatedApiToken>("/api-tokens", { name: tokenName.trim() });
+      setNewToken(r.data.token); // shown once
+      setTokenName("");
+      const list = await api.get<ApiTokenInfo[]>("/api-tokens");
+      setApiTokens(list.data);
+      toast.success("API token created — copy it now, it won't be shown again.");
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setCreatingToken(false);
+    }
+  }
+
+  async function revokeToken(id: string) {
+    try {
+      await api.delete(`/api-tokens/${id}`);
+      setApiTokens((t) => t?.filter((x) => x.id !== id) ?? null);
+      toast.success("API token revoked.");
     } catch (err) {
       toast.error(apiError(err));
     }
@@ -422,6 +457,78 @@ export default function SecurityPage() {
                 Save key
               </Button>
             </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Terminal className="size-5" /> API tokens
+          </CardTitle>
+          <CardDescription>
+            Personal tokens for scripts, a CLI, or Terraform. Send as{" "}
+            <code className="rounded bg-muted px-1 py-0.5 text-xs">Authorization: Bearer &lt;token&gt;</code>.
+            A token acts as you. See <code className="rounded bg-muted px-1 py-0.5 text-xs">/api/openapi.json</code>{" "}
+            for the API.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          {newToken && (
+            <div className="grid gap-2 rounded-md border border-primary/40 bg-primary/5 p-3">
+              <p className="text-sm font-medium">Your new token — copy it now, it won&apos;t be shown again:</p>
+              <div className="flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate rounded bg-background px-2 py-1.5 font-mono text-xs">{newToken}</code>
+                <Button variant="outline" size="sm" onClick={() => copyText(newToken)}>
+                  <Copy /> Copy
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setNewToken(null)}>
+                  Done
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {apiTokens === null ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> Loading…
+            </div>
+          ) : apiTokens.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No API tokens yet.</p>
+          ) : (
+            <ul className="divide-y rounded-md border">
+              {apiTokens.map((t) => (
+                <li key={t.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+                  <div className="min-w-0">
+                    <p className="font-medium">{t.name}</p>
+                    <p className="truncate font-mono text-xs text-muted-foreground">
+                      {t.prefix}…{t.lastUsedAt ? ` · last used ${new Date(t.lastUsedAt).toLocaleDateString()}` : " · never used"}
+                    </p>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={() => revokeToken(t.id)} aria-label={`Revoke ${t.name}`}>
+                    <Trash2 className="text-destructive" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="flex items-end gap-2 border-t pt-3">
+            <div className="flex-1">
+              <FormField label="Token name" htmlFor="tokenName">
+                <Input
+                  id="tokenName"
+                  value={tokenName}
+                  onChange={(e) => setTokenName(e.target.value)}
+                  placeholder="e.g. ci, laptop, terraform"
+                  maxLength={60}
+                />
+              </FormField>
+            </div>
+            <Button variant="outline" onClick={createToken} disabled={creatingToken || !tokenName.trim()}>
+              {creatingToken ? <Loader2 className="animate-spin" /> : <Plus />}
+              Create token
+            </Button>
           </div>
         </CardContent>
       </Card>
