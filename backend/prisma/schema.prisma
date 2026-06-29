@@ -113,6 +113,12 @@ model VirtualMachine {
   startCron     String?   // auto-start when this fires
   stopCron      String?   // auto-shutdown (graceful) when this fires
 
+  // Optional per-VM backup policy. backupCron null = fall back to the cluster-wide
+  // weekly default; set = this VM is backed up on its own schedule instead.
+  // backupKeep null = default rolling retention (MATESTATE_RETENTION).
+  backupCron    String?   // 5-field cron; when set, a MateState is taken as it fires
+  backupKeep    Int?      // how many MateStates to keep for this VM
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 

@@ -6,9 +6,10 @@ cloud-provider parity gaps and hardening for scale**, not fixing breakage. Tiers
 rough priority bands, not commitments. Have an idea? Open a
 [discussion](https://github.com/r0073d-l053r/ProxMate/discussions/categories/ideas).
 
-> ✅ **Shipped:** _Live VM resize_ and _Rebuild / reinstall_ (Tier 1) — resize a VM's
-> vCPU / memory / disk in place (quota-checked, disk grow-only), and re-image a VM from a
-> fresh ISO or template while keeping its VMID, name, and resources.
+> ✅ **Shipped (Tier 1):** _Live VM resize_ — resize a VM's vCPU / memory / disk in place
+> (quota-checked, disk grow-only). _Rebuild / reinstall_ — re-image a VM from a fresh ISO or
+> template while keeping its VMID, name, and resources. _Per-VM backup policy_ — configurable
+> MateState frequency + retention per VM.
 
 ---
 
@@ -18,8 +19,9 @@ rough priority bands, not commitments. Have an idea? Open a
   (`PATCH /api/vms/:id`; disk is grow-only). _Done._
 - **Rebuild / reinstall** ✅ — re-image a VM from a fresh ISO or template while keeping
   its DB record, VMID, name, and resources (`POST /api/vms/:id/rebuild`). _Done._
-- **Per-VM backup policy** — make MateState frequency/retention configurable per VM
-  instead of the fixed weekly / keep-2 default.
+- **Per-VM backup policy** ✅ — configurable MateState frequency + retention per VM
+  (`PUT /api/vms/:id/backup-policy`); VMs without one stay on the cluster-wide weekly
+  default. _Done._
 - **Tags / projects + bulk actions** — group VMs for users who run several.
 
 ## Tier 2 — Notifications & sharing
