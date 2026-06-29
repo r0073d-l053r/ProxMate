@@ -25,6 +25,7 @@ import {
   isValidTag,
 } from '../services/update.service.js';
 import { getMailConfig, saveMailConfig, verifyMailConfig } from '../services/mail.service.js';
+import { getNotifyConfig, saveNotifyConfig, sendTestNotification, NOTIFY_EVENTS } from '../services/notify.service.js';
 import * as sso from '../services/sso.service.js';
 import { listResetRequests, adminResetPassword } from '../services/password-reset.service.js';
 import { refreshVmIps } from '../services/vm.service.js';
@@ -65,6 +66,7 @@ router.get('/settings', async (_req: Request, res: Response) => {
     smtp: mail
       ? { configured: true, host: mail.host, port: mail.port, secure: mail.secure, user: mail.user ?? '', from: mail.from, hasPass: !!mail.pass }
       : { configured: false },
+    notify: await getNotifyConfig(),
     sso: ssoCfg
       ? {
           configured: true,
@@ -109,6 +111,44 @@ router.post('/settings/smtp/test', async (_req: Request, res: Response) => {
     res.json(await verifyMailConfig());
   } catch (err) {
     res.status(502).json({ ok: false, error: err instanceof Error ? err.message : 'SMTP test failed' });
+  }
+});
+
+// ─── Event notifications (webhook + email) ────────────────────
+
+const NotifySchema = z.object({
+  webhookUrl: z.string().max(2000).optional(), // blank = webhook disabled
+  emailEnabled: z.boolean().default(false),
+  emailTo: z.string().max(200).optional(), // blank = all admins
+  events: z.array(z.enum(NOTIFY_EVENTS)).default([]),
+});
+
+router.put('/settings/notifications', async (req: Request, res: Response) => {
+  const parsed = NotifySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  const url = (parsed.data.webhookUrl ?? '').trim();
+  if (url && !/^https?:\/\//i.test(url)) {
+    res.status(400).json({ error: 'Webhook URL must start with http:// or https://' });
+    return;
+  }
+  await saveNotifyConfig({
+    webhookUrl: url,
+    emailEnabled: parsed.data.emailEnabled,
+    emailTo: parsed.data.emailTo,
+    events: parsed.data.events,
+  });
+  await recordAudit({ action: 'admin.notify_config', actor: (req as AuthRequest).user, req });
+  res.json({ success: true });
+});
+
+router.post('/settings/notifications/test', async (_req: Request, res: Response) => {
+  try {
+    res.json(await sendTestNotification());
+  } catch (err) {
+    res.status(502).json({ ok: false, error: err instanceof Error ? err.message : 'Test failed' });
   }
 });
 

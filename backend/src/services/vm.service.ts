@@ -1,7 +1,18 @@
 import type { User, VirtualMachine, Template } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { getConfig } from './config.service.js';
+import { notify } from './notify.service.js';
 import * as pve from './proxmox.service.js';
+
+/** Flag a VM as failed in the DB and fire a best-effort vm.error notification. */
+async function markVmError(vmId: string, name: string, err: unknown): Promise<void> {
+  await prisma.virtualMachine.update({ where: { id: vmId }, data: { status: 'error' } });
+  await notify({
+    event: 'vm.error',
+    title: name,
+    message: `Provisioning of "${name}" failed: ${pve.pveMessage(err)}`,
+  }).catch(() => undefined);
+}
 
 /** Thrown when a VM request would push a user over one of their quota caps. */
 export class QuotaError extends Error {
@@ -144,7 +155,7 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
     await pve.waitForTask(node, startUpid, client);
     return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
   } catch (err) {
-    await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'error' } });
+    await markVmError(vm.id, input.name, err);
     throw err;
   }
 }
@@ -303,7 +314,7 @@ export async function deployFromTemplate(
     await pve.waitForTask(node, startUpid, client);
     return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
   } catch (err) {
-    await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'error' } });
+    await markVmError(vm.id, input.name, err);
     throw err;
   }
 }
@@ -751,7 +762,7 @@ export async function rebuildVm(
     await pve.waitForTask(targetNode, startUpid, client);
     return prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'running' } });
   } catch (err) {
-    await prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'error' } });
+    await markVmError(current.id, current.name, err);
     throw err;
   }
 }

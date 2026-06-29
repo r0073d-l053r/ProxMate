@@ -26,9 +26,9 @@ rough priority bands, not commitments. Have an idea? Open a
 
 ## Tier 2 — Notifications & sharing
 
-- **Event notifications** — email + webhook (Discord / Slack / ntfy) alerts for backup
-  failed, VM crashed / unexpectedly stopped, quota near limit, and account lockout.
-  (SMTP exists today but is used only for password reset.)
+- **Event notifications** ✅ — admin-configured webhook (Discord / Slack / Mattermost /
+  generic) + optional email alerts for backup failed, VM provisioning error, and account
+  lockout. Per-event toggles and a "send test" button in Admin → Settings. _Done._
 - **Share a VM** with another tenant — co-owner or read-only console access.
 
 ## Tier 3 — API & scale
