@@ -306,6 +306,112 @@ export async function updateVm(
   return prisma.virtualMachine.update({ where: { id: vm.id }, data });
 }
 
+/** Thrown when a resize can't be applied (e.g. shrinking a disk, which Proxmox forbids). */
+export class ResizeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ResizeError';
+  }
+}
+
+/**
+ * Quota check for an in-place resize: the VM's *new* totals must fit the user's
+ * caps, counting every OTHER VM they own plus the requested target values — so a
+ * resize is judged on the delta, not by double-counting the VM's current size.
+ */
+export async function assertResizeWithinQuota(
+  user: User,
+  vm: VirtualMachine,
+  target: { cpu: number; ram: number; storage: number },
+): Promise<void> {
+  // Admins (cluster owners) are not quota-limited.
+  if (user.role === 'admin') return;
+
+  const others = await prisma.virtualMachine.findMany({
+    where: { userId: user.id, id: { not: vm.id } },
+  });
+  const usedCpu = others.reduce((s, v) => s + v.cpu, 0);
+  const usedRam = others.reduce((s, v) => s + v.ram, 0);
+  const usedStorage = others.reduce((s, v) => s + v.storage, 0);
+
+  const violations: Record<string, { used: number; requested: number; max: number }> = {};
+  if (usedCpu + target.cpu > user.maxCpu)
+    violations['cpu'] = { used: usedCpu, requested: target.cpu, max: user.maxCpu };
+  if (usedRam + target.ram > user.maxRam)
+    violations['ram'] = { used: usedRam, requested: target.ram, max: user.maxRam };
+  if (usedStorage + target.storage > user.maxStorage)
+    violations['storage'] = { used: usedStorage, requested: target.storage, max: user.maxStorage };
+
+  if (Object.keys(violations).length > 0) throw new QuotaError(violations);
+}
+
+export interface ResizeVmInput {
+  cpu?: number;
+  ram?: number; // MB
+  storage?: number; // GB (grow-only)
+}
+
+/**
+ * Change a VM's allocated CPU/RAM/disk in place. Disk is grow-only (Proxmox can't
+ * shrink). Each Proxmox change is written to our DB right after it lands —
+ * Proxmox-first, mirroring the rename flow — so a mid-way failure never leaves the
+ * DB claiming resources the cluster didn't apply. CPU/RAM changes the guest can't
+ * hot-plug take effect on the VM's next start. Returns the updated VM (unchanged
+ * if the request is a no-op).
+ */
+export async function resizeVm(
+  user: User,
+  vm: VirtualMachine,
+  input: ResizeVmInput,
+): Promise<VirtualMachine> {
+  const targetCpu = input.cpu ?? vm.cpu;
+  const targetRam = input.ram ?? vm.ram;
+  const targetStorage = input.storage ?? vm.storage;
+
+  // Proxmox can only grow a disk, never shrink it.
+  if (targetStorage < vm.storage) {
+    throw new ResizeError(
+      `Disks can only grow — ${targetStorage}GB is smaller than the current ${vm.storage}GB.`,
+    );
+  }
+
+  const resourcesChanged = targetCpu !== vm.cpu || targetRam !== vm.ram;
+  const growDisk = targetStorage > vm.storage;
+  if (!resourcesChanged && !growDisk) return vm; // nothing to do
+
+  await assertResizeWithinQuota(user, vm, { cpu: targetCpu, ram: targetRam, storage: targetStorage });
+
+  let current = await syncVmNode(vm);
+  const client = await pve.getClient();
+
+  // Resolve the disk up-front so a missing/unresizable disk fails before we
+  // change anything else.
+  let diskKey: string | undefined;
+  if (growDisk) {
+    const cfg = await pve.getVmConfig(current.proxmoxNode, current.proxmoxVmId, client);
+    diskKey = pve.findPrimaryDisk(cfg);
+    if (!diskKey) throw new ResizeError('Could not find a resizable disk on this VM.');
+  }
+
+  if (resourcesChanged) {
+    await pve.setVmResources(current.proxmoxNode, current.proxmoxVmId, targetCpu, targetRam, client);
+    current = await prisma.virtualMachine.update({
+      where: { id: current.id },
+      data: { cpu: targetCpu, ram: targetRam },
+    });
+  }
+
+  if (growDisk && diskKey) {
+    await pve.resizeDisk(current.proxmoxNode, current.proxmoxVmId, diskKey, targetStorage, client);
+    current = await prisma.virtualMachine.update({
+      where: { id: current.id },
+      data: { storage: targetStorage },
+    });
+  }
+
+  return current;
+}
+
 /** Set (or clear, with nulls) a VM's auto start/stop cron schedule. */
 export async function setPowerSchedule(
   vm: VirtualMachine,

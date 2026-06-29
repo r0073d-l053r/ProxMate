@@ -28,7 +28,9 @@ import {
 } from '../services/matestate.service.js';
 import {
   QuotaError,
+  ResizeError,
   createVm,
+  resizeVm,
   listVms,
   refreshVmIps,
   getLiveUsage,
@@ -181,8 +183,8 @@ router.get('/:id/activity', async (req: Request, res: Response) => {
 });
 
 // ─── PATCH /api/vms/:id ───────────────────────────────────────
-// Update a VM's user-editable metadata: free-text notes and/or its name (the
-// latter is also pushed to Proxmox).
+// Update a VM: free-text notes, its name (also pushed to Proxmox), and/or an
+// in-place resize of CPU/RAM/disk (quota-checked; disk is grow-only).
 
 const UpdateVmSchema = z.object({
   description: z.string().max(500).nullable().optional(),
@@ -192,6 +194,10 @@ const UpdateVmSchema = z.object({
     .max(63)
     .regex(/^[a-zA-Z0-9-]+$/, 'Use letters, numbers and hyphens only')
     .optional(),
+  // In-place resize. Each is optional; disk can only grow (enforced server-side).
+  cpu: z.number().int().positive().max(64).optional(),
+  ram: z.number().int().positive().optional(),
+  storage: z.number().int().positive().optional(),
 });
 
 router.patch('/:id', async (req: Request, res: Response) => {
@@ -212,20 +218,54 @@ router.patch('/:id', async (req: Request, res: Response) => {
       : (parsed.data.description?.trim() || null);
   const newName = parsed.data.name?.trim();
   const renaming = !!newName && newName !== vm.name;
+  const metaChanged = renaming || description !== undefined;
+
+  const resizeInput = {
+    ...(parsed.data.cpu !== undefined ? { cpu: parsed.data.cpu } : {}),
+    ...(parsed.data.ram !== undefined ? { ram: parsed.data.ram } : {}),
+    ...(parsed.data.storage !== undefined ? { storage: parsed.data.storage } : {}),
+  };
+  const resizing = Object.keys(resizeInput).length > 0;
+
+  if (!metaChanged && !resizing) { res.json(vm); return; }
 
   try {
-    // A rename hits Proxmox first (so a PVE failure doesn't desync our DB).
-    if (renaming) {
-      vm = await syncVmNode(vm);
-      await setVmName(vm.proxmoxNode, vm.proxmoxVmId, newName);
+    // Notes / rename first. A rename hits Proxmox first (so a PVE failure
+    // doesn't desync our DB).
+    if (metaChanged) {
+      if (renaming) {
+        vm = await syncVmNode(vm);
+        await setVmName(vm.proxmoxNode, vm.proxmoxVmId, newName!);
+      }
+      vm = await updateVm(vm, { description, ...(renaming ? { name: newName } : {}) });
+      await recordAudit({
+        action: 'vm.update', actor: user, targetType: 'vm', targetId: vm.id,
+        detail: renaming ? `renamed ${vm.name} → ${newName}` : `${vm.name} notes updated`, req,
+      });
     }
-    const updated = await updateVm(vm, { description, ...(renaming ? { name: newName } : {}) });
-    await recordAudit({
-      action: 'vm.update', actor: user, targetType: 'vm', targetId: vm.id,
-      detail: renaming ? `renamed ${vm.name} → ${newName}` : `${vm.name} notes updated`, req,
-    });
-    res.json(updated);
+
+    if (resizing) {
+      // resizeVm needs the full user record (quota caps + role).
+      const fullUser = await prisma.user.findUnique({ where: { id: user.id } });
+      if (!fullUser) { res.status(404).json({ error: 'User not found' }); return; }
+      const before = `${vm.cpu}c/${vm.ram}MB/${vm.storage}GB`;
+      vm = await resizeVm(fullUser, vm, resizeInput);
+      await recordAudit({
+        action: 'vm.resize', actor: user, targetType: 'vm', targetId: vm.id,
+        detail: `${vm.name}: ${before} → ${vm.cpu}c/${vm.ram}MB/${vm.storage}GB`, req,
+      });
+    }
+
+    res.json(vm);
   } catch (err) {
+    if (err instanceof QuotaError) {
+      res.status(403).json({ error: 'Quota exceeded', details: err.details });
+      return;
+    }
+    if (err instanceof ResizeError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
     res.status(502).json({ error: pveMessage(err) });
   }
 });
