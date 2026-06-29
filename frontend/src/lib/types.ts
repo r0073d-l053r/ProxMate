@@ -251,7 +251,23 @@ export interface AdminSettings {
         hasSecret: boolean;
         callbackUrl: string;
       };
+  notify: NotifyConfig;
 }
+
+export type NotifyEvent = "backup.failed" | "vm.error" | "auth.lockout";
+
+export interface NotifyConfig {
+  webhookUrl: string;
+  emailEnabled: boolean;
+  emailTo: string;
+  events: NotifyEvent[];
+}
+
+export const NOTIFY_EVENT_LABELS: Record<NotifyEvent, string> = {
+  "backup.failed": "Backup failed",
+  "vm.error": "VM provisioning error",
+  "auth.lockout": "Account locked (brute-force)",
+};
 
 export interface IsolationStatus {
   isolationEnabled: boolean;
