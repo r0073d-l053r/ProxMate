@@ -33,6 +33,7 @@ import {
   createVm,
   resizeVm,
   rebuildVm,
+  normalizeTags,
   listVms,
   refreshVmIps,
   getLiveUsage,
@@ -127,6 +128,46 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
+// ─── POST /api/vms/bulk ───────────────────────────────────────
+// Apply one power action to several owned VMs at once. Per-VM errors are
+// isolated and reported; declared before `/:id` so "bulk" isn't read as an id.
+// NOTE: bulk *delete* is intentionally excluded — destroying multiple VMs at once
+// is too easy to trigger by accident; deletion stays a deliberate per-VM action.
+
+const BulkSchema = z.object({
+  action: z.enum(['start', 'stop', 'restart']),
+  ids: z.array(z.string()).min(1).max(50),
+});
+
+router.post('/bulk', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const parsed = BulkSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  const { action, ids } = parsed.data;
+  const results: Array<{ id: string; ok: boolean; error?: string }> = [];
+  for (const id of ids) {
+    const vm = await getOwnedVm(id, user);
+    if (!vm) { results.push({ id, ok: false, error: 'not found' }); continue; }
+    try {
+      if (action === 'start') await startVm(vm);
+      else if (action === 'stop') await stopVm(vm, false);
+      else await restartVm(vm); // restart
+      results.push({ id, ok: true });
+    } catch (err) {
+      results.push({ id, ok: false, error: pveMessage(err) });
+    }
+  }
+  const ok = results.filter((r) => r.ok).length;
+  await recordAudit({
+    action: `vm.bulk_${action}`, actor: user, targetType: 'vm',
+    detail: `${ok}/${ids.length} ${action}`, req,
+  });
+  res.json({ results });
+});
+
 // ─── GET /api/vms/:id ─────────────────────────────────────────
 
 router.get('/:id', async (req: Request, res: Response) => {
@@ -201,6 +242,11 @@ const UpdateVmSchema = z.object({
   cpu: z.number().int().positive().max(64).optional(),
   ram: z.number().int().positive().optional(),
   storage: z.number().int().positive().optional(),
+  // Optional labels for grouping/filtering. Pass [] to clear.
+  tags: z
+    .array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _-]{0,30}$/, 'Letters, numbers, space, _ and - only'))
+    .max(20)
+    .optional(),
 });
 
 router.patch('/:id', async (req: Request, res: Response) => {
@@ -221,7 +267,9 @@ router.patch('/:id', async (req: Request, res: Response) => {
       : (parsed.data.description?.trim() || null);
   const newName = parsed.data.name?.trim();
   const renaming = !!newName && newName !== vm.name;
-  const metaChanged = renaming || description !== undefined;
+  // undefined = not provided; empty CSV → null (clear all tags).
+  const tags = parsed.data.tags === undefined ? undefined : normalizeTags(parsed.data.tags) || null;
+  const metaChanged = renaming || description !== undefined || tags !== undefined;
 
   const resizeInput = {
     ...(parsed.data.cpu !== undefined ? { cpu: parsed.data.cpu } : {}),
@@ -240,10 +288,14 @@ router.patch('/:id', async (req: Request, res: Response) => {
         vm = await syncVmNode(vm);
         await setVmName(vm.proxmoxNode, vm.proxmoxVmId, newName!);
       }
-      vm = await updateVm(vm, { description, ...(renaming ? { name: newName } : {}) });
+      vm = await updateVm(vm, {
+        description,
+        ...(renaming ? { name: newName } : {}),
+        ...(tags !== undefined ? { tags } : {}),
+      });
       await recordAudit({
         action: 'vm.update', actor: user, targetType: 'vm', targetId: vm.id,
-        detail: renaming ? `renamed ${vm.name} → ${newName}` : `${vm.name} notes updated`, req,
+        detail: renaming ? `renamed ${vm.name} → ${newName}` : `${vm.name} updated`, req,
       });
     }
 
