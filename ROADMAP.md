@@ -23,7 +23,8 @@ rough priority bands, not commitments. Have an idea? Open a
   (`PUT /api/vms/:id/backup-policy`); VMs without one stay on the cluster-wide weekly
   default. _Done._
 - **Tags / projects + bulk actions** ✅ — per-VM tags with a tag filter, plus multi-select
-  bulk start/stop/restart/delete on the VM list. _Done._
+  bulk start/stop/restart on the VM list. (Bulk *delete* intentionally omitted — destroying
+  several VMs at once is too easy to fumble, so deletion stays a deliberate per-VM action.) _Done._
 
 ## Tier 2 — Notifications & sharing
 
@@ -35,11 +36,14 @@ rough priority bands, not commitments. Have an idea? Open a
 
 ## Tier 3 — API & scale
 
-- **Public REST API + per-user API tokens** ✅ — `pm_…` Bearer tokens (managed under
-  Security), resolved alongside the session cookie. _Done._
+- **Public REST API + per-user API tokens** — `pm_…` Bearer tokens resolved alongside the session
+  cookie. _Deferred_ — built and verified, but held back from release to land on its own with a
+  focused security review (it adds a second authentication path with full user privileges, which an
+  invite-only deployment doesn't need yet). Tracked in PR #34.
 - **OpenAPI / Swagger spec** ✅ — served at `GET /api/openapi.json`. _Done._
-- **PostgreSQL option** ✅ — documented switch + portable Prisma queries
-  ([docs/api.md](./docs/api.md)). _Done._
+- **PostgreSQL option** — documented switch + portable Prisma queries. _Deferred_ — the prose docs
+  (`docs/api.md`) ride with the API-tokens PR (#34); the queries are already portable and SQLite
+  stays the default.
 
 ## Tier 4 — Reliability & observability ✅
 
