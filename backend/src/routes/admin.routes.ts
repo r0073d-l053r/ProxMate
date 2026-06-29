@@ -7,6 +7,7 @@ import { testProxmoxConnection, saveDefaults } from '../services/setup.service.j
 import {
   isClusterFirewallEnabled,
   getClusterStats,
+  getNodesHealth,
   getBridgeNetwork,
   ipv4NetworkCidr,
   setClusterFirewall,
@@ -236,6 +237,17 @@ router.get('/cluster-stats', async (_req: Request, res: Response) => {
     const diskPool = (await getConfig('default_storage')) ?? undefined;
     const stats = await getClusterStats(diskPool);
     res.json(stats);
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── GET /api/admin/nodes ─────────────────────────────────────
+// Per-node health + cluster quorum (the kiosk command center).
+
+router.get('/nodes', async (_req: Request, res: Response) => {
+  try {
+    res.json(await getNodesHealth());
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }

@@ -310,6 +310,22 @@ export interface ClusterStats {
   vmCount: number;
 }
 
+/** Per-node health + cluster quorum (kiosk command center). */
+export interface NodeHealth {
+  name: string;
+  online: boolean;
+  cpu: number; // 0..1 load fraction
+  mem: { used: number; total: number };
+  uptime: number; // seconds
+}
+
+export interface ClusterHealth {
+  quorate: boolean;
+  expected: number;
+  online: number;
+  nodes: NodeHealth[];
+}
+
 /** Live aggregate usage of the caller's own running VMs (dashboard sparklines). */
 export interface LiveUsage {
   cpu: number; // cores in use
