@@ -25,7 +25,8 @@ import {
   currentVersion,
   isValidTag,
 } from '../services/update.service.js';
-import { getMailConfig, saveMailConfig, verifyMailConfig } from '../services/mail.service.js';
+import { getMailConfig, saveMailConfig, verifyMailConfig, isMailConfigured, sendMail } from '../services/mail.service.js';
+import { announcementEmail } from '../lib/email-templates.js';
 import { getNotifyConfig, saveNotifyConfig, sendTestNotification, NOTIFY_EVENTS } from '../services/notify.service.js';
 import * as sso from '../services/sso.service.js';
 import { listResetRequests, adminResetPassword } from '../services/password-reset.service.js';
@@ -503,6 +504,42 @@ router.get('/resource-history', async (req: Request, res: Response) => {
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to load usage history' });
   }
+});
+
+// ─── POST /api/admin/broadcast ────────────────────────────────
+// Email a maintenance / downtime / general announcement to every user. Sent
+// best-effort per recipient; returns a structured 200 result (not a 5xx an
+// upstream proxy could swallow) so the admin sees exactly how many were reached.
+
+const BroadcastSchema = z.object({
+  subject: z.string().trim().min(1).max(200),
+  message: z.string().trim().min(1).max(5000),
+});
+
+router.post('/broadcast', async (req: Request, res: Response) => {
+  const parsed = BroadcastSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Enter a subject and a message.' });
+    return;
+  }
+  if (!(await isMailConfigured())) {
+    res.status(400).json({ error: 'SMTP is not configured — set up email in Settings first.' });
+    return;
+  }
+
+  const users = await prisma.user.findMany({ select: { email: true } });
+  const mail = announcementEmail(parsed.data.subject, parsed.data.message);
+  const results = await Promise.allSettled(users.map((u) => sendMail({ to: u.email, ...mail })));
+  const sent = results.filter((r) => r.status === 'fulfilled').length;
+  const failed = results.length - sent;
+
+  await recordAudit({
+    action: 'admin.broadcast',
+    actor: (req as AuthRequest).user,
+    detail: `"${parsed.data.subject}" → ${sent}/${results.length} delivered`,
+    req,
+  });
+  res.json({ ok: failed === 0, sent, failed, total: results.length });
 });
 
 // ─── Updates ──────────────────────────────────────────────────

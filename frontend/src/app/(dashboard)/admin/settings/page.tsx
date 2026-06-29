@@ -32,6 +32,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { BroadcastCard } from "@/components/admin/broadcast-card";
 
 // Sentinel for "let the backend auto-pick the first backup-capable storage".
 const BACKUP_AUTO = "__auto__";
@@ -988,6 +989,8 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      <BroadcastCard />
     </div>
   );
 }
