@@ -380,7 +380,56 @@ applies DB migrations on boot (`docker-entrypoint.sh`). **Back up the DB first**
 
 ---
 
-## 14. Troubleshooting
+## 14. Rack kiosk mode (touch panel)
+
+ProxMate has a full-screen, touch-friendly **kiosk** view designed for a small panel mounted
+on/near the cluster (e.g. a Raspberry Pi Touch Display 2 at 1280×720). It shows an at-a-glance
+**command center** — cluster CPU/memory/storage gauges, per-node health + quorum, VM
+running/stopped counts, trend sparklines, and a live activity ticker — plus a **VMs** tab with
+touch power controls.
+
+- **Enter from the app:** **Admin ▸ Monitor ▸ "Kiosk mode"**. The tap requests browser
+  fullscreen (a user gesture is required) and routes to the chromeless kiosk.
+- **Exit:** the **✕** in the top-right corner returns to the dashboard; the **⛶** button toggles
+  fullscreen.
+- **Admin-only:** the kiosk shows cluster-wide data, so it's gated to admins (and the underlying
+  `/api/admin/*` feeds are admin-gated server-side).
+- It keeps the panel awake via the **Screen Wake Lock API** and hides the cursor for a true
+  appliance feel.
+
+```mermaid
+flowchart LR
+  M["Admin ▸ Monitor<br/>'Kiosk mode' button"] -->|requestFullscreen + route| K["/kiosk<br/>(chromeless, admin-only)"]
+  K -->|"✕ exit"| M
+  P["Pi boots Chromium<br/>--kiosk https://HOST/kiosk"] --> K
+```
+
+### 14.1 Auto-launch on the Raspberry Pi (boot straight into kiosk)
+
+`/kiosk` is a stable deep link. For the panel to come up in fullscreen kiosk after a reboot, point
+Chromium at it with the `--kiosk` flag (browsers can't self-trigger OS-level fullscreen without a
+user gesture, so the flag does it). Example for a Pi running a desktop session — create
+`~/.config/autostart/proxmate-kiosk.desktop`:
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=ProxMate Kiosk
+Exec=chromium-browser --kiosk --noerrdialogs --disable-infobars --incognito https://proxmate.example.com/kiosk
+X-GNOME-Autostart-enabled=true
+```
+
+Notes:
+- The browser must already hold a logged-in **admin** session (sign in once on the panel; the
+  `proxmate_session` cookie persists). Treat the panel as a trusted, physically-secured device —
+  it stays signed in.
+- Use the externally reachable origin (the same one in `NEXT_PUBLIC_SITE_URL` / your tunnel host).
+- To keep the Pi display from blanking at the OS level too, disable DPMS/screen-blanking in your
+  Pi's display settings (the in-app Wake Lock covers the browser, but the OS may still blank).
+
+---
+
+## 15. Troubleshooting
 
 | Symptom | Likely cause / fix |
 |---|---|
