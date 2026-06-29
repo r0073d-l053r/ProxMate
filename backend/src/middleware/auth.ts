@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { verifySession } from '../services/auth.service.js';
+import { isApiToken, verifyApiToken } from '../services/api-token.service.js';
 import { SESSION_COOKIE } from '../lib/cookies.js';
 import type { AuthRequest } from '../types/index.js';
 
@@ -11,6 +12,22 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   const cookieToken = req.cookies?.[SESSION_COOKIE] as string | undefined;
   const header = req.headers.authorization;
   const bearer = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
+
+  // A `pm_…` Bearer is a personal API token (programmatic access), resolved
+  // separately from session JWTs. API clients send no cookie, so no CSRF surface.
+  if (!cookieToken && isApiToken(bearer)) {
+    const user = await verifyApiToken(bearer!);
+    if (!user) {
+      res.status(401).json({ error: 'Invalid or expired API token' });
+      return;
+    }
+    const ar = req as AuthRequest;
+    ar.user = user;
+    ar.sessionToken = bearer;
+    next();
+    return;
+  }
+
   const token = cookieToken ?? bearer;
 
   if (!token) {

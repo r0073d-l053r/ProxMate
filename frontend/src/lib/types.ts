@@ -135,6 +135,24 @@ export interface SshKey {
   lastUsedAt: string | null;
 }
 
+/** A personal API token's non-secret metadata (for listing). */
+export interface ApiTokenInfo {
+  id: string;
+  name: string;
+  prefix: string;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+/** Returned once when a token is created — `token` is the raw secret, shown one time. */
+export interface CreatedApiToken {
+  id: string;
+  name: string;
+  token: string;
+  createdAt: string;
+}
+
 export interface Invite {
   id: string;
   token: string;

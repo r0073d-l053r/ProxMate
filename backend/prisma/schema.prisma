@@ -41,6 +41,25 @@ model User {
   usedInvite     InviteToken?   @relation("UsedInvite")
   sessions       Session[]
   sshKeys        SshKey[]
+  apiTokens      ApiToken[]
+}
+
+// A personal API token for programmatic access (CLI / Terraform / scripts). The raw
+// token (prefix `pm_…`) is shown once at creation; only its SHA-256 hash is stored.
+// A request bearing it acts as the owning user.
+model ApiToken {
+  id         String    @id @default(cuid())
+  userId     String
+  name       String                     // user-friendly label, e.g. "ci"
+  tokenHash  String    @unique          // SHA-256 of the raw token
+  prefix     String                     // first chars of the raw token, for display
+  lastUsedAt DateTime?
+  expiresAt  DateTime?                  // null = never expires
+  createdAt  DateTime  @default(now())
+
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 // A reusable SSH public key saved to a user's profile, so cloud-init deploys can
