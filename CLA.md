@@ -1,6 +1,6 @@
 # ProxMate Contributor License Agreement (Individual)
 
-> **Draft template — review by a lawyer before relying on it for real
+> **Draft template — needs reviewing by a lawyer before relying on it for real
 > contributions.** This CLA lets the project accept your contribution into the
 > open-source Community Edition *and* into the commercial EDU Edition. Until it is
 > finalized, ProxMate is **not** accepting external code contributions (see
