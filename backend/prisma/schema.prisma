@@ -42,6 +42,7 @@ model User {
   sessions       Session[]
   sshKeys        SshKey[]
   apiTokens      ApiToken[]
+  vmShares       VmShare[]
 }
 
 // A personal API token for programmatic access (CLI / Terraform / scripts). The raw
@@ -147,9 +148,27 @@ model VirtualMachine {
 
   user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   matestates    MateState[]
+  shares        VmShare[]
 
   @@index([userId])
   @@index([proxmoxVmId])
+}
+
+// Grants another tenant access to a VM they don't own. `co-owner` = full lifecycle
+// (start/stop/resize/backup…) except delete + managing shares; `read-only` = view
+// only (details, live stats, activity). The owner/admins always retain full control.
+model VmShare {
+  id        String   @id @default(cuid())
+  vmId      String
+  userId    String                  // the user the VM is shared WITH
+  role      String   @default("read-only") // "co-owner" | "read-only"
+  createdAt DateTime @default(now())
+
+  vm        VirtualMachine @relation(fields: [vmId], references: [id], onDelete: Cascade)
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([vmId, userId])
+  @@index([userId])
 }
 
 // A point-in-time backup of a VM (Proxmox vzdump). "MateState" — never "droplet".
@@ -193,6 +212,22 @@ model AuditLog {
   detail      String?                       // short human-readable summary
   ip          String?                       // client IP (honors trust proxy)
   createdAt   DateTime  @default(now())
+
+  @@index([createdAt])
+  @@index([userId])
+}
+
+// Periodic per-VM usage sample for the per-tenant resource-history view. Like
+// AuditLog, userId/vmId are denormalized (no FK cascade) so history outlives a
+// deleted VM/user. Pruned to a rolling window by the scheduler.
+model ResourceSample {
+  id        String   @id @default(cuid())
+  userId    String                  // owner of the sampled VM
+  vmId      String                  // ProxMate VM id
+  cpu       Float                   // 0..1 fraction of allocated vCPUs
+  mem       Float                   // used memory, bytes
+  maxmem    Float                   // allocated memory, bytes
+  createdAt DateTime @default(now())
 
   @@index([createdAt])
   @@index([userId])

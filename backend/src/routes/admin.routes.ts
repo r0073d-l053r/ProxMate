@@ -16,6 +16,7 @@ import {
   pveMessage,
 } from '../services/proxmox.service.js';
 import { listAudit, recordAudit } from '../services/audit.service.js';
+import { getUsageByUser } from '../services/resource-history.service.js';
 import {
   checkForUpdate,
   getUpdateStatus,
@@ -49,20 +50,21 @@ router.get('/audit', async (req: Request, res: Response) => {
 // Returns current config (never the Proxmox token secret).
 
 router.get('/settings', async (_req: Request, res: Response) => {
-  const [host, tokenId, verifySsl, storage, bridge, isoStorage] = await Promise.all([
+  const [host, tokenId, verifySsl, storage, bridge, isoStorage, backupStorage] = await Promise.all([
     getConfig('proxmox_host'),
     getConfig('proxmox_token_id'),
     getConfig('proxmox_verify_ssl'),
     getConfig('default_storage'),
     getConfig('default_bridge'),
     getConfig('iso_storage'),
+    getConfig('backup_storage'),
   ]);
 
   const mail = await getMailConfig();
   const ssoCfg = await sso.getSsoConfig();
   res.json({
     proxmox: { host, tokenId, verifySsl: verifySsl === 'true', hasSecret: !!(await getConfig('proxmox_token_secret')) },
-    defaults: { storage, bridge, isoStorage },
+    defaults: { storage, bridge, isoStorage, backupStorage },
     smtp: mail
       ? { configured: true, host: mail.host, port: mail.port, secure: mail.secure, user: mail.user ?? '', from: mail.from, hasPass: !!mail.pass }
       : { configured: false },
@@ -261,6 +263,8 @@ const DefaultsSchema = z.object({
   storage: z.string().min(1),
   bridge: z.string().min(1),
   isoStorage: z.string().min(1),
+  // Empty string = clear the override and let the backend auto-pick.
+  backupStorage: z.string().optional(),
 });
 
 router.put('/settings/defaults', async (req: Request, res: Response) => {
@@ -485,6 +489,19 @@ router.get('/live-stats', async (_req: Request, res: Response) => {
     res.json(data);
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── GET /api/admin/resource-history ──────────────────────────
+// Per-tenant usage aggregates over the last `days` (default 7) — "who consumed
+// what last week". Sampled every 5 min by the scheduler; complements live-stats.
+
+router.get('/resource-history', async (req: Request, res: Response) => {
+  const days = Math.min(Math.max(Number(req.query['days']) || 7, 1), 90);
+  try {
+    res.json({ days, usage: await getUsageByUser(days) });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to load usage history' });
   }
 });
 

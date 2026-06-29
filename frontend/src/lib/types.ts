@@ -45,6 +45,9 @@ export interface EnrollmentResponse {
   enrollmentToken: string;
 }
 
+/** The caller's access to a VM: their own, admin, or a share grant. */
+export type VmAccess = "owner" | "admin" | "co-owner" | "read-only";
+
 export interface VirtualMachine {
   id: string;
   userId: string;
@@ -61,6 +64,15 @@ export interface VirtualMachine {
   tags: string | null;
   createdAt: string;
   updatedAt: string;
+  // Present on list/detail responses: how the current user may use this VM.
+  access?: VmAccess;
+}
+
+export interface VmShare {
+  id: string;
+  role: "co-owner" | "read-only";
+  createdAt: string;
+  user: { id: string; email: string; displayName: string };
 }
 
 export interface VmLiveStatus {
@@ -226,10 +238,26 @@ export interface ProxmoxIso {
   size?: number;
 }
 
+export interface UserUsage {
+  userId: string;
+  email: string;
+  displayName: string;
+  samples: number;
+  avgCpuPct: number;
+  avgMemBytes: number;
+  peakMemBytes: number;
+}
+
+export interface ResourceHistory {
+  days: number;
+  usage: UserUsage[];
+}
+
 export interface ProxmoxResources {
   storages: Array<{ name: string; type: string }>;
   bridges: Array<{ name: string }>;
   isoStorages: Array<{ name: string; type: string }>;
+  backupStorages: Array<{ name: string; type: string }>;
 }
 
 export interface UpdateCheck {
@@ -255,7 +283,7 @@ export interface UpdateStatus {
 
 export interface AdminSettings {
   proxmox: { host: string | null; tokenId: string | null; verifySsl: boolean; hasSecret: boolean };
-  defaults: { storage: string | null; bridge: string | null; isoStorage: string | null };
+  defaults: { storage: string | null; bridge: string | null; isoStorage: string | null; backupStorage: string | null };
   smtp:
     | { configured: false }
     | { configured: true; host: string; port: number; secure: boolean; user: string; from: string; hasPass: boolean };
