@@ -230,6 +230,7 @@ cluster-firewall step, least-privilege API tokens, and a production hardening ch
 - **[Tailscale for SSH](./docs/tailscale-ssh.md)** — tenants: SSH into your VM from anywhere, no public IP needed.
 - **[Cloudflare Tunnels](./docs/cloudflare-tunnels.md)** — tenants: publish a public website from your VM without forwarding any port.
 - **[Admin guide](./docs/admin-guide.md)** — owners: cluster setup, firewall enforcement, adding cloud images, authentication settings (SMTP, MFA, OIDC SSO), and shipping a tenant-ready Linux template.
+- **[REST API & scaling](./docs/api.md)** — personal API tokens, the OpenAPI spec (`/api/openapi.json`), `/metrics`, and running on PostgreSQL.
 
 All of these are also surfaced inside the app under **Help & Docs** in the sidebar.
 
