@@ -395,11 +395,16 @@ router.put('/:id/backup-policy', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
     return;
   }
-  const { backupCron, backupKeep } = parsed.data;
+  const { backupCron } = parsed.data;
   if (backupCron !== null && !isValidCron(backupCron)) {
     res.status(400).json({ error: 'Invalid backup schedule.' });
     return;
   }
+
+  // Backup *redundancy* (how many MateStates to keep) is an admin-only setting.
+  // Regular users always fall back to the cluster default (MATESTATE_RETENTION = 2),
+  // so a tenant can never keep more than two redundant backups of a VM.
+  const backupKeep = user.role === 'admin' ? parsed.data.backupKeep : null;
 
   const updated = await setBackupPolicy(vm, { backupCron, backupKeep });
   await recordAudit({
