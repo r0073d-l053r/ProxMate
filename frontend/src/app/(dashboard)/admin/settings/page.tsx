@@ -334,8 +334,17 @@ export default function SettingsPage() {
   async function testNotify() {
     setTestingNotify(true);
     try {
-      const res = await api.post<{ channels: string[] }>("/admin/settings/notifications/test");
-      toast.success(`Test sent via ${res.data.channels.join(" + ") || "no channel"}.`);
+      const res = await api.post<{ ok: boolean; results: { channel: string; ok: boolean; error?: string }[] }>(
+        "/admin/settings/notifications/test",
+      );
+      const { ok, results } = res.data;
+      const reached = results.filter((c) => c.ok).map((c) => c.channel);
+      if (ok) {
+        toast.success(`Test sent via ${reached.join(" + ")}.`);
+      } else {
+        const failed = results.filter((c) => !c.ok).map((c) => `${c.channel}: ${c.error ?? "failed"}`);
+        toast.error(`${failed.join("; ")}${reached.length ? ` — ${reached.join(" + ")} worked` : ""}`);
+      }
     } catch (err) {
       toast.error(apiError(err));
     } finally {
