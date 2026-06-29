@@ -14,8 +14,14 @@ export function listAll(): Promise<Template[]> {
 }
 
 /** Proxmox templates that exist on the cluster but aren't registered in the store yet. */
-export async function discover(): Promise<Array<{ vmid: number; node: string; name: string; diskGb: number }>> {
-  const [pveTemplates, registered] = await Promise.all([pve.getTemplates(), prisma.template.findMany()]);
+export async function discover(): Promise<
+  Array<{ vmid: number; node: string; name: string; diskGb: number; arch: pve.Arch }>
+> {
+  const [pveTemplates, registered, archMap] = await Promise.all([
+    pve.getTemplates(),
+    prisma.template.findMany(),
+    pve.getNodeArchMap(),
+  ]);
   const known = new Set(registered.map((t) => t.proxmoxVmId));
   return pveTemplates
     .filter((t) => !known.has(t.vmid))
@@ -24,6 +30,9 @@ export async function discover(): Promise<Array<{ vmid: number; node: string; na
       node: t.node,
       name: t.name,
       diskGb: t.maxdisk ? Math.round(t.maxdisk / 1024 / 1024 / 1024) : 0,
+      // A template on an arm64 node is an arm64 template (cross-arch templates
+      // aren't useful); fall back to amd64 when the node's arch is undetectable.
+      arch: archMap.get(t.node) === 'arm64' ? 'arm64' : 'amd64',
     }));
 }
 
@@ -36,6 +45,7 @@ export interface RegisterTemplateInput {
   diskGb?: number;
   notes?: string;
   cloudInit?: boolean;
+  arch?: pve.Arch;
 }
 
 /** Register a Proxmox template into the store (or update an existing registration). */
@@ -47,14 +57,19 @@ export async function register(input: RegisterTemplateInput): Promise<Template> 
     if (found?.maxdisk) diskGb = Math.round(found.maxdisk / 1024 / 1024 / 1024);
   }
 
-  // Auto-detect cloud-init capability when the caller didn't assert it, so
-  // host-made cloud-init templates published via "Add from cluster" are flagged.
+  // Auto-detect cloud-init capability and guest arch when the caller didn't
+  // assert them (host-made templates published via "Add from cluster"). A single
+  // config read covers both.
   let cloudInit = input.cloudInit;
-  if (cloudInit === undefined) {
+  let arch: pve.Arch | undefined = input.arch;
+  if (cloudInit === undefined || arch === undefined) {
     try {
-      cloudInit = pve.isCloudInitTemplate(await pve.getVmConfig(input.node, input.proxmoxVmId));
+      const cfg = await pve.getVmConfig(input.node, input.proxmoxVmId);
+      if (cloudInit === undefined) cloudInit = pve.isCloudInitTemplate(cfg);
+      if (arch === undefined) arch = (cfg as { arch?: string }).arch === 'aarch64' ? 'arm64' : 'amd64';
     } catch {
-      cloudInit = false;
+      if (cloudInit === undefined) cloudInit = false;
+      if (arch === undefined) arch = 'amd64';
     }
   }
 
@@ -64,6 +79,7 @@ export async function register(input: RegisterTemplateInput): Promise<Template> 
       name: input.name,
       description: input.description ?? null,
       os: input.os ?? null,
+      arch: arch ?? null,
       proxmoxNode: input.node,
       diskGb,
       cloudInit,
@@ -76,6 +92,7 @@ export async function register(input: RegisterTemplateInput): Promise<Template> 
       name: input.name,
       description: input.description ?? null,
       os: input.os ?? null,
+      arch: arch ?? null,
       proxmoxVmId: input.proxmoxVmId,
       proxmoxNode: input.node,
       diskGb,
@@ -293,7 +310,46 @@ export const CURATED_IMAGES: CuratedImage[] = [
     os: 'Arch Linux',
     defaultUser: 'arch',
   },
+  // ─── ARM64 (aarch64) — for ARM nodes (e.g. Raspberry Pi running the Proxmox ARM port) ───
+  {
+    id: 'debian-13-arm64',
+    label: 'Debian 13 (Trixie) · ARM64',
+    url: 'https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-arm64.qcow2',
+    os: 'Debian 13',
+    defaultUser: 'debian',
+  },
+  {
+    id: 'debian-12-arm64',
+    label: 'Debian 12 (Bookworm) · ARM64',
+    url: 'https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-arm64.qcow2',
+    os: 'Debian 12',
+    defaultUser: 'debian',
+  },
+  {
+    id: 'ubuntu-24.04-arm64',
+    label: 'Ubuntu 24.04 LTS (Noble) · ARM64',
+    url: 'https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img',
+    os: 'Ubuntu 24.04',
+    defaultUser: 'ubuntu',
+  },
+  {
+    id: 'ubuntu-22.04-arm64',
+    label: 'Ubuntu 22.04 LTS (Jammy) · ARM64',
+    url: 'https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-arm64.img',
+    os: 'Ubuntu 22.04',
+    defaultUser: 'ubuntu',
+  },
 ];
+
+/** Infer guest arch from a cloud-image filename (they encode amd64/arm64/aarch64). */
+export function archFromImageUrl(url: string): pve.Arch {
+  return /(?:arm64|aarch64)/i.test(url) ? 'arm64' : 'amd64';
+}
+
+/** Curated images with their arch resolved from the URL (for the admin picker). */
+export function curatedImagesWithArch(): Array<CuratedImage & { arch: pve.Arch }> {
+  return CURATED_IMAGES.map((i) => ({ ...i, arch: archFromImageUrl(i.url) }));
+}
 
 export interface AddCloudImageInput {
   name: string;
@@ -301,6 +357,7 @@ export interface AddCloudImageInput {
   os?: string;
   description?: string;
   node?: string;
+  arch?: pve.Arch;
 }
 
 /**
@@ -317,9 +374,14 @@ export async function addCloudImage(input: AddCloudImageInput): Promise<Template
     throw new Error('Server defaults are not configured — finish setup first');
   }
 
-  // Place on a node that has the disk pool (default = best capacity). Linked
-  // clones of the template will stay on this node, like every other template.
-  const node = input.node ?? (await pve.pickBestNode({ cpu: 1, ramMb: 1024, storageGb: 4 }, diskStorage, client));
+  // Arch comes from the image filename unless the caller pinned it; the build
+  // node (where the template — and all its clones — will live) must match it.
+  const arch = input.arch ?? archFromImageUrl(input.imageUrl);
+
+  // Place on a node that has the disk pool (default = best capacity) AND the
+  // matching CPU arch. Linked clones of the template stay on this node.
+  const node =
+    input.node ?? (await pve.pickBestNode({ cpu: 1, ramMb: 1024, storageGb: 4 }, diskStorage, client, undefined, arch));
 
   // Need an import-capable storage on that node to land the downloaded image.
   const importStorages = await pve.getImportStorages(node, client);
@@ -357,6 +419,7 @@ export async function addCloudImage(input: AddCloudImageInput): Promise<Template
       os: input.os,
       diskGb,
       cloudInit: true,
+      arch,
     });
     await pve.deleteStorageVolume(node, importFrom, client).catch(() => {}); // image no longer needed
     return tpl;

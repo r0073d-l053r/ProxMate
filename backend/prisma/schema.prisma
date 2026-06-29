@@ -175,6 +175,7 @@ model Template {
   name          String
   description   String?
   os            String?                       // display label, e.g. "Debian 12"
+  arch          String?                       // guest CPU arch: "amd64" | "arm64" (null = legacy/unknown)
   proxmoxVmId   Int                           // the Proxmox template's VMID
   proxmoxNode   String                        // node the template lives on
   diskGb        Int       @default(0)         // base disk size = minimum deployable disk
