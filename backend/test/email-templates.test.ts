@@ -4,6 +4,7 @@ import {
   notificationEmail,
   accountLockedEmail,
   inviteEmail,
+  announcementEmail,
   type RenderedEmail,
 } from '../src/lib/email-templates.js';
 
@@ -49,6 +50,7 @@ const SAMPLES: Array<[string, RenderedEmail]> = [
       inviterName: 'Admin',
     }),
   ],
+  ['announcement', announcementEmail('Scheduled maintenance', 'Down 10–11pm ET tonight.')],
 ];
 
 describe('email-templates — shared branding', () => {
@@ -107,6 +109,22 @@ describe('accountLockedEmail', () => {
       lockMinutes: 15,
     });
     expect(email.html).not.toContain('Source IP');
+  });
+});
+
+describe('announcementEmail', () => {
+  it('uses the admin subject and preserves the message, branded', () => {
+    const email = announcementEmail('Maintenance tonight', 'VMs keep running.\nDashboard offline 10–11pm.');
+    expect(email.subject).toBe('Maintenance tonight');
+    expect(email.html).toContain('Maintenance tonight');
+    expect(email.html).toContain('Dashboard offline 10–11pm.');
+    expect(email.text).toContain('VMs keep running.');
+  });
+
+  it('escapes HTML in the admin-supplied message', () => {
+    const email = announcementEmail('Heads up', '<b>bold</b> & <script>x</script>');
+    expect(email.html).not.toContain('<script>x</script>');
+    expect(email.html).toContain('&lt;script&gt;');
   });
 });
 

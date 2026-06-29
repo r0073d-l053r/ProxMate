@@ -275,3 +275,22 @@ export function inviteEmail(opts: {
 
   return { subject, text, html: wrapEmail("You're invited to ProxMate — accept your invite link inside.", bodyRows) };
 }
+
+/**
+ * Branded admin broadcast — a maintenance/downtime/general announcement sent to
+ * every user. The admin controls the subject and free-text message (preserved
+ * line breaks, HTML-escaped).
+ */
+export function announcementEmail(subject: string, message: string): RenderedEmail {
+  const text = `${subject}\n\n${message}`;
+  const bodyRows =
+    h1(escapeHtml(subject)) +
+    `<div style="font-family:${FONT}; font-size:15px; line-height:1.6; color:${BODY}; white-space:pre-wrap;">${escapeHtml(message)}</div>` +
+    p("You're receiving this because you have a ProxMate account on this server.", {
+      color: MUTED,
+      size: 13,
+      mt: 24,
+      mb: 0,
+    });
+  return { subject, text, html: wrapEmail(subject, bodyRows) };
+}
