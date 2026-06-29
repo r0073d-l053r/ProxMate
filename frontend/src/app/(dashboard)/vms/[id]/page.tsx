@@ -51,6 +51,7 @@ import { VmStatusBadge } from "@/components/vm/vm-status-badge";
 import { MateStatesPanel } from "@/components/vm/matestates-panel";
 import { SnapshotsPanel } from "@/components/vm/snapshots-panel";
 import { PowerSchedulePanel } from "@/components/vm/power-schedule-panel";
+import { BackupPolicyPanel } from "@/components/vm/backup-policy-panel";
 import { useAuthStore } from "@/lib/auth-store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -296,6 +297,7 @@ const ACTIVITY_META: Record<string, { label: string; dot: string }> = {
   "snapshot.rollback": { label: "Rolled back to snapshot", dot: "bg-amber-500" },
   "snapshot.delete": { label: "Snapshot deleted", dot: "bg-muted-foreground" },
   "vm.schedule": { label: "Schedule updated", dot: "bg-muted-foreground" },
+  "vm.backup_policy": { label: "Backup policy updated", dot: "bg-muted-foreground" },
 };
 
 /**
@@ -1143,6 +1145,8 @@ export default function VmDetailPage() {
       <SnapshotsPanel vmId={vm.id} vmName={vm.name} />
 
       <MateStatesPanel vmId={vm.id} vmName={vm.name} />
+
+      <BackupPolicyPanel vmId={vm.id} />
 
       <Card className="mt-4">
         <CardHeader>
