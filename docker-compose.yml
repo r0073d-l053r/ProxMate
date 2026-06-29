@@ -64,6 +64,14 @@ services:
       # host updater (deploy/update.sh + the systemd path unit) is installed.
       # When enabled, also mount the control dir below. See DEPLOYMENT.md.
       SELF_UPDATE_ENABLED: ${SELF_UPDATE_ENABLED:-false}
+    # Report healthy only once /api/health passes (DB reachable + migrations run),
+    # so the frontend can wait for a genuinely-ready backend (see depends_on below).
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
     volumes:
       - proxmate-data:/data
       # Uncomment to enable one-click updates (the host updater watches this dir):
@@ -97,7 +105,10 @@ services:
       # Blank = a safe default ('self' https: wss:). See frontend/src/proxy.ts.
       CSP_CONNECT_SRC: ${CSP_CONNECT_SRC:-}
     depends_on:
-      - backend
+      backend:
+        # Wait for the backend to be healthy (migrated + DB up), not just started,
+        # so the UI never comes up against an unmigrated/booting API.
+        condition: service_healthy
     ports:
       - "${BIND_ADDR:-0.0.0.0}:${FRONTEND_PORT:-3000}:3000"
 

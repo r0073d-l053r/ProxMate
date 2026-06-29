@@ -23,16 +23,20 @@ rough priority bands, not commitments. Have an idea? Open a
   (`PUT /api/vms/:id/backup-policy`); VMs without one stay on the cluster-wide weekly
   default. _Done._
 - **Tags / projects + bulk actions** ✅ — per-VM tags with a tag filter, plus multi-select
-  bulk start/stop/restart on the VM list. (Bulk *delete* intentionally omitted — destroying
-  several VMs at once is too easy to fumble, so deletion stays a deliberate per-VM action.) _Done._
+  bulk start/stop/restart/**delete** on the VM list. Bulk delete is guarded behind a typed
+  confirmation (you must type the exact count of selected VMs) so a destructive mass-action can't
+  happen on a stray click. _Done (delete restored in v0.2.7)._
 
 ## Tier 2 — Notifications & sharing
 
 - **Event notifications** ✅ — admin-configured webhook (Discord / Slack / Mattermost /
   generic) + optional email alerts for backup failed, VM provisioning error, and account
   lockout. Per-event toggles and a "send test" button in Admin → Settings. _Done._
-- **Share a VM** with another tenant — co-owner or read-only console access. _(Not yet
-  built — deferred.)_
+- **Share a VM** with another tenant ✅ — grant **co-owner** (full lifecycle: start/stop/resize/
+  back up) or **read-only** (view details, live stats, activity) access by email, managed from the
+  VM detail page (`/api/vms/:id/shares`). The API enforces every action; shared VMs show in the
+  recipient's list with a role badge. _Done._ _(Read-only access to the **interactive console** —
+  input-blocked viewing — is the remaining follow-up; co-owners already get full console.)_
 
 ## Tier 3 — API & scale
 

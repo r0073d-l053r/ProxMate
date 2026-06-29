@@ -27,6 +27,7 @@ import {
   deleteMateState,
   setBackupPolicy,
 } from '../services/matestate.service.js';
+import { listShares, addShare, removeShare, SHARE_ROLES, ShareError } from '../services/vm-share.service.js';
 import {
   QuotaError,
   ResizeError,
@@ -38,6 +39,10 @@ import {
   refreshVmIps,
   getLiveUsage,
   getOwnedVm,
+  getViewableVm,
+  getWritableVm,
+  resolveVmAccess,
+  annotateAccess,
   getVmWithLiveStatus,
   updateVm,
   setPowerSchedule,
@@ -60,7 +65,9 @@ router.use(enforceMfaSetup);
 
 router.get('/', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vms = await refreshVmIps(await listVms(user));
+  // Tag each VM with the caller's access (owner/admin/co-owner/read-only) so the
+  // UI can badge shared VMs and gate write actions; the API enforces it regardless.
+  const vms = await annotateAccess(await refreshVmIps(await listVms(user)), user);
   res.json(vms);
 });
 
@@ -174,11 +181,11 @@ router.post('/bulk', async (req: Request, res: Response) => {
 
 router.get('/:id', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getOwnedVm(req.params['id'] as string, user);
-  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  const resolved = await resolveVmAccess(req.params['id'] as string, user);
+  if (!resolved) { res.status(404).json({ error: 'VM not found' }); return; }
 
-  const withStatus = await getVmWithLiveStatus(vm);
-  res.json(withStatus);
+  const withStatus = await getVmWithLiveStatus(resolved.vm);
+  res.json({ ...withStatus, access: resolved.access });
 });
 
 // ─── GET /api/vms/:id/metrics ─────────────────────────────────
@@ -189,7 +196,7 @@ const RRD_TIMEFRAMES = ['hour', 'day', 'week', 'month', 'year'] as const;
 
 router.get('/:id/metrics', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  let vm = await getOwnedVm(req.params['id'] as string, user);
+  let vm = await getViewableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   const tfParam = req.query['timeframe'];
@@ -212,7 +219,7 @@ router.get('/:id/metrics', async (req: Request, res: Response) => {
 
 router.get('/:id/activity', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getOwnedVm(req.params['id'] as string, user);
+  const vm = await getViewableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   const entries = await listAuditForTarget('vm', vm.id, 20);
   // Project to a safe subset for the owner-facing feed — never expose the actor's
@@ -253,7 +260,7 @@ const UpdateVmSchema = z.object({
 
 router.patch('/:id', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  let vm = await getOwnedVm(req.params['id'] as string, user);
+  let vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   const parsed = UpdateVmSchema.safeParse(req.body);
@@ -331,7 +338,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
 
 router.get('/:id/schedule', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getOwnedVm(req.params['id'] as string, user);
+  const vm = await getViewableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   res.json({ startCron: vm.startCron, stopCron: vm.stopCron });
 });
@@ -343,7 +350,7 @@ const ScheduleSchema = z.object({
 
 router.put('/:id/schedule', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getOwnedVm(req.params['id'] as string, user);
+  const vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   const parsed = ScheduleSchema.safeParse(req.body);
@@ -373,7 +380,7 @@ router.put('/:id/schedule', async (req: Request, res: Response) => {
 
 router.get('/:id/backup-policy', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getOwnedVm(req.params['id'] as string, user);
+  const vm = await getViewableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   res.json({ backupCron: vm.backupCron, backupKeep: vm.backupKeep });
 });
@@ -387,7 +394,7 @@ const BackupPolicySchema = z.object({
 
 router.put('/:id/backup-policy', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getOwnedVm(req.params['id'] as string, user);
+  const vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   const parsed = BackupPolicySchema.safeParse(req.body);
@@ -414,6 +421,51 @@ router.put('/:id/backup-policy', async (req: Request, res: Response) => {
   res.json({ backupCron: updated.backupCron, backupKeep: updated.backupKeep });
 });
 
+// ─── VM sharing (owner/admin only) ────────────────────────────
+// Grant another tenant co-owner (operate) or read-only (view) access to a VM.
+
+router.get('/:id/shares', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getOwnedVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  res.json(await listShares(vm.id));
+});
+
+const AddShareSchema = z.object({
+  email: z.string().trim().email().max(254),
+  role: z.enum(SHARE_ROLES),
+});
+
+router.post('/:id/shares', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getOwnedVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+
+  const parsed = AddShareSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Enter a valid email and role.' }); return; }
+  try {
+    const share = await addShare(vm, parsed.data.email, parsed.data.role);
+    await recordAudit({
+      action: 'vm.share', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `${parsed.data.email} as ${parsed.data.role}`, req,
+    });
+    res.status(201).json(share);
+  } catch (err) {
+    if (err instanceof ShareError) { res.status(err.status).json({ error: err.message }); return; }
+    res.status(500).json({ error: 'Failed to share the VM' });
+  }
+});
+
+router.delete('/:id/shares/:shareId', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getOwnedVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  const ok = await removeShare(vm.id, req.params['shareId'] as string);
+  if (!ok) { res.status(404).json({ error: 'Share not found' }); return; }
+  await recordAudit({ action: 'vm.unshare', actor: user, targetType: 'vm', targetId: vm.id, req });
+  res.json({ success: true });
+});
+
 // ─── DELETE /api/vms/:id ──────────────────────────────────────
 
 router.delete('/:id', async (req: Request, res: Response) => {
@@ -437,7 +489,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
 
 router.post('/:id/start', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getOwnedVm(req.params['id'] as string, user);
+  const vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   try {
@@ -451,7 +503,7 @@ router.post('/:id/start', async (req: Request, res: Response) => {
 
 router.post('/:id/stop', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getOwnedVm(req.params['id'] as string, user);
+  const vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   const force = req.query['force'] === 'true';
@@ -469,7 +521,7 @@ router.post('/:id/stop', async (req: Request, res: Response) => {
 
 router.post('/:id/restart', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getOwnedVm(req.params['id'] as string, user);
+  const vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   try {
@@ -515,7 +567,7 @@ const RebuildSchema = z
 
 router.post('/:id/rebuild', async (req: Request, res: Response) => {
   const authUser = (req as AuthRequest).user;
-  const vm = await getOwnedVm(req.params['id'] as string, authUser);
+  const vm = await getWritableVm(req.params['id'] as string, authUser);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   const parsed = RebuildSchema.safeParse(req.body);
@@ -596,14 +648,14 @@ router.post('/:id/convert-template', async (req: Request, res: Response) => {
 
 router.get('/:id/matestates', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getOwnedVm(req.params['id'] as string, user);
+  const vm = await getViewableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   res.json(await listForVm(vm.id));
 });
 
 router.post('/:id/matestates', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getOwnedVm(req.params['id'] as string, user);
+  const vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   try {
     const ms = await createMateState(vm, 'manual');
@@ -619,7 +671,7 @@ router.post('/:id/matestates', async (req: Request, res: Response) => {
 
 router.post('/:id/matestates/:msid/restore', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getOwnedVm(req.params['id'] as string, user);
+  const vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   const ms = await prisma.mateState.findUnique({ where: { id: req.params['msid'] as string } });
   if (!ms || ms.vmId !== vm.id) { res.status(404).json({ error: 'MateState not found' }); return; }
@@ -637,7 +689,7 @@ router.post('/:id/matestates/:msid/restore', async (req: Request, res: Response)
 
 router.delete('/:id/matestates/:msid', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getOwnedVm(req.params['id'] as string, user);
+  const vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   const ms = await prisma.mateState.findUnique({ where: { id: req.params['msid'] as string } });
   if (!ms || ms.vmId !== vm.id) { res.status(404).json({ error: 'MateState not found' }); return; }
@@ -674,7 +726,7 @@ const CreateSnapshotSchema = z.object({
 
 router.get('/:id/snapshots', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  let vm = await getOwnedVm(req.params['id'] as string, user);
+  let vm = await getViewableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   try {
     vm = await syncVmNode(vm);
@@ -686,7 +738,7 @@ router.get('/:id/snapshots', async (req: Request, res: Response) => {
 
 router.post('/:id/snapshots', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  let vm = await getOwnedVm(req.params['id'] as string, user);
+  let vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   const parsed = CreateSnapshotSchema.safeParse(req.body);
@@ -724,7 +776,7 @@ router.post('/:id/snapshots/:name/rollback', async (req: Request, res: Response)
   const user = (req as AuthRequest).user;
   const name = req.params['name'] as string;
   if (!SNAP_NAME_RE.test(name)) { res.status(400).json({ error: 'Invalid snapshot name' }); return; }
-  let vm = await getOwnedVm(req.params['id'] as string, user);
+  let vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   try {
     vm = await syncVmNode(vm);
@@ -744,7 +796,7 @@ router.delete('/:id/snapshots/:name', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const name = req.params['name'] as string;
   if (!SNAP_NAME_RE.test(name)) { res.status(400).json({ error: 'Invalid snapshot name' }); return; }
-  let vm = await getOwnedVm(req.params['id'] as string, user);
+  let vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   try {
     vm = await syncVmNode(vm);
@@ -765,7 +817,7 @@ router.delete('/:id/snapshots/:name', async (req: Request, res: Response) => {
 
 router.post('/:id/console', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  let vm = await getOwnedVm(req.params['id'] as string, user);
+  let vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   try {
@@ -783,7 +835,7 @@ router.post('/:id/console', async (req: Request, res: Response) => {
 
 router.post('/:id/serial', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  let vm = await getOwnedVm(req.params['id'] as string, user);
+  let vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   try {
