@@ -2,7 +2,7 @@ import type { Server } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { verifyToken } from '../services/auth.service.js';
 import { SESSION_COOKIE } from '../lib/cookies.js';
-import { getOwnedVm, syncVmNode } from '../services/vm.service.js';
+import { getWritableVm, syncVmNode } from '../services/vm.service.js';
 import { connectVncTarget, connectSerialTarget, relay } from '../services/vnc-proxy.service.js';
 
 const CONSOLE_PATH = /^\/api\/vms\/([^/]+)\/console$/;
@@ -67,7 +67,10 @@ export function setupConsoleWebSocket(server: Server): void {
         return;
       }
 
-      const vm = await getOwnedVm(vmId, user);
+      // Console operates the VM, so it requires write access: owner / admin /
+      // co-owner may connect; a read-only share is rejected here (the POST that
+      // mints the ticket uses the same gate, so the two paths stay consistent).
+      const vm = await getWritableVm(vmId, user);
       if (!vm || !vncticket || !port) {
         socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
         socket.destroy();
