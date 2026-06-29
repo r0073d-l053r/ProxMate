@@ -1,26 +1,20 @@
-import { randomBytes, pbkdf2Sync, createHash } from 'node:crypto';
+import { randomBytes, createHmac } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import type { AuthUser } from '../types/index.js';
 
 const PREFIX = 'pm_';
 const DISPLAY_PREFIX_LEN = 11; // `pm_` + 8 chars
-const PBKDF2_ITERATIONS = 100_000;
-
-/** Fixed, server-keyed salt — keeps the hash deterministic (so tokens stay O(1)
- *  lookup-able) while binding it to this server (a DB-only leak can't precompute). */
-function tokenSalt(): Buffer {
-  return createHash('sha256').update(`proxmate-apitoken:${process.env['ENCRYPTION_KEY'] ?? 'dev'}`).digest();
-}
 
 /**
- * Hash a token with PBKDF2-SHA256 and a fixed (server-keyed) salt. The token is a
- * 192-bit random secret, so a fast hash would be fine cryptographically, but a KDF
- * with a constant salt is both deterministic (required to look a token up by value —
- * a per-row random salt can't) and meets password-hash guidance. Real passwords are
- * hashed with bcrypt elsewhere.
+ * Hash a token with HMAC-SHA256, keyed by the server's ENCRYPTION_KEY. The token is
+ * a 192-bit random secret, so a fast hash is correct (a slow KDF would only add
+ * latency to every API request); it must be *deterministic* so a token can be looked
+ * up by value, and the server-key pepper binds the hash to this deployment. Real
+ * passwords are hashed with bcrypt elsewhere.
  */
 function hashToken(raw: string): string {
-  return pbkdf2Sync(raw, tokenSalt(), PBKDF2_ITERATIONS, 32, 'sha256').toString('hex');
+  const pepper = process.env['ENCRYPTION_KEY'] ?? 'proxmate-token-pepper';
+  return createHmac('sha256', pepper).update(raw).digest('hex');
 }
 
 /** True if a bearer value looks like a ProxMate API token (vs a session JWT). */
