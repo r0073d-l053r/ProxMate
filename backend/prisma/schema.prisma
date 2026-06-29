@@ -109,6 +109,9 @@ model VirtualMachine {
   status        String    @default("creating") // creating | running | stopped | error
   ipAddress     String?
 
+  // Optional user labels for grouping/filtering (lowercase, comma-separated).
+  tags          String?
+
   // Optional power schedule (5-field cron, server timezone). Null = no auto action.
   startCron     String?   // auto-start when this fires
   stopCron      String?   // auto-shutdown (graceful) when this fires
