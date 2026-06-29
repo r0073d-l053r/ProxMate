@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Plus, MonitorPlay } from "lucide-react";
+import { toast } from "sonner";
+import { Plus, MonitorPlay, Play, Square, RotateCw, Trash2, Loader2, X } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import type { VirtualMachine, UserGroup } from "@/lib/types";
@@ -21,13 +22,63 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+
+export function parseTags(csv: string | null): string[] {
+  return (csv ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+}
+
+function TagChips({ tags, onClick }: { tags: string[]; onClick?: (t: string) => void }) {
+  if (tags.length === 0) return null;
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {tags.map((t) => (
+        <button
+          key={t}
+          type="button"
+          onClick={onClick ? () => onClick(t) : undefined}
+          className={
+            "rounded-full border px-2 py-0.5 text-xs text-muted-foreground " +
+            (onClick ? "hover:bg-muted" : "cursor-default")
+          }
+        >
+          {t}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+interface Selection {
+  selected: Set<string>;
+  toggle: (id: string) => void;
+}
 
 /** The VM table, reused for each owner group (admin) and the user's own list. */
-function VmTable({ vms }: { vms: VirtualMachine[] }) {
+function VmTable({
+  vms,
+  selection,
+  onTagClick,
+}: {
+  vms: VirtualMachine[];
+  selection?: Selection;
+  onTagClick?: (t: string) => void;
+}) {
   return (
     <Table>
       <TableHeader>
         <TableRow>
+          {selection && <TableHead className="w-8" />}
           <TableHead>Name</TableHead>
           <TableHead>Status</TableHead>
           <TableHead>Resources</TableHead>
@@ -39,10 +90,22 @@ function VmTable({ vms }: { vms: VirtualMachine[] }) {
       <TableBody>
         {vms.map((vm) => (
           <TableRow key={vm.id}>
+            {selection && (
+              <TableCell>
+                <input
+                  type="checkbox"
+                  aria-label={`Select ${vm.name}`}
+                  checked={selection.selected.has(vm.id)}
+                  onChange={() => selection.toggle(vm.id)}
+                  className="size-4 align-middle accent-primary"
+                />
+              </TableCell>
+            )}
             <TableCell>
               <Link href={`/vms/${vm.id}`} className="font-medium hover:underline">
                 {vm.name}
               </Link>
+              <TagChips tags={parseTags(vm.tags)} onClick={onTagClick} />
             </TableCell>
             <TableCell>
               <VmStatusBadge status={vm.status} />
@@ -60,11 +123,130 @@ function VmTable({ vms }: { vms: VirtualMachine[] }) {
   );
 }
 
+/** The user's own VM list: tag filter + multi-select + bulk power/delete actions. */
+function OwnVmList({ vms, reload }: { vms: VirtualMachine[]; reload: () => Promise<void> }) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const allTags = useMemo(() => {
+    const s = new Set<string>();
+    vms.forEach((v) => parseTags(v.tags).forEach((t) => s.add(t)));
+    return [...s].sort();
+  }, [vms]);
+
+  const shown = activeTag ? vms.filter((v) => parseTags(v.tags).includes(activeTag)) : vms;
+
+  const toggle = useCallback((id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  async function runBulk(action: "start" | "stop" | "restart" | "delete") {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    setBusy(true);
+    try {
+      const res = await api.post<{ results: { id: string; ok: boolean; error?: string }[] }>("/vms/bulk", { action, ids });
+      const ok = res.data.results.filter((r) => r.ok).length;
+      const failed = res.data.results.length - ok;
+      toast.success(`${action}: ${ok} ok${failed ? `, ${failed} failed` : ""}.`);
+      setSelected(new Set());
+      await reload();
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-3">
+      {allTags.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">Filter:</span>
+          {allTags.map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setActiveTag((cur) => (cur === t ? null : t))}
+              aria-pressed={activeTag === t}
+              className={
+                "rounded-full border px-2 py-0.5 text-xs transition-colors " +
+                (activeTag === t ? "border-primary bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted")
+              }
+            >
+              {t}
+            </button>
+          ))}
+          {activeTag && (
+            <button type="button" onClick={() => setActiveTag(null)} className="text-xs text-muted-foreground hover:text-foreground">
+              <X className="inline size-3" /> clear
+            </button>
+          )}
+        </div>
+      )}
+
+      {selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 p-2 text-sm">
+          <span className="font-medium">{selected.size} selected</span>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => runBulk("start")}>
+            <Play /> Start
+          </Button>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => runBulk("stop")}>
+            <Square /> Stop
+          </Button>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => runBulk("restart")}>
+            <RotateCw /> Restart
+          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger
+              render={
+                <Button size="sm" variant="destructive" disabled={busy}>
+                  <Trash2 /> Delete
+                </Button>
+              }
+            />
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete {selected.size} VM(s)?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This permanently destroys each selected VM and its disk on Proxmox. This cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction variant="destructive" onClick={() => runBulk("delete")} disabled={busy}>
+                  {busy ? <Loader2 className="animate-spin" /> : <Trash2 />} Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+            Clear
+          </Button>
+        </div>
+      )}
+
+      <VmTable vms={shown} selection={{ selected, toggle }} onTagClick={(t) => setActiveTag(t)} />
+    </div>
+  );
+}
+
 export default function VmsPage() {
   const isAdmin = useAuthStore((s) => s.user?.role === "admin");
   const [vms, setVms] = useState<VirtualMachine[] | null>(null); // user view
   const [groups, setGroups] = useState<UserGroup[] | null>(null); // admin view
   const [error, setError] = useState<string | null>(null);
+
+  const reloadOwn = useCallback(async () => {
+    const res = await api.get<VirtualMachine[]>("/vms");
+    setVms(res.data);
+  }, []);
 
   useEffect(() => {
     if (isAdmin) {
@@ -73,12 +255,9 @@ export default function VmsPage() {
         .then((res) => setGroups(res.data))
         .catch((err) => setError(apiError(err)));
     } else {
-      api
-        .get<VirtualMachine[]>("/vms")
-        .then((res) => setVms(res.data))
-        .catch((err) => setError(apiError(err)));
+      reloadOwn().catch((err) => setError(apiError(err)));
     }
-  }, [isAdmin]);
+  }, [isAdmin, reloadOwn]);
 
   const ownerGroups = groups?.filter((g) => g.vms.length > 0) ?? [];
   const totalVms = groups?.reduce((n, g) => n + g.vms.length, 0) ?? 0;
@@ -133,7 +312,7 @@ export default function VmsPage() {
       ) : (
         <Card>
           <CardContent>
-            <VmTable vms={vms ?? []} />
+            <OwnVmList vms={vms ?? []} reload={reloadOwn} />
           </CardContent>
         </Card>
       )}
