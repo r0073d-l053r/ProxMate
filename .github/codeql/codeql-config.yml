@@ -17,3 +17,14 @@ query-filters:
   # only produces false positives here.
   - exclude:
       id: js/insufficient-password-hash
+  # `js/missing-token-validation` ("Missing CSRF middleware") flags every request
+  # handler downstream of cookie-parser because it only recognizes named CSRF
+  # libraries (e.g. csurf). ProxMate enforces CSRF with a custom, centralized
+  # double-submit token in requireAuth (middleware/auth.ts): a cookie-authenticated
+  # MUTATING request must echo the session's csrfToken in the `x-csrf-token` header
+  # (rejected 403 otherwise), while Bearer / `pm_…` API-token clients send no cookie
+  # and therefore have no CSRF surface. The protection is real and applied to every
+  # router via requireAuth; CodeQL just can't model the custom middleware, so this
+  # query is a false positive across the whole API.
+  - exclude:
+      id: js/missing-token-validation
