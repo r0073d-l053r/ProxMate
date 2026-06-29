@@ -129,11 +129,13 @@ router.post('/', async (req: Request, res: Response) => {
 });
 
 // ─── POST /api/vms/bulk ───────────────────────────────────────
-// Apply one power/delete action to several owned VMs at once. Per-VM errors are
+// Apply one power action to several owned VMs at once. Per-VM errors are
 // isolated and reported; declared before `/:id` so "bulk" isn't read as an id.
+// NOTE: bulk *delete* is intentionally excluded — destroying multiple VMs at once
+// is too easy to trigger by accident; deletion stays a deliberate per-VM action.
 
 const BulkSchema = z.object({
-  action: z.enum(['start', 'stop', 'restart', 'delete']),
+  action: z.enum(['start', 'stop', 'restart']),
   ids: z.array(z.string()).min(1).max(50),
 });
 
@@ -152,8 +154,7 @@ router.post('/bulk', async (req: Request, res: Response) => {
     try {
       if (action === 'start') await startVm(vm);
       else if (action === 'stop') await stopVm(vm, false);
-      else if (action === 'restart') await restartVm(vm);
-      else await destroyVm(vm);
+      else await restartVm(vm); // restart
       results.push({ id, ok: true });
     } catch (err) {
       results.push({ id, ok: false, error: pveMessage(err) });
