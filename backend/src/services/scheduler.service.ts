@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { runScheduledBackups, runDueBackups } from './matestate.service.js';
 import { runDuePowerActions, previousCronOccurrence } from './power-schedule.service.js';
 import { sampleResourceUsage, pruneResourceSamples } from './resource-history.service.js';
+import { runAutoBalance } from './cluster-balancer.service.js';
 import { getConfig, setConfig } from './config.service.js';
 
 /** SystemConfig key: ISO timestamp of the last successful weekly backup run. */
@@ -18,12 +19,15 @@ let task: ReturnType<typeof cron.schedule> | null = null;
 let powerTask: ReturnType<typeof cron.schedule> | null = null;
 let backupTask: ReturnType<typeof cron.schedule> | null = null;
 let historyTask: ReturnType<typeof cron.schedule> | null = null;
+let balancerTask: ReturnType<typeof cron.schedule> | null = null;
 let running = false;
 let powerRunning = false;
 let backupRunning = false;
 let historyRunning = false;
+let balancerRunning = false;
 
 const DEFAULT_SCHEDULE = '0 3 * * 0'; // Sun 03:00
+const DEFAULT_BALANCER_SCHEDULE = '*/15 * * * *'; // every 15 min (auto mode only)
 
 /** The effective weekly schedule (env override, validated, else the default). */
 function resolveSchedule(): string {
@@ -149,4 +153,24 @@ export function startScheduler(): void {
   });
 
   console.log('[scheduler] per-tenant resource history active (5-min sampling)');
+
+  // Cluster Balancer: when auto mode is enabled, even out node memory load by
+  // live-migrating guests. A no-op (and cheap) while the mode is off/recommend.
+  const balancerExpr = process.env['BALANCER_CRON'] && cron.validate(process.env['BALANCER_CRON'])
+    ? process.env['BALANCER_CRON']
+    : DEFAULT_BALANCER_SCHEDULE;
+  balancerTask = cron.schedule(balancerExpr, async () => {
+    if (balancerRunning) return; // a long live-migration pass is still working — skip
+    balancerRunning = true;
+    try {
+      const r = await runAutoBalance();
+      if (r.applied > 0) console.log(`[scheduler] cluster balancer: ${r.applied} migration(s) applied — ${r.reason}`);
+    } catch (err) {
+      console.error('[scheduler] cluster-balancer tick failed:', err);
+    } finally {
+      balancerRunning = false;
+    }
+  });
+
+  console.log(`[scheduler] cluster balancer active (${balancerExpr}, auto mode only)`);
 }

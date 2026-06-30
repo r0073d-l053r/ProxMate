@@ -472,3 +472,52 @@ export interface AuditListResponse {
   limit: number;
   offset: number;
 }
+
+// ─── Cluster Balancer ─────────────────────────────────────────
+
+export type BalancerMode = "off" | "recommend" | "auto";
+
+export interface BalancerSettings {
+  mode: BalancerMode;
+  thresholdPct: number;
+  maxMoves: number;
+  exclude: number[];
+}
+
+export interface BalancerMove {
+  vmId: string;
+  proxmoxVmId: number;
+  name: string;
+  fromNode: string;
+  toNode: string;
+  memBytes: number;
+  reason: string;
+}
+
+export interface BalancerNodeView {
+  name: string;
+  online: boolean;
+  arch: "amd64" | "arm64" | "unknown";
+  cpuPct: number;
+  memUsed: number;
+  memTotal: number;
+  loadPct: number;
+  vmCount: number;
+}
+
+export interface BalancePlan {
+  balanced: boolean;
+  reason: string;
+  thresholdPct: number;
+  currentSpreadPct: number;
+  projectedSpreadPct: number;
+  nodes: BalancerNodeView[];
+  projectedNodes: BalancerNodeView[];
+  moves: BalancerMove[];
+}
+
+export interface BalancerResponse {
+  settings: BalancerSettings;
+  plan: BalancePlan | null;
+  error?: string;
+}
