@@ -58,6 +58,11 @@ rough priority bands, not commitments. Have an idea? Open a
     auto best-fit placement **or** bulk-migrate all to one chosen target, running guests **live** (no
     downtime), stopped guests offline — same arch + anti-affinity guardrails. Unmanaged/foreign guests
     are flagged for manual handling. _Done._
+  - **Live migration on local storage + owner heads-up** ✅ — migration now passes
+    `--with-local-disks`, so a running guest on node-local storage (local-lvm / ZFS) live-migrates
+    (disk copied during the move) instead of being refused; a no-op on shared storage. Every
+    admin-initiated move (manual or drain) emails the VM's **owner** a branded heads-up ("maintenance
+    — brief momentary blip"); routine auto-balancing stays silent. _Done._
 
 ## Tier 4 — Reliability & observability ✅
 

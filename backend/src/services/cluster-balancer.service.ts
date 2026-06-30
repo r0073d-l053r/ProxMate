@@ -397,7 +397,9 @@ export async function runMigrations(
     }
     const from = vm.proxmoxNode;
     try {
-      await migrateVmToNode(vm, mv.toNode);
+      // Notify the owner only for admin-initiated moves (manual apply / drain),
+      // i.e. when an actor is present — never for routine auto-balancing.
+      await migrateVmToNode(vm, mv.toNode, { notifyOwner: !!actor, actorId: actor?.id });
       results.push({ vmId: vm.id, name: vm.name, fromNode: from, toNode: mv.toNode, ok: true });
       await recordAudit({
         action: 'balancer.migrate',
