@@ -389,6 +389,34 @@ export async function annotateAccess<T extends { id: string; userId: string }>(
 }
 
 /**
+ * Migrate a VM to another cluster node (admin op). Live-migrates when it's running,
+ * offline otherwise. Honors the arch-aware guardrail (never cross architectures;
+ * fail-open on unknown). Waits for the task, then records the new node.
+ */
+export async function migrateVmToNode(vm: VirtualMachine, targetNode: string): Promise<VirtualMachine> {
+  if (targetNode === vm.proxmoxNode) throw new Error('The VM is already on that node.');
+  const client = await pve.getClient();
+
+  const nodes = await pve.getNodes(client);
+  if (!nodes.some((n) => n.node === targetNode)) throw new Error(`No such node "${targetNode}".`);
+
+  // Architecture guardrail — never migrate an x86 guest onto an ARM node (or vice
+  // versa). Fail-open when either node's arch is unknown (mirrors placement).
+  const arch = await pve.getNodeArchMap(client);
+  const src = arch.get(vm.proxmoxNode);
+  const dst = arch.get(targetNode);
+  if (src && dst && src !== 'unknown' && dst !== 'unknown' && src !== dst) {
+    throw new Error(`Architecture mismatch: ${vm.proxmoxNode} is ${src}, ${targetNode} is ${dst}.`);
+  }
+
+  const online = (await getVmWithLiveStatus(vm)).live?.status === 'running';
+  const upid = await pve.migrateVm(vm.proxmoxNode, vm.proxmoxVmId, targetNode, online, client);
+  // The migrate task runs on the source node; a live migration can take a while.
+  await pve.waitForTask(vm.proxmoxNode, upid, client, 1_800_000);
+  return prisma.virtualMachine.update({ where: { id: vm.id }, data: { proxmoxNode: targetNode } });
+}
+
+/**
  * Update a VM's user-editable metadata: free-text notes (`description`) and/or
  * its `name`. The notes are ProxMate-only; a name change is pushed to Proxmox by
  * the route (via `setVmName`) before this writes the new name to our DB.

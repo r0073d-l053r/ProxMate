@@ -12,11 +12,17 @@ import {
   ipv4NetworkCidr,
   setClusterFirewall,
   getDefaultNode,
-  getClient,
   pveMessage,
 } from '../services/proxmox.service.js';
 import { listAudit, recordAudit } from '../services/audit.service.js';
 import { getUsageByUser } from '../services/resource-history.service.js';
+import { getLiveStats, addLiveFeedSubscriber } from '../services/live-stats.service.js';
+import {
+  listPendingQuotaRequests,
+  approveQuotaRequest,
+  denyQuotaRequest,
+  QuotaRequestError,
+} from '../services/quota-request.service.js';
 import {
   checkForUpdate,
   getUpdateStatus,
@@ -417,80 +423,28 @@ router.get('/all-vms', async (_req: Request, res: Response) => {
 // Live metrics for ALL guests on the cluster in a single Proxmox call.
 // Returned as a map keyed by proxmoxVmId so the frontend can do O(1) lookups.
 
-interface PveResource {
-  type: string;
-  vmid?: number;
-  status?: string;
-  cpu?: number;
-  maxcpu?: number;
-  mem?: number;
-  maxmem?: number;
-  disk?: number;
-  maxdisk?: number;
-  uptime?: number;
-  netin?: number;
-  netout?: number;
-}
-
-type LiveStat = {
-  status: string;
-  cpu: number; maxcpu: number;
-  mem: number; maxmem: number;
-  disk: number; maxdisk: number;
-  uptime: number;
-  netin: number; netout: number;
-};
-
-// Tiny in-process cache so the live monitor can poll at a fast, "btop-like"
-// cadence without multiplying load on Proxmox: every client/tab shares one
-// `/cluster/resources` call per window. Proxmox only samples guest stats every
-// few seconds anyway, so a sub-second TTL loses nothing real while capping us at
-// a couple of upstream calls per second no matter how fast the UI refreshes.
-const LIVE_STATS_TTL_MS = 750;
-let liveStatsCache: { at: number; data: Record<number, LiveStat> } | null = null;
-let liveStatsInflight: Promise<Record<number, LiveStat>> | null = null;
-
-async function fetchLiveStats(): Promise<Record<number, LiveStat>> {
-  const client = await getClient();
-  const r = await client.get<{ data: PveResource[] }>('/cluster/resources');
-  const stats: Record<number, LiveStat> = {};
-  for (const item of r.data.data) {
-    if ((item.type === 'qemu' || item.type === 'lxc') && item.vmid !== undefined) {
-      stats[item.vmid] = {
-        status: item.status ?? 'unknown',
-        cpu: item.cpu ?? 0,
-        maxcpu: item.maxcpu ?? 0,
-        mem: item.mem ?? 0,
-        maxmem: item.maxmem ?? 0,
-        disk: item.disk ?? 0,
-        maxdisk: item.maxdisk ?? 0,
-        uptime: item.uptime ?? 0,
-        netin: item.netin ?? 0,
-        netout: item.netout ?? 0,
-      };
-    }
-  }
-  return stats;
-}
-
 router.get('/live-stats', async (_req: Request, res: Response) => {
   try {
-    if (liveStatsCache && Date.now() - liveStatsCache.at < LIVE_STATS_TTL_MS) {
-      res.json(liveStatsCache.data);
-      return;
-    }
-    // Coalesce concurrent misses onto a single upstream request.
-    if (!liveStatsInflight) {
-      liveStatsInflight = fetchLiveStats().finally(() => {
-        liveStatsInflight = null;
-      });
-    }
-    const data = await liveStatsInflight;
-    liveStatsCache = { at: Date.now(), data };
-    res.json(data);
+    res.json(await getLiveStats());
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }
+});
+
+// ─── GET /api/admin/live-feed (SSE) ───────────────────────────
+// One server-side poll loop pushes live stats to every subscribed admin client,
+// so the monitor no longer polls once per tab. Clients fall back to /live-stats
+// polling if the stream drops (e.g. an SSE-buffering proxy).
+router.get('/live-feed', (req: Request, res: Response) => {
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+  });
+  res.flushHeaders();
+  res.write(': connected\n\n');
+  const unsubscribe = addLiveFeedSubscriber(res);
+  req.on('close', unsubscribe);
 });
 
 // ─── GET /api/admin/resource-history ──────────────────────────
@@ -503,6 +457,46 @@ router.get('/resource-history', async (req: Request, res: Response) => {
     res.json({ days, usage: await getUsageByUser(days) });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to load usage history' });
+  }
+});
+
+// ─── Quota-increase requests (admin review) ───────────────────
+
+router.get('/quota-requests', async (_req: Request, res: Response) => {
+  res.json(await listPendingQuotaRequests());
+});
+
+router.post('/quota-requests/:id/approve', async (req: Request, res: Response) => {
+  try {
+    const r = await approveQuotaRequest(req.params['id'] as string, (req as AuthRequest).user.id);
+    await recordAudit({
+      action: 'quota.approve',
+      actor: (req as AuthRequest).user,
+      targetType: 'user',
+      detail: `${r.email}: ${r.cpu} vCPU / ${r.ram} MB / ${r.storage} GB`,
+      req,
+    });
+    res.json({ success: true });
+  } catch (err) {
+    if (err instanceof QuotaRequestError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    res.status(500).json({ error: 'Failed to approve request' });
+  }
+});
+
+router.post('/quota-requests/:id/deny', async (req: Request, res: Response) => {
+  try {
+    const r = await denyQuotaRequest(req.params['id'] as string, (req as AuthRequest).user.id);
+    await recordAudit({ action: 'quota.deny', actor: (req as AuthRequest).user, targetType: 'user', detail: r.email, req });
+    res.json({ success: true });
+  } catch (err) {
+    if (err instanceof QuotaRequestError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    res.status(500).json({ error: 'Failed to deny request' });
   }
 });
 

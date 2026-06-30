@@ -68,6 +68,13 @@ export interface VirtualMachine {
   access?: VmAccess;
 }
 
+export interface VmDisk {
+  slot: string;
+  storage: string;
+  sizeGb: number;
+  isRoot: boolean;
+}
+
 export interface VmShare {
   id: string;
   role: "co-owner" | "read-only";
@@ -213,6 +220,16 @@ export interface ManagedUser {
   vmCount: number;
   quota: Quota;
   createdAt: string;
+}
+
+export interface PendingQuotaRequest {
+  id: string;
+  cpu: number;
+  ram: number;
+  storage: number;
+  reason: string | null;
+  createdAt: string;
+  user: { id: string; email: string; displayName: string; quota: { cpu: number; ram: number; storage: number } };
 }
 
 export interface PasswordResetRequest {

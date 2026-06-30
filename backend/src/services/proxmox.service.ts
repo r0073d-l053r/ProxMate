@@ -792,6 +792,56 @@ export async function resizeDisk(
   );
 }
 
+/** Allocate + attach a new disk at `slot` (e.g. "scsi1"), `sizeGb` GB, on `storage`. */
+export async function attachDisk(
+  node: string,
+  vmid: number,
+  slot: string,
+  storage: string,
+  sizeGb: number,
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  await c.put(
+    `/nodes/${node}/qemu/${vmid}/config`,
+    new URLSearchParams({ [slot]: `${storage}:${sizeGb}` }),
+  );
+}
+
+/**
+ * Detach a disk slot and destroy the volume it freed. Proxmox detach moves the
+ * volume to an `unusedN` entry; we delete only the entry that *this* detach
+ * created (captured by diffing the unused keys) so a pre-existing unused volume
+ * is never touched.
+ */
+export async function removeDisk(node: string, vmid: number, slot: string, client?: AxiosInstance): Promise<void> {
+  const c = client ?? (await getClient());
+  const before = new Set(
+    Object.keys(await getVmConfig(node, vmid, c)).filter((k) => /^unused\d+$/.test(k)),
+  );
+  await c.put(`/nodes/${node}/qemu/${vmid}/config`, new URLSearchParams({ delete: slot }));
+  const after = await getVmConfig(node, vmid, c);
+  const freed = Object.keys(after).find((k) => /^unused\d+$/.test(k) && !before.has(k));
+  if (freed) {
+    await c.put(`/nodes/${node}/qemu/${vmid}/config`, new URLSearchParams({ delete: freed }));
+  }
+}
+
+/** Migrate a VM to another node; `online` for a live migration of a running guest. Returns the task UPID. */
+export async function migrateVm(
+  node: string,
+  vmid: number,
+  target: string,
+  online: boolean,
+  client?: AxiosInstance,
+): Promise<string> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams({ target });
+  if (online) params.set('online', '1');
+  const res = await c.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/migrate`, params);
+  return res.data.data;
+}
+
 /** Read a VM's config as a string map. */
 export async function getVmConfig(
   node: string,
