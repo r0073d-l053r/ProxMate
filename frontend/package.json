@@ -1,6 +1,6 @@
 {
   "name": "frontend",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "private": true,
   "license": "AGPL-3.0-only",
   "scripts": {
