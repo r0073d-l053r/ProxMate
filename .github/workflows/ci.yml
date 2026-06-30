@@ -2,6 +2,12 @@ name: CI
 
 on:
   push:
+    # Don't re-run the full CI on release tags — release.yml handles tag pushes,
+    # and the merge-commit run already validated the exact code the tag points at.
+    # (Avoids a redundant second run that can flake, e.g. the Playwright browser
+    # download hitting a mirror mid-sync.)
+    tags-ignore:
+      - "**"
   pull_request:
 
 # Cancel superseded runs on the same ref.
@@ -75,7 +81,19 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+        # Retry the browser download: it pulls from external mirrors (e.g. Google's
+        # apt repo) that occasionally serve a mid-sync file ("unexpected size"), a
+        # transient infra flake unrelated to the code under test.
+        run: |
+          for attempt in 1 2 3; do
+            if npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "::warning::Playwright browser install failed (attempt $attempt/3); retrying in 15s…"
+            sleep 15
+          done
+          echo "::error::Playwright browser install failed after 3 attempts"
+          exit 1
       - name: Run smoke tests
         run: npm run e2e
 
