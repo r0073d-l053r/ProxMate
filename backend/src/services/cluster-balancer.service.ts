@@ -1,0 +1,439 @@
+import type { AxiosInstance } from 'axios';
+import { prisma } from '../lib/prisma.js';
+import * as pve from './proxmox.service.js';
+import { migrateVmToNode } from './vm.service.js';
+import { getConfig, setConfig } from './config.service.js';
+import { recordAudit, type AuditActor } from './audit.service.js';
+
+/**
+ * Cluster Balancer — a DRS-style workload balancer for ProxMate's API-only model.
+ *
+ * It reads each node's memory load and live-migrates running, ProxMate-managed
+ * guests off the hottest node onto the coldest until the cluster's memory-load
+ * spread is within an admin-set tolerance. Memory is the binding constraint in
+ * virtualization (it can't be safely overcommitted the way CPU can), so the plan
+ * is computed and simulated on memory; CPU is surfaced for context only.
+ *
+ * Safety rails that make this "professional grade" rather than a naive mover:
+ *   - only ProxMate-managed guests are ever moved (foreign guests are fixed load);
+ *   - the architecture guardrail is honoured (never x86↔ARM);
+ *   - anti-affinity groups (VM tag `aa:<group>`) are never co-located;
+ *   - pinned guests (tag `pin`/`no-balance`, or the admin exclude list) never move;
+ *   - every candidate move must strictly lower the peak node load, so the planner
+ *     can't oscillate or overshoot;
+ *   - a per-run cap bounds how much churn a single pass can cause.
+ *
+ * The core `planBalance` is a pure function (no Proxmox, no DB) so the algorithm
+ * is fully unit-tested; the orchestrators below just gather inputs and apply.
+ */
+
+export type BalancerMode = 'off' | 'recommend' | 'auto';
+
+export interface BalancerSettings {
+  /** off = never act; recommend = surface a plan but only apply on demand; auto = apply on a schedule. */
+  mode: BalancerMode;
+  /** Imbalance tolerance in percentage points of memory load (5..50). */
+  thresholdPct: number;
+  /** Cap on migrations a single pass may schedule (1..20). */
+  maxMoves: number;
+  /** Proxmox VMIDs that must never be moved. */
+  exclude: number[];
+}
+
+type Arch = 'amd64' | 'arm64' | 'unknown';
+
+export interface BalancerNode {
+  name: string;
+  online: boolean;
+  arch: Arch;
+  memUsed: number;
+  memTotal: number;
+  cpu: number; // 0..1 host load fraction
+}
+
+export interface BalancerVm {
+  vmId: string; // ProxMate DB id
+  proxmoxVmId: number;
+  name: string;
+  node: string;
+  memBytes: number; // live consumed memory
+  running: boolean;
+  antiAffinity: string[]; // group keys from `aa:<group>` tags
+  excluded: boolean;
+}
+
+export interface BalancerInput {
+  nodes: BalancerNode[];
+  vms: BalancerVm[];
+  thresholdPct: number;
+  maxMoves: number;
+}
+
+export interface BalancerMove {
+  vmId: string;
+  proxmoxVmId: number;
+  name: string;
+  fromNode: string;
+  toNode: string;
+  memBytes: number;
+  reason: string;
+}
+
+export interface BalancerNodeView {
+  name: string;
+  online: boolean;
+  arch: Arch;
+  cpuPct: number; // 0..100
+  memUsed: number;
+  memTotal: number;
+  loadPct: number; // memory load, 0..100
+  vmCount: number; // movable guests currently placed here
+}
+
+export interface BalancePlan {
+  /** True when current memory-load spread is already within tolerance. */
+  balanced: boolean;
+  reason: string;
+  thresholdPct: number;
+  currentSpreadPct: number;
+  projectedSpreadPct: number;
+  nodes: BalancerNodeView[]; // current placement
+  projectedNodes: BalancerNodeView[]; // placement after `moves`
+  moves: BalancerMove[];
+}
+
+const round1 = (x: number): number => Math.round(x * 10) / 10;
+const loadFrac = (used: number, total: number): number => (total > 0 ? used / total : 0);
+
+/**
+ * Pure DRS planner. Given a snapshot of node memory + movable guests, greedily
+ * relocates guests from the hottest node to the coldest — accepting a move only
+ * when it strictly lowers the peak load — until the spread is within tolerance,
+ * no improving move remains, or the move cap is hit.
+ */
+export function planBalance(input: BalancerInput): BalancePlan {
+  const onlineNodes = input.nodes.filter((n) => n.online && n.memTotal > 0);
+  const threshold = Math.max(0, input.thresholdPct) / 100;
+
+  const total = new Map(onlineNodes.map((n) => [n.name, n.memTotal]));
+  const arch = new Map(onlineNodes.map((n) => [n.name, n.arch]));
+  const cpu = new Map(onlineNodes.map((n) => [n.name, n.cpu]));
+  // Projected used-memory per node, mutated as moves are simulated.
+  const used = new Map(onlineNodes.map((n) => [n.name, n.memUsed]));
+
+  const movable = input.vms.filter((v) => v.running && !v.excluded && used.has(v.node));
+  const mem = new Map(movable.map((v) => [v.vmId, v.memBytes]));
+  const vmById = new Map(movable.map((v) => [v.vmId, v]));
+  const placement = new Map(movable.map((v) => [v.vmId, v.node])); // mutated as moves apply
+
+  const at = (node: string): number => loadFrac(used.get(node)!, total.get(node)!);
+  const spread = (): number => {
+    let max = -Infinity;
+    let min = Infinity;
+    for (const n of onlineNodes) {
+      const l = at(n.name);
+      if (l > max) max = l;
+      if (l < min) min = l;
+    }
+    return onlineNodes.length ? max - min : 0;
+  };
+  const view = (): BalancerNodeView[] =>
+    onlineNodes.map((n) => ({
+      name: n.name,
+      online: true,
+      arch: arch.get(n.name)!,
+      cpuPct: round1(cpu.get(n.name)! * 100),
+      memUsed: used.get(n.name)!,
+      memTotal: total.get(n.name)!,
+      loadPct: round1(at(n.name) * 100),
+      vmCount: [...placement.values()].filter((p) => p === n.name).length,
+    }));
+
+  const currentNodes = view();
+  const currentSpread = spread();
+  const balanced = currentSpread <= threshold;
+
+  if (onlineNodes.length < 2) {
+    return {
+      balanced: true,
+      reason: 'Load balancing needs at least two online nodes.',
+      thresholdPct: input.thresholdPct,
+      currentSpreadPct: round1(currentSpread * 100),
+      projectedSpreadPct: round1(currentSpread * 100),
+      nodes: currentNodes,
+      projectedNodes: currentNodes,
+      moves: [],
+    };
+  }
+
+  const moves: BalancerMove[] = [];
+  const moved = new Set<string>();
+
+  // Anti-affinity: would placing `vm` on `target` co-locate it with another guest
+  // that shares one of its `aa:<group>` keys (using the projected placement)?
+  const conflicts = (vm: BalancerVm, target: string): boolean => {
+    if (vm.antiAffinity.length === 0) return false;
+    for (const [id, node] of placement) {
+      if (id === vm.vmId || node !== target) continue;
+      const other = vmById.get(id)!;
+      if (other.antiAffinity.some((g) => vm.antiAffinity.includes(g))) return true;
+    }
+    return false;
+  };
+
+  while (moves.length < input.maxMoves && spread() > threshold) {
+    const ranked = [...onlineNodes].sort((a, b) => at(b.name) - at(a.name));
+    const hot = ranked[0]!.name;
+    const cold = ranked[ranked.length - 1]!.name;
+    if (hot === cold) break;
+    const peakBefore = at(hot);
+
+    const candidates = [...placement.entries()]
+      .filter(([id, node]) => node === hot && !moved.has(id))
+      .map(([id]) => vmById.get(id)!);
+
+    let best: { vm: BalancerVm; peakAfter: number } | null = null;
+    for (const vm of candidates) {
+      const sa = arch.get(hot)!;
+      const da = arch.get(cold)!;
+      if (sa !== 'unknown' && da !== 'unknown' && sa !== da) continue; // arch guardrail
+      if (conflicts(vm, cold)) continue; // anti-affinity
+
+      const m = mem.get(vm.vmId)!;
+      const peakAfter = Math.max(
+        (used.get(hot)! - m) / total.get(hot)!,
+        (used.get(cold)! + m) / total.get(cold)!,
+      );
+      if (peakAfter >= peakBefore) continue; // must strictly improve the peak
+      if (!best || peakAfter < best.peakAfter) best = { vm, peakAfter };
+    }
+
+    if (!best) break; // nothing on the hottest node can be improved onto the coldest
+
+    const m = mem.get(best.vm.vmId)!;
+    used.set(hot, used.get(hot)! - m);
+    used.set(cold, used.get(cold)! + m);
+    placement.set(best.vm.vmId, cold);
+    moved.add(best.vm.vmId);
+    moves.push({
+      vmId: best.vm.vmId,
+      proxmoxVmId: best.vm.proxmoxVmId,
+      name: best.vm.name,
+      fromNode: hot,
+      toNode: cold,
+      memBytes: m,
+      reason: `Relieve ${hot} → ${cold}`,
+    });
+  }
+
+  const projectedSpread = spread();
+  let reason: string;
+  if (moves.length > 0) {
+    reason = `${moves.length} migration${moves.length === 1 ? '' : 's'} would cut memory-load spread from ${round1(currentSpread * 100)}% to ${round1(projectedSpread * 100)}%.`;
+  } else if (balanced) {
+    reason = `Cluster is balanced — node memory load is within ${input.thresholdPct}%.`;
+  } else {
+    reason = `Memory load is uneven (${round1(currentSpread * 100)}% spread), but no migration that respects architecture and anti-affinity rules would improve it.`;
+  }
+
+  return {
+    balanced,
+    reason,
+    thresholdPct: input.thresholdPct,
+    currentSpreadPct: round1(currentSpread * 100),
+    projectedSpreadPct: round1(projectedSpread * 100),
+    nodes: currentNodes,
+    projectedNodes: view(),
+    moves,
+  };
+}
+
+// ─── Settings (persisted in SystemConfig) ─────────────────────
+
+const DEFAULTS: BalancerSettings = { mode: 'off', thresholdPct: 15, maxMoves: 5, exclude: [] };
+
+function clampInt(raw: string | null, min: number, max: number, fallback: number): number {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function parseVmidCsv(raw: string | null): number[] {
+  return [
+    ...new Set(
+      (raw ?? '')
+        .split(',')
+        .map((s) => Math.floor(Number(s.trim())))
+        .filter((n) => Number.isInteger(n) && n > 0),
+    ),
+  ];
+}
+
+export async function getBalancerSettings(): Promise<BalancerSettings> {
+  const [mode, threshold, maxMoves, exclude] = await Promise.all([
+    getConfig('balancer_mode'),
+    getConfig('balancer_threshold'),
+    getConfig('balancer_max_moves'),
+    getConfig('balancer_exclude'),
+  ]);
+  return {
+    mode: mode === 'recommend' || mode === 'auto' ? mode : DEFAULTS.mode,
+    thresholdPct: clampInt(threshold, 5, 50, DEFAULTS.thresholdPct),
+    maxMoves: clampInt(maxMoves, 1, 20, DEFAULTS.maxMoves),
+    exclude: parseVmidCsv(exclude),
+  };
+}
+
+export async function saveBalancerSettings(s: BalancerSettings): Promise<BalancerSettings> {
+  await Promise.all([
+    setConfig('balancer_mode', s.mode),
+    setConfig('balancer_threshold', String(s.thresholdPct)),
+    setConfig('balancer_max_moves', String(s.maxMoves)),
+    setConfig('balancer_exclude', s.exclude.join(',')),
+  ]);
+  return getBalancerSettings();
+}
+
+// ─── Orchestration (Proxmox + DB) ─────────────────────────────
+
+/** A guest row from /cluster/resources?type=vm (qemu or lxc). */
+interface VmResource {
+  type: string;
+  vmid?: number;
+  name?: string;
+  node?: string;
+  status?: string;
+  mem?: number;
+  template?: number;
+}
+
+const PIN_TAGS = new Set(['pin', 'no-balance']);
+
+function parseTags(csv: string | null): string[] {
+  return (csv ?? '')
+    .split(',')
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function antiAffinityGroups(tags: string[]): string[] {
+  return tags.filter((t) => t.startsWith('aa:')).map((t) => t.slice(3)).filter(Boolean);
+}
+
+/** Gather a live snapshot of the cluster and compute a balance plan. */
+export async function computeClusterPlan(
+  settings?: BalancerSettings,
+  client?: AxiosInstance,
+): Promise<BalancePlan> {
+  const s = settings ?? (await getBalancerSettings());
+  const c = client ?? (await pve.getClient());
+
+  const [health, archMap, resources, dbVms] = await Promise.all([
+    pve.getNodesHealth(c),
+    pve.getNodeArchMap(c),
+    c.get<{ data: VmResource[] }>('/cluster/resources?type=vm'),
+    prisma.virtualMachine.findMany(),
+  ]);
+
+  const resByVmid = new Map<number, VmResource>();
+  for (const r of resources.data.data) {
+    if (r.type === 'qemu' && typeof r.vmid === 'number') resByVmid.set(r.vmid, r);
+  }
+
+  const exclude = new Set(s.exclude);
+  const vms: BalancerVm[] = dbVms.map((v) => {
+    const r = resByVmid.get(v.proxmoxVmId);
+    const tags = parseTags(v.tags);
+    return {
+      vmId: v.id,
+      proxmoxVmId: v.proxmoxVmId,
+      name: v.name,
+      // Proxmox is authoritative for current placement (a VM may have moved outside ProxMate).
+      node: r?.node ?? v.proxmoxNode,
+      memBytes: r?.mem ?? 0,
+      running: r?.status === 'running' && (r?.template ?? 0) !== 1,
+      antiAffinity: antiAffinityGroups(tags),
+      excluded: exclude.has(v.proxmoxVmId) || tags.some((t) => PIN_TAGS.has(t)),
+    };
+  });
+
+  const nodes: BalancerNode[] = health.nodes.map((n) => ({
+    name: n.name,
+    online: n.online,
+    arch: archMap.get(n.name) ?? 'unknown',
+    memUsed: n.mem.used,
+    memTotal: n.mem.total,
+    cpu: n.cpu,
+  }));
+
+  return planBalance({ nodes, vms, thresholdPct: s.thresholdPct, maxMoves: s.maxMoves });
+}
+
+export interface MigrationResult {
+  vmId: string;
+  name: string;
+  fromNode: string;
+  toNode: string;
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Apply a set of moves sequentially. Each migration re-validates through
+ * `migrateVmToNode` (arch guardrail, node existence, live-vs-offline), so stale
+ * or hand-crafted move lists can't bypass the safety checks. Runs one at a time
+ * to avoid hammering a source node with concurrent live migrations.
+ */
+export async function runMigrations(
+  moves: { vmId: string; toNode: string }[],
+  actor?: AuditActor,
+): Promise<MigrationResult[]> {
+  const results: MigrationResult[] = [];
+  for (const mv of moves) {
+    const vm = await prisma.virtualMachine.findUnique({ where: { id: mv.vmId } });
+    if (!vm) {
+      results.push({ vmId: mv.vmId, name: mv.vmId, fromNode: '?', toNode: mv.toNode, ok: false, error: 'VM not found' });
+      continue;
+    }
+    const from = vm.proxmoxNode;
+    try {
+      await migrateVmToNode(vm, mv.toNode);
+      results.push({ vmId: vm.id, name: vm.name, fromNode: from, toNode: mv.toNode, ok: true });
+      await recordAudit({
+        action: 'balancer.migrate',
+        actor: actor ?? null,
+        targetType: 'vm',
+        targetId: vm.id,
+        detail: `${from} → ${mv.toNode}`,
+      });
+    } catch (err) {
+      const error = err instanceof Error ? err.message : 'Migration failed';
+      results.push({ vmId: vm.id, name: vm.name, fromNode: from, toNode: mv.toNode, ok: false, error });
+      await recordAudit({
+        action: 'balancer.migrate_failed',
+        actor: actor ?? null,
+        targetType: 'vm',
+        targetId: vm.id,
+        detail: `${from} → ${mv.toNode}: ${error}`,
+      });
+    }
+  }
+  return results;
+}
+
+/**
+ * Scheduler entry point: when auto mode is on, compute and apply a plan. Awaited
+ * by the balancer cron tick; a no-op (and cheap) when the mode is off/recommend.
+ */
+export async function runAutoBalance(): Promise<{ applied: number; reason: string }> {
+  const settings = await getBalancerSettings();
+  if (settings.mode !== 'auto') return { applied: 0, reason: 'auto mode is off' };
+
+  const plan = await computeClusterPlan(settings);
+  if (plan.moves.length === 0) return { applied: 0, reason: plan.reason };
+
+  const results = await runMigrations(plan.moves.map((m) => ({ vmId: m.vmId, toNode: m.toNode })));
+  const applied = results.filter((r) => r.ok).length;
+  await recordAudit({ action: 'balancer.auto_run', detail: `${applied}/${results.length} migrations applied` });
+  return { applied, reason: plan.reason };
+}

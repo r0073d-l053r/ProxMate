@@ -5,9 +5,11 @@ import { toast } from "sonner";
 import { Trash2, KeyRound, Loader2, RefreshCw, Save, Check, X } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
+import { cn } from "@/lib/utils";
 import type { ManagedUser, PasswordResetRequest, PendingQuotaRequest } from "@/lib/types";
 import { formatRam, formatDate } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
+import { UsageReport } from "@/components/admin/usage-report";
 import { FormField } from "@/components/form-field";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -37,6 +39,7 @@ export default function UsersPage() {
   const [users, setUsers] = useState<ManagedUser[] | null>(null);
   const [requests, setRequests] = useState<PasswordResetRequest[]>([]);
   const [quotaReqs, setQuotaReqs] = useState<PendingQuotaRequest[]>([]);
+  const [tab, setTab] = useState<"accounts" | "usage">("accounts");
   const meId = useAuthStore((s) => s.user?.id);
 
   const load = useCallback(() => {
@@ -80,8 +83,30 @@ export default function UsersPage() {
 
   return (
     <div className="mx-auto max-w-5xl">
-      <PageHeader title="Users" description="Manage accounts and their resource quotas." />
+      <PageHeader title="Users" description="Manage accounts and quotas, and review per-tenant usage." />
 
+      <div className="mb-4 inline-flex rounded-lg border bg-muted/40 p-0.5 text-sm">
+        {(["accounts", "usage"] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setTab(t)}
+            className={cn(
+              "rounded-md px-3 py-1.5 font-medium capitalize transition-colors",
+              tab === t
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {tab === "usage" ? (
+        <UsageReport />
+      ) : (
+        <>
       {quotaReqs.length > 0 && (
         <Card className="mb-4 border-primary/40 bg-primary/5">
           <CardContent className="grid gap-2.5 py-3">
@@ -223,6 +248,8 @@ export default function UsersPage() {
           )}
         </CardContent>
       </Card>
+        </>
+      )}
     </div>
   );
 }
