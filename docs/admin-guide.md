@@ -221,6 +221,9 @@ A few things worth knowing day-to-day:
 
 - **MateStates (backups)** run automatically every Sunday at 03:00 server time for every VM. We keep the 2 newest per VM and prune the rest. Override the schedule with `MATESTATE_CRON` (5-field cron) in the backend env.
 - **Restoring a tenant VM** rewrites its config — ProxMate re-asserts the per-NIC firewall flag automatically.
+- **Migrating a VM between nodes** (admin-only). On a VM's page, **Migrate** moves it to another node — **live, with no downtime** for a running guest, offline for a stopped one. Guests on node-local storage (`local-lvm` / ZFS) migrate live too (the disk is copied during the move; the target node must have a storage of the **same name**). Cross-architecture moves (x86↔ARM) are blocked. The VM's **owner is emailed a heads-up** whenever you move their VM.
+- **Cluster Balancer** (**Admin → Balancer**) evens out node **memory** load — the binding constraint — by live-migrating ProxMate-managed guests off the busiest node. Pick a mode: **Off**, **Recommend only** (review the plan and apply by hand), or **Auto-apply** (acts every ~15 min; override with `BALANCER_CRON`). Tune the imbalance tolerance, a per-run move cap, and a never-move list. Keep specific guests on separate nodes with the tag `aa:<group>` (anti-affinity), and pin a guest in place with the tag `pin` or `no-balance`. Routine balancing never emails tenants.
+- **Maintenance mode (node drain)** — also on the Balancer page. Before taking a node down, pick it and **Plan drain**: ProxMate evacuates every managed guest off it (auto best-fit, or all to one target you choose), running guests live, stopped offline. Anything it can't move automatically (e.g. a guest not managed by ProxMate) is listed so you can handle it before powering the node off.
 - **Deleting a tenant** in **Admin → Users** also destroys their VMs (best-effort) on Proxmox.
 - **Re-configuring Proxmox** later (new host, rotated token) is in **Admin → Settings**; the existing token secret is kept if you leave the field blank.
 
@@ -236,3 +239,4 @@ A few things worth knowing day-to-day:
 | `vzdump` fails for a tenant VM | The chosen storage doesn't support `content=backup` — enable it in Proxmox **Datacenter → Storage** |
 | Console (noVNC) won't connect | Browser blocked the WebSocket; check the ProxMate backend reverse-proxy forwards `Upgrade` headers |
 | The scheduled backup didn't run | Backend was offline at the scheduled time, or `MATESTATE_CRON` is invalid (check backend logs for the warning) |
+| Live-migrating a VM fails ("can't migrate local disk" / storage error) | The target node needs a storage of the **same name** as the source. Cross-architecture (x86↔ARM) moves are blocked by design. A stopped VM migrates offline regardless |
