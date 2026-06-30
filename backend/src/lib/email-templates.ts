@@ -294,3 +294,41 @@ export function announcementEmail(subject: string, message: string): RenderedEma
     });
   return { subject, text, html: wrapEmail(subject, bodyRows) };
 }
+
+/**
+ * Branded heads-up sent to a VM's owner when an admin migrates their VM to
+ * another host (manual migrate or a maintenance node-drain). Reassures them that
+ * a running guest keeps running with at most a momentary blip; a stopped guest
+ * has no extra interruption.
+ */
+export function vmMaintenanceEmail(opts: { vmName: string; live: boolean }): RenderedEmail {
+  const { vmName, live } = opts;
+  const subject = `[ProxMate] Maintenance: your server "${vmName}" is being moved`;
+
+  const blipText = live
+    ? 'Your server keeps running throughout the move, but you may notice a brief, momentary interruption — typically a second or less — as it switches hosts. Active connections normally reconnect on their own.'
+    : 'Your server is currently powered off, so there is no extra interruption — it will simply be on a different host the next time you start it.';
+
+  const text =
+    `Maintenance is being performed on the ProxMate cluster, and your VM "${vmName}" is being migrated to another host.\n\n` +
+    `${blipText}\n\n` +
+    `No action is needed on your part — this is just a heads-up.`;
+
+  const bodyRows =
+    h1('Maintenance on your server') +
+    p(
+      `Maintenance is being performed on the ProxMate cluster, and your VM <strong style="color:${INK};">${escapeHtml(vmName)}</strong> is being migrated to another host.`,
+    ) +
+    p(blipText) +
+    p('No action is needed on your part — this message is just to let you know.', {
+      color: MUTED,
+      size: 13,
+      mb: 0,
+    });
+
+  return {
+    subject,
+    text,
+    html: wrapEmail(`Maintenance: your server "${escapeHtml(vmName)}" is being moved to another host.`, bodyRows),
+  };
+}
