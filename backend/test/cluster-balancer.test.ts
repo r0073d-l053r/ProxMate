@@ -2,7 +2,13 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../src/lib/prisma.js', () => ({ prisma: {} }));
 
-import { planBalance, type BalancerNode, type BalancerVm } from '../src/services/cluster-balancer.service.js';
+import {
+  planBalance,
+  planDrain,
+  type BalancerNode,
+  type BalancerVm,
+  type DrainGuest,
+} from '../src/services/cluster-balancer.service.js';
 import { GB } from './helpers.js';
 
 const TOTAL = 100 * GB;
@@ -142,5 +148,118 @@ describe('planBalance (cluster balancer)', () => {
     });
     expect(plan.moves).toHaveLength(1);
     expect(plan.moves[0]!.vmId).toBe('u1');
+  });
+});
+
+let nextGuest = 500;
+function guest(gb: number, opts: Partial<DrainGuest> = {}): DrainGuest {
+  const proxmoxVmId = opts.proxmoxVmId ?? nextGuest++;
+  return {
+    vmId: opts.vmId ?? `g-${proxmoxVmId}`,
+    proxmoxVmId,
+    name: opts.name ?? `g-${proxmoxVmId}`,
+    memBytes: gb * GB,
+    running: opts.running ?? true,
+    antiAffinity: opts.antiAffinity ?? [],
+  };
+}
+
+const offline = (name: string): BalancerNode => ({
+  name,
+  online: false,
+  arch: 'amd64',
+  memUsed: 0,
+  memTotal: TOTAL,
+  cpu: 0,
+});
+
+describe('planDrain (maintenance node evacuation)', () => {
+  it('evacuates every managed guest onto other nodes', () => {
+    const plan = planDrain({
+      drainNode: 'pve-a',
+      targetNode: null,
+      nodes: [node('pve-a', 0.5), node('pve-b', 0), node('pve-c', 0)],
+      guests: [guest(20, { vmId: 'g1' }), guest(20, { vmId: 'g2' })],
+      occupants: [],
+    });
+    expect(plan.ok).toBe(true);
+    expect(plan.blockers).toHaveLength(0);
+    expect(plan.moves).toHaveLength(2);
+    expect(plan.moves.every((m) => m.fromNode === 'pve-a')).toBe(true);
+    expect(plan.moves.every((m) => m.toNode !== 'pve-a')).toBe(true);
+  });
+
+  it('pushes everything to one node when a target is named', () => {
+    const plan = planDrain({
+      drainNode: 'pve-a',
+      targetNode: 'pve-c',
+      nodes: [node('pve-a', 0.5), node('pve-b', 0), node('pve-c', 0)],
+      guests: [guest(20, { vmId: 'g1' }), guest(20, { vmId: 'g2' })],
+      occupants: [],
+    });
+    expect(plan.ok).toBe(true);
+    expect(plan.moves.map((m) => m.toNode)).toEqual(['pve-c', 'pve-c']);
+  });
+
+  it('spreads anti-affinity group members across receiving nodes', () => {
+    const plan = planDrain({
+      drainNode: 'pve-a',
+      targetNode: null,
+      nodes: [node('pve-a', 0.5), node('pve-b', 0), node('pve-c', 0)],
+      guests: [
+        guest(20, { vmId: 'db1', antiAffinity: ['db'] }),
+        guest(20, { vmId: 'db2', antiAffinity: ['db'] }),
+      ],
+      occupants: [],
+    });
+    expect(plan.ok).toBe(true);
+    const t1 = plan.moves.find((m) => m.vmId === 'db1')!.toNode;
+    const t2 = plan.moves.find((m) => m.vmId === 'db2')!.toNode;
+    expect(t1).not.toBe(t2);
+  });
+
+  it('blocks when there is no other online node to evacuate onto', () => {
+    const plan = planDrain({
+      drainNode: 'pve-a',
+      targetNode: null,
+      nodes: [node('pve-a', 0.5), offline('pve-b')],
+      guests: [guest(20)],
+      occupants: [],
+    });
+    expect(plan.ok).toBe(false);
+    expect(plan.moves).toHaveLength(0);
+    expect(plan.blockers).toHaveLength(1);
+  });
+
+  it('blocks a guest with no architecture-compatible target', () => {
+    const plan = planDrain({
+      drainNode: 'pve-a',
+      targetNode: null,
+      nodes: [node('pve-a', 0.5, 'amd64'), node('pve-b', 0, 'arm64')],
+      guests: [guest(20)],
+      occupants: [],
+    });
+    expect(plan.ok).toBe(false);
+    expect(plan.moves).toHaveLength(0);
+    expect(plan.blockers[0]!.reason).toMatch(/architecture/i);
+  });
+
+  it('marks running guests live and stopped guests offline', () => {
+    const plan = planDrain({
+      drainNode: 'pve-a',
+      targetNode: null,
+      nodes: [node('pve-a', 0.5), node('pve-b', 0), node('pve-c', 0)],
+      guests: [
+        guest(20, { vmId: 'run', running: true }),
+        guest(20, { vmId: 'stop', running: false }),
+      ],
+      occupants: [],
+    });
+    const run = plan.moves.find((m) => m.vmId === 'run')!;
+    const stop = plan.moves.find((m) => m.vmId === 'stop')!;
+    expect(run.running).toBe(true);
+    expect(run.reason).toMatch(/live/i);
+    expect(stop.running).toBe(false);
+    expect(stop.reason).toMatch(/offline/i);
   });
 });

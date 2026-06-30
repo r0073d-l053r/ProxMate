@@ -28,6 +28,7 @@ import {
   saveBalancerSettings,
   computeClusterPlan,
   runMigrations,
+  planNodeDrain,
 } from '../services/cluster-balancer.service.js';
 import {
   checkForUpdate,
@@ -618,6 +619,30 @@ router.post('/balancer/apply', async (req: Request, res: Response) => {
     req,
   });
   res.status(202).json({ started: parsed.data.moves.length });
+});
+
+// ─── Maintenance: node drain ──────────────────────────────────
+// Plan the evacuation of a node before maintenance — move every managed guest
+// off it, either auto-placed on best-fit nodes or all onto one chosen target.
+// Apply reuses POST /balancer/apply with the returned moves.
+
+const DrainSchema = z.object({
+  node: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid node name'),
+  targetNode: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid node name').optional(),
+});
+
+router.post('/balancer/drain', async (req: Request, res: Response) => {
+  const parsed = DrainSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Choose a node to drain.' });
+    return;
+  }
+  try {
+    res.json(await planNodeDrain(parsed.data.node, parsed.data.targetNode));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : pveMessage(err);
+    res.status(/no such node|different target/i.test(msg) ? 400 : 502).json({ error: msg });
+  }
 });
 
 // ─── Updates ──────────────────────────────────────────────────

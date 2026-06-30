@@ -53,6 +53,11 @@ rough priority bands, not commitments. Have an idea? Open a
   x86↔ARM), **anti-affinity** via `aa:<group>` tags, **pinning** via `pin`/`no-balance` tags, and
   every candidate move must strictly lower the peak node load (no oscillation). Recommend mode shows
   a reviewable plan you apply by hand; auto mode applies on a ~15-min scheduler tick. _Done._
+  - **Maintenance mode (node drain)** ✅ — before taking a node down, evacuate every
+    ProxMate-managed guest off it (`POST /api/admin/balancer/drain` → plan; reuses `/balancer/apply`):
+    auto best-fit placement **or** bulk-migrate all to one chosen target, running guests **live** (no
+    downtime), stopped guests offline — same arch + anti-affinity guardrails. Unmanaged/foreign guests
+    are flagged for manual handling. _Done._
 
 ## Tier 4 — Reliability & observability ✅
 

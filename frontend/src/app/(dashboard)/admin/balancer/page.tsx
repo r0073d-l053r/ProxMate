@@ -28,6 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { MaintenanceDrain } from "@/components/admin/maintenance-drain";
 
 const MODE_LABEL: Record<BalancerMode, string> = {
   off: "Off",
@@ -299,6 +300,9 @@ export default function BalancerPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* ── Maintenance: node drain ─────────────────────────── */}
+      {plan && <MaintenanceDrain nodes={plan.nodes} onApplied={load} />}
     </div>
   );
 }
