@@ -46,6 +46,18 @@ rough priority bands, not commitments. Have an idea? Open a
 - **OpenAPI / Swagger spec** ✅ — served at `GET /api/openapi.json`. _Done._
 - **PostgreSQL option** — Prisma queries are portable and a switch is feasible, but **SQLite stays
   the default** and is the only supported datasource for now.
+- **Cluster Balancer (DRS-style workload balancing)** ✅ — evens out node **memory** load (the
+  binding constraint) by live-migrating ProxMate-managed guests off the hottest node onto the
+  coldest. Admin policy in **Admin → Balancer**: _Off / Recommend only / Auto-apply_, an imbalance
+  tolerance, a per-run move cap, and a never-move list. Guardrails: architecture-aware (never
+  x86↔ARM), **anti-affinity** via `aa:<group>` tags, **pinning** via `pin`/`no-balance` tags, and
+  every candidate move must strictly lower the peak node load (no oscillation). Recommend mode shows
+  a reviewable plan you apply by hand; auto mode applies on a ~15-min scheduler tick. _Done._
+  - **Maintenance mode (node drain)** ✅ — before taking a node down, evacuate every
+    ProxMate-managed guest off it (`POST /api/admin/balancer/drain` → plan; reuses `/balancer/apply`):
+    auto best-fit placement **or** bulk-migrate all to one chosen target, running guests **live** (no
+    downtime), stopped guests offline — same arch + anti-affinity guardrails. Unmanaged/foreign guests
+    are flagged for manual handling. _Done._
 
 ## Tier 4 — Reliability & observability ✅
 
@@ -99,3 +111,10 @@ then the **EDU** items. Status below reflects the CE build pass (shipped in **v0
 9. ✅ **Live updates over the wire — DONE (v0.3.4, via SSE).** One server poll loop fans live
    stats out to all admins over Server-Sent Events; the monitor falls back to polling.
 10. ~~**Audit-log retention, export & SIEM streaming.**~~ _Declined by the owner._
+11. ✅ **Cluster Balancer (DRS-style) — DONE.** Professional-grade workload balancing for the
+    API-only model: memory-load-based, recommend-first then opt-in auto-apply, with arch +
+    anti-affinity + pinning guardrails (Admin → Balancer). _Builds on:_ VM migration (#5) + the
+    arch-aware placement guardrail. See Tier 3 above for the full description.
+
+> **UI:** the admin **Usage** tab is now merged into **Users** (an in-page _Accounts / Usage_
+> toggle), so cluster ops live under one fewer nav entry.

@@ -24,6 +24,13 @@ import {
   QuotaRequestError,
 } from '../services/quota-request.service.js';
 import {
+  getBalancerSettings,
+  saveBalancerSettings,
+  computeClusterPlan,
+  runMigrations,
+  planNodeDrain,
+} from '../services/cluster-balancer.service.js';
+import {
   checkForUpdate,
   getUpdateStatus,
   requestUpdate,
@@ -534,6 +541,108 @@ router.post('/broadcast', async (req: Request, res: Response) => {
     req,
   });
   res.json({ ok: failed === 0, sent, failed, total: results.length });
+});
+
+// ─── Cluster Balancer (DRS-style workload balancing) ──────────
+// Reads node memory load and recommends/applies live migrations to even it out.
+// GET returns the current settings + a freshly computed plan (recommendations).
+
+router.get('/balancer', async (_req: Request, res: Response) => {
+  try {
+    const settings = await getBalancerSettings();
+    const plan = await computeClusterPlan(settings);
+    res.json({ settings, plan });
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+const BalancerSettingsSchema = z.object({
+  mode: z.enum(['off', 'recommend', 'auto']),
+  thresholdPct: z.number().int().min(5).max(50),
+  maxMoves: z.number().int().min(1).max(20),
+  exclude: z.array(z.number().int().positive()).max(500).default([]),
+});
+
+router.put('/balancer', async (req: Request, res: Response) => {
+  const parsed = BalancerSettingsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  const settings = await saveBalancerSettings(parsed.data);
+  await recordAudit({
+    action: 'balancer.settings',
+    actor: (req as AuthRequest).user,
+    detail: `mode=${settings.mode} threshold=${settings.thresholdPct}% maxMoves=${settings.maxMoves}`,
+    req,
+  });
+  // Return a fresh plan with the new settings; if Proxmox is briefly unreachable
+  // the settings still saved, so surface that as data rather than failing the save.
+  try {
+    res.json({ settings, plan: await computeClusterPlan(settings) });
+  } catch (err) {
+    res.json({ settings, plan: null, error: pveMessage(err) });
+  }
+});
+
+const BalancerApplySchema = z.object({
+  moves: z
+    .array(
+      z.object({
+        vmId: z.string().min(1),
+        toNode: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid node name'),
+      }),
+    )
+    .min(1)
+    .max(50),
+});
+
+router.post('/balancer/apply', async (req: Request, res: Response) => {
+  const parsed = BalancerApplySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Select at least one migration to apply.' });
+    return;
+  }
+  const user = (req as AuthRequest).user;
+  // Each migration can take minutes (live moves especially), so run them in the
+  // background instead of blocking the request (which an edge proxy could time
+  // out). Progress is visible on the Monitor and in the audit log; the Balancer
+  // page refetches its plan to show the settled placement.
+  void runMigrations(parsed.data.moves, user).catch((err) =>
+    console.error('[balancer] apply failed:', err),
+  );
+  await recordAudit({
+    action: 'balancer.apply',
+    actor: user,
+    detail: `${parsed.data.moves.length} migration(s) queued`,
+    req,
+  });
+  res.status(202).json({ started: parsed.data.moves.length });
+});
+
+// ─── Maintenance: node drain ──────────────────────────────────
+// Plan the evacuation of a node before maintenance — move every managed guest
+// off it, either auto-placed on best-fit nodes or all onto one chosen target.
+// Apply reuses POST /balancer/apply with the returned moves.
+
+const DrainSchema = z.object({
+  node: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid node name'),
+  targetNode: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid node name').optional(),
+});
+
+router.post('/balancer/drain', async (req: Request, res: Response) => {
+  const parsed = DrainSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Choose a node to drain.' });
+    return;
+  }
+  try {
+    res.json(await planNodeDrain(parsed.data.node, parsed.data.targetNode));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : pveMessage(err);
+    res.status(/no such node|different target/i.test(msg) ? 400 : 502).json({ error: msg });
+  }
 });
 
 // ─── Updates ──────────────────────────────────────────────────
