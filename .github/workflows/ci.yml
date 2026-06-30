@@ -2,11 +2,13 @@ name: CI
 
 on:
   push:
-    # Don't re-run the full CI on release tags — release.yml handles tag pushes,
-    # and the merge-commit run already validated the exact code the tag points at.
-    # (Avoids a redundant second run that can flake, e.g. the Playwright browser
-    # download hitting a mirror mid-sync.)
-    tags-ignore:
+    # Run on all *branch* pushes but not on tags. Filtering on `branches` (rather
+    # than `tags-ignore`) is what actually excludes tags: in GitHub Actions, a
+    # `push` trigger that specifies only tag filters stops firing on branch pushes
+    # altogether. release.yml handles tag pushes, and the merge-commit run already
+    # validated the exact code a release tag points at — so re-running the full CI
+    # on the tag was redundant work that gave transient flakes a second chance.
+    branches:
       - "**"
   pull_request:
 
