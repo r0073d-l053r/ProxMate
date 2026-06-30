@@ -509,7 +509,7 @@ router.post('/:id/migrate', async (req: Request, res: Response) => {
   const parsed = MigrateSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Choose a target node.' }); return; }
   try {
-    const updated = await migrateVmToNode(vm, parsed.data.targetNode);
+    const updated = await migrateVmToNode(vm, parsed.data.targetNode, { notifyOwner: true, actorId: user.id });
     await recordAudit({
       action: 'vm.migrate', actor: user, targetType: 'vm', targetId: vm.id,
       detail: `${vm.proxmoxNode} → ${parsed.data.targetNode}`, req,

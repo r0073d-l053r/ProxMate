@@ -2,6 +2,8 @@ import type { User, VirtualMachine, Template } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { getConfig } from './config.service.js';
 import { notify } from './notify.service.js';
+import { isMailConfigured, sendMail } from './mail.service.js';
+import { vmMaintenanceEmail } from '../lib/email-templates.js';
 import * as pve from './proxmox.service.js';
 
 /** Flag a VM as failed in the DB and fire a best-effort vm.error notification. */
@@ -393,7 +395,18 @@ export async function annotateAccess<T extends { id: string; userId: string }>(
  * offline otherwise. Honors the arch-aware guardrail (never cross architectures;
  * fail-open on unknown). Waits for the task, then records the new node.
  */
-export async function migrateVmToNode(vm: VirtualMachine, targetNode: string): Promise<VirtualMachine> {
+/**
+ * Move a VM to another node (live if running, offline if stopped). When
+ * `notifyOwner` is set — i.e. an admin kicked this off by hand or via a
+ * maintenance drain — the VM's owner gets a branded heads-up email as the move
+ * begins (skipped if the owner is the admin who triggered it). The auto-balancer
+ * leaves it unset, so routine rebalancing never emails tenants.
+ */
+export async function migrateVmToNode(
+  vm: VirtualMachine,
+  targetNode: string,
+  opts: { notifyOwner?: boolean; actorId?: string } = {},
+): Promise<VirtualMachine> {
   if (targetNode === vm.proxmoxNode) throw new Error('The VM is already on that node.');
   const client = await pve.getClient();
 
@@ -411,9 +424,28 @@ export async function migrateVmToNode(vm: VirtualMachine, targetNode: string): P
 
   const online = (await getVmWithLiveStatus(vm)).live?.status === 'running';
   const upid = await pve.migrateVm(vm.proxmoxNode, vm.proxmoxVmId, targetNode, online, client);
+
+  // Heads-up to the owner as the move starts (best-effort; never blocks the
+  // migration). Only for admin-initiated moves, and not when the admin is moving
+  // their own VM.
+  if (opts.notifyOwner && opts.actorId !== vm.userId) {
+    await notifyOwnerOfMigration(vm, online).catch((err) =>
+      console.error(`[migrate] owner notification failed for "${vm.name}":`, err),
+    );
+  }
+
   // The migrate task runs on the source node; a live migration can take a while.
   await pve.waitForTask(vm.proxmoxNode, upid, client, 1_800_000);
   return prisma.virtualMachine.update({ where: { id: vm.id }, data: { proxmoxNode: targetNode } });
+}
+
+/** Email a VM's owner that maintenance is moving their VM. No-op without SMTP. */
+async function notifyOwnerOfMigration(vm: VirtualMachine, live: boolean): Promise<void> {
+  if (!(await isMailConfigured())) return;
+  const owner = await prisma.user.findUnique({ where: { id: vm.userId } });
+  if (!owner?.email) return;
+  const mail = vmMaintenanceEmail({ vmName: vm.name, live });
+  await sendMail({ to: owner.email, ...mail });
 }
 
 /**
