@@ -521,3 +521,30 @@ export interface BalancerResponse {
   plan: BalancePlan | null;
   error?: string;
 }
+
+export interface DrainMove {
+  vmId: string;
+  proxmoxVmId: number;
+  name: string;
+  fromNode: string;
+  toNode: string;
+  memBytes: number;
+  running: boolean;
+  reason: string;
+}
+
+export interface DrainBlocker {
+  proxmoxVmId: number;
+  name: string;
+  reason: string;
+}
+
+export interface DrainPlan {
+  node: string;
+  targetNode: string | null;
+  ok: boolean;
+  reason: string;
+  moves: DrainMove[];
+  blockers: DrainBlocker[];
+  targets: BalancerNodeView[];
+}

@@ -437,3 +437,237 @@ export async function runAutoBalance(): Promise<{ applied: number; reason: strin
   await recordAudit({ action: 'balancer.auto_run', detail: `${applied}/${results.length} migrations applied` });
   return { applied, reason: plan.reason };
 }
+
+// ─── Maintenance: node drain (evacuate before powering off) ───
+//
+// Before an admin takes a node down for maintenance, evacuate every
+// ProxMate-managed guest off it — live-migrating running guests (no downtime
+// with shared storage) and offline-migrating stopped ones. Either spread them
+// onto best-fit nodes automatically, or push them all to one chosen target.
+
+export interface DrainGuest {
+  vmId: string;
+  proxmoxVmId: number;
+  name: string;
+  memBytes: number;
+  running: boolean;
+  antiAffinity: string[];
+}
+
+export interface DrainMove {
+  vmId: string;
+  proxmoxVmId: number;
+  name: string;
+  fromNode: string;
+  toNode: string;
+  memBytes: number;
+  running: boolean; // true = live migration, false = offline
+  reason: string;
+}
+
+export interface DrainBlocker {
+  proxmoxVmId: number;
+  name: string;
+  reason: string;
+}
+
+export interface DrainPlan {
+  node: string;
+  targetNode: string | null; // null = auto best-fit
+  /** True when every managed guest on the node has a placement. */
+  ok: boolean;
+  reason: string;
+  moves: DrainMove[];
+  blockers: DrainBlocker[];
+  targets: BalancerNodeView[]; // receiving nodes with projected load after the drain
+}
+
+export interface DrainInput {
+  drainNode: string;
+  targetNode: string | null;
+  nodes: BalancerNode[]; // all nodes, including the one being drained
+  guests: DrainGuest[]; // managed guests currently on the drain node
+  occupants: { node: string; antiAffinity: string[] }[]; // managed guests elsewhere (for anti-affinity)
+}
+
+/**
+ * Pure placement planner for a node drain. Greedily bin-packs the drained node's
+ * guests (largest first) onto receiving nodes — best-fit by free memory, honoring
+ * the architecture guardrail and anti-affinity. An explicit `targetNode` forces
+ * every guest there (an admin override, so capacity/anti-affinity aren't enforced,
+ * only architecture). No Proxmox/DB access → unit-tested directly.
+ */
+export function planDrain(input: DrainInput): DrainPlan {
+  const { drainNode, targetNode } = input;
+  const targets = input.nodes.filter((n) => n.online && n.name !== drainNode && n.memTotal > 0);
+  const total = new Map(targets.map((n) => [n.name, n.memTotal]));
+  const arch = new Map(targets.map((n) => [n.name, n.arch]));
+  const cpu = new Map(targets.map((n) => [n.name, n.cpu]));
+  const used = new Map(targets.map((n) => [n.name, n.memUsed]));
+
+  const aaByNode = new Map<string, Set<string>>(targets.map((n) => [n.name, new Set<string>()]));
+  for (const o of input.occupants) {
+    const set = aaByNode.get(o.node);
+    if (set) for (const g of o.antiAffinity) set.add(g);
+  }
+
+  const drainArch = input.nodes.find((n) => n.name === drainNode)?.arch ?? 'unknown';
+  const archOk = (t: string): boolean => {
+    const ta = arch.get(t)!;
+    return drainArch === 'unknown' || ta === 'unknown' || ta === drainArch;
+  };
+
+  const moves: DrainMove[] = [];
+  const blockers: DrainBlocker[] = [];
+  const ordered = [...input.guests].sort((a, b) => b.memBytes - a.memBytes); // largest first
+  const explicit = targetNode ? targets.find((n) => n.name === targetNode) : undefined;
+
+  for (const g of ordered) {
+    let pick: string | undefined;
+
+    if (targetNode) {
+      if (!explicit) {
+        blockers.push({ proxmoxVmId: g.proxmoxVmId, name: g.name, reason: `Target ${targetNode} is offline or doesn't exist.` });
+        continue;
+      }
+      if (!archOk(targetNode)) {
+        blockers.push({ proxmoxVmId: g.proxmoxVmId, name: g.name, reason: `Architecture mismatch with ${targetNode}.` });
+        continue;
+      }
+      pick = targetNode; // admin override — only the arch guardrail is enforced
+    } else {
+      const compatible = targets.filter((n) => archOk(n.name));
+      const safe = compatible.filter((n) => {
+        if (g.antiAffinity.length === 0) return true;
+        const set = aaByNode.get(n.name)!;
+        return !g.antiAffinity.some((grp) => set.has(grp));
+      });
+      const pool = safe.length > 0 ? safe : compatible; // fall back if anti-affinity can't be met
+      if (pool.length === 0) {
+        blockers.push({ proxmoxVmId: g.proxmoxVmId, name: g.name, reason: 'No architecture-compatible node is available to receive it.' });
+        continue;
+      }
+      // Prefer nodes the guest actually fits on; among those, the most free memory.
+      pick = pool
+        .map((n) => {
+          const freeAfter = total.get(n.name)! - (used.get(n.name)! + g.memBytes);
+          return { name: n.name, fits: freeAfter >= 0, freeAfter };
+        })
+        .sort((a, b) => Number(b.fits) - Number(a.fits) || b.freeAfter - a.freeAfter)[0]!.name;
+    }
+
+    used.set(pick, used.get(pick)! + g.memBytes);
+    if (g.antiAffinity.length) {
+      const set = aaByNode.get(pick);
+      if (set) for (const grp of g.antiAffinity) set.add(grp);
+    }
+    moves.push({
+      vmId: g.vmId,
+      proxmoxVmId: g.proxmoxVmId,
+      name: g.name,
+      fromNode: drainNode,
+      toNode: pick,
+      memBytes: g.memBytes,
+      running: g.running,
+      reason: g.running ? 'Live migration (no downtime)' : 'Offline migration (guest is stopped)',
+    });
+  }
+
+  const targetsView: BalancerNodeView[] = targets.map((n) => ({
+    name: n.name,
+    online: true,
+    arch: arch.get(n.name)!,
+    cpuPct: round1(cpu.get(n.name)! * 100),
+    memUsed: used.get(n.name)!,
+    memTotal: total.get(n.name)!,
+    loadPct: round1(loadFrac(used.get(n.name)!, total.get(n.name)!) * 100),
+    vmCount: moves.filter((m) => m.toNode === n.name).length,
+  }));
+
+  const live = moves.filter((m) => m.running).length;
+  const offline = moves.length - live;
+  const ok = blockers.length === 0 && moves.length === input.guests.length;
+  let reason: string;
+  if (input.guests.length === 0) {
+    reason = `No ProxMate-managed guests are on ${drainNode}.`;
+  } else if (moves.length === 0) {
+    reason = `Couldn't place any guest off ${drainNode} — see blockers below.`;
+  } else {
+    const how = live && offline ? `${live} live, ${offline} offline` : live ? 'live — no downtime' : 'offline';
+    reason = `Evacuate ${moves.length} guest${moves.length === 1 ? '' : 's'} off ${drainNode} (${how}) ${targetNode ? `to ${targetNode}` : 'onto best-fit nodes'}.`;
+  }
+
+  return { node: drainNode, targetNode: targetNode ?? null, ok, reason, moves, blockers, targets: targetsView };
+}
+
+/** Gather a live snapshot and compute a drain plan for `node`. */
+export async function planNodeDrain(
+  node: string,
+  targetNode?: string,
+  client?: AxiosInstance,
+): Promise<DrainPlan> {
+  const c = client ?? (await pve.getClient());
+  const [health, archMap, resources, dbVms] = await Promise.all([
+    pve.getNodesHealth(c),
+    pve.getNodeArchMap(c),
+    c.get<{ data: VmResource[] }>('/cluster/resources?type=vm'),
+    prisma.virtualMachine.findMany(),
+  ]);
+
+  const nodeNames = new Set(health.nodes.map((n) => n.name));
+  if (!nodeNames.has(node)) throw new Error(`No such node "${node}".`);
+  if (targetNode) {
+    if (targetNode === node) throw new Error('Choose a different target node.');
+    if (!nodeNames.has(targetNode)) throw new Error(`No such node "${targetNode}".`);
+  }
+
+  const dbByVmid = new Map(dbVms.map((v) => [v.proxmoxVmId, v]));
+  const qemu = resources.data.data.filter((r) => r.type === 'qemu' && typeof r.vmid === 'number');
+
+  const guests: DrainGuest[] = [];
+  const unmanaged: DrainBlocker[] = [];
+  for (const r of qemu) {
+    if (r.node !== node || (r.template ?? 0) === 1) continue;
+    const db = dbByVmid.get(r.vmid!);
+    if (!db) {
+      unmanaged.push({
+        proxmoxVmId: r.vmid!,
+        name: r.name ?? `VM ${r.vmid}`,
+        reason: 'Not managed by ProxMate — migrate or power it off manually.',
+      });
+      continue;
+    }
+    guests.push({
+      vmId: db.id,
+      proxmoxVmId: db.proxmoxVmId,
+      name: db.name,
+      memBytes: r.mem ?? 0,
+      running: r.status === 'running',
+      antiAffinity: antiAffinityGroups(parseTags(db.tags)),
+    });
+  }
+
+  const occupants: { node: string; antiAffinity: string[] }[] = [];
+  for (const r of qemu) {
+    if (r.node === node || (r.template ?? 0) === 1 || !r.node) continue;
+    const db = dbByVmid.get(r.vmid!);
+    if (!db) continue;
+    occupants.push({ node: r.node, antiAffinity: antiAffinityGroups(parseTags(db.tags)) });
+  }
+
+  const nodes: BalancerNode[] = health.nodes.map((n) => ({
+    name: n.name,
+    online: n.online,
+    arch: archMap.get(n.name) ?? 'unknown',
+    memUsed: n.mem.used,
+    memTotal: n.mem.total,
+    cpu: n.cpu,
+  }));
+
+  const plan = planDrain({ drainNode: node, targetNode: targetNode ?? null, nodes, guests, occupants });
+  if (unmanaged.length > 0) {
+    plan.blockers.push(...unmanaged);
+    plan.reason += ` ${unmanaged.length} guest${unmanaged.length === 1 ? '' : 's'} not managed by ProxMate must be moved or stopped manually.`;
+  }
+  return plan;
+}
