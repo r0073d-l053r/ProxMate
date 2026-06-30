@@ -11,6 +11,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { QuotaCard } from "@/components/dashboard/quota-card";
 import { ClusterLoadCard } from "@/components/dashboard/cluster-load-card";
 import { LiveUsageCard } from "@/components/dashboard/live-usage-card";
+import { RequestQuotaDialog } from "@/components/dashboard/request-quota-dialog";
 import { OwnerGroupHeader } from "@/components/dashboard/owner-group-header";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -144,11 +145,14 @@ export default function DashboardPage() {
           <Skeleton className="h-64" />
         )
       ) : me ? (
-        <div className="grid gap-4 sm:grid-cols-3">
-          <QuotaCard label="vCPU" icon={Cpu} used={me.quota.cpu.used} max={me.quota.cpu.max} display={(n) => `${n}`} />
-          <QuotaCard label="Memory" icon={MemoryStick} used={me.quota.ram.used} max={me.quota.ram.max} display={formatRam} />
-          <QuotaCard label="Storage" icon={HardDrive} used={me.quota.storage.used} max={me.quota.storage.max} display={(n) => `${n} GB`} />
-        </div>
+        <>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <QuotaCard label="vCPU" icon={Cpu} used={me.quota.cpu.used} max={me.quota.cpu.max} display={(n) => `${n}`} />
+            <QuotaCard label="Memory" icon={MemoryStick} used={me.quota.ram.used} max={me.quota.ram.max} display={formatRam} />
+            <QuotaCard label="Storage" icon={HardDrive} used={me.quota.storage.used} max={me.quota.storage.max} display={(n) => `${n} GB`} />
+          </div>
+          <RequestQuotaDialog quota={me.quota} />
+        </>
       ) : (
         <div className="grid gap-4 sm:grid-cols-3">
           <Skeleton className="h-28" />

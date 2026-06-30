@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Trash2, KeyRound, Loader2, RefreshCw, Save } from "lucide-react";
+import { Trash2, KeyRound, Loader2, RefreshCw, Save, Check, X } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
-import type { ManagedUser, PasswordResetRequest } from "@/lib/types";
+import type { ManagedUser, PasswordResetRequest, PendingQuotaRequest } from "@/lib/types";
 import { formatRam, formatDate } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { FormField } from "@/components/form-field";
@@ -36,6 +36,7 @@ import {
 export default function UsersPage() {
   const [users, setUsers] = useState<ManagedUser[] | null>(null);
   const [requests, setRequests] = useState<PasswordResetRequest[]>([]);
+  const [quotaReqs, setQuotaReqs] = useState<PendingQuotaRequest[]>([]);
   const meId = useAuthStore((s) => s.user?.id);
 
   const load = useCallback(() => {
@@ -47,9 +48,23 @@ export default function UsersPage() {
       .get<PasswordResetRequest[]>("/admin/password-requests")
       .then((res) => setRequests(res.data))
       .catch(() => setRequests([]));
+    api
+      .get<PendingQuotaRequest[]>("/admin/quota-requests")
+      .then((res) => setQuotaReqs(res.data))
+      .catch(() => setQuotaReqs([]));
   }, []);
 
   useEffect(load, [load]);
+
+  async function resolveQuota(id: string, action: "approve" | "deny") {
+    try {
+      await api.post(`/admin/quota-requests/${id}/${action}`);
+      toast.success(action === "approve" ? "Quota request approved." : "Quota request denied.");
+      load();
+    } catch (err) {
+      toast.error(apiError(err));
+    }
+  }
 
   async function onDelete(id: string) {
     try {
@@ -66,6 +81,44 @@ export default function UsersPage() {
   return (
     <div className="mx-auto max-w-5xl">
       <PageHeader title="Users" description="Manage accounts and their resource quotas." />
+
+      {quotaReqs.length > 0 && (
+        <Card className="mb-4 border-primary/40 bg-primary/5">
+          <CardContent className="grid gap-2.5 py-3">
+            <div className="text-sm font-medium">
+              {quotaReqs.length} quota {quotaReqs.length === 1 ? "request" : "requests"} awaiting review
+            </div>
+            {quotaReqs.map((q) => (
+              <div
+                key={q.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background p-2.5"
+              >
+                <div className="min-w-0 text-sm">
+                  <div className="font-medium">
+                    {q.user.displayName}{" "}
+                    <span className="text-xs font-normal text-muted-foreground">· {q.user.email}</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {q.user.quota.cpu}→{q.cpu} vCPU · {formatRam(q.user.quota.ram)}→{formatRam(q.ram)} ·{" "}
+                    {q.user.quota.storage}→{q.storage} GB
+                  </div>
+                  {q.reason && (
+                    <div className="mt-0.5 text-xs italic text-muted-foreground">&ldquo;{q.reason}&rdquo;</div>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Button size="sm" variant="outline" onClick={() => resolveQuota(q.id, "approve")}>
+                    <Check /> Approve
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => resolveQuota(q.id, "deny")}>
+                    <X /> Deny
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {requests.length > 0 && (
         <Card className="mb-4 border-primary/40 bg-primary/5">
