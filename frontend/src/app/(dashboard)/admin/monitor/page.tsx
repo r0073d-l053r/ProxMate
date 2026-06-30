@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Crown, User, Activity, ServerOff, Maximize } from "lucide-react";
-import { api, apiError } from "@/lib/api";
+import { api, apiError, apiBaseUrl } from "@/lib/api";
 import type { UserGroup, LiveStats } from "@/lib/types";
 import { formatRam } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
@@ -43,6 +43,26 @@ export default function AdminMonitorPage() {
   const [statsError, setStatsError] = useState<string | null>(null);
   const [pollMs, setPollMs] = useState<number>(DEFAULT_POLL_MS);
   const inFlight = useRef(false);
+  // Live-stats arrive via one server push (SSE); the render loop reads this ref at
+  // the chosen cadence. If the stream drops, the loop falls back to HTTP polling.
+  const latestRef = useRef<LiveStats>({});
+  const sseOkRef = useRef(false);
+
+  useEffect(() => {
+    const es = new EventSource(`${apiBaseUrl}/admin/live-feed`, { withCredentials: true });
+    es.onmessage = (e) => {
+      try {
+        latestRef.current = JSON.parse(e.data) as LiveStats;
+        sseOkRef.current = true;
+      } catch {
+        /* keep the last good frame */
+      }
+    };
+    es.onerror = () => {
+      sseOkRef.current = false; // fall back to polling until the stream recovers
+    };
+    return () => es.close();
+  }, []);
 
   // Restore the saved cadence after mount (avoids an SSR/hydration mismatch), and
   // persist any change.
@@ -74,14 +94,23 @@ export default function AdminMonitorPage() {
     let cancelled = false;
 
     const tick = async () => {
-      // Pause polling when the tab isn't visible — there's no one watching.
+      // Pause when the tab isn't visible — there's no one watching.
       if (document.visibilityState !== "visible") return;
-      // Drop overlapping ticks if a previous request is still in flight.
+      // SSE is delivering → just render the latest pushed frame (no HTTP).
+      if (sseOkRef.current) {
+        if (!cancelled) {
+          setStats(latestRef.current);
+          setStatsError(null);
+        }
+        return;
+      }
+      // Fallback path: poll the cached endpoint until the stream recovers.
       if (inFlight.current) return;
       inFlight.current = true;
       try {
         const res = await api.get<LiveStats>("/admin/live-stats");
         if (!cancelled) {
+          latestRef.current = res.data;
           setStats(res.data);
           setStatsError(null);
         }

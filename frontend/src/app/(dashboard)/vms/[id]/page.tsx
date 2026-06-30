@@ -55,6 +55,8 @@ import { SnapshotsPanel } from "@/components/vm/snapshots-panel";
 import { PowerSchedulePanel } from "@/components/vm/power-schedule-panel";
 import { BackupPolicyPanel } from "@/components/vm/backup-policy-panel";
 import { SharePanel } from "@/components/vm/share-panel";
+import { DisksPanel } from "@/components/vm/disks-panel";
+import { MigrateDialog } from "@/components/vm/migrate-dialog";
 import { useAuthStore } from "@/lib/auth-store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -1154,6 +1156,10 @@ export default function VmDetailPage() {
           </AlertDialog>
         )}
 
+        {isAdmin && (
+          <MigrateDialog vmId={vm.id} currentNode={vm.proxmoxNode} running={running} onDone={load} />
+        )}
+
         <div className="ml-auto">
           <AlertDialog>
             <AlertDialogTrigger
@@ -1249,6 +1255,8 @@ export default function VmDetailPage() {
       {canWrite && <MateStatesPanel vmId={vm.id} vmName={vm.name} />}
 
       {canWrite && <BackupPolicyPanel vmId={vm.id} />}
+
+      {canWrite && <DisksPanel vmId={vm.id} onChanged={load} />}
 
       {isManager && <SharePanel vmId={vm.id} />}
 
