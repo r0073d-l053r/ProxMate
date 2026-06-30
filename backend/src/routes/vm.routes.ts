@@ -28,6 +28,7 @@ import {
   setBackupPolicy,
 } from '../services/matestate.service.js';
 import { listShares, addShare, removeShare, SHARE_ROLES, ShareError } from '../services/vm-share.service.js';
+import { listDisks, addDataDisk, resizeDataDisk, removeDataDisk } from '../services/disk.service.js';
 import {
   QuotaError,
   ResizeError,
@@ -43,6 +44,7 @@ import {
   getWritableVm,
   resolveVmAccess,
   annotateAccess,
+  migrateVmToNode,
   getVmWithLiveStatus,
   updateVm,
   setPowerSchedule,
@@ -419,6 +421,104 @@ router.put('/:id/backup-policy', async (req: Request, res: Response) => {
     detail: `${vm.name}: backup=${backupCron ?? 'default'} keep=${backupKeep ?? 'default'}`, req,
   });
   res.json({ backupCron: updated.backupCron, backupKeep: updated.backupKeep });
+});
+
+// ─── Data disks (extra volumes) ───────────────────────────────
+// View for any access level; mutate requires write access (co-owner+). The VM's
+// `storage` (total provisioned GB) and the owner's quota are kept in step.
+
+router.get('/:id/disks', async (req: Request, res: Response) => {
+  const vm = await getViewableVm(req.params['id'] as string, (req as AuthRequest).user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  try {
+    res.json(await listDisks(vm));
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+const DiskSizeSchema = z.object({ sizeGb: z.number().int().min(1).max(4096) });
+const DISK_SLOT_RE = /^(scsi|virtio|sata|ide)\d+$/;
+
+router.post('/:id/disks', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getWritableVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  const parsed = DiskSizeSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Enter a disk size in GB.' }); return; }
+  try {
+    const disk = await addDataDisk(vm, parsed.data.sizeGb);
+    await recordAudit({ action: 'vm.disk_add', actor: user, targetType: 'vm', targetId: vm.id, detail: `${disk.slot} +${disk.sizeGb}GB`, req });
+    res.status(201).json(disk);
+  } catch (err) {
+    if (err instanceof QuotaError) { res.status(403).json({ error: 'Quota exceeded', details: err.details }); return; }
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+router.patch('/:id/disks/:slot', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getWritableVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  const slot = req.params['slot'] as string;
+  if (!DISK_SLOT_RE.test(slot)) { res.status(400).json({ error: 'Invalid disk.' }); return; }
+  const parsed = DiskSizeSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Enter a new size in GB.' }); return; }
+  try {
+    await resizeDataDisk(vm, slot, parsed.data.sizeGb);
+    await recordAudit({ action: 'vm.disk_resize', actor: user, targetType: 'vm', targetId: vm.id, detail: `${slot} → ${parsed.data.sizeGb}GB`, req });
+    res.json({ success: true });
+  } catch (err) {
+    if (err instanceof QuotaError) { res.status(403).json({ error: 'Quota exceeded', details: err.details }); return; }
+    const msg = err instanceof Error ? err.message : pveMessage(err);
+    res.status(/grow|root|not found/i.test(msg) ? 400 : 502).json({ error: msg });
+  }
+});
+
+router.delete('/:id/disks/:slot', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getWritableVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  const slot = req.params['slot'] as string;
+  if (!DISK_SLOT_RE.test(slot)) { res.status(400).json({ error: 'Invalid disk.' }); return; }
+  try {
+    await removeDataDisk(vm, slot);
+    await recordAudit({ action: 'vm.disk_remove', actor: user, targetType: 'vm', targetId: vm.id, detail: slot, req });
+    res.json({ success: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : pveMessage(err);
+    res.status(/root|not found/i.test(msg) ? 400 : 502).json({ error: msg });
+  }
+});
+
+// ─── POST /api/vms/:id/migrate (admin only) ───────────────────
+// Move a VM to another cluster node (live if running, offline otherwise).
+
+const MigrateSchema = z.object({
+  targetNode: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid node name'),
+});
+
+router.post('/:id/migrate', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  if (user.role !== 'admin') {
+    res.status(403).json({ error: 'Only an admin can migrate VMs between nodes.' });
+    return;
+  }
+  const vm = await getOwnedVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  const parsed = MigrateSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Choose a target node.' }); return; }
+  try {
+    const updated = await migrateVmToNode(vm, parsed.data.targetNode);
+    await recordAudit({
+      action: 'vm.migrate', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `${vm.proxmoxNode} → ${parsed.data.targetNode}`, req,
+    });
+    res.json({ success: true, proxmoxNode: updated.proxmoxNode });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : pveMessage(err);
+    res.status(/already on|No such node|mismatch/i.test(msg) ? 400 : 502).json({ error: msg });
+  }
 });
 
 // ─── VM sharing (owner/admin only) ────────────────────────────

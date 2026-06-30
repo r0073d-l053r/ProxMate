@@ -43,6 +43,28 @@ model User {
   sshKeys        SshKey[]
   apiTokens      ApiToken[]
   vmShares       VmShare[]
+  quotaRequests  QuotaRequest[]
+}
+
+// A tenant's request to raise their resource quota; an admin approves (applies the
+// new caps) or denies. Absolute target values, so approval just writes them onto
+// the user. One pending request per user at a time (enforced in the service).
+model QuotaRequest {
+  id           String    @id @default(cuid())
+  userId       String
+  cpu          Int                       // requested new max vCPU
+  ram          Int                       // requested new max RAM (MB)
+  storage      Int                       // requested new max storage (GB)
+  reason       String?
+  status       String    @default("pending") // pending | approved | denied
+  createdAt    DateTime  @default(now())
+  resolvedAt   DateTime?
+  resolvedById String?                   // admin who approved/denied
+
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
 }
 
 // A personal API token for programmatic access (CLI / Terraform / scripts). The raw
