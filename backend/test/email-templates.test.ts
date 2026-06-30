@@ -5,6 +5,7 @@ import {
   accountLockedEmail,
   inviteEmail,
   announcementEmail,
+  vmMaintenanceEmail,
   type RenderedEmail,
 } from '../src/lib/email-templates.js';
 
@@ -51,6 +52,8 @@ const SAMPLES: Array<[string, RenderedEmail]> = [
     }),
   ],
   ['announcement', announcementEmail('Scheduled maintenance', 'Down 10–11pm ET tonight.')],
+  ['vm maintenance (live)', vmMaintenanceEmail({ vmName: 'web-1', live: true })],
+  ['vm maintenance (offline)', vmMaintenanceEmail({ vmName: 'web-1', live: false })],
 ];
 
 describe('email-templates — shared branding', () => {
@@ -123,6 +126,28 @@ describe('announcementEmail', () => {
 
   it('escapes HTML in the admin-supplied message', () => {
     const email = announcementEmail('Heads up', '<b>bold</b> & <script>x</script>');
+    expect(email.html).not.toContain('<script>x</script>');
+    expect(email.html).toContain('&lt;script&gt;');
+  });
+});
+
+describe('vmMaintenanceEmail', () => {
+  it('names the VM in the subject and tells a running guest to expect only a brief blip', () => {
+    const email = vmMaintenanceEmail({ vmName: 'db-prod', live: true });
+    expect(email.subject).toContain('db-prod');
+    expect(email.html).toContain('db-prod');
+    expect(email.text).toMatch(/momentary interruption|second or less/i);
+    expect(email.text).toMatch(/no action is needed/i);
+  });
+
+  it('tells a stopped guest there is no extra interruption', () => {
+    const email = vmMaintenanceEmail({ vmName: 'archive', live: false });
+    expect(email.text).toMatch(/powered off|no extra interruption/i);
+    expect(email.text).not.toMatch(/momentary interruption/i);
+  });
+
+  it('escapes HTML in the VM name', () => {
+    const email = vmMaintenanceEmail({ vmName: '<script>x</script>', live: true });
     expect(email.html).not.toContain('<script>x</script>');
     expect(email.html).toContain('&lt;script&gt;');
   });

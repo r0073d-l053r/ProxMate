@@ -837,7 +837,14 @@ export async function migrateVm(
 ): Promise<string> {
   const c = client ?? (await getClient());
   const params = new URLSearchParams({ target });
-  if (online) params.set('online', '1');
+  if (online) {
+    params.set('online', '1');
+    // Allow live migration even when the guest sits on node-local storage
+    // (local-lvm, local ZFS, …): Proxmox copies the disk during the move instead
+    // of refusing. A no-op for VMs already on shared storage (Ceph/NFS), where
+    // only RAM transfers. Same-named storage on the target is assumed.
+    params.set('with-local-disks', '1');
+  }
   const res = await c.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/migrate`, params);
   return res.data.data;
 }
