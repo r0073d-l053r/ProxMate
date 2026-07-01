@@ -453,6 +453,14 @@ export async function deleteStorageVolume(node: string, volid: string, client?: 
   await c.delete(`/nodes/${node}/storage/${storage}/content/${encodeURIComponent(volid)}`);
 }
 
+// ─── Guest kind (QEMU VM vs LXC container) ────────────────────
+//
+// Almost every per-guest Proxmox endpoint is /nodes/{node}/{qemu|lxc}/{vmid}/…
+// The shared lifecycle helpers below take an optional trailing `kind` (default
+// 'qemu', so existing QEMU callers are unchanged). The GuestKind values are
+// exactly the path segments, so they're interpolated directly.
+export type GuestKind = 'qemu' | 'lxc';
+
 // ─── VM lifecycle ─────────────────────────────────────────────
 
 export async function getNextVmId(client?: AxiosInstance): Promise<number> {
@@ -494,6 +502,145 @@ export async function createVm(config: CreateVmConfig, client?: AxiosInstance): 
   });
   const res = await c.post<{ data: string }>(`/nodes/${config.node}/qemu`, params);
   return res.data.data;
+}
+
+// ─── LXC containers ───────────────────────────────────────────
+
+export interface CreateLxcConfig {
+  node: string;
+  vmid: number;
+  hostname: string;
+  cores: number;
+  memory: number; // MB
+  swap?: number; // MB (default 512)
+  diskGb: number;
+  storage: string; // rootfs storage pool
+  bridge: string;
+  ostemplate: string; // full volid, e.g. "local:vztmpl/debian-12-standard_….tar.zst"
+  password?: string;
+  sshPublicKeys?: string; // OpenSSH public key(s)
+  unprivileged?: boolean; // default true
+}
+
+/**
+ * Create an LXC container. Returns the Proxmox task UPID. The NIC carries
+ * `firewall=1` so tenant isolation (configureVmIsolation) applies before it ever
+ * boots — same model as QEMU VMs. Started separately (start=0) so isolation can
+ * be locked down first.
+ */
+export async function createLxc(config: CreateLxcConfig, client?: AxiosInstance): Promise<string> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams({
+    vmid: String(config.vmid),
+    hostname: config.hostname,
+    cores: String(config.cores),
+    memory: String(config.memory),
+    swap: String(config.swap ?? 512),
+    rootfs: `${config.storage}:${config.diskGb}`,
+    // firewall=1 enables the per-NIC Proxmox firewall (tenant isolation).
+    net0: `name=eth0,bridge=${config.bridge},firewall=1,ip=dhcp`,
+    ostemplate: config.ostemplate,
+    unprivileged: config.unprivileged === false ? '0' : '1',
+    start: '0',
+  });
+  if (config.password) params.set('password', config.password);
+  if (config.sshPublicKeys) params.set('ssh-public-keys', config.sshPublicKeys);
+  const res = await c.post<{ data: string }>(`/nodes/${config.node}/lxc`, params);
+  return res.data.data;
+}
+
+export interface PveLxcTemplate {
+  volid: string; // e.g. "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
+  name: string; // filename portion
+  storage: string;
+  size?: number;
+}
+
+/**
+ * List LXC OS templates (vztmpl content) across the cluster, deduped by volid.
+ * Admins add these via Proxmox `pveam` / the UI, just like ISOs. Scans every
+ * storage that advertises `vztmpl` content on each node.
+ */
+export async function listLxcTemplates(client?: AxiosInstance): Promise<PveLxcTemplate[]> {
+  const c = client ?? (await getClient());
+  const [nodes, storages] = await Promise.all([getNodes(c), getStorages(c)]);
+  const tmplStorages = storages.filter((s) => (s.content ?? '').split(',').includes('vztmpl')).map((s) => s.storage);
+  const seen = new Map<string, PveLxcTemplate>();
+
+  for (const { node } of nodes) {
+    for (const storage of tmplStorages) {
+      try {
+        const res = await c.get<{ data: Array<{ volid: string; size?: number }> }>(
+          `/nodes/${node}/storage/${storage}/content?content=vztmpl`,
+        );
+        for (const item of res.data.data) {
+          if (!seen.has(item.volid)) {
+            seen.set(item.volid, {
+              volid: item.volid,
+              name: item.volid.split('/').pop() ?? item.volid,
+              storage,
+              size: item.size,
+            });
+          }
+        }
+      } catch {
+        // Storage not present/readable on this node (node-local storage) — skip.
+      }
+    }
+  }
+  return [...seen.values()];
+}
+
+/**
+ * Which online nodes physically hold a given LXC template volume. Mirrors
+ * getIsoNodes: node-local template storage (e.g. `local`) only holds the file on
+ * the node it was downloaded to, so an LXC referencing it can only be built
+ * there; shared storage returns every node. Constrains auto-placement.
+ */
+export async function getTemplateNodes(volid: string, client?: AxiosInstance): Promise<string[]> {
+  const c = client ?? (await getClient());
+  const storage = volid.split(':')[0];
+  if (!storage) return [];
+  const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources');
+  const nodeNames = res.data.data
+    .filter((i) => i.type === 'node' && i.status === 'online' && i.node)
+    .map((i) => i.node!);
+
+  const result: string[] = [];
+  for (const node of nodeNames) {
+    try {
+      const content = await c.get<{ data: Array<{ volid: string }> }>(
+        `/nodes/${node}/storage/${storage}/content?content=vztmpl`,
+      );
+      if (content.data.data?.some((i) => i.volid === volid)) result.push(node);
+    } catch {
+      // template storage not present/readable on this node → not a candidate.
+    }
+  }
+  return result;
+}
+
+/**
+ * Best-effort LXC container IP (no guest agent needed — Proxmox reads it from the
+ * container's network namespace). Returns the first non-loopback IPv4, or null.
+ */
+export async function getLxcIpAddress(node: string, vmid: number, client?: AxiosInstance): Promise<string | null> {
+  const c = client ?? (await getClient());
+  try {
+    const res = await c.get<{ data: Array<{ name?: string; inet?: string }> }>(
+      `/nodes/${node}/lxc/${vmid}/interfaces`,
+      { timeout: 2000 },
+    );
+    for (const iface of res.data.data ?? []) {
+      if (iface.name === 'lo') continue;
+      // `inet` is a CIDR like "192.168.50.40/24"; strip the prefix.
+      const ip = iface.inet?.split('/')[0];
+      if (ip && !ip.startsWith('127.')) return ip;
+    }
+    return null;
+  } catch {
+    return null; // container stopped, or interfaces unavailable
+  }
 }
 
 export interface CloudInitVmConfig {
@@ -751,17 +898,18 @@ export async function waitForTask(
   throw new Error('Proxmox task timed out');
 }
 
-/** Update a VM's CPU cores and memory (MB). */
+/** Update a guest's CPU cores and memory (MB). Works for both QEMU and LXC. */
 export async function setVmResources(
   node: string,
   vmid: number,
   cores: number,
   memory: number,
   client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
 ): Promise<void> {
   const c = client ?? (await getClient());
   await c.put(
-    `/nodes/${node}/qemu/${vmid}/config`,
+    `/nodes/${node}/${kind}/${vmid}/config`,
     new URLSearchParams({ cores: String(cores), memory: String(memory) }),
   );
 }
@@ -777,17 +925,19 @@ export async function setVmName(
   await c.put(`/nodes/${node}/qemu/${vmid}/config`, new URLSearchParams({ name }));
 }
 
-/** Grow a VM disk to an absolute size in GB (Proxmox only supports growing). */
+/** Grow a guest disk to an absolute size in GB (Proxmox only supports growing).
+ *  For LXC the disk is `rootfs`; for QEMU a slot like `scsi0`. */
 export async function resizeDisk(
   node: string,
   vmid: number,
   disk: string,
   sizeGb: number,
   client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
 ): Promise<void> {
   const c = client ?? (await getClient());
   await c.put(
-    `/nodes/${node}/qemu/${vmid}/resize`,
+    `/nodes/${node}/${kind}/${vmid}/resize`,
     new URLSearchParams({ disk, size: `${sizeGb}G` }),
   );
 }
@@ -849,14 +999,15 @@ export async function migrateVm(
   return res.data.data;
 }
 
-/** Read a VM's config as a string map. */
+/** Read a guest's config as a string map. Works for both QEMU and LXC. */
 export async function getVmConfig(
   node: string,
   vmid: number,
   client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
 ): Promise<Record<string, string>> {
   const c = client ?? (await getClient());
-  const res = await c.get<{ data: Record<string, unknown> }>(`/nodes/${node}/qemu/${vmid}/config`);
+  const res = await c.get<{ data: Record<string, unknown> }>(`/nodes/${node}/${kind}/${vmid}/config`);
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(res.data.data)) out[k] = String(v);
   return out;
@@ -958,14 +1109,28 @@ export async function deleteBackup(
 }
 
 /**
- * Restore a backup into an EXISTING VMID (overwrites the VM in place). The VM must
- * be stopped first. Returns the Proxmox task UPID.
+ * Restore a backup into an EXISTING VMID (overwrites the guest in place). The
+ * guest must be stopped first. Returns the Proxmox task UPID. QEMU and LXC use
+ * different restore shapes: QEMU takes `archive=<volid>` on POST /qemu; LXC takes
+ * `ostemplate=<volid>` + `restore=1` on POST /lxc.
  */
 export async function restoreBackup(
   opts: { node: string; vmid: number; volid: string; storage?: string },
   client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
 ): Promise<string> {
   const c = client ?? (await getClient());
+  if (kind === 'lxc') {
+    const params = new URLSearchParams({
+      vmid: String(opts.vmid),
+      ostemplate: opts.volid,
+      restore: '1',
+      force: '1', // overwrite the existing container
+    });
+    if (opts.storage) params.set('storage', opts.storage);
+    const res = await c.post<{ data: string }>(`/nodes/${opts.node}/lxc`, params);
+    return res.data.data;
+  }
   const params = new URLSearchParams({
     vmid: String(opts.vmid),
     archive: opts.volid,
@@ -1046,19 +1211,21 @@ export async function rollbackSnapshot(
   return res.data.data;
 }
 
-/** Ensure every NIC on a VM has the per-NIC firewall flag set (for cloned VMs). */
+/** Ensure every NIC on a guest has the per-NIC firewall flag set (for cloned VMs
+ *  and restores). Works for both QEMU and LXC (both use `netN` keys). */
 export async function ensureNicFirewall(
   node: string,
   vmid: number,
   client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
 ): Promise<void> {
   const c = client ?? (await getClient());
-  const cfg = await getVmConfig(node, vmid, c);
+  const cfg = await getVmConfig(node, vmid, c, kind);
   for (const k of Object.keys(cfg).filter((key) => /^net\d+$/.test(key))) {
     const val = cfg[k]!;
     if (/\bfirewall=1\b/.test(val)) continue;
     const updated = /\bfirewall=0\b/.test(val) ? val.replace(/\bfirewall=0\b/, 'firewall=1') : `${val},firewall=1`;
-    await c.put(`/nodes/${node}/qemu/${vmid}/config`, new URLSearchParams({ [k]: updated }));
+    await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams({ [k]: updated }));
   }
 }
 
@@ -1311,9 +1478,10 @@ export async function configureVmIsolation(
   vmid: number,
   opts: { dnsServers?: string[] } = {},
   client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
 ): Promise<void> {
   const c = client ?? (await getClient());
-  const base = `/nodes/${node}/qemu/${vmid}/firewall`;
+  const base = `/nodes/${node}/${kind}/${vmid}/firewall`;
 
   // Default-deny inbound, allow outbound (further restricted by rules below),
   // permit DHCP, and block MAC/IP spoofing.
@@ -1368,35 +1536,35 @@ export async function configureVmIsolation(
   }
 }
 
-export async function deleteVm(node: string, vmid: number, client?: AxiosInstance): Promise<string> {
+export async function deleteVm(node: string, vmid: number, client?: AxiosInstance, kind: GuestKind = 'qemu'): Promise<string> {
   const c = client ?? (await getClient());
-  const res = await c.delete<{ data: string }>(`/nodes/${node}/qemu/${vmid}`);
+  const res = await c.delete<{ data: string }>(`/nodes/${node}/${kind}/${vmid}`);
   return res.data.data;
 }
 
-export async function startVm(node: string, vmid: number, client?: AxiosInstance): Promise<string> {
+export async function startVm(node: string, vmid: number, client?: AxiosInstance, kind: GuestKind = 'qemu'): Promise<string> {
   const c = client ?? (await getClient());
-  const res = await c.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/status/start`);
+  const res = await c.post<{ data: string }>(`/nodes/${node}/${kind}/${vmid}/status/start`);
   return res.data.data;
 }
 
 /** Graceful ACPI shutdown. */
-export async function shutdownVm(node: string, vmid: number, client?: AxiosInstance): Promise<string> {
+export async function shutdownVm(node: string, vmid: number, client?: AxiosInstance, kind: GuestKind = 'qemu'): Promise<string> {
   const c = client ?? (await getClient());
-  const res = await c.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/status/shutdown`);
+  const res = await c.post<{ data: string }>(`/nodes/${node}/${kind}/${vmid}/status/shutdown`);
   return res.data.data;
 }
 
 /** Hard power-off. */
-export async function stopVm(node: string, vmid: number, client?: AxiosInstance): Promise<string> {
+export async function stopVm(node: string, vmid: number, client?: AxiosInstance, kind: GuestKind = 'qemu'): Promise<string> {
   const c = client ?? (await getClient());
-  const res = await c.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/status/stop`);
+  const res = await c.post<{ data: string }>(`/nodes/${node}/${kind}/${vmid}/status/stop`);
   return res.data.data;
 }
 
-export async function rebootVm(node: string, vmid: number, client?: AxiosInstance): Promise<string> {
+export async function rebootVm(node: string, vmid: number, client?: AxiosInstance, kind: GuestKind = 'qemu'): Promise<string> {
   const c = client ?? (await getClient());
-  const res = await c.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/status/reboot`);
+  const res = await c.post<{ data: string }>(`/nodes/${node}/${kind}/${vmid}/status/reboot`);
   return res.data.data;
 }
 
@@ -1413,9 +1581,10 @@ export async function getVmStatus(
   node: string,
   vmid: number,
   client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
 ): Promise<PveVmStatus> {
   const c = client ?? (await getClient());
-  const res = await c.get<{ data: PveVmStatus }>(`/nodes/${node}/qemu/${vmid}/status/current`);
+  const res = await c.get<{ data: PveVmStatus }>(`/nodes/${node}/${kind}/${vmid}/status/current`);
   return res.data.data;
 }
 
@@ -1445,9 +1614,10 @@ export async function getVmRrdData(
   vmid: number,
   timeframe: RrdTimeframe = 'hour',
   client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
 ): Promise<RrdPoint[]> {
   const c = client ?? (await getClient());
-  const res = await c.get<{ data: RrdPoint[] }>(`/nodes/${node}/qemu/${vmid}/rrddata`, {
+  const res = await c.get<{ data: RrdPoint[] }>(`/nodes/${node}/${kind}/${vmid}/rrddata`, {
     params: { timeframe, cf: 'AVERAGE' },
   });
   return res.data.data ?? [];

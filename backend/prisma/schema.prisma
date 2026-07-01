@@ -144,6 +144,11 @@ model VirtualMachine {
   name          String
   description   String?
 
+  // Guest kind: "qemu" (full VM, the original + default) or "lxc" (container).
+  // Drives the Proxmox API path segment and which features apply (LXC has no
+  // live migration, data disks, or cloud-init extras).
+  type          String    @default("qemu")
+
   cpu           Int
   ram           Int
   storage       Int
