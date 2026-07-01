@@ -84,10 +84,20 @@ rough priority bands, not commitments. Have an idea? Open a
 
 ## Optional / larger bets
 
-- **LXC container support** — the isolation model already extends to it.
-- **Built-in public ingress** — a managed reverse proxy / per-VM Cloudflare tunnel so
-  tenants get `name.proxmate.example.com` without manual setup.
-- **GPU / PCI passthrough requests.**
+- **LXC container support** ✅ — create and manage **LXC containers** alongside VMs:
+  create from an OS template, start/stop/restart, noVNC + text console, tenant
+  isolation, quota, cpu/ram/rootfs resize, and MateState backups. Live migration,
+  extra data disks, snapshots, and cloud-init extras stay VM-only (the balancer
+  treats containers as pinned and flags them on a node drain). _Done (v0.4.0)._
+- **Built-in public ingress** — **documented self-service** (`docs/cloudflare-tunnels.md`),
+  **not automated**. Automating it collides with the API-only + tenant-isolation model:
+  it would need DNS automation plus a path into isolated tenant networks (or cloudflared
+  installed inside each guest, which ProxMate can't reliably do). Left as a documented
+  manual setup.
+- **GPU / PCI passthrough requests** — planned next as a **request/attach workflow**
+  (mirrors the quota-request flow): a tenant requests a GPU on a VM → an admin attaches
+  an available Proxmox PCI resource mapping. Host VFIO/IOMMU setup stays the admin's job;
+  a passthrough VM can't migrate, so the balancer/drain will skip it.
 
 ## Candidate ideas — proposed 2026-06-29 (post-audit)
 

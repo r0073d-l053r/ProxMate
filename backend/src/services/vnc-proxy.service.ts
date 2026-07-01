@@ -1,6 +1,6 @@
 import { WebSocket, type RawData } from 'ws';
 import type { AxiosInstance } from 'axios';
-import { getClient, getConnectionConfig, type ProxmoxConnection } from './proxmox.service.js';
+import { getClient, getConnectionConfig, type ProxmoxConnection, type GuestKind } from './proxmox.service.js';
 
 export interface VncTicket {
   ticket: string;
@@ -18,11 +18,11 @@ export interface TermTicket {
  * Ask Proxmox for a VNC websocket proxy session. Returns the one-time VNC
  * ticket (used as the RFB password by noVNC) and the port to attach to.
  */
-export async function requestVncProxy(node: string, vmid: number): Promise<VncTicket> {
+export async function requestVncProxy(node: string, vmid: number, kind: GuestKind = 'qemu'): Promise<VncTicket> {
   const client = await getClient();
   const params = new URLSearchParams({ websocket: '1' });
   const res = await client.post<{ data: { ticket: string; port: number | string } }>(
-    `/nodes/${node}/qemu/${vmid}/vncproxy`,
+    `/nodes/${node}/${kind}/${vmid}/vncproxy`,
     params,
   );
   return { ticket: String(res.data.data.ticket), port: String(res.data.data.port) };
@@ -34,10 +34,10 @@ export async function requestVncProxy(node: string, vmid: number): Promise<VncTi
  * and the `user` the ticket is bound to — the xterm.js client authenticates the
  * stream in-band by sending `${user}:${ticket}\n` as its first message.
  */
-export async function requestTermProxy(node: string, vmid: number, client?: AxiosInstance): Promise<TermTicket> {
+export async function requestTermProxy(node: string, vmid: number, client?: AxiosInstance, kind: GuestKind = 'qemu'): Promise<TermTicket> {
   const c = client ?? (await getClient());
   const res = await c.post<{ data: { ticket: string; port: number | string; user: string } }>(
-    `/nodes/${node}/qemu/${vmid}/termproxy`,
+    `/nodes/${node}/${kind}/${vmid}/termproxy`,
     new URLSearchParams(),
   );
   return {
@@ -54,13 +54,13 @@ export async function requestTermProxy(node: string, vmid: number, client?: Axio
  * differs — so they share this connector. Authenticated with the stored API
  * token; the browser never sees the token.
  */
-function connectConsoleTarget(node: string, vmid: number, port: string, ticket: string, config: ProxmoxConnection): WebSocket {
+function connectConsoleTarget(node: string, vmid: number, port: string, ticket: string, config: ProxmoxConnection, kind: GuestKind): WebSocket {
   const { host, tokenId, tokenSecret, verifySsl } = config;
   // Proxmox's API/console listens on HTTPS only; force wss so a host saved as http://
   // (which REST tolerates via a 301 redirect, but the ws client does NOT) still works.
   const wsBase = `wss://${host.replace(/^[a-z]+:\/\//i, '')}`;
   const url =
-    `${wsBase}/api2/json/nodes/${node}/qemu/${vmid}/vncwebsocket` +
+    `${wsBase}/api2/json/nodes/${node}/${kind}/${vmid}/vncwebsocket` +
     `?port=${encodeURIComponent(port)}&vncticket=${encodeURIComponent(ticket)}`;
 
   return new WebSocket(url, ['binary'], {
@@ -75,8 +75,9 @@ export async function connectVncTarget(
   vmid: number,
   port: string,
   ticket: string,
+  kind: GuestKind = 'qemu',
 ): Promise<WebSocket> {
-  return connectConsoleTarget(node, vmid, port, ticket, await getConnectionConfig());
+  return connectConsoleTarget(node, vmid, port, ticket, await getConnectionConfig(), kind);
 }
 
 /** Open the Proxmox vncwebsocket for a text (serial/termproxy) console session. */
@@ -85,8 +86,9 @@ export async function connectSerialTarget(
   vmid: number,
   port: string,
   ticket: string,
+  kind: GuestKind = 'qemu',
 ): Promise<WebSocket> {
-  return connectConsoleTarget(node, vmid, port, ticket, await getConnectionConfig());
+  return connectConsoleTarget(node, vmid, port, ticket, await getConnectionConfig(), kind);
 }
 
 /** Pipe bytes bidirectionally between the browser and Proxmox sockets. */

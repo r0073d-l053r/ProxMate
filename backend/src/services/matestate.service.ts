@@ -124,18 +124,19 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
   if (mateState.status !== 'ready') throw new Error('MateState is not ready');
 
   const client = await pve.getClient();
+  const kind: pve.GuestKind = vm.type === 'lxc' ? 'lxc' : 'qemu';
 
-  // Stop first if running — Proxmox refuses to restore over a running VM, and
+  // Stop first if running — Proxmox refuses to restore over a running guest, and
   // stop is async (same pattern as destroyVm).
   try {
-    const status = await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client);
+    const status = await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
     if (status.status !== 'stopped') {
-      await pve.stopVm(vm.proxmoxNode, vm.proxmoxVmId, client);
+      await pve.stopVm(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
       const deadline = Date.now() + 30_000;
       while (Date.now() < deadline) {
         await sleep(1000);
         try {
-          if ((await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client)).status === 'stopped') break;
+          if ((await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client, kind)).status === 'stopped') break;
         } catch {
           break;
         }
@@ -145,11 +146,25 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
     /* status unknown — try anyway */
   }
 
+  // LXC restore must target a container-capable rootfs storage: the backup
+  // storage (often a directory like `local`) usually can't hold a container
+  // rootfs, so Proxmox 400s unless we pass one. Reuse the container's current
+  // rootfs pool, falling back to the configured default. (QEMU reads the target
+  // from the vzdump config, so it needs no explicit storage.)
+  let restoreStorage: string | undefined;
+  if (kind === 'lxc') {
+    const cfg = await pve
+      .getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, 'lxc')
+      .catch(() => ({}) as Record<string, string>);
+    restoreStorage = cfg.rootfs?.split(':')[0] || (await getConfig('default_storage')) || undefined;
+  }
+
   await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'restoring' } });
   try {
     const upid = await pve.restoreBackup(
-      { node: vm.proxmoxNode, vmid: vm.proxmoxVmId, volid: mateState.volid },
+      { node: vm.proxmoxNode, vmid: vm.proxmoxVmId, volid: mateState.volid, storage: restoreStorage },
       client,
+      kind,
     );
     await pve.waitForTask(vm.proxmoxNode, upid, client, 30 * 60 * 1000);
     await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'ready' } });
@@ -157,12 +172,12 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
     const isolate = (await getConfig('isolation_enabled')) !== 'false';
     if (isolate) {
       try {
-        await pve.ensureNicFirewall(vm.proxmoxNode, vm.proxmoxVmId, client);
+        await pve.ensureNicFirewall(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
       } catch {
         /* not fatal */
       }
     }
-    await pve.startVm(vm.proxmoxNode, vm.proxmoxVmId, client);
+    await pve.startVm(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
   } catch (err) {
     await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'ready' } });
     throw err;

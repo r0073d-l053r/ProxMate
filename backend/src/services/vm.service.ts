@@ -6,6 +6,9 @@ import { isMailConfigured, sendMail } from './mail.service.js';
 import { vmMaintenanceEmail } from '../lib/email-templates.js';
 import * as pve from './proxmox.service.js';
 
+/** The Proxmox guest kind for a VM row (defaults to QEMU for legacy/unset rows). */
+export const kindOf = (vm: { type?: string | null }): pve.GuestKind => (vm.type === 'lxc' ? 'lxc' : 'qemu');
+
 /** Flag a VM as failed in the DB and fire a best-effort vm.error notification. */
 async function markVmError(vmId: string, name: string, err: unknown): Promise<void> {
   await prisma.virtualMachine.update({ where: { id: vmId }, data: { status: 'error' } });
@@ -154,6 +157,132 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
 
     // Wait for the start task too, so "running" means it actually started.
     const startUpid = await pve.startVm(node, vmid, client);
+    await pve.waitForTask(node, startUpid, client);
+    return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
+  } catch (err) {
+    await markVmError(vm.id, input.name, err);
+    throw err;
+  }
+}
+
+export interface CreateContainerInput {
+  name: string;
+  cpu: number;
+  ram: number; // MB
+  storage: number; // GB (rootfs)
+  template: string; // full LXC template volid, e.g. "local:vztmpl/debian-12-…tar.zst"
+  password?: string;
+  sshKey?: string;
+  node?: string;
+}
+
+/** Guess a container's CPU architecture from its OS-template filename. */
+function archFromTemplate(volid: string): pve.Arch | undefined {
+  const s = volid.toLowerCase();
+  if (/arm64|aarch64/.test(s)) return 'arm64';
+  if (/amd64|x86[_-]?64/.test(s)) return 'amd64';
+  return undefined; // unknown → don't constrain placement by arch
+}
+
+/**
+ * Orchestrate LXC container creation — mirrors createVm: quota check → pick a node
+ * that physically holds the OS template → reserve VMID → DB record (type:'lxc') →
+ * create on Proxmox → lock the firewall down for tenant isolation → start.
+ */
+export async function createContainer(user: User, input: CreateContainerInput): Promise<VirtualMachine> {
+  await assertWithinQuota(user, {
+    name: input.name,
+    cpu: input.cpu,
+    ram: input.ram,
+    storage: input.storage,
+    os: input.template,
+  });
+
+  const client = await pve.getClient();
+  const [storage, bridge, isolationCfg] = await Promise.all([
+    getConfig('default_storage'),
+    getConfig('default_bridge'),
+    getConfig('isolation_enabled'),
+  ]);
+  if (!storage || !bridge) {
+    throw new Error('Server defaults are not configured — finish setup first');
+  }
+  const isolate = isolationCfg !== 'false'; // tenant isolation is on by default
+
+  // Only nodes that physically hold the OS template can build this container
+  // (node-local template storage like `local` isn't shared) — same constraint as
+  // ISO placement for QEMU.
+  const templateName = input.template.split('/').pop() ?? input.template;
+  const tmplNodes = await pve.getTemplateNodes(input.template, client);
+  if (tmplNodes.length === 0) {
+    throw new Error(
+      `LXC template "${templateName}" isn't available on any node. ` +
+        `Add it in Proxmox (pveam / Datacenter → CT Templates) and try again.`,
+    );
+  }
+
+  let node: string;
+  if (input.node) {
+    if (!tmplNodes.includes(input.node)) {
+      throw new Error(
+        `Node "${input.node}" doesn't have template "${templateName}" (available on: ${tmplNodes.join(', ')}).`,
+      );
+    }
+    node = input.node;
+  } else {
+    node = await pve.pickBestNode(
+      { cpu: input.cpu, ramMb: input.ram, storageGb: input.storage },
+      storage,
+      client,
+      tmplNodes,
+      archFromTemplate(input.template),
+    );
+  }
+  const vmid = await pve.getNextVmId(client);
+
+  const vm = await prisma.virtualMachine.create({
+    data: {
+      userId: user.id,
+      proxmoxVmId: vmid,
+      proxmoxNode: node,
+      type: 'lxc',
+      name: input.name,
+      cpu: input.cpu,
+      ram: input.ram,
+      storage: input.storage,
+      os: templateName,
+      status: 'creating',
+    },
+  });
+
+  try {
+    const createUpid = await pve.createLxc(
+      {
+        node,
+        vmid,
+        hostname: input.name,
+        cores: input.cpu,
+        memory: input.ram,
+        diskGb: input.storage,
+        storage,
+        bridge,
+        ostemplate: input.template,
+        password: input.password,
+        sshPublicKeys: input.sshKey,
+      },
+      client,
+    );
+    await pve.waitForTask(node, createUpid, client);
+
+    // Lock the container's firewall down for tenant isolation before it boots.
+    if (isolate) {
+      const dnsServers = ((await getConfig('isolation_dns_servers')) ?? '').split(/[,\s]+/).filter(Boolean);
+      await pve.configureVmIsolation(node, vmid, { dnsServers }, client, 'lxc');
+    }
+
+    await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
+
+    const startUpid = await pve.startVm(node, vmid, client, 'lxc');
     await pve.waitForTask(node, startUpid, client);
     return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
   } catch (err) {
@@ -408,6 +537,10 @@ export async function migrateVmToNode(
   opts: { notifyOwner?: boolean; actorId?: string } = {},
 ): Promise<VirtualMachine> {
   if (targetNode === vm.proxmoxNode) throw new Error('The VM is already on that node.');
+  // Containers can't be live-migrated in ProxMate's API-only model (LXC has no
+  // live migration; a restart-migration would mean downtime), so they're excluded
+  // from manual moves, the balancer, and drains. Keep them pinned.
+  if (kindOf(vm) === 'lxc') throw new Error('Live migration isn’t supported for containers (LXC).');
   const client = await pve.getClient();
 
   const nodes = await pve.getNodes(client);
@@ -543,18 +676,24 @@ export async function resizeVm(
 
   let current = await syncVmNode(vm);
   const client = await pve.getClient();
+  const kind = kindOf(current);
 
   // Resolve the disk up-front so a missing/unresizable disk fails before we
-  // change anything else.
+  // change anything else. LXC's root volume is always `rootfs`; a QEMU VM's
+  // primary disk is a bus slot (scsi0, …) we read from its config.
   let diskKey: string | undefined;
   if (growDisk) {
-    const cfg = await pve.getVmConfig(current.proxmoxNode, current.proxmoxVmId, client);
-    diskKey = pve.findPrimaryDisk(cfg);
-    if (!diskKey) throw new ResizeError('Could not find a resizable disk on this VM.');
+    if (kind === 'lxc') {
+      diskKey = 'rootfs';
+    } else {
+      const cfg = await pve.getVmConfig(current.proxmoxNode, current.proxmoxVmId, client);
+      diskKey = pve.findPrimaryDisk(cfg);
+      if (!diskKey) throw new ResizeError('Could not find a resizable disk on this VM.');
+    }
   }
 
   if (resourcesChanged) {
-    await pve.setVmResources(current.proxmoxNode, current.proxmoxVmId, targetCpu, targetRam, client);
+    await pve.setVmResources(current.proxmoxNode, current.proxmoxVmId, targetCpu, targetRam, client, kind);
     current = await prisma.virtualMachine.update({
       where: { id: current.id },
       data: { cpu: targetCpu, ram: targetRam },
@@ -562,7 +701,7 @@ export async function resizeVm(
   }
 
   if (growDisk && diskKey) {
-    await pve.resizeDisk(current.proxmoxNode, current.proxmoxVmId, diskKey, targetStorage, client);
+    await pve.resizeDisk(current.proxmoxNode, current.proxmoxVmId, diskKey, targetStorage, client, kind);
     current = await prisma.virtualMachine.update({
       where: { id: current.id },
       data: { storage: targetStorage },
@@ -609,16 +748,17 @@ export async function getVmWithLiveStatus(
   vm: VirtualMachine,
 ): Promise<VirtualMachine & { live: pve.PveVmStatus | null }> {
   let currentVm = vm;
+  const kind = kindOf(vm);
   try {
     let live: pve.PveVmStatus;
     try {
-      live = await pve.getVmStatus(currentVm.proxmoxNode, currentVm.proxmoxVmId);
+      live = await pve.getVmStatus(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind);
     } catch (err) {
       // If VM is not found on the stored node, check if it migrated
       const syncedVm = await syncVmNode(currentVm);
       if (syncedVm.proxmoxNode !== currentVm.proxmoxNode) {
         currentVm = syncedVm;
-        live = await pve.getVmStatus(currentVm.proxmoxNode, currentVm.proxmoxVmId);
+        live = await pve.getVmStatus(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind);
       } else {
         throw err;
       }
@@ -649,7 +789,11 @@ export async function refreshVmIps<T extends VirtualMachine>(vms: T[]): Promise<
   const client = await pve.getClient();
   await Promise.all(
     running.map(async (vm) => {
-      const ip = await pve.getVmIpAddress(vm.proxmoxNode, vm.proxmoxVmId, client);
+      // LXC has no guest agent — Proxmox reads the container's IP directly.
+      const ip =
+        kindOf(vm) === 'lxc'
+          ? await pve.getLxcIpAddress(vm.proxmoxNode, vm.proxmoxVmId, client)
+          : await pve.getVmIpAddress(vm.proxmoxNode, vm.proxmoxVmId, client);
       if (ip && ip !== vm.ipAddress) {
         vm.ipAddress = ip;
         await prisma.virtualMachine
@@ -707,12 +851,13 @@ async function waitForStopped(
   vmid: number,
   client: Awaited<ReturnType<typeof pve.getClient>>,
   timeoutMs = 25_000,
+  kind: pve.GuestKind = 'qemu',
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     await sleep(1000);
     try {
-      const s = await pve.getVmStatus(node, vmid, client);
+      const s = await pve.getVmStatus(node, vmid, client, kind);
       if (s.status === 'stopped') return;
     } catch {
       return; // VM is gone — nothing left to wait for
@@ -729,21 +874,22 @@ async function stopAndDeleteProxmoxVm(
   node: string,
   vmid: number,
   client: Awaited<ReturnType<typeof pve.getClient>>,
+  kind: pve.GuestKind = 'qemu',
 ): Promise<void> {
   // Proxmox refuses to delete a running VM, and stop is an async task — so
   // hard-stop first and wait until it's actually stopped before deleting.
   try {
-    const status = await pve.getVmStatus(node, vmid, client);
+    const status = await pve.getVmStatus(node, vmid, client, kind);
     if (status.status !== 'stopped') {
-      await pve.stopVm(node, vmid, client);
-      await waitForStopped(node, vmid, client);
+      await pve.stopVm(node, vmid, client, kind);
+      await waitForStopped(node, vmid, client, 25_000, kind);
     }
   } catch {
     /* status unavailable or VM already gone — fall through to delete */
   }
 
   try {
-    await pve.deleteVm(node, vmid, client);
+    await pve.deleteVm(node, vmid, client, kind);
   } catch (err) {
     // If the VM no longer exists on Proxmox, treat it as already deleted.
     const msg = pve.pveMessage(err);
@@ -754,7 +900,7 @@ async function stopAndDeleteProxmoxVm(
 export async function destroyVm(vm: VirtualMachine): Promise<void> {
   const currentVm = await syncVmNode(vm);
   const client = await pve.getClient();
-  await stopAndDeleteProxmoxVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client);
+  await stopAndDeleteProxmoxVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client, kindOf(currentVm));
   await prisma.virtualMachine.delete({ where: { id: currentVm.id } });
 }
 
@@ -885,19 +1031,20 @@ export async function rebuildVm(
 
 export async function startVm(vm: VirtualMachine): Promise<void> {
   const currentVm = await syncVmNode(vm);
-  await pve.startVm(currentVm.proxmoxNode, currentVm.proxmoxVmId);
+  await pve.startVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kindOf(currentVm));
   await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'running' } });
 }
 
 export async function stopVm(vm: VirtualMachine, force: boolean): Promise<void> {
   const currentVm = await syncVmNode(vm);
-  if (force) await pve.stopVm(currentVm.proxmoxNode, currentVm.proxmoxVmId);
-  else await pve.shutdownVm(currentVm.proxmoxNode, currentVm.proxmoxVmId);
+  const kind = kindOf(currentVm);
+  if (force) await pve.stopVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind);
+  else await pve.shutdownVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind);
   await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'stopped' } });
 }
 
 export async function restartVm(vm: VirtualMachine): Promise<void> {
   const currentVm = await syncVmNode(vm);
-  await pve.rebootVm(currentVm.proxmoxNode, currentVm.proxmoxVmId);
+  await pve.rebootVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kindOf(currentVm));
   await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'running' } });
 }

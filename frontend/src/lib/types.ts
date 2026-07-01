@@ -2,6 +2,9 @@ export type Role = "admin" | "user";
 
 export type VmStatus = "creating" | "running" | "stopped" | "error";
 
+/** Guest kind: a full QEMU VM or an LXC container. */
+export type GuestType = "qemu" | "lxc";
+
 export interface AuthUser {
   id: string;
   email: string;
@@ -55,6 +58,7 @@ export interface VirtualMachine {
   proxmoxNode: string;
   name: string;
   description: string | null;
+  type: GuestType; // "qemu" (default) | "lxc"
   cpu: number;
   ram: number;
   storage: number;
@@ -252,6 +256,14 @@ export interface ProxmoxNode {
 export interface ProxmoxIso {
   volid: string;
   name: string;
+  size?: number;
+}
+
+/** An LXC OS template (vztmpl) available on the cluster. */
+export interface LxcTemplate {
+  volid: string;
+  name: string;
+  storage: string;
   size?: number;
 }
 
