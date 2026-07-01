@@ -353,7 +353,9 @@ export async function computeClusterPlan(
       memBytes: r?.mem ?? 0,
       running: r?.status === 'running' && (r?.template ?? 0) !== 1,
       antiAffinity: antiAffinityGroups(tags),
-      excluded: exclude.has(v.proxmoxVmId) || tags.some((t) => PIN_TAGS.has(t)),
+      // Containers (LXC) can't be live-migrated in the API-only model, so they're
+      // treated as pinned — the planner never tries to move them.
+      excluded: v.type === 'lxc' || exclude.has(v.proxmoxVmId) || tags.some((t) => PIN_TAGS.has(t)),
     };
   });
 
@@ -666,10 +668,28 @@ export async function planNodeDrain(
     cpu: n.cpu,
   }));
 
+  // Containers on the drained node can't be live-migrated by ProxMate — surface
+  // them as blockers so the admin stops/moves them by hand before powering off.
+  const containerBlockers: DrainBlocker[] = resources.data.data
+    .filter((r) => r.type === 'lxc' && typeof r.vmid === 'number' && r.node === node && (r.template ?? 0) !== 1)
+    .map((r) => {
+      const db = dbByVmid.get(r.vmid!);
+      return {
+        proxmoxVmId: r.vmid!,
+        name: db?.name ?? r.name ?? `CT ${r.vmid}`,
+        reason: 'Container (LXC) — ProxMate can’t live-migrate it; stop or move it manually.',
+      };
+    });
+
   const plan = planDrain({ drainNode: node, targetNode: targetNode ?? null, nodes, guests, occupants });
   if (unmanaged.length > 0) {
     plan.blockers.push(...unmanaged);
     plan.reason += ` ${unmanaged.length} guest${unmanaged.length === 1 ? '' : 's'} not managed by ProxMate must be moved or stopped manually.`;
+  }
+  if (containerBlockers.length > 0) {
+    plan.blockers.push(...containerBlockers);
+    plan.ok = false;
+    plan.reason += ` ${containerBlockers.length} container${containerBlockers.length === 1 ? '' : 's'} must be moved or stopped manually (no live migration for LXC).`;
   }
   return plan;
 }

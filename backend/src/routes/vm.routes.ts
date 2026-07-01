@@ -15,6 +15,7 @@ import {
   deleteSnapshot,
   rollbackSnapshot,
   waitForTask,
+  listLxcTemplates,
 } from '../services/proxmox.service.js';
 import type { RrdTimeframe } from '../services/proxmox.service.js';
 import { requestVncProxy, requestTermProxy } from '../services/vnc-proxy.service.js';
@@ -33,6 +34,8 @@ import {
   QuotaError,
   ResizeError,
   createVm,
+  createContainer,
+  kindOf,
   resizeVm,
   rebuildVm,
   normalizeTags,
@@ -137,6 +140,81 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
+// ─── GET /api/vms/lxc-templates ───────────────────────────────
+// LXC OS templates (vztmpl) available on the cluster, for the create wizard.
+// Declared before `/:id` so "lxc-templates" isn't read as a VM id.
+
+router.get('/lxc-templates', async (_req: Request, res: Response) => {
+  try {
+    res.json(await listLxcTemplates());
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── POST /api/vms/containers ─────────────────────────────────
+// Create an LXC container from an OS template. Mirrors POST /api/vms (QEMU) but
+// takes a template volid instead of an ISO, plus optional password / SSH key.
+
+const CreateContainerSchema = z.object({
+  name: z.string().min(1).max(63).regex(/^[a-zA-Z0-9-]+$/, 'Use letters, numbers and hyphens only'),
+  cpu: z.number().int().positive().max(64),
+  ram: z.number().int().positive(),
+  storage: z.number().int().positive(),
+  // Full Proxmox template volid, e.g. "local:vztmpl/debian-12-standard_….tar.zst".
+  // Constrained charset since it's interpolated into the create call's ostemplate.
+  template: z
+    .string()
+    .min(1)
+    .max(255)
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*:vztmpl\/[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid template'),
+  password: z.string().min(5).max(128).optional(),
+  sshKey: z
+    .string()
+    .max(4000)
+    .optional()
+    .refine((v) => !v || /^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-|sk-)/m.test(v.trim()), 'Must be an OpenSSH public key'),
+  node: z
+    .string()
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid node name')
+    .optional(),
+});
+
+router.post('/containers', async (req: Request, res: Response) => {
+  const parsed = CreateContainerSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  if (!parsed.data.password && !parsed.data.sshKey) {
+    res.status(400).json({ error: 'A container needs a root password or an SSH public key to log in.' });
+    return;
+  }
+
+  const { id } = (req as AuthRequest).user;
+  const user = await prisma.user.findUnique({ where: { id } });
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+
+  try {
+    const vm = await createContainer(user, parsed.data);
+    await recordAudit({
+      action: 'vm.create',
+      actor: user,
+      targetType: 'vm',
+      targetId: vm.id,
+      detail: `${vm.name} (LXC, vmid ${vm.proxmoxVmId} on ${vm.proxmoxNode}, ${vm.cpu}c/${vm.ram}MB/${vm.storage}GB)`,
+      req,
+    });
+    res.status(201).json({ vm, status: vm.status });
+  } catch (err) {
+    if (err instanceof QuotaError) {
+      res.status(403).json({ error: 'Quota exceeded', details: err.details });
+      return;
+    }
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
 // ─── POST /api/vms/bulk ───────────────────────────────────────
 // Apply one power action to several owned VMs at once. Per-VM errors are
 // isolated and reported; declared before `/:id` so "bulk" isn't read as an id.
@@ -208,7 +286,7 @@ router.get('/:id/metrics', async (req: Request, res: Response) => {
 
   try {
     vm = await syncVmNode(vm);
-    const data = await getVmRrdData(vm.proxmoxNode, vm.proxmoxVmId, timeframe);
+    const data = await getVmRrdData(vm.proxmoxNode, vm.proxmoxVmId, timeframe, undefined, kindOf(vm));
     res.json({ timeframe, points: data });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
@@ -430,6 +508,9 @@ router.put('/:id/backup-policy', async (req: Request, res: Response) => {
 router.get('/:id/disks', async (req: Request, res: Response) => {
   const vm = await getViewableVm(req.params['id'] as string, (req as AuthRequest).user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  // Containers have a single rootfs (resized via the VM resize controls), not the
+  // QEMU multi-disk model — surface none here.
+  if (kindOf(vm) === 'lxc') { res.json([]); return; }
   try {
     res.json(await listDisks(vm));
   } catch (err) {
@@ -444,6 +525,7 @@ router.post('/:id/disks', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Data disks aren’t supported for containers.' }); return; }
   const parsed = DiskSizeSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Enter a disk size in GB.' }); return; }
   try {
@@ -460,6 +542,7 @@ router.patch('/:id/disks/:slot', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Data disks aren’t supported for containers.' }); return; }
   const slot = req.params['slot'] as string;
   if (!DISK_SLOT_RE.test(slot)) { res.status(400).json({ error: 'Invalid disk.' }); return; }
   const parsed = DiskSizeSchema.safeParse(req.body);
@@ -479,6 +562,7 @@ router.delete('/:id/disks/:slot', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Data disks aren’t supported for containers.' }); return; }
   const slot = req.params['slot'] as string;
   if (!DISK_SLOT_RE.test(slot)) { res.status(400).json({ error: 'Invalid disk.' }); return; }
   try {
@@ -517,7 +601,7 @@ router.post('/:id/migrate', async (req: Request, res: Response) => {
     res.json({ success: true, proxmoxNode: updated.proxmoxNode });
   } catch (err) {
     const msg = err instanceof Error ? err.message : pveMessage(err);
-    res.status(/already on|No such node|mismatch/i.test(msg) ? 400 : 502).json({ error: msg });
+    res.status(/already on|No such node|mismatch|containers/i.test(msg) ? 400 : 502).json({ error: msg });
   }
 });
 
@@ -669,6 +753,10 @@ router.post('/:id/rebuild', async (req: Request, res: Response) => {
   const authUser = (req as AuthRequest).user;
   const vm = await getWritableVm(req.params['id'] as string, authUser);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') {
+    res.status(400).json({ error: 'Rebuild isn’t available for containers. Delete and recreate it instead.' });
+    return;
+  }
 
   const parsed = RebuildSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -731,6 +819,10 @@ router.post('/:id/convert-template', async (req: Request, res: Response) => {
   }
   const vm = await getOwnedVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') {
+    res.status(400).json({ error: 'Converting to a template isn’t supported for containers.' });
+    return;
+  }
 
   try {
     const template = await convertVmToTemplate(vm, parsed.data);
@@ -828,6 +920,7 @@ router.get('/:id/snapshots', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   let vm = await getViewableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') { res.json([]); return; }
   try {
     vm = await syncVmNode(vm);
     res.json(await listSnapshots(vm.proxmoxNode, vm.proxmoxVmId));
@@ -841,6 +934,7 @@ router.post('/:id/snapshots', async (req: Request, res: Response) => {
   let vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
+  if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Snapshots aren’t available for containers yet.' }); return; }
   const parsed = CreateSnapshotSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
@@ -878,6 +972,7 @@ router.post('/:id/snapshots/:name/rollback', async (req: Request, res: Response)
   if (!SNAP_NAME_RE.test(name)) { res.status(400).json({ error: 'Invalid snapshot name' }); return; }
   let vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Snapshots aren’t available for containers yet.' }); return; }
   try {
     vm = await syncVmNode(vm);
     const upid = await rollbackSnapshot(vm.proxmoxNode, vm.proxmoxVmId, name);
@@ -898,6 +993,7 @@ router.delete('/:id/snapshots/:name', async (req: Request, res: Response) => {
   if (!SNAP_NAME_RE.test(name)) { res.status(400).json({ error: 'Invalid snapshot name' }); return; }
   let vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Snapshots aren’t available for containers yet.' }); return; }
   try {
     vm = await syncVmNode(vm);
     const upid = await deleteSnapshot(vm.proxmoxNode, vm.proxmoxVmId, name);
@@ -922,7 +1018,7 @@ router.post('/:id/console', async (req: Request, res: Response) => {
 
   try {
     vm = await syncVmNode(vm);
-    const { ticket, port } = await requestVncProxy(vm.proxmoxNode, vm.proxmoxVmId);
+    const { ticket, port } = await requestVncProxy(vm.proxmoxNode, vm.proxmoxVmId, kindOf(vm));
     res.json({ ticket, port });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
@@ -940,12 +1036,17 @@ router.post('/:id/serial', async (req: Request, res: Response) => {
 
   try {
     vm = await syncVmNode(vm);
-    const config = await getVmConfig(vm.proxmoxNode, vm.proxmoxVmId);
-    if (!hasSerialConsole(config)) {
-      res.status(409).json({ code: 'no_serial', error: 'This VM has no serial/text console.' });
-      return;
+    const kind = kindOf(vm);
+    // LXC containers always expose a text console (their native console is the
+    // termproxy); QEMU VMs need a serial port in their config.
+    if (kind === 'qemu') {
+      const config = await getVmConfig(vm.proxmoxNode, vm.proxmoxVmId);
+      if (!hasSerialConsole(config)) {
+        res.status(409).json({ code: 'no_serial', error: 'This VM has no serial/text console.' });
+        return;
+      }
     }
-    const ticket = await requestTermProxy(vm.proxmoxNode, vm.proxmoxVmId);
+    const ticket = await requestTermProxy(vm.proxmoxNode, vm.proxmoxVmId, undefined, kind);
     res.json(ticket);
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
