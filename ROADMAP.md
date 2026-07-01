@@ -94,10 +94,13 @@ rough priority bands, not commitments. Have an idea? Open a
   it would need DNS automation plus a path into isolated tenant networks (or cloudflared
   installed inside each guest, which ProxMate can't reliably do). Left as a documented
   manual setup.
-- **GPU / PCI passthrough requests** — planned next as a **request/attach workflow**
-  (mirrors the quota-request flow): a tenant requests a GPU on a VM → an admin attaches
-  an available Proxmox PCI resource mapping. Host VFIO/IOMMU setup stays the admin's job;
-  a passthrough VM can't migrate, so the balancer/drain will skip it.
+- **GPU / PCI passthrough requests** ✅ — a **request → admin-attach workflow** (mirrors
+  the quota-request flow): a tenant requests GPU/PCI passthrough for a VM they own → an
+  admin reviews and attaches an available Proxmox **PCI resource mapping**
+  (`hostpciN: mapping=<name>`), or denies. Host VFIO/IOMMU setup + defining the mapping
+  stays the admin's job (API-only, documented). Attaching requires the VM stopped; a
+  passthrough VM can't be live-migrated, so the balancer skips it (pinned) and a node
+  drain flags it. QEMU-only. _Done (v0.4.1)._
 
 ## Candidate ideas — proposed 2026-06-29 (post-audit)
 

@@ -12,6 +12,7 @@ import {
   ipv4NetworkCidr,
   setClusterFirewall,
   getDefaultNode,
+  listPciMappings,
   pveMessage,
 } from '../services/proxmox.service.js';
 import { listAudit, recordAudit } from '../services/audit.service.js';
@@ -30,6 +31,14 @@ import {
   runMigrations,
   planNodeDrain,
 } from '../services/cluster-balancer.service.js';
+import {
+  listPendingPassthroughRequests,
+  approvePassthroughRequest,
+  denyPassthroughRequest,
+  detachPassthrough,
+  PassthroughRequestError,
+} from '../services/passthrough-request.service.js';
+import { getOwnedVm } from '../services/vm.service.js';
 import {
   checkForUpdate,
   getUpdateStatus,
@@ -504,6 +513,95 @@ router.post('/quota-requests/:id/deny', async (req: Request, res: Response) => {
       return;
     }
     res.status(500).json({ error: 'Failed to deny request' });
+  }
+});
+
+// ─── GPU / PCI passthrough (admin review + attach) ─────────────
+// Admin-defined resource mappings are the only devices a tenant can get; the
+// admin picks one to attach. Host VFIO/IOMMU + defining the mapping is manual.
+
+router.get('/pci-mappings', async (_req: Request, res: Response) => {
+  try {
+    res.json(await listPciMappings());
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+router.get('/passthrough-requests', async (_req: Request, res: Response) => {
+  res.json(await listPendingPassthroughRequests());
+});
+
+const ApprovePassthroughSchema = z.object({
+  // Mapping names go into the VM config value — keep them to a safe charset.
+  mapping: z.string().min(1).max(128).regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid mapping name'),
+});
+
+router.post('/passthrough-requests/:id/approve', async (req: Request, res: Response) => {
+  const parsed = ApprovePassthroughSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Choose a PCI mapping to attach.' }); return; }
+  try {
+    const r = await approvePassthroughRequest(
+      req.params['id'] as string,
+      (req as AuthRequest).user.id,
+      parsed.data.mapping,
+    );
+    await recordAudit({
+      action: 'passthrough.approve',
+      actor: (req as AuthRequest).user,
+      targetType: 'vm',
+      detail: `${r.vmName} ← mapping ${r.mapping}${r.wasRunning ? ' (VM stopped to attach)' : ''}`,
+      req,
+    });
+    res.json({ success: true, wasRunning: r.wasRunning });
+  } catch (err) {
+    if (err instanceof PassthroughRequestError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+router.post('/passthrough-requests/:id/deny', async (req: Request, res: Response) => {
+  try {
+    const r = await denyPassthroughRequest(req.params['id'] as string, (req as AuthRequest).user.id);
+    await recordAudit({ action: 'passthrough.deny', actor: (req as AuthRequest).user, targetType: 'vm', detail: r.vmName, req });
+    res.json({ success: true });
+  } catch (err) {
+    if (err instanceof PassthroughRequestError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    res.status(500).json({ error: 'Failed to deny request' });
+  }
+});
+
+const DetachPassthroughSchema = z.object({ index: z.number().int().min(0).max(15).optional() });
+
+router.post('/vms/:id/passthrough/detach', async (req: Request, res: Response) => {
+  const parsed = DetachPassthroughSchema.safeParse(req.body ?? {});
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid device index.' }); return; }
+  const vm = await getOwnedVm(req.params['id'] as string, (req as AuthRequest).user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  try {
+    const index = parsed.data.index ?? 0;
+    await detachPassthrough(vm, index);
+    await recordAudit({
+      action: 'passthrough.detach',
+      actor: (req as AuthRequest).user,
+      targetType: 'vm',
+      targetId: vm.id,
+      detail: `${vm.name} hostpci${index}`,
+      req,
+    });
+    res.json({ success: true });
+  } catch (err) {
+    if (err instanceof PassthroughRequestError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    res.status(502).json({ error: pveMessage(err) });
   }
 });
 

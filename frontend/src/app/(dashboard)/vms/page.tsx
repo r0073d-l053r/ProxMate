@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Plus, MonitorPlay, Play, Square, RotateCw, X, Trash2, Loader2, Box } from "lucide-react";
+import { Plus, MonitorPlay, Play, Square, RotateCw, X, Trash2, Loader2, Box, Cpu } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import type { VirtualMachine, UserGroup } from "@/lib/types";
@@ -158,6 +158,11 @@ function VmTable({
               {vm.type === "lxc" && (
                 <span className="ml-2 inline-flex items-center gap-1 align-middle rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">
                   <Box className="size-2.5" /> LXC
+                </span>
+              )}
+              {vm.hasPassthrough && (
+                <span className="ml-2 inline-flex items-center gap-1 align-middle rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">
+                  <Cpu className="size-2.5" /> GPU/PCI
                 </span>
               )}
               {(vm.access === "co-owner" || vm.access === "read-only") && (

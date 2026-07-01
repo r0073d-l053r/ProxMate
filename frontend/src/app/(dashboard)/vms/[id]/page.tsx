@@ -56,6 +56,7 @@ import { PowerSchedulePanel } from "@/components/vm/power-schedule-panel";
 import { BackupPolicyPanel } from "@/components/vm/backup-policy-panel";
 import { SharePanel } from "@/components/vm/share-panel";
 import { DisksPanel } from "@/components/vm/disks-panel";
+import { PassthroughPanel } from "@/components/vm/passthrough-panel";
 import { MigrateDialog } from "@/components/vm/migrate-dialog";
 import { useAuthStore } from "@/lib/auth-store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1042,6 +1043,11 @@ export default function VmDetailPage() {
               LXC
             </span>
           )}
+          {vm.hasPassthrough && (
+            <span className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+              <Cpu className="size-2.5" /> GPU/PCI
+            </span>
+          )}
           <VmStatusBadge status={transition ?? vm.status} />
           {transition && (
             <span className="text-xs text-muted-foreground tabular-nums" title="Time in this transition">
@@ -1265,6 +1271,16 @@ export default function VmDetailPage() {
       {canWrite && <BackupPolicyPanel vmId={vm.id} />}
 
       {canWrite && !isLxc && <DisksPanel vmId={vm.id} onChanged={load} />}
+
+      {!isLxc && (
+        <PassthroughPanel
+          vmId={vm.id}
+          vmName={vm.name}
+          isAdmin={isAdmin}
+          canWrite={canWrite}
+          onChanged={load}
+        />
+      )}
 
       {isManager && <SharePanel vmId={vm.id} />}
 
