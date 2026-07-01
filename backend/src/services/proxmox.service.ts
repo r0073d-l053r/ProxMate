@@ -1046,6 +1046,99 @@ export function primaryDiskSizeGb(config: Record<string, string>): number {
   return Math.max(1, Math.ceil(gb));
 }
 
+// ─── PCI / GPU passthrough ────────────────────────────────────
+//
+// ProxMate never picks raw PCI addresses. An admin defines named **resource
+// mappings** in Proxmox (Datacenter → Resource Mappings → PCI), each pinning a
+// device to specific nodes; ProxMate only lists those and attaches one to a VM
+// as `hostpciN: mapping=<name>`. Host VFIO/IOMMU setup + defining the mapping
+// stays the admin's job (not doable over the API). Attaching requires the VM
+// stopped, and such a VM can't be live-migrated.
+
+export interface PciMapping {
+  id: string; // the mapping name (what we attach)
+  description?: string;
+  nodes: string[]; // nodes this mapping has a device path for
+}
+
+/** Extract node names from a mapping's `map` (entries are node-scoped strings or objects). */
+function pciMappingNodes(map: unknown): string[] {
+  if (!Array.isArray(map)) return [];
+  const nodes = new Set<string>();
+  for (const e of map) {
+    if (typeof e === 'string') {
+      const m = /(?:^|,)node=([^,]+)/.exec(e);
+      if (m) nodes.add(m[1]!);
+    } else if (e && typeof e === 'object' && typeof (e as { node?: unknown }).node === 'string') {
+      nodes.add((e as { node: string }).node);
+    }
+  }
+  return [...nodes];
+}
+
+/** Admin-defined PCI resource mappings on the cluster (`/cluster/mapping/pci`). */
+export async function listPciMappings(client?: AxiosInstance): Promise<PciMapping[]> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Array<{ id: string; description?: string; map?: unknown }> }>(
+    '/cluster/mapping/pci',
+  );
+  return (res.data.data ?? []).map((m) => ({
+    id: m.id,
+    description: m.description,
+    nodes: pciMappingNodes(m.map),
+  }));
+}
+
+/**
+ * Attach a PCI resource mapping to a VM at `hostpci{index}`. `pcie=1` selects
+ * PCIe (q35). The VM must be stopped. The admin is responsible for the VM being
+ * compatible (q35 + OVMF for a GPU) and for host VFIO/IOMMU setup.
+ */
+export async function attachPci(
+  node: string,
+  vmid: number,
+  index: number,
+  mapping: string,
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  await c.put(
+    `/nodes/${node}/qemu/${vmid}/config`,
+    new URLSearchParams({ [`hostpci${index}`]: `mapping=${mapping},pcie=1` }),
+  );
+}
+
+/** Remove a PCI passthrough device (`hostpci{index}`) from a VM. */
+export async function detachPci(
+  node: string,
+  vmid: number,
+  index: number,
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  await c.put(`/nodes/${node}/qemu/${vmid}/config`, new URLSearchParams({ delete: `hostpci${index}` }));
+}
+
+export interface PassthroughDevice {
+  index: number; // N in hostpciN
+  slot: string; // e.g. "hostpci0"
+  mapping?: string; // the resource-mapping name, when attached via a mapping
+  raw: string; // the full config value
+}
+
+/** Parse a VM config's attached PCI devices (its `hostpciN` keys). */
+export function getPassthroughDevices(config: Record<string, string>): PassthroughDevice[] {
+  const out: PassthroughDevice[] = [];
+  for (const [k, v] of Object.entries(config)) {
+    const m = /^hostpci(\d+)$/.exec(k);
+    if (!m) continue;
+    const raw = String(v);
+    const mapping = /(?:^|,)mapping=([^,]+)/.exec(raw)?.[1];
+    out.push({ index: Number(m[1]), slot: k, mapping, raw });
+  }
+  return out.sort((a, b) => a.index - b.index);
+}
+
 // ─── Backups (vzdump / restore / list / delete) ──────────────
 
 /** Kick off a vzdump backup. Returns the Proxmox task UPID. */

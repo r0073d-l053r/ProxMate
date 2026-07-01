@@ -16,6 +16,7 @@ import {
   rollbackSnapshot,
   waitForTask,
   listLxcTemplates,
+  getPassthroughDevices,
 } from '../services/proxmox.service.js';
 import type { RrdTimeframe } from '../services/proxmox.service.js';
 import { requestVncProxy, requestTermProxy } from '../services/vnc-proxy.service.js';
@@ -288,6 +289,24 @@ router.get('/:id/metrics', async (req: Request, res: Response) => {
     vm = await syncVmNode(vm);
     const data = await getVmRrdData(vm.proxmoxNode, vm.proxmoxVmId, timeframe, undefined, kindOf(vm));
     res.json({ timeframe, points: data });
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── GET /api/vms/:id/passthrough ─────────────────────────────
+// Attached PCI/GPU devices (parsed `hostpciN`), for the detail page's badge +
+// admin detach. QEMU-only; containers return an empty list.
+
+router.get('/:id/passthrough', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  let vm = await getViewableVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') { res.json({ devices: [] }); return; }
+  try {
+    vm = await syncVmNode(vm);
+    const cfg = await getVmConfig(vm.proxmoxNode, vm.proxmoxVmId);
+    res.json({ devices: getPassthroughDevices(cfg) });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }
@@ -601,7 +620,7 @@ router.post('/:id/migrate', async (req: Request, res: Response) => {
     res.json({ success: true, proxmoxNode: updated.proxmoxNode });
   } catch (err) {
     const msg = err instanceof Error ? err.message : pveMessage(err);
-    res.status(/already on|No such node|mismatch|containers/i.test(msg) ? 400 : 502).json({ error: msg });
+    res.status(/already on|No such node|mismatch|containers|passthrough/i.test(msg) ? 400 : 502).json({ error: msg });
   }
 });
 

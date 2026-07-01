@@ -2,11 +2,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Trash2, KeyRound, Loader2, RefreshCw, Save, Check, X } from "lucide-react";
+import { Trash2, KeyRound, Loader2, RefreshCw, Save, Check, X, Cpu } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
-import type { ManagedUser, PasswordResetRequest, PendingQuotaRequest } from "@/lib/types";
+import type {
+  ManagedUser,
+  PasswordResetRequest,
+  PendingQuotaRequest,
+  PendingPassthroughRequest,
+  PciMapping,
+} from "@/lib/types";
 import { formatRam, formatDate } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { UsageReport } from "@/components/admin/usage-report";
@@ -39,6 +45,9 @@ export default function UsersPage() {
   const [users, setUsers] = useState<ManagedUser[] | null>(null);
   const [requests, setRequests] = useState<PasswordResetRequest[]>([]);
   const [quotaReqs, setQuotaReqs] = useState<PendingQuotaRequest[]>([]);
+  const [passthroughReqs, setPassthroughReqs] = useState<PendingPassthroughRequest[]>([]);
+  const [pciMappings, setPciMappings] = useState<PciMapping[]>([]);
+  const [mappingChoice, setMappingChoice] = useState<Record<string, string>>({});
   const [tab, setTab] = useState<"accounts" | "usage">("accounts");
   const meId = useAuthStore((s) => s.user?.id);
 
@@ -55,6 +64,14 @@ export default function UsersPage() {
       .get<PendingQuotaRequest[]>("/admin/quota-requests")
       .then((res) => setQuotaReqs(res.data))
       .catch(() => setQuotaReqs([]));
+    api
+      .get<PendingPassthroughRequest[]>("/admin/passthrough-requests")
+      .then((res) => setPassthroughReqs(res.data))
+      .catch(() => setPassthroughReqs([]));
+    api
+      .get<PciMapping[]>("/admin/pci-mappings")
+      .then((res) => setPciMappings(res.data))
+      .catch(() => setPciMappings([]));
   }, []);
 
   useEffect(load, [load]);
@@ -63,6 +80,28 @@ export default function UsersPage() {
     try {
       await api.post(`/admin/quota-requests/${id}/${action}`);
       toast.success(action === "approve" ? "Quota request approved." : "Quota request denied.");
+      load();
+    } catch (err) {
+      toast.error(apiError(err));
+    }
+  }
+
+  async function resolvePassthrough(id: string, action: "approve" | "deny") {
+    const mapping = mappingChoice[id];
+    if (action === "approve" && !mapping) {
+      toast.error("Pick a PCI mapping to attach.");
+      return;
+    }
+    try {
+      await api.post(
+        `/admin/passthrough-requests/${id}/${action}`,
+        action === "approve" ? { mapping } : {},
+      );
+      toast.success(
+        action === "approve"
+          ? "Passthrough approved — device attached (VM stopped if it was running)."
+          : "Passthrough request denied.",
+      );
       load();
     } catch (err) {
       toast.error(apiError(err));
@@ -136,6 +175,67 @@ export default function UsersPage() {
                     <Check /> Approve
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => resolveQuota(q.id, "deny")}>
+                    <X /> Deny
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {passthroughReqs.length > 0 && (
+        <Card className="mb-4 border-amber-500/40 bg-amber-500/5">
+          <CardContent className="grid gap-2.5 py-3">
+            <div className="flex items-center gap-1.5 text-sm font-medium">
+              <Cpu className="size-4" />
+              {passthroughReqs.length} GPU / PCI passthrough {passthroughReqs.length === 1 ? "request" : "requests"} awaiting review
+            </div>
+            {pciMappings.length === 0 && (
+              <p className="rounded-md border border-amber-500/40 bg-background p-2 text-xs text-muted-foreground">
+                No PCI resource mappings are defined on the cluster. Create one in Proxmox
+                (Datacenter → Resource Mappings → PCI) before you can approve — see the admin guide.
+              </p>
+            )}
+            {passthroughReqs.map((p) => (
+              <div
+                key={p.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background p-2.5"
+              >
+                <div className="min-w-0 text-sm">
+                  <div className="font-medium">
+                    {p.vm.name}{" "}
+                    <span className="text-xs font-normal text-muted-foreground">
+                      · vmid {p.vm.vmid} on {p.vm.node}
+                    </span>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {p.user.displayName} · {p.user.email}
+                  </div>
+                  {p.reason && (
+                    <div className="mt-0.5 text-xs italic text-muted-foreground">&ldquo;{p.reason}&rdquo;</div>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <select
+                    aria-label="PCI mapping"
+                    value={mappingChoice[p.id] ?? ""}
+                    onChange={(e) => setMappingChoice((m) => ({ ...m, [p.id]: e.target.value }))}
+                    disabled={pciMappings.length === 0}
+                    className="rounded-md border bg-background px-2 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                  >
+                    <option value="">Select mapping…</option>
+                    {pciMappings.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.id}
+                        {m.nodes.length ? ` (${m.nodes.join(", ")})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <Button size="sm" variant="outline" onClick={() => resolvePassthrough(p.id, "approve")}>
+                    <Check /> Approve
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => resolvePassthrough(p.id, "deny")}>
                     <X /> Deny
                   </Button>
                 </div>
