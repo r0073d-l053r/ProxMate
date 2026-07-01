@@ -152,6 +152,22 @@ It now appears in the **Template Store** for everyone. When a tenant deploys it,
 
 > **Linked clones** are fast and space-efficient (no full disk copy), so deploys take seconds. Two trade-offs to know: a clone stays on the **template's node**, and the template can't be deleted while clones still reference it. Tenants don't choose a node for custom (ISO) VMs either — ProxMate auto-places those on the node with the most free capacity.
 
+### 3.4 Container (LXC) OS templates
+
+Tenants can also deploy **LXC containers** — lightweight guests that share the host kernel and boot in seconds — via the **"Container (LXC)"** source in the New-VM wizard. Instead of an ISO they pick an **OS template** (a `vztmpl` tarball) plus a root password and/or SSH key.
+
+Add container templates through **Proxmox** (the download is a Proxmox action, not a ProxMate one), the same way you add ISOs:
+
+```bash
+pveam update
+pveam available --section system        # list what's downloadable
+pveam download local debian-12-standard_12.7-1_amd64.tar.zst
+```
+
+Or in the Proxmox UI: **node → your template storage (e.g. `local`) → CT Templates → Download**. Once present, a template appears in ProxMate's wizard under **Container (LXC)** on any node that holds it. Node-local template storage only keeps the file on the node it was downloaded to, so download it to each node (or use shared storage) if you want placement flexibility. ProxMate then auto-places the container on a node that has the chosen template.
+
+**What containers support:** create, start/stop/restart, in-browser console, tenant isolation, quotas, cpu/RAM/rootfs resize, and MateStates backups. **VM-only** (not on containers): rebuild, convert-to-template, extra data disks, snapshots, cloud-init extras, and **live migration** — so the [Cluster Balancer](#7-operating-the-cluster) treats containers as *pinned*, and a node drain lists them for you to stop or move by hand before powering the node off.
+
 ---
 
 ## 4. Invite tenants
@@ -240,3 +256,4 @@ A few things worth knowing day-to-day:
 | Console (noVNC) won't connect | Browser blocked the WebSocket; check the ProxMate backend reverse-proxy forwards `Upgrade` headers |
 | The scheduled backup didn't run | Backend was offline at the scheduled time, or `MATESTATE_CRON` is invalid (check backend logs for the warning) |
 | Live-migrating a VM fails ("can't migrate local disk" / storage error) | The target node needs a storage of the **same name** as the source. Cross-architecture (x86↔ARM) moves are blocked by design. A stopped VM migrates offline regardless |
+| "No container templates available" in the create wizard | No `vztmpl` OS template is present on the cluster — add one via `pveam download …` or Proxmox **CT Templates** (see §3.4) |
