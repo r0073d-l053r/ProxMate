@@ -59,6 +59,7 @@ export interface VirtualMachine {
   name: string;
   description: string | null;
   type: GuestType; // "qemu" (default) | "lxc"
+  hasPassthrough?: boolean; // a PCI/GPU device is attached (VM can't migrate)
   cpu: number;
   ram: number;
   storage: number;
@@ -224,6 +225,42 @@ export interface ManagedUser {
   vmCount: number;
   quota: Quota;
   createdAt: string;
+}
+
+/** A GPU/PCI passthrough request the current user has made (for the pending badge). */
+export interface MyPassthroughRequest {
+  id: string;
+  vmId: string;
+  vmName: string;
+  reason: string | null;
+  status: string; // pending | approved | denied
+  mapping: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+/** A pending passthrough request in the admin review queue. */
+export interface PendingPassthroughRequest {
+  id: string;
+  reason: string | null;
+  createdAt: string;
+  user: { id: string; email: string; displayName: string };
+  vm: { id: string; name: string; node: string; vmid: number };
+}
+
+/** An admin-defined Proxmox PCI resource mapping (what a passthrough attaches). */
+export interface PciMapping {
+  id: string;
+  description?: string;
+  nodes: string[];
+}
+
+/** An attached PCI device on a VM (parsed `hostpciN`). */
+export interface PassthroughDevice {
+  index: number;
+  slot: string;
+  mapping?: string;
+  raw: string;
 }
 
 export interface PendingQuotaRequest {

@@ -353,9 +353,14 @@ export async function computeClusterPlan(
       memBytes: r?.mem ?? 0,
       running: r?.status === 'running' && (r?.template ?? 0) !== 1,
       antiAffinity: antiAffinityGroups(tags),
-      // Containers (LXC) can't be live-migrated in the API-only model, so they're
-      // treated as pinned — the planner never tries to move them.
-      excluded: v.type === 'lxc' || exclude.has(v.proxmoxVmId) || tags.some((t) => PIN_TAGS.has(t)),
+      // Treated as pinned (the planner never moves them): containers (LXC has no
+      // live migration) and VMs with a PCI/GPU device attached (passthrough
+      // pins a guest to its host). Plus admin excludes and pin tags.
+      excluded:
+        v.type === 'lxc' ||
+        v.hasPassthrough ||
+        exclude.has(v.proxmoxVmId) ||
+        tags.some((t) => PIN_TAGS.has(t)),
     };
   });
 
@@ -630,6 +635,7 @@ export async function planNodeDrain(
 
   const guests: DrainGuest[] = [];
   const unmanaged: DrainBlocker[] = [];
+  const passthroughBlockers: DrainBlocker[] = [];
   for (const r of qemu) {
     if (r.node !== node || (r.template ?? 0) === 1) continue;
     const db = dbByVmid.get(r.vmid!);
@@ -638,6 +644,15 @@ export async function planNodeDrain(
         proxmoxVmId: r.vmid!,
         name: r.name ?? `VM ${r.vmid}`,
         reason: 'Not managed by ProxMate — migrate or power it off manually.',
+      });
+      continue;
+    }
+    // A VM with a PCI/GPU device attached can't be migrated — flag it instead.
+    if (db.hasPassthrough) {
+      passthroughBlockers.push({
+        proxmoxVmId: db.proxmoxVmId,
+        name: db.name,
+        reason: 'Has PCI/GPU passthrough — can’t be migrated; stop it or detach the device first.',
       });
       continue;
     }
@@ -690,6 +705,11 @@ export async function planNodeDrain(
     plan.blockers.push(...containerBlockers);
     plan.ok = false;
     plan.reason += ` ${containerBlockers.length} container${containerBlockers.length === 1 ? '' : 's'} must be moved or stopped manually (no live migration for LXC).`;
+  }
+  if (passthroughBlockers.length > 0) {
+    plan.blockers.push(...passthroughBlockers);
+    plan.ok = false;
+    plan.reason += ` ${passthroughBlockers.length} VM${passthroughBlockers.length === 1 ? '' : 's'} with PCI/GPU passthrough must be stopped or detached first.`;
   }
   return plan;
 }
