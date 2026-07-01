@@ -44,6 +44,7 @@ model User {
   apiTokens      ApiToken[]
   vmShares       VmShare[]
   quotaRequests  QuotaRequest[]
+  passthroughRequests PassthroughRequest[]
 }
 
 // A tenant's request to raise their resource quota; an admin approves (applies the
@@ -149,6 +150,11 @@ model VirtualMachine {
   // live migration, data disks, or cloud-init extras).
   type          String    @default("qemu")
 
+  // True once a GPU / PCI device (a `hostpciN` mapping) is attached. A cheap
+  // signal so the balancer/drain can skip the VM without reading its Proxmox
+  // config — such a VM can't be live-migrated.
+  hasPassthrough Boolean  @default(false)
+
   cpu           Int
   ram           Int
   storage       Int
@@ -176,9 +182,33 @@ model VirtualMachine {
   user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   matestates    MateState[]
   shares        VmShare[]
+  passthroughRequests PassthroughRequest[]
 
   @@index([userId])
   @@index([proxmoxVmId])
+}
+
+// A tenant's request to attach GPU / PCI passthrough to a VM they own. Mirrors
+// QuotaRequest: an admin reviews, picks an available Proxmox PCI resource
+// mapping (defined by the admin in Proxmox), and attaches it — or denies. The
+// chosen mapping name is recorded on approval. One pending request per VM.
+model PassthroughRequest {
+  id           String    @id @default(cuid())
+  userId       String
+  vmId         String
+  reason       String?
+  status       String    @default("pending") // pending | approved | denied
+  mapping      String?                        // Proxmox PCI mapping name chosen at approval
+  createdAt    DateTime  @default(now())
+  resolvedAt   DateTime?
+  resolvedById String?                        // admin who approved/denied
+
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vm           VirtualMachine @relation(fields: [vmId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([vmId])
+  @@index([status])
 }
 
 // Grants another tenant access to a VM they don't own. `co-owner` = full lifecycle

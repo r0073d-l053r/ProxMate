@@ -541,6 +541,8 @@ export async function migrateVmToNode(
   // live migration; a restart-migration would mean downtime), so they're excluded
   // from manual moves, the balancer, and drains. Keep them pinned.
   if (kindOf(vm) === 'lxc') throw new Error('Live migration isn’t supported for containers (LXC).');
+  // A guest with PCI/GPU passthrough is pinned to its host — can't be migrated.
+  if (vm.hasPassthrough) throw new Error('A VM with PCI/GPU passthrough can’t be migrated. Detach the device first.');
   const client = await pve.getClient();
 
   const nodes = await pve.getNodes(client);
