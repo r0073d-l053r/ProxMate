@@ -21,6 +21,7 @@ import {
   setVmResources,
   resizeDisk,
   getVmRrdData,
+  waitForTask,
 } from '../src/services/proxmox.service.js';
 import { requestTermProxy } from '../src/services/vnc-proxy.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
@@ -212,6 +213,26 @@ describe('restoreBackup (kind-aware restore shape)', () => {
       restore: '1',
       force: '1',
     });
+  });
+});
+
+describe('waitForTask tolerates task warnings', () => {
+  it('resolves when a task finishes OK', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue({ data: { data: { status: 'stopped', exitstatus: 'OK' } } });
+    await expect(waitForTask(NODE, 'UPID:x', asClient(c))).resolves.toBeUndefined();
+  });
+
+  it('treats "WARNINGS: N" as success (LXC creates and vzdump commonly warn)', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue({ data: { data: { status: 'stopped', exitstatus: 'WARNINGS: 1' } } });
+    await expect(waitForTask(NODE, 'UPID:x', asClient(c))).resolves.toBeUndefined();
+  });
+
+  it('still throws on a genuine failure exitstatus', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue({ data: { data: { status: 'stopped', exitstatus: 'unable to create CT' } } });
+    await expect(waitForTask(NODE, 'UPID:x', asClient(c))).rejects.toThrow(/task failed/i);
   });
 });
 

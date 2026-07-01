@@ -890,7 +890,12 @@ export async function waitForTask(
     );
     const { status, exitstatus } = res.data.data;
     if (status === 'stopped') {
-      if (exitstatus && exitstatus !== 'OK') throw new Error(`Proxmox task failed: ${exitstatus}`);
+      // Proxmox marks a fully-successful task "OK" and a task that completed with
+      // non-fatal warnings "WARNINGS: N" — the latter is a success (common for LXC
+      // creates and vzdump backups). Anything else is a genuine failure.
+      if (exitstatus && exitstatus !== 'OK' && !exitstatus.startsWith('WARNINGS')) {
+        throw new Error(`Proxmox task failed: ${exitstatus}`);
+      }
       return;
     }
     await new Promise((r) => setTimeout(r, 1500));

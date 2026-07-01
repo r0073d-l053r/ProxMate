@@ -146,10 +146,23 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
     /* status unknown — try anyway */
   }
 
+  // LXC restore must target a container-capable rootfs storage: the backup
+  // storage (often a directory like `local`) usually can't hold a container
+  // rootfs, so Proxmox 400s unless we pass one. Reuse the container's current
+  // rootfs pool, falling back to the configured default. (QEMU reads the target
+  // from the vzdump config, so it needs no explicit storage.)
+  let restoreStorage: string | undefined;
+  if (kind === 'lxc') {
+    const cfg = await pve
+      .getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, 'lxc')
+      .catch(() => ({}) as Record<string, string>);
+    restoreStorage = cfg.rootfs?.split(':')[0] || (await getConfig('default_storage')) || undefined;
+  }
+
   await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'restoring' } });
   try {
     const upid = await pve.restoreBackup(
-      { node: vm.proxmoxNode, vmid: vm.proxmoxVmId, volid: mateState.volid },
+      { node: vm.proxmoxNode, vmid: vm.proxmoxVmId, volid: mateState.volid, storage: restoreStorage },
       client,
       kind,
     );
