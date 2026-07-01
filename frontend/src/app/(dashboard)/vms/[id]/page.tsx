@@ -1022,6 +1022,9 @@ export default function VmDetailPage() {
   // view (the API enforces all of this — the UI just hides what won't work).
   const canWrite = vm.access !== "read-only";
   const isManager = vm.access === "owner" || vm.access === "admin" || isAdmin;
+  // Containers (LXC) don't support the QEMU-only features: rebuild, convert to
+  // template, live migration, extra data disks, and snapshots.
+  const isLxc = vm.type === "lxc";
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -1034,6 +1037,11 @@ export default function VmDetailPage() {
           <span className="flex items-center gap-1.5 text-xs text-muted-foreground" title="Auto-refreshing">
             <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" /> Live
           </span>
+          {isLxc && (
+            <span className="rounded border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+              LXC
+            </span>
+          )}
           <VmStatusBadge status={transition ?? vm.status} />
           {transition && (
             <span className="text-xs text-muted-foreground tabular-nums" title="Time in this transition">
@@ -1117,9 +1125,9 @@ export default function VmDetailPage() {
 
         <ResizeDialog vm={vm} isAdmin={isAdmin} disabled={busy} onResized={load} />
 
-        <RebuildDialog vm={vm} disabled={busy} onRebuilt={load} />
+        {!isLxc && <RebuildDialog vm={vm} disabled={busy} onRebuilt={load} />}
 
-        {isAdmin && (
+        {isAdmin && !isLxc && (
           <AlertDialog>
             <AlertDialogTrigger
               render={
@@ -1156,7 +1164,7 @@ export default function VmDetailPage() {
           </AlertDialog>
         )}
 
-        {isAdmin && (
+        {isAdmin && !isLxc && (
           <MigrateDialog vmId={vm.id} currentNode={vm.proxmoxNode} running={running} onDone={load} />
         )}
 
@@ -1250,13 +1258,13 @@ export default function VmDetailPage() {
 
       <ActivityCard vmId={vm.id} />
 
-      {canWrite && <SnapshotsPanel vmId={vm.id} vmName={vm.name} />}
+      {canWrite && !isLxc && <SnapshotsPanel vmId={vm.id} vmName={vm.name} />}
 
       {canWrite && <MateStatesPanel vmId={vm.id} vmName={vm.name} />}
 
       {canWrite && <BackupPolicyPanel vmId={vm.id} />}
 
-      {canWrite && <DisksPanel vmId={vm.id} onChanged={load} />}
+      {canWrite && !isLxc && <DisksPanel vmId={vm.id} onChanged={load} />}
 
       {isManager && <SharePanel vmId={vm.id} />}
 
@@ -1268,21 +1276,32 @@ export default function VmDetailPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="grid gap-1.5 text-sm text-muted-foreground">
-          <p>
-            <span className="font-medium text-foreground">VirtIO is already configured</span> —
-            this VM uses a VirtIO SCSI disk and VirtIO network for max throughput.
-          </p>
-          <p>
-            <span className="font-medium text-foreground">Install the guest agent</span> so memory
-            stats and clean shutdown work. Inside the VM (Debian/Ubuntu):{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-xs">
-              sudo apt update &amp;&amp; sudo apt install qemu-guest-agent
-            </code>
-          </p>
-          <p>
-            <span className="font-medium text-foreground">Reuse it</span> — once configured,
-            convert the VM to a Template in Proxmox to clone new ones instantly.
-          </p>
+          {isLxc ? (
+            <p>
+              <span className="font-medium text-foreground">Lightweight by design</span> — this is an
+              LXC container: it shares the host kernel, boots in seconds, and reports its IP and stats
+              without a guest agent. Live migration, extra data disks, and snapshots aren&apos;t
+              available for containers.
+            </p>
+          ) : (
+            <>
+              <p>
+                <span className="font-medium text-foreground">VirtIO is already configured</span> —
+                this VM uses a VirtIO SCSI disk and VirtIO network for max throughput.
+              </p>
+              <p>
+                <span className="font-medium text-foreground">Install the guest agent</span> so memory
+                stats and clean shutdown work. Inside the VM (Debian/Ubuntu):{" "}
+                <code className="rounded bg-muted px-1 py-0.5 text-xs">
+                  sudo apt update &amp;&amp; sudo apt install qemu-guest-agent
+                </code>
+              </p>
+              <p>
+                <span className="font-medium text-foreground">Reuse it</span> — once configured,
+                convert the VM to a Template in Proxmox to clone new ones instantly.
+              </p>
+            </>
+          )}
           <p>
             <span className="font-medium text-foreground">Reach it from outside ProxMate</span> —
             use{" "}

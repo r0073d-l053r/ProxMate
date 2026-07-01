@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { ArrowLeft, Loader2, Plus, Rocket, HardDrive, KeyRound, Server, Container } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
-import type { MeResponse, ProxmoxIso, Template, VirtualMachine, SshKey } from "@/lib/types";
+import type { MeResponse, ProxmoxIso, LxcTemplate, Template, VirtualMachine, SshKey } from "@/lib/types";
 import { formatRam } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,7 +28,9 @@ import {
 
 const RAM_OPTIONS = [1, 2, 4, 8, 16, 32];
 const CUSTOM = "custom";
+const CONTAINER = "container"; // LXC container source
 const CUSTOM_DISK_DEFAULT = 20;
+const CONTAINER_DISK_DEFAULT = 8;
 
 /** One-click "T-shirt" sizes that pre-fill cpu/ram/disk; disk is clamped up to a
  *  template's base. Tweak any field afterwards — these are just sensible starts. */
@@ -63,16 +65,20 @@ export default function NewVmWizard() {
   const [quota, setQuota] = useState<MeResponse["user"]["quota"] | null>(null);
   const [isos, setIsos] = useState<ProxmoxIso[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [lxcTemplates, setLxcTemplates] = useState<LxcTemplate[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // `source` is either CUSTOM (install from ISO) or a template id (clone + autoscale).
+  // `source` is CUSTOM (install from ISO), CONTAINER (LXC from a template), or a
+  // QEMU template id (clone + autoscale).
   const [source, setSource] = useState<string>(CUSTOM);
   const [name, setName] = useState("");
   const [cpu, setCpu] = useState(1);
   const [ramGb, setRamGb] = useState(2);
   const [storageGb, setStorageGb] = useState(CUSTOM_DISK_DEFAULT);
   const [os, setOs] = useState("");
+  // LXC container deploys only:
+  const [lxcTemplate, setLxcTemplate] = useState("");
   // Cloud-init template deploys only:
   const [sshKey, setSshKey] = useState("");
   const [savedKeys, setSavedKeys] = useState<SshKey[]>([]);
@@ -97,14 +103,17 @@ export default function NewVmWizard() {
         .catch(() => ({ data: { features: [], nodes: {} } })),
       // Saved SSH keys — offered as quick-pick for cloud-init deploys. Never block.
       api.get<SshKey[]>("/ssh-keys").catch(() => ({ data: [] as SshKey[] })),
+      // LXC OS templates (vztmpl) available on the cluster. Never block the wizard.
+      api.get<LxcTemplate[]>("/vms/lxc-templates").catch(() => ({ data: [] as LxcTemplate[] })),
     ])
-      .then(([meRes, isosRes, tplRes, extrasRes, keysRes]) => {
+      .then(([meRes, isosRes, tplRes, extrasRes, keysRes, lxcRes]) => {
         setQuota(meRes.data.user.quota);
         setIsos(isosRes.data);
         setTemplates(tplRes.data);
         setCloudFeatures(extrasRes.data.features ?? []);
         setCloudNodes(extrasRes.data.nodes ?? {});
         setSavedKeys(keysRes.data ?? []);
+        setLxcTemplates(lxcRes.data ?? []);
 
         // Deep-link preselect: /vms/new?template=<id> (e.g. the store's Deploy button).
         const wanted = searchParams.get("template");
@@ -119,7 +128,8 @@ export default function NewVmWizard() {
       .finally(() => setLoading(false));
   }, [searchParams]);
 
-  const template = source === CUSTOM ? null : templates.find((t) => t.id === source) ?? null;
+  const isContainer = source === CONTAINER;
+  const template = source === CUSTOM || isContainer ? null : templates.find((t) => t.id === source) ?? null;
   const isCustom = source === CUSTOM;
   const isCloud = !!template?.cloudInit;
   const nodeSnippets = isCloud && template ? cloudNodes[template.proxmoxNode] ?? [] : [];
@@ -161,6 +171,8 @@ export default function NewVmWizard() {
     setSelectedFeatures([]);
     if (v === CUSTOM) {
       setStorageGb(CUSTOM_DISK_DEFAULT);
+    } else if (v === CONTAINER) {
+      setStorageGb(CONTAINER_DISK_DEFAULT);
     } else {
       const t = templates.find((x) => x.id === v);
       setStorageGb(t ? Math.max(t.diskGb, 1) : CUSTOM_DISK_DEFAULT);
@@ -178,6 +190,13 @@ export default function NewVmWizard() {
       e.storage = template ? `Template needs at least ${minDisk} GB` : "At least 1 GB";
     else if (!isAdmin && storageGb > storageLeft) e.storage = `Exceeds your remaining ${storageLeft} GB`;
     if (isCustom && !os) e.os = "Select an installation ISO";
+    if (isContainer) {
+      if (!lxcTemplate) e.lxcTemplate = "Select a container template";
+      if (!sshKey.trim() && !password) e.sshKey = "Add an SSH public key (or set a root password below)";
+      else if (sshKey.trim() && !/^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-|sk-)/.test(sshKey.trim()))
+        e.sshKey = "That doesn't look like an OpenSSH public key";
+      if (password && password.length < 5) e.password = "Use at least 5 characters";
+    }
     if (isCloud) {
       if (!sshKey.trim() && !password) e.sshKey = "Add an SSH public key (or set a password below)";
       else if (sshKey.trim() && !/^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-|sk-)/.test(sshKey.trim()))
@@ -206,6 +225,18 @@ export default function NewVmWizard() {
           // chosen ISO and the disk pool, with the most free capacity.
         });
         toast.success(`VM "${name}" is being created.`);
+        router.push(`/vms/${res.data.vm.id}`);
+      } else if (isContainer) {
+        const res = await api.post<{ vm: VirtualMachine }>("/vms/containers", {
+          name,
+          cpu,
+          ram: ramGb * 1024,
+          storage: storageGb,
+          template: lxcTemplate,
+          sshKey: sshKey.trim() || undefined,
+          password: password || undefined,
+        });
+        toast.success(`Container "${name}" is being created.`);
         router.push(`/vms/${res.data.vm.id}`);
       } else {
         const res = await api.post<{ vm: VirtualMachine }>("/templates/deploy", {
@@ -270,9 +301,11 @@ export default function NewVmWizard() {
                   hint={
                     isCustom
                       ? "Install a fresh OS from an ISO image."
-                      : template
-                        ? `${template.description || template.os || "Linux template"} · ${template.diskGb} GB base`
-                        : undefined
+                      : isContainer
+                        ? "A lightweight Linux container (LXC) from an OS template — boots in seconds."
+                        : template
+                          ? `${template.description || template.os || "Linux template"} · ${template.diskGb} GB base`
+                          : undefined
                   }
                 >
                   <Select value={source} onValueChange={(v) => onSourceChange(v as string)}>
@@ -283,6 +316,11 @@ export default function NewVmWizard() {
                       <SelectItem value={CUSTOM}>
                         <span className="flex items-center gap-2">
                           <Plus className="size-3.5" /> Custom VM (install from ISO)
+                        </span>
+                      </SelectItem>
+                      <SelectItem value={CONTAINER}>
+                        <span className="flex items-center gap-2">
+                          <Container className="size-3.5" /> Container (LXC)
                         </span>
                       </SelectItem>
                       {templates.length > 0 && (
@@ -491,6 +529,88 @@ export default function NewVmWizard() {
                   </>
                 )}
 
+                {isContainer && (
+                  <>
+                    <FormField label="Container template" error={errors.lxcTemplate}>
+                      <Select
+                        value={lxcTemplate}
+                        onValueChange={(v) => {
+                          setLxcTemplate(v as string);
+                          setErrors({});
+                        }}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue
+                            placeholder={lxcTemplates.length ? "Select a template" : "No container templates available"}
+                          />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {lxcTemplates.map((t) => (
+                            <SelectItem key={t.volid} value={t.volid}>
+                              {t.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </FormField>
+
+                    <FormField
+                      label="SSH public key"
+                      htmlFor="ct-sshkey"
+                      error={errors.sshKey}
+                      hint="Added to the container's root authorized_keys so you can SSH in — or set a root password below."
+                    >
+                      {savedKeys.length > 0 && (
+                        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                          <span className="text-xs text-muted-foreground">Use a saved key:</span>
+                          {savedKeys.map((k) => (
+                            <button
+                              key={k.id}
+                              type="button"
+                              onClick={() => setSshKey(k.publicKey)}
+                              className={
+                                "rounded-full border px-2.5 py-0.5 text-xs transition-colors " +
+                                (sshKey === k.publicKey
+                                  ? "border-primary bg-primary/10 text-primary"
+                                  : "hover:bg-muted")
+                              }
+                            >
+                              {k.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <textarea
+                        id="ct-sshkey"
+                        value={sshKey}
+                        onChange={(e) => setSshKey(e.target.value)}
+                        placeholder="ssh-ed25519 AAAA… you@laptop"
+                        className="h-20 w-full resize-none rounded-md border bg-background p-2 font-mono text-xs outline-none focus:ring-2 focus:ring-ring"
+                      />
+                    </FormField>
+
+                    <FormField
+                      label="Root password (optional)"
+                      htmlFor="ct-password"
+                      error={errors.password}
+                      hint="SSH key is recommended. At least 5 characters if set."
+                    >
+                      <Input
+                        id="ct-password"
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                      />
+                    </FormField>
+
+                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Server className="size-3.5" />
+                      ProxMate places the container on a node that has this template, with the most free
+                      capacity.
+                    </p>
+                  </>
+                )}
+
                 {isCustom && (
                   <>
                     <FormField label="Installation ISO" error={errors.os}>
@@ -516,7 +636,7 @@ export default function NewVmWizard() {
                   </>
                 )}
 
-                {!isCustom && (
+                {!isCustom && !isContainer && (
                   <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                     <HardDrive className="size-3.5" />
                     Clones stay on the template&apos;s node and storage — fast and space-efficient.
@@ -528,10 +648,12 @@ export default function NewVmWizard() {
                     <Loader2 className="animate-spin" />
                   ) : isCustom ? (
                     <Plus />
+                  ) : isContainer ? (
+                    <Container />
                   ) : (
                     <Rocket />
                   )}
-                  {isCustom ? "Create VM" : "Deploy"}
+                  {isCustom ? "Create VM" : isContainer ? "Create container" : "Deploy"}
                 </Button>
               </form>
             </CardContent>

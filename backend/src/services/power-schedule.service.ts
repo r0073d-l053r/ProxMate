@@ -125,7 +125,7 @@ export async function runDuePowerActions(now: Date = new Date()): Promise<{ star
   );
   const statusByVmid = new Map<number, string>();
   for (const r of res.data.data) {
-    if (r.type === 'qemu' && r.vmid !== undefined && r.status) statusByVmid.set(r.vmid, r.status);
+    if ((r.type === 'qemu' || r.type === 'lxc') && r.vmid !== undefined && r.status) statusByVmid.set(r.vmid, r.status);
   }
 
   let started = 0;
