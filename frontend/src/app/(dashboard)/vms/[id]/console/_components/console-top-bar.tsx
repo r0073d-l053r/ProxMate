@@ -5,14 +5,15 @@ import Link from "next/link";
 import { ArrowLeft, Monitor, SquareTerminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { ConsoleActions } from "./console-actions";
 
 export type ConsoleMode = "graphical" | "text";
 
 /**
- * Shared console header: a Back link, the Graphical | Text mode toggle, and a
- * slot on the right for mode-specific actions (status, paste, reconnect, …).
- * Both the noVNC and the xterm.js consoles render this so the toggle is always
- * present and consistent.
+ * Shared console header: a Back link, the Graphical | Text mode toggle, the VM
+ * power Actions menu, and a slot on the right for mode-specific actions
+ * (status, paste, reconnect, …). Both the noVNC and the xterm.js consoles
+ * render this so the toggle is always present and consistent.
  */
 export function ConsoleTopBar({
   id,
@@ -40,6 +41,8 @@ export function ConsoleTopBar({
             <SquareTerminal className="size-4" /> Text
           </ModeButton>
         </div>
+
+        <ConsoleActions id={id} />
       </div>
 
       <div className="flex items-center gap-2">{children}</div>

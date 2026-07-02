@@ -91,6 +91,8 @@ export interface VmShare {
 
 export interface VmLiveStatus {
   status: string;
+  /** QEMU machine state — "paused" while suspended (execution frozen, RAM resident). */
+  qmpstatus?: string;
   cpu?: number;
   mem?: number;
   maxmem?: number;
@@ -99,6 +101,16 @@ export interface VmLiveStatus {
 
 export interface VmDetail extends VirtualMachine {
   live: VmLiveStatus | null;
+}
+
+/** One 1 s sample from GET /vms/:id/live-stats (cached cluster/resources). */
+export interface VmLiveSample {
+  status: string;
+  cpu: number; // 0..1 fraction of allocated cores
+  maxcpu: number;
+  mem: number; // bytes
+  maxmem: number; // bytes
+  uptime?: number;
 }
 
 /** Owner-facing per-VM activity entry — a sanitized slice of the audit log

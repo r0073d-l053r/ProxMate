@@ -20,6 +20,7 @@ import {
   Network,
   Package,
   Pencil,
+  PictureInPicture2,
   Play,
   RotateCcw,
   RotateCw,
@@ -31,6 +32,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { SiTailscale } from "react-icons/si";
+import { TemplateIcon } from "@/components/template-icon";
 import { api, apiError } from "@/lib/api";
 import type { VmDetail } from "@/lib/types";
 import { copyText } from "@/lib/clipboard";
@@ -143,6 +145,8 @@ export default function VmDetailPage() {
   const [elapsed, setElapsed] = useState(0);
   const [tplName, setTplName] = useState("");
   const [newName, setNewName] = useState("");
+  // Typed-name confirmation for the destructive delete — must match vm.name exactly.
+  const [deleteText, setDeleteText] = useState("");
   const [dialog, setDialog] = useState<ActiveDialog>(null);
 
   // Active tab, deep-linkable via ?tab= (e.g. /vms/abc?tab=backups). Kept in the
@@ -369,14 +373,11 @@ export default function VmDetailPage() {
               <Hash className="size-3.5" />
               {vm.proxmoxVmId}
             </span>
-            <span className="hidden max-w-56 items-center gap-1 sm:flex">
-              <Disc className="size-3.5 shrink-0" />
+            <span className="hidden max-w-56 items-center gap-1.5 sm:flex">
+              <TemplateIcon os={vm.os} name={vm.os} className="size-3.5 shrink-0" />
               <span className="truncate" title={vm.os}>
                 {vm.os}
               </span>
-            </span>
-            <span className="flex items-center gap-1.5" title="Auto-refreshing">
-              <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" /> Live
             </span>
           </div>
         </div>
@@ -401,6 +402,19 @@ export default function VmDetailPage() {
                 <DropdownMenuItem onClick={() => router.push(`/vms/${vm.id}/console?mode=text`)}>
                   <SquareTerminal />
                   Text — links, copy/paste
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() =>
+                    window.open(
+                      `/console-popout/${vm.id}`,
+                      `proxmate-console-${vm.id}`,
+                      "popup,width=960,height=540",
+                    )
+                  }
+                >
+                  <PictureInPicture2 />
+                  Pop out text console
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -546,7 +560,18 @@ export default function VmDetailPage() {
                   <DetailRow icon={Cpu} label="vCPU" value={`${vm.cpu} cores`} />
                   <DetailRow icon={MemoryStick} label="Memory" value={formatRam(vm.ram)} />
                   <DetailRow icon={HardDrive} label="Disk" value={`${vm.storage} GB`} />
-                  <DetailRow icon={Disc} label="OS image" value={vm.os} />
+                  <div className="flex items-center justify-between gap-4 py-2.5 text-sm">
+                    <span className="flex items-center gap-2 text-muted-foreground">
+                      <Disc className="size-4" />
+                      OS image
+                    </span>
+                    <span className="flex min-w-0 items-center gap-1.5 font-medium">
+                      <TemplateIcon os={vm.os} name={vm.os} className="size-4 shrink-0" />
+                      <span className="truncate" title={vm.os}>
+                        {vm.os}
+                      </span>
+                    </span>
+                  </div>
                 </CardContent>
               </Card>
 
@@ -676,7 +701,8 @@ export default function VmDetailPage() {
         <TabsContent value="insights" className="pt-4">
           <MetricsCard vmId={vm.id} tall />
           <p className="mt-3 text-xs text-muted-foreground">
-            History comes from Proxmox&apos;s metric store — longer windows fill in as the VM keeps running.
+            Live ticks every second (rolling two-minute window, zoomed to the activity); Day and Week
+            come from Proxmox&apos;s metric store and fill in as the VM keeps running.
           </p>
         </TabsContent>
 
@@ -903,18 +929,54 @@ export default function VmDetailPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={dialog === "delete"} onOpenChange={(o: boolean) => setDialog(o ? "delete" : null)}>
+      <AlertDialog
+        open={dialog === "delete"}
+        onOpenChange={(o: boolean) => {
+          setDialog(o ? "delete" : null);
+          if (!o) setDeleteText("");
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {vm.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This permanently destroys the {isLxc ? "container" : "VM"} and its disk on Proxmox. This
-              cannot be undone.
+              This <span className="font-semibold text-foreground">permanently destroys</span> the{" "}
+              {isLxc ? "container" : "VM"} and its disk on Proxmox —{" "}
+              <span className="font-semibold text-foreground">it can never be brought back</span>. Its
+              backups and snapshots are removed with it, so if there&apos;s anything on this machine
+              you want to keep, save it first (see the{" "}
+              <button
+                type="button"
+                className="font-medium text-primary underline-offset-4 hover:underline"
+                onClick={() => {
+                  setDialog(null);
+                  setDeleteText("");
+                  setTab("backups");
+                }}
+              >
+                Backups &amp; Snapshots
+              </button>{" "}
+              tab).
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <FormField label={`Type "${vm.name}" to confirm`} htmlFor="deleteConfirm">
+            <Input
+              id="deleteConfirm"
+              autoFocus
+              value={deleteText}
+              onChange={(e) => setDeleteText(e.target.value)}
+              placeholder={vm.name}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </FormField>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={onDelete} disabled={pending === "delete"}>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={onDelete}
+              disabled={pending === "delete" || deleteText.trim() !== vm.name}
+            >
               {pending === "delete" ? <Loader2 className="animate-spin" /> : <Trash2 />}
               Delete {isLxc ? "container" : "VM"}
             </AlertDialogAction>
