@@ -125,6 +125,7 @@ Fill in the **PRODUCTION** block (replace the domain). The key values:
 | `COOKIE_SECURE` | `true` | Send `Secure` cookies (HTTPS). |
 | `TRUST_PROXY` | `1` | One proxy hop (Caddy) → real client IP for rate-limit + audit. |
 | `BIND_ADDR` | `127.0.0.1` | Only the local reverse proxy can reach the app ports. |
+| `BACKUP_DOWNLOAD_DIR` | *(optional)* e.g. `/backups` | **Enables tenant backup downloads.** Mount your backup share (the same NFS/CIFS/PBS-dir Proxmox writes vzdumps to) into the API container and point this at it. Tenants then get a **Download** button on each MateState that emails them a single-use, 1-hour link; ProxMate streams the file off this mount (the Proxmox API can't stream vzdump bytes). Requires SMTP. Leave unset to keep the feature off. |
 
 > If you ever change `NEXT_PUBLIC_API_URL`, you must **rebuild** the frontend image
 > (it's compiled in, not read at runtime).

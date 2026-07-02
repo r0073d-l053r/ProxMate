@@ -33,6 +33,7 @@ const ACTIVITY_META: Record<string, { label: string; dot: string }> = {
   "snapshot.delete": { label: "Snapshot deleted", dot: "bg-muted-foreground" },
   "vm.schedule": { label: "Schedule updated", dot: "bg-muted-foreground" },
   "vm.backup_policy": { label: "Backup policy updated", dot: "bg-muted-foreground" },
+  "matestate.download": { label: "Backup download requested", dot: "bg-sky-500" },
 };
 
 /**

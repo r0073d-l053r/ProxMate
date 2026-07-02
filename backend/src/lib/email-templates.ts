@@ -366,3 +366,33 @@ export function alertEmail(opts: { vmName: string; alertLabel: string; detail: s
 
   return { subject, text, html: wrapEmail(`${alertLabel}: ${escapeHtml(vmName)}`, bodyRows) };
 }
+
+/**
+ * Branded email carrying a single-use link to download a VM backup file. Sent
+ * when a tenant requests a MateState download (feature requires the admin to
+ * mount the backup share). The link expires and works once.
+ */
+export function backupDownloadEmail(opts: { vmName?: string; link: string; filename: string; ttlMinutes: number }): RenderedEmail {
+  const { link, filename, ttlMinutes } = opts;
+  const subject = `[ProxMate] Your backup download is ready`;
+  const text =
+    `Your ProxMate backup is ready to download:\n\n${filename}\n\n${link}\n\n` +
+    `This link works once and expires in ${ttlMinutes} minutes. If you didn't request it, you can ignore this email.`;
+
+  const bodyRows =
+    h1('Your backup is ready') +
+    p(`The backup you requested is ready to download:`, { mb: 8 }) +
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%; margin:0 0 20px; background-color:#fafafa; border:1px solid ${LINE}; border-radius:8px;">
+<tr><td style="padding:12px 16px; font-family:${FONT}; font-size:13px; line-height:1.5; color:${BODY}; word-break:break-all;">${escapeHtml(filename)}</td></tr>
+</table>` +
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;"><tr><td style="border-radius:8px; background-color:${INK};">
+<a href="${escapeHtml(link)}" style="display:inline-block; padding:11px 20px; font-family:${FONT}; font-size:14px; font-weight:600; color:#ffffff; text-decoration:none;">Download backup</a>
+</td></tr></table>` +
+    p(`This link works once and expires in ${ttlMinutes} minutes. If you didn't request it, you can safely ignore this email.`, {
+      color: MUTED,
+      size: 13,
+      mb: 0,
+    });
+
+  return { subject, text, html: wrapEmail('Your ProxMate backup is ready to download', bodyRows) };
+}
