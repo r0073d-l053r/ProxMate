@@ -332,3 +332,37 @@ export function vmMaintenanceEmail(opts: { vmName: string; live: boolean }): Ren
     html: wrapEmail(`Maintenance: your server "${escapeHtml(vmName)}" is being moved to another host.`, bodyRows),
   };
 }
+
+/**
+ * Branded alert sent to a VM's owner when one of their per-VM resource alerts
+ * trips (CPU/memory sustained high, disk nearly full, or an unexpected stop).
+ * `detail` is a one-line human summary already composed by the alert service.
+ */
+export function alertEmail(opts: { vmName: string; alertLabel: string; detail: string; vmUrl?: string }): RenderedEmail {
+  const { vmName, alertLabel, detail, vmUrl } = opts;
+  const subject = `[ProxMate] Alert: ${vmName} — ${alertLabel}`;
+  const text =
+    `${alertLabel} on your server "${vmName}".\n\n${detail}\n\n` +
+    (vmUrl ? `View it: ${vmUrl}\n\n` : '') +
+    `You're receiving this because you set an alert on this machine. Manage alerts on its page under Settings.`;
+
+  const bodyRows =
+    h1(`${escapeHtml(alertLabel)}`) +
+    p(
+      `Your server <strong style="color:${INK};">${escapeHtml(vmName)}</strong> tripped an alert you set.`,
+      { mb: 16 },
+    ) +
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%; margin:0 0 22px; background-color:#fafafa; border:1px solid ${LINE}; border-radius:8px;">
+<tr><td style="padding:14px 16px; font-family:${FONT}; font-size:14px; line-height:1.6; color:${BODY};">${escapeHtml(detail)}</td></tr>
+</table>` +
+    (vmUrl
+      ? p(`<a href="${escapeHtml(vmUrl)}" style="color:${LINK};">Open ${escapeHtml(vmName)} in ProxMate</a>`, { mb: 16 })
+      : '') +
+    p('You set this alert on the machine’s page. Adjust or remove it there under Settings → Alerts.', {
+      color: MUTED,
+      size: 13,
+      mb: 0,
+    });
+
+  return { subject, text, html: wrapEmail(`${alertLabel}: ${escapeHtml(vmName)}`, bodyRows) };
+}

@@ -53,6 +53,7 @@ import { SharePanel } from "@/components/vm/share-panel";
 import { DisksPanel } from "@/components/vm/disks-panel";
 import { PassthroughPanel } from "@/components/vm/passthrough-panel";
 import { RecoveryPanel } from "@/components/vm/recovery-panel";
+import { AlertsPanel } from "@/components/vm/alerts-panel";
 import { useAuthStore } from "@/lib/auth-store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -790,6 +791,8 @@ export default function VmDetailPage() {
                 onChanged={load}
               />
             )}
+
+            <AlertsPanel vmId={vm.id} canWrite={canWrite} />
 
             {!isLxc && <RecoveryPanel vm={vm} busy={busy} onChanged={load} />}
 
