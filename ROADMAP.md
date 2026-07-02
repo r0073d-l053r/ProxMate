@@ -165,8 +165,9 @@ Reviewed with the owner; in progress. Continues the DigitalOcean-parity push for
    "exit rescue" that restores the original boot order (QEMU).
 3. **Reset guest password** — via the guest agent's dedicated `set-user-password` call
    (QEMU + agent), for locked-out users on key-only cloud images.
-4. **Duplicate VM** — self-service clone of your own (stopped) VM: quota-checked,
-   auto-placed, isolation firewall before first boot.
+4. **Duplicate VM** ✅ — self-service full clone of your own **stopped** VM (`POST
+   /api/vms/:id/duplicate`): quota-checked against the owner's caps, isolation firewall
+   re-applied before first boot, from the VM's Actions menu. QEMU-only. _Done._
 5. **Cloud image freshness** — per-template refresh + optional monthly schedule:
    re-import the upstream cloud image as a new template and repoint the store entry, so
    new deploys always boot a patched base (superseded templates kept until clone-free).
