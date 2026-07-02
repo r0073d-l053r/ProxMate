@@ -6,50 +6,42 @@ import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   ArrowLeft,
-  Play,
-  Square,
-  RotateCw,
-  Trash2,
-  Terminal,
-  SquareTerminal,
-  Loader2,
+  ArrowLeftRight,
+  Archive,
+  ChevronDown,
+  Copy,
   Cpu,
-  MemoryStick,
-  HardDrive,
-  Server,
   Disc,
-  Network,
+  HardDrive,
   Hash,
   Lightbulb,
+  Loader2,
+  MemoryStick,
+  Network,
   Package,
-  StickyNote,
-  Check,
-  History,
-  RefreshCw,
-  LineChart,
   Pencil,
-  Scaling,
+  Play,
   RotateCcw,
-  AlertTriangle,
-  Tag,
-  X,
+  RotateCw,
+  Scaling,
+  Server,
+  Square,
+  SquareTerminal,
+  Terminal,
+  Trash2,
 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
-import type {
-  VmDetail,
-  VmActivityEntry,
-  VmMetrics,
-  RrdTimeframe,
-  MeResponse,
-  Quota,
-  ProxmoxIso,
-  Template,
-  SshKey,
-} from "@/lib/types";
-import { formatRam, formatBytes, formatUptime, formatDate, formatRelative } from "@/lib/format";
-import { PageHeader } from "@/components/dashboard/page-header";
-import { Sparkline } from "@/components/dashboard/sparkline";
+import type { VmDetail } from "@/lib/types";
+import { copyText } from "@/lib/clipboard";
+import { formatRam, formatBytes, formatUptime, formatDate } from "@/lib/format";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
+import { NotesCard } from "@/components/vm/notes-card";
+import { TagsCard } from "@/components/vm/tags-card";
+import { MetricsCard } from "@/components/vm/metrics-card";
+import { ActivityCard } from "@/components/vm/activity-card";
+import { ResizeDialog } from "@/components/vm/resize-dialog";
+import { RebuildDialog } from "@/components/vm/rebuild-dialog";
+import { MigrateDialog } from "@/components/vm/migrate-dialog";
 import { MateStatesPanel } from "@/components/vm/matestates-panel";
 import { SnapshotsPanel } from "@/components/vm/snapshots-panel";
 import { PowerSchedulePanel } from "@/components/vm/power-schedule-panel";
@@ -57,22 +49,21 @@ import { BackupPolicyPanel } from "@/components/vm/backup-policy-panel";
 import { SharePanel } from "@/components/vm/share-panel";
 import { DisksPanel } from "@/components/vm/disks-panel";
 import { PassthroughPanel } from "@/components/vm/passthrough-panel";
-import { MigrateDialog } from "@/components/vm/migrate-dialog";
 import { useAuthStore } from "@/lib/auth-store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/form-field";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -82,11 +73,21 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
 /** Client-side optimistic state while a power action is in flight. */
 type Transition = "starting" | "stopping" | "restarting" | null;
+
+/** Which of the page's modal dialogs is open (all driven from the Actions menu). */
+type ActiveDialog = "rename" | "resize" | "rebuild" | "convert" | "migrate" | "delete" | null;
+
+/** DigitalOcean-style top-level sections of the detail page. */
+const TAB_VALUES = ["overview", "insights", "backups", "activity", "settings"] as const;
+type TabValue = (typeof TAB_VALUES)[number];
+
+function isTabValue(v: string | null): v is TabValue {
+  return !!v && (TAB_VALUES as readonly string[]).includes(v);
+}
 
 function DetailRow({
   icon: Icon,
@@ -108,746 +109,24 @@ function DetailRow({
   );
 }
 
-/**
- * Editable free-text notes for a VM ("staging — don't touch", "Minecraft server").
- * Self-contained: keeps its own draft so the detail page's 2.5 s status poll never
- * clobbers an in-progress edit. The Save button only enables once the draft differs
- * from what's stored (max 500 chars, mirrored by the backend).
- */
-function NotesCard({
-  vmId,
-  initial,
-  onSaved,
+/** A Settings-tab row: label + explanation on the left, one action on the right. */
+function SettingRow({
+  title,
+  description,
+  action,
 }: {
-  vmId: string;
-  initial: string | null;
-  onSaved: () => void;
+  title: string;
+  description: React.ReactNode;
+  action: React.ReactNode;
 }) {
-  const [value, setValue] = useState(initial ?? "");
-  const [saving, setSaving] = useState(false);
-  const dirty = value !== (initial ?? "");
-
-  async function save() {
-    setSaving(true);
-    try {
-      await api.patch(`/vms/${vmId}`, { description: value });
-      toast.success("Notes saved.");
-      onSaved();
-    } catch (err) {
-      toast.error(apiError(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
   return (
-    <Card className="mt-4">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <StickyNote className="size-4 text-muted-foreground" />
-          Notes
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <textarea
-          value={value}
-          maxLength={500}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder="Add a note for this VM — e.g. what it runs, who it's for, or 'staging — don't touch'."
-          className="h-24 w-full resize-none rounded-md border bg-background p-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-        />
-        <div className="mt-2 flex items-center justify-between">
-          <span className="text-xs text-muted-foreground tabular-nums">{value.length}/500</span>
-          <div className="flex gap-2">
-            {dirty && (
-              <Button size="sm" variant="ghost" disabled={saving} onClick={() => setValue(initial ?? "")}>
-                Reset
-              </Button>
-            )}
-            <Button size="sm" disabled={saving || !dirty} onClick={save}>
-              {saving ? <Loader2 className="animate-spin" /> : <Check />} Save
-            </Button>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-/**
- * Editable tags for grouping/filtering a VM. Adds/removes persist immediately via
- * PATCH (tags are sent as an array; the backend normalizes + stores them).
- */
-function TagsCard({ vmId, initial, onSaved }: { vmId: string; initial: string | null; onSaved: () => void }) {
-  const [tags, setTags] = useState<string[]>(() =>
-    (initial ?? "").split(",").map((t) => t.trim()).filter(Boolean),
-  );
-  const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  async function persist(next: string[]) {
-    setSaving(true);
-    try {
-      await api.patch(`/vms/${vmId}`, { tags: next });
-      setTags(next);
-      onSaved();
-    } catch (err) {
-      toast.error(apiError(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  function add() {
-    const t = draft.trim().toLowerCase();
-    if (!t) return;
-    if (!/^[a-z0-9][a-z0-9 _-]{0,30}$/.test(t)) {
-      toast.error("Letters, numbers, space, _ and - only.");
-      return;
-    }
-    if (tags.includes(t)) { setDraft(""); return; }
-    setDraft("");
-    void persist([...tags, t]);
-  }
-
-  return (
-    <Card className="mt-4">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <Tag className="size-4 text-muted-foreground" />
-          Tags
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {tags.map((t) => (
-            <span key={t} className="flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs">
-              {t}
-              <button
-                type="button"
-                aria-label={`Remove ${t}`}
-                disabled={saving}
-                onClick={() => persist(tags.filter((x) => x !== t))}
-                className="text-muted-foreground hover:text-destructive"
-              >
-                <X className="size-3" />
-              </button>
-            </span>
-          ))}
-          {tags.length === 0 && <span className="text-sm text-muted-foreground">No tags yet.</span>}
-        </div>
-        <div className="mt-3 flex gap-2">
-          <Input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") { e.preventDefault(); add(); }
-            }}
-            placeholder="Add a tag — e.g. prod, web, team-a"
-            maxLength={31}
-            className="max-w-xs"
-          />
-          <Button size="sm" variant="outline" onClick={add} disabled={saving || !draft.trim()}>
-            {saving ? <Loader2 className="animate-spin" /> : <Tag />} Add
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-const TIMEFRAMES: { key: RrdTimeframe; label: string }[] = [
-  { key: "hour", label: "Hour" },
-  { key: "day", label: "Day" },
-  { key: "week", label: "Week" },
-];
-
-/** A small metric block: label, current + peak %, and a history sparkline. */
-function MetricRow({
-  label,
-  series,
-  color,
-}: {
-  label: string;
-  series: number[];
-  color: string;
-}) {
-  const now = series.length ? series[series.length - 1]! : 0;
-  const peak = series.length ? Math.max(...series) : 0;
-  return (
-    <div>
-      <div className="mb-1 flex items-baseline justify-between text-sm">
-        <span className="font-medium">{label}</span>
-        <span className="text-xs text-muted-foreground tabular-nums">
-          now {now.toFixed(0)}% · peak {peak.toFixed(0)}%
-        </span>
+    <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">{title}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
       </div>
-      <Sparkline data={series} max={100} className={`h-16 w-full ${color}`} />
+      <div className="shrink-0">{action}</div>
     </div>
-  );
-}
-
-/**
- * Historical CPU + memory for this VM, read from Proxmox's RRD store
- * (`GET /vms/:id/metrics`). Tenants couldn't see their own VM's trends before —
- * only the admin monitor did. Hour/Day/Week timeframes; Proxmox builds the
- * longer rollups over time, so a fresh VM starts mostly flat.
- */
-function MetricsCard({ vmId }: { vmId: string }) {
-  const [timeframe, setTimeframe] = useState<RrdTimeframe>("hour");
-  const [metrics, setMetrics] = useState<VmMetrics | null>(null);
-  const [error, setError] = useState(false);
-
-  const load = useCallback(
-    async (tf: RrdTimeframe) => {
-      setMetrics(null);
-      setError(false);
-      try {
-        const res = await api.get<VmMetrics>(`/vms/${vmId}/metrics`, { params: { timeframe: tf } });
-        setMetrics(res.data);
-      } catch {
-        setError(true);
-      }
-    },
-    [vmId],
-  );
-
-  useEffect(() => {
-    load(timeframe);
-  }, [load, timeframe]);
-
-  const points = metrics?.points ?? [];
-  const cpu = points.map((p) => (p.cpu ?? 0) * 100);
-  const mem = points.map((p) => (p.maxmem ? ((p.mem ?? 0) / p.maxmem) * 100 : 0));
-  const hasData = cpu.some((v) => v > 0) || mem.some((v) => v > 0);
-
-  return (
-    <Card className="mt-4">
-      <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <LineChart className="size-4 text-muted-foreground" />
-          Resource history
-        </CardTitle>
-        <div className="flex gap-1 rounded-md border p-0.5" role="tablist">
-          {TIMEFRAMES.map((tf) => (
-            <button
-              key={tf.key}
-              type="button"
-              role="tab"
-              aria-selected={timeframe === tf.key}
-              onClick={() => setTimeframe(tf.key)}
-              className={
-                "rounded px-2 py-0.5 text-xs transition-colors " +
-                (timeframe === tf.key
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground")
-              }
-            >
-              {tf.label}
-            </button>
-          ))}
-        </div>
-      </CardHeader>
-      <CardContent>
-        {error ? (
-          <p className="py-4 text-center text-sm text-muted-foreground">
-            Couldn&apos;t load metrics — the VM may be unreachable on Proxmox.
-          </p>
-        ) : metrics === null ? (
-          <p className="py-4 text-center text-sm text-muted-foreground">Loading…</p>
-        ) : !hasData ? (
-          <p className="py-4 text-center text-sm text-muted-foreground">
-            No history for this window yet — Proxmox builds it up while the VM runs.
-          </p>
-        ) : (
-          <div className="grid gap-4">
-            <MetricRow label="CPU" series={cpu} color="text-sky-500" />
-            <MetricRow label="Memory" series={mem} color="text-violet-500" />
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-/** Map a raw audit action to a friendly label + a dot color for the timeline. */
-const ACTIVITY_META: Record<string, { label: string; dot: string }> = {
-  "vm.create": { label: "Created", dot: "bg-emerald-500" },
-  "vm.start": { label: "Started", dot: "bg-emerald-500" },
-  "vm.stop": { label: "Stopped", dot: "bg-amber-500" },
-  "vm.stop_force": { label: "Force-stopped", dot: "bg-red-500" },
-  "vm.restart": { label: "Restarted", dot: "bg-sky-500" },
-  "vm.update": { label: "Notes updated", dot: "bg-muted-foreground" },
-  "vm.resize": { label: "Resized", dot: "bg-sky-500" },
-  "vm.rebuild": { label: "Rebuilt", dot: "bg-amber-500" },
-  "vm.delete": { label: "Deleted", dot: "bg-red-500" },
-  "snapshot.create": { label: "Snapshot taken", dot: "bg-sky-500" },
-  "snapshot.rollback": { label: "Rolled back to snapshot", dot: "bg-amber-500" },
-  "snapshot.delete": { label: "Snapshot deleted", dot: "bg-muted-foreground" },
-  "vm.schedule": { label: "Schedule updated", dot: "bg-muted-foreground" },
-  "vm.backup_policy": { label: "Backup policy updated", dot: "bg-muted-foreground" },
-};
-
-/**
- * A compact, owner-visible timeline of this VM's recent lifecycle events, read
- * from the audit log (`GET /vms/:id/activity`). Refreshes on demand; the actor
- * email is shown so you can tell whether you or an admin acted.
- */
-function ActivityCard({ vmId }: { vmId: string }) {
-  const [items, setItems] = useState<VmActivityEntry[] | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      const res = await api.get<VmActivityEntry[]>(`/vms/${vmId}/activity`);
-      setItems(res.data);
-    } catch {
-      setItems([]);
-    }
-  }, [vmId]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  async function refresh() {
-    setRefreshing(true);
-    await load();
-    setRefreshing(false);
-  }
-
-  return (
-    <Card className="mt-4">
-      <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <History className="size-4 text-muted-foreground" />
-          Activity
-        </CardTitle>
-        <Button variant="ghost" size="sm" onClick={refresh} disabled={refreshing} title="Refresh">
-          <RefreshCw className={refreshing ? "animate-spin" : undefined} />
-        </Button>
-      </CardHeader>
-      <CardContent>
-        {items === null ? (
-          <p className="py-4 text-center text-sm text-muted-foreground">Loading…</p>
-        ) : items.length === 0 ? (
-          <p className="py-4 text-center text-sm text-muted-foreground">No activity recorded yet.</p>
-        ) : (
-          <ul className="space-y-3">
-            {items.map((e) => {
-              const meta = ACTIVITY_META[e.action] ?? { label: e.action, dot: "bg-muted-foreground" };
-              return (
-                <li key={e.id} className="flex items-start gap-3 text-sm">
-                  <span className={`mt-1.5 size-2 shrink-0 rounded-full ${meta.dot}`} />
-                  <div className="min-w-0 flex-1">
-                    <span className="font-medium">{meta.label}</span>
-                    {e.actorEmail && (
-                      <span className="text-muted-foreground"> · {e.actorEmail}</span>
-                    )}
-                  </div>
-                  <span
-                    className="shrink-0 text-xs text-muted-foreground tabular-nums"
-                    title={formatDate(e.createdAt)}
-                  >
-                    {formatRelative(e.createdAt)}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-/** One-click "T-shirt" sizes for the resize dialog (mirror the create wizard). */
-const SIZE_PRESETS = [
-  { key: "s", label: "Small", cpu: 1, ramGb: 2, diskGb: 20 },
-  { key: "m", label: "Medium", cpu: 2, ramGb: 4, diskGb: 40 },
-  { key: "l", label: "Large", cpu: 4, ramGb: 8, diskGb: 80 },
-  { key: "xl", label: "X-Large", cpu: 8, ramGb: 16, diskGb: 160 },
-] as const;
-
-/**
- * In-place resize of a VM's vCPU / memory / disk. Disk is grow-only (Proxmox can't
- * shrink). Quota is checked here for a friendly error and re-checked server-side.
- * CPU/RAM changes the guest can't hot-plug take effect on the next reboot; after a
- * disk grow the filesystem still has to be extended inside the guest.
- */
-function ResizeDialog({
-  vm,
-  isAdmin,
-  disabled,
-  onResized,
-}: {
-  vm: VmDetail;
-  isAdmin: boolean;
-  disabled: boolean;
-  onResized: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [quota, setQuota] = useState<Quota | null>(null);
-  const [cpu, setCpu] = useState(vm.cpu);
-  const [ramGb, setRamGb] = useState(Math.round(vm.ram / 1024));
-  const [storageGb, setStorageGb] = useState(vm.storage);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  // On open, reset the form to the VM's current size and (re)load the quota so the
-  // ceilings reflect the user's other VMs.
-  useEffect(() => {
-    if (!open) return;
-    setCpu(vm.cpu);
-    setRamGb(Math.round(vm.ram / 1024));
-    setStorageGb(vm.storage);
-    setError(null);
-    if (!isAdmin) {
-      api
-        .get<MeResponse>("/auth/me")
-        .then((r) => setQuota(r.data.user.quota))
-        .catch(() => setQuota(null));
-    }
-  }, [open, vm.cpu, vm.ram, vm.storage, isAdmin]);
-
-  // Per-field ceilings from remaining quota — the VM's own current size is freed
-  // first, so a resize is judged on the delta (matches the backend).
-  const cpuMax = !isAdmin && quota ? quota.cpu.max - quota.cpu.used + vm.cpu : Infinity;
-  const ramMaxGb = !isAdmin && quota ? Math.floor((quota.ram.max - quota.ram.used + vm.ram) / 1024) : Infinity;
-  const storageMax = !isAdmin && quota ? quota.storage.max - quota.storage.used + vm.storage : Infinity;
-
-  const ramMb = ramGb * 1024;
-  const changed = cpu !== vm.cpu || ramMb !== vm.ram || storageGb !== vm.storage;
-  const activePreset = SIZE_PRESETS.find((p) => p.cpu === cpu && p.ramGb === ramGb && p.diskGb === storageGb)?.key;
-
-  function validate(): string | null {
-    if (cpu < 1) return "At least 1 vCPU.";
-    if (cpu > cpuMax) return `Exceeds your remaining quota — up to ${cpuMax} vCPU.`;
-    if (ramGb < 1) return "At least 1 GB of memory.";
-    if (ramGb > ramMaxGb) return `Exceeds your remaining quota — up to ${ramMaxGb} GB memory.`;
-    if (storageGb < vm.storage) return `Disks can only grow — minimum ${vm.storage} GB.`;
-    if (storageGb > storageMax) return `Exceeds your remaining quota — up to ${storageMax} GB disk.`;
-    if (!changed) return "Nothing to change.";
-    return null;
-  }
-
-  async function submit() {
-    const v = validate();
-    if (v) { setError(v); return; }
-    setSaving(true);
-    try {
-      await api.patch(`/vms/${vm.id}`, {
-        ...(cpu !== vm.cpu ? { cpu } : {}),
-        ...(ramMb !== vm.ram ? { ram: ramMb } : {}),
-        ...(storageGb !== vm.storage ? { storage: storageGb } : {}),
-      });
-      toast.success(
-        "VM resized. CPU/RAM changes may need a reboot; grow the filesystem inside the guest to use new disk space.",
-      );
-      onResized();
-      setOpen(false);
-    } catch (err) {
-      setError(apiError(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const num = (v: string, min: number) => Math.max(min, Math.floor(Number(v) || 0));
-
-  return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
-      <AlertDialogTrigger
-        render={
-          <Button variant="outline" disabled={disabled}>
-            <Scaling />
-            Resize
-          </Button>
-        }
-      />
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Resize {vm.name}</AlertDialogTitle>
-          <AlertDialogDescription>
-            Change vCPU, memory and disk. Disk can only grow. CPU/RAM the guest can&apos;t hot-plug
-            apply on the next reboot; after growing the disk, extend the filesystem inside the VM.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-
-        <div className="flex flex-wrap gap-2">
-          {SIZE_PRESETS.map((p) => {
-            const wouldShrinkDisk = p.diskGb < vm.storage;
-            return (
-              <button
-                key={p.key}
-                type="button"
-                disabled={wouldShrinkDisk}
-                aria-pressed={activePreset === p.key}
-                onClick={() => {
-                  setCpu(p.cpu);
-                  setRamGb(p.ramGb);
-                  setStorageGb(Math.max(p.diskGb, vm.storage));
-                  setError(null);
-                }}
-                title={wouldShrinkDisk ? "Would shrink the disk — not allowed" : undefined}
-                className={
-                  "rounded-md border px-3 py-1.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 " +
-                  (activePreset === p.key ? "border-primary bg-primary/10" : "hover:bg-accent")
-                }
-              >
-                {p.label}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="grid grid-cols-3 gap-3">
-          <FormField label="vCPU" htmlFor="rs-cpu">
-            <Input
-              id="rs-cpu"
-              type="number"
-              min={1}
-              value={cpu}
-              onChange={(e) => { setCpu(num(e.target.value, 1)); setError(null); }}
-            />
-          </FormField>
-          <FormField label="Memory (GB)" htmlFor="rs-ram">
-            <Input
-              id="rs-ram"
-              type="number"
-              min={1}
-              value={ramGb}
-              onChange={(e) => { setRamGb(num(e.target.value, 1)); setError(null); }}
-            />
-          </FormField>
-          <FormField label="Disk (GB)" htmlFor="rs-disk">
-            <Input
-              id="rs-disk"
-              type="number"
-              min={vm.storage}
-              value={storageGb}
-              onChange={(e) => { setStorageGb(num(e.target.value, vm.storage)); setError(null); }}
-            />
-          </FormField>
-        </div>
-
-        {!isAdmin && quota && (
-          <p className="text-xs text-muted-foreground">
-            With your other VMs, this one can go up to {cpuMax} vCPU · {ramMaxGb} GB RAM · {storageMax} GB disk.
-          </p>
-        )}
-        {error && <p className="text-sm text-destructive">{error}</p>}
-
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={submit} disabled={saving || !changed}>
-            {saving ? <Loader2 className="animate-spin" /> : <Scaling />}
-            Apply
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-}
-
-/**
- * Re-image a VM in place from a fresh ISO or a template / cloud image. Destructive:
- * the current disk is wiped, but the VM keeps its id, VMID, name, and resources.
- * Cloud-init login details are re-supplied here (they're never stored). Source values
- * are encoded as `iso::<filename>` or `tpl::<id>` so one Select can list both.
- */
-function RebuildDialog({
-  vm,
-  disabled,
-  onRebuilt,
-}: {
-  vm: VmDetail;
-  disabled: boolean;
-  onRebuilt: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [isos, setIsos] = useState<ProxmoxIso[]>([]);
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [savedKeys, setSavedKeys] = useState<SshKey[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [source, setSource] = useState<string>("");
-  const [sshKey, setSshKey] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmed, setConfirmed] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setSource("");
-    setSshKey("");
-    setUsername("");
-    setPassword("");
-    setConfirmed(false);
-    setError(null);
-    setLoading(true);
-    Promise.all([
-      api.get<ProxmoxIso[]>("/proxmox/isos").catch(() => ({ data: [] as ProxmoxIso[] })),
-      api.get<Template[]>("/templates").catch(() => ({ data: [] as Template[] })),
-      api.get<SshKey[]>("/ssh-keys").catch(() => ({ data: [] as SshKey[] })),
-    ])
-      .then(([isoRes, tplRes, keyRes]) => {
-        setIsos(isoRes.data);
-        setTemplates(tplRes.data);
-        setSavedKeys(keyRes.data);
-      })
-      .finally(() => setLoading(false));
-  }, [open]);
-
-  const isTemplate = source.startsWith("tpl::");
-  const template = isTemplate ? templates.find((t) => t.id === source.slice(5)) : undefined;
-  const needsCloudInit = !!template?.cloudInit;
-
-  function validate(): string | null {
-    if (!source) return "Pick an image to rebuild from.";
-    if (needsCloudInit && !sshKey.trim() && !password) return "Add an SSH public key or a password to log in.";
-    if (sshKey.trim() && !/^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-|sk-)/.test(sshKey.trim()))
-      return "That doesn't look like an OpenSSH public key.";
-    if (!confirmed) return "Tick the box to confirm — this erases the current disk.";
-    return null;
-  }
-
-  async function submit() {
-    const v = validate();
-    if (v) { setError(v); return; }
-    setSaving(true);
-    try {
-      const body = isTemplate
-        ? {
-            templateId: source.slice(5),
-            ...(sshKey.trim() ? { sshKey: sshKey.trim() } : {}),
-            ...(username.trim() ? { username: username.trim() } : {}),
-            ...(password ? { password } : {}),
-          }
-        : { os: source.slice(5) };
-      await api.post(`/vms/${vm.id}/rebuild`, body);
-      toast.success("VM rebuilt — it's been re-imaged and is starting up.");
-      onRebuilt();
-      setOpen(false);
-    } catch (err) {
-      setError(apiError(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
-      <AlertDialogTrigger
-        render={
-          <Button variant="outline" disabled={disabled}>
-            <RotateCcw />
-            Rebuild
-          </Button>
-        }
-      />
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Rebuild {vm.name}</AlertDialogTitle>
-          <AlertDialogDescription>
-            Re-image this VM from a fresh ISO or template. It keeps its name and{" "}
-            {vm.cpu} vCPU / {formatRam(vm.ram)} / {vm.storage} GB, but{" "}
-            <span className="font-medium text-foreground">its current disk and all data are erased.</span>
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-
-        <FormField label="Rebuild from" htmlFor="rb-source">
-          <Select value={source} onValueChange={(v) => { setSource(v as string); setError(null); }}>
-            <SelectTrigger id="rb-source" className="w-full">
-              <SelectValue placeholder={loading ? "Loading images…" : "Choose an ISO or template"} />
-            </SelectTrigger>
-            <SelectContent>
-              {isos.length > 0 && (
-                <SelectGroup>
-                  <SelectLabel>Install ISOs</SelectLabel>
-                  {isos.map((iso) => (
-                    <SelectItem key={iso.volid} value={`iso::${iso.name}`}>
-                      {iso.name}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              )}
-              {templates.length > 0 && (
-                <SelectGroup>
-                  <SelectLabel>Templates</SelectLabel>
-                  {templates.map((t) => (
-                    <SelectItem key={t.id} value={`tpl::${t.id}`}>
-                      {t.name}
-                      {t.cloudInit ? " (cloud image)" : ""}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              )}
-            </SelectContent>
-          </Select>
-        </FormField>
-
-        {needsCloudInit && (
-          <div className="grid gap-3">
-            <FormField label="SSH public key" htmlFor="rb-ssh">
-              <textarea
-                id="rb-ssh"
-                value={sshKey}
-                onChange={(e) => { setSshKey(e.target.value); setError(null); }}
-                placeholder="ssh-ed25519 AAAA… you@laptop"
-                className="h-20 w-full resize-none rounded-md border bg-background p-2 font-mono text-xs outline-none focus:ring-2 focus:ring-ring"
-              />
-            </FormField>
-            {savedKeys.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {savedKeys.map((k) => (
-                  <button
-                    key={k.id}
-                    type="button"
-                    onClick={() => { setSshKey(k.publicKey); setError(null); }}
-                    className="rounded-md border px-2 py-1 text-xs hover:bg-accent"
-                  >
-                    {k.name}
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-3">
-              <FormField label="Login user (optional)" htmlFor="rb-user">
-                <Input id="rb-user" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="debian" />
-              </FormField>
-              <FormField label="Password (optional)" htmlFor="rb-pass">
-                <Input id="rb-pass" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="—" />
-              </FormField>
-            </div>
-          </div>
-        )}
-
-        <label className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-2.5 text-sm">
-          <input
-            type="checkbox"
-            checked={confirmed}
-            onChange={(e) => { setConfirmed(e.target.checked); setError(null); }}
-            className="mt-0.5"
-          />
-          <span className="flex items-center gap-1.5">
-            <AlertTriangle className="size-4 shrink-0 text-destructive" />
-            I understand this permanently erases the current disk and its data.
-          </span>
-        </label>
-
-        {error && <p className="text-sm text-destructive">{error}</p>}
-
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" onClick={submit} disabled={saving || loading}>
-            {saving ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-            Rebuild
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   );
 }
 
@@ -863,6 +142,22 @@ export default function VmDetailPage() {
   const [elapsed, setElapsed] = useState(0);
   const [tplName, setTplName] = useState("");
   const [newName, setNewName] = useState("");
+  const [dialog, setDialog] = useState<ActiveDialog>(null);
+
+  // Active tab, deep-linkable via ?tab= (e.g. /vms/abc?tab=backups). Kept in the
+  // URL with replaceState so switching tabs never adds history entries.
+  const [tab, setTabState] = useState<TabValue>(() => {
+    if (typeof window === "undefined") return "overview";
+    const t = new URLSearchParams(window.location.search).get("tab");
+    return isTabValue(t) ? t : "overview";
+  });
+  const setTab = useCallback((t: TabValue) => {
+    setTabState(t);
+    const url = new URL(window.location.href);
+    if (t === "overview") url.searchParams.delete("tab");
+    else url.searchParams.set("tab", t);
+    window.history.replaceState(null, "", url);
+  }, []);
 
   const transitionRef = useRef<Transition>(null);
   const startRef = useRef(0);
@@ -971,6 +266,7 @@ export default function VmDetailPage() {
       toast.success("VM renamed.");
       await load();
       setPending(null);
+      setDialog(null);
     } catch (err) {
       toast.error(apiError(err));
       setPending(null);
@@ -993,9 +289,16 @@ export default function VmDetailPage() {
     }
   }
 
+  async function onCopyIp() {
+    if (!vm?.ipAddress) return;
+    const ok = await copyText(vm.ipAddress);
+    if (ok) toast.success("IP address copied.");
+    else toast.error("Couldn't copy — select the address and copy manually.");
+  }
+
   if (error) {
     return (
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto max-w-5xl">
         <Button variant="ghost" render={<Link href="/vms" />} className="mb-4">
           <ArrowLeft /> Back to VMs
         </Button>
@@ -1008,8 +311,9 @@ export default function VmDetailPage() {
 
   if (!vm) {
     return (
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto max-w-5xl">
         <Skeleton className="mb-6 h-9 w-48" />
+        <Skeleton className="mb-4 h-10 w-full max-w-md" />
         <Skeleton className="h-64" />
       </div>
     );
@@ -1027,35 +331,158 @@ export default function VmDetailPage() {
   // template, live migration, extra data disks, and snapshots.
   const isLxc = vm.type === "lxc";
 
+  // Read-only shares don't get the Backups / Settings tabs — if a deep link asks
+  // for one anyway, land on Overview instead of an empty panel.
+  const activeTab: TabValue = !canWrite && (tab === "backups" || tab === "settings") ? "overview" : tab;
+
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className="mx-auto max-w-5xl">
       <Button variant="ghost" render={<Link href="/vms" />} className="mb-4">
         <ArrowLeft /> Back to VMs
       </Button>
 
-      <PageHeader title={vm.name} description={vm.description ?? undefined}>
-        <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground" title="Auto-refreshing">
-            <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" /> Live
-          </span>
-          {isLxc && (
-            <span className="rounded border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-              LXC
+      {/* DigitalOcean-style header: identity + status on the left, the two things
+          you reach for most — Console and Actions — pinned on the right. */}
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="font-heading text-2xl font-semibold tracking-tight">{vm.name}</h1>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
+            <VmStatusBadge status={transition ?? vm.status} />
+            {transition && (
+              <span className="tabular-nums" title="Time in this transition">
+                {elapsed}s
+              </span>
+            )}
+            {isLxc && (
+              <span className="rounded border px-1.5 py-0.5 text-[10px] font-medium">LXC</span>
+            )}
+            {vm.hasPassthrough && (
+              <span className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                <Cpu className="size-2.5" /> GPU/PCI
+              </span>
+            )}
+            <span className="flex items-center gap-1">
+              <Server className="size-3.5" />
+              {vm.proxmoxNode}
             </span>
-          )}
-          {vm.hasPassthrough && (
-            <span className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
-              <Cpu className="size-2.5" /> GPU/PCI
+            <span className="flex items-center gap-1">
+              <Hash className="size-3.5" />
+              {vm.proxmoxVmId}
             </span>
-          )}
-          <VmStatusBadge status={transition ?? vm.status} />
-          {transition && (
-            <span className="text-xs text-muted-foreground tabular-nums" title="Time in this transition">
-              {elapsed}s
+            <span className="hidden max-w-56 items-center gap-1 sm:flex">
+              <Disc className="size-3.5 shrink-0" />
+              <span className="truncate" title={vm.os}>
+                {vm.os}
+              </span>
             </span>
-          )}
+            <span className="flex items-center gap-1.5" title="Auto-refreshing">
+              <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" /> Live
+            </span>
+          </div>
         </div>
-      </PageHeader>
+
+        {canWrite && (
+          <div className="flex items-center gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button variant="outline" disabled={!running || acting}>
+                    <Terminal />
+                    Console
+                    <ChevronDown className="size-3.5 text-muted-foreground" />
+                  </Button>
+                }
+              />
+              <DropdownMenuContent align="end" className="min-w-56">
+                <DropdownMenuItem onClick={() => router.push(`/vms/${vm.id}/console`)}>
+                  <Terminal />
+                  Graphical (noVNC)
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => router.push(`/vms/${vm.id}/console?mode=text`)}>
+                  <SquareTerminal />
+                  Text — links, copy/paste
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button>
+                    Actions
+                    <ChevronDown className="size-3.5" />
+                  </Button>
+                }
+              />
+              <DropdownMenuContent align="end" className="min-w-52">
+                <DropdownMenuGroup>
+                  <DropdownMenuItem disabled={busy || running} onClick={() => action("start", "start")}>
+                    <Play />
+                    Start
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={busy || stopped} onClick={() => action("stop", "stop")}>
+                    <Square />
+                    Stop
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={busy || !running} onClick={() => action("restart", "restart")}>
+                    <RotateCw />
+                    Restart
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuGroup>
+                  <DropdownMenuItem
+                    disabled={busy}
+                    onClick={() => {
+                      setNewName(vm.name);
+                      setDialog("rename");
+                    }}
+                  >
+                    <Pencil />
+                    Rename
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={busy} onClick={() => setDialog("resize")}>
+                    <Scaling />
+                    Resize
+                  </DropdownMenuItem>
+                  {!isLxc && (
+                    <DropdownMenuItem disabled={busy} onClick={() => setDialog("rebuild")}>
+                      <RotateCcw />
+                      Rebuild
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuGroup>
+                {isAdmin && !isLxc && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuGroup>
+                      <DropdownMenuItem disabled={busy} onClick={() => setDialog("migrate")}>
+                        <ArrowLeftRight />
+                        Migrate to node
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={busy}
+                        onClick={() => {
+                          setTplName("");
+                          setDialog("convert");
+                        }}
+                      >
+                        <Package />
+                        Save as template
+                      </DropdownMenuItem>
+                    </DropdownMenuGroup>
+                  </>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" disabled={busy} onClick={() => setDialog("delete")}>
+                  <Trash2 />
+                  Delete…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
+      </div>
 
       {!canWrite && (
         <Card className="mb-6 border-amber-500/40 bg-amber-500/5">
@@ -1066,268 +493,411 @@ export default function VmDetailPage() {
         </Card>
       )}
 
-      {/* Power controls — hidden for read-only shares (the API enforces it too). */}
-      {canWrite && (
-      <div className="mb-6 flex flex-wrap gap-2">
-        <Button onClick={() => action("start", "start")} disabled={busy || running} variant="outline">
-          {transition === "starting" ? <Loader2 className="animate-spin" /> : <Play />}
-          Start
-        </Button>
-        <Button onClick={() => action("stop", "stop")} disabled={busy || stopped} variant="outline">
-          {transition === "stopping" ? <Loader2 className="animate-spin" /> : <Square />}
-          Stop
-        </Button>
-        <Button onClick={() => action("restart", "restart")} disabled={busy || !running} variant="outline">
-          {transition === "restarting" ? <Loader2 className="animate-spin" /> : <RotateCw />}
-          Restart
-        </Button>
-        <Button variant="outline" render={<Link href={`/vms/${vm.id}/console`} />} disabled={!running || acting}>
-          <Terminal />
-          Console
-        </Button>
-        <Button
-          variant="outline"
-          render={<Link href={`/vms/${vm.id}/console?mode=text`} />}
-          disabled={!running || acting}
-          title="Text console with clickable links, copy/paste and scrollback"
-        >
-          <SquareTerminal />
-          Text console
-        </Button>
+      <Tabs value={activeTab} onValueChange={(v) => setTab(v as TabValue)}>
+        <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="insights">Insights</TabsTrigger>
+          {canWrite && <TabsTrigger value="backups">Backups &amp; Snapshots</TabsTrigger>}
+          <TabsTrigger value="activity">Activity</TabsTrigger>
+          {canWrite && <TabsTrigger value="settings">Settings</TabsTrigger>}
+        </TabsList>
 
-        <AlertDialog>
-          <AlertDialogTrigger
-            render={
-              <Button variant="outline" disabled={busy} onClick={() => setNewName(vm.name)}>
-                <Pencil />
-                Rename
-              </Button>
-            }
-          />
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Rename {vm.name}</AlertDialogTitle>
-              <AlertDialogDescription>
-                Changes the VM&apos;s name here and on Proxmox. Letters, numbers and hyphens only.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <FormField label="New name" htmlFor="newName">
-              <Input
-                id="newName"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="e.g. web-server-02"
-              />
-            </FormField>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={onRename} disabled={pending === "rename"}>
-                {pending === "rename" ? <Loader2 className="animate-spin" /> : <Pencil />}
-                Rename
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <TabsContent value="overview" className="pt-4">
+          <div className="grid items-start gap-4 lg:grid-cols-5">
+            <div className="grid gap-4 lg:col-span-3">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Live status</CardTitle>
+                </CardHeader>
+                <CardContent className="divide-y">
+                  {vm.live ? (
+                    <>
+                      <DetailRow icon={Play} label="State" value={vm.live.status} />
+                      <DetailRow
+                        icon={Cpu}
+                        label="CPU usage"
+                        value={vm.live.cpu !== undefined ? `${(vm.live.cpu * 100).toFixed(1)}%` : "—"}
+                      />
+                      <DetailRow
+                        icon={MemoryStick}
+                        label="Memory used"
+                        value={
+                          vm.live.mem !== undefined
+                            ? `${formatBytes(vm.live.mem)} / ${formatBytes(vm.live.maxmem)}`
+                            : "—"
+                        }
+                      />
+                      <DetailRow icon={RotateCw} label="Uptime" value={formatUptime(vm.live.uptime)} />
+                    </>
+                  ) : (
+                    <p className="py-6 text-center text-sm text-muted-foreground">
+                      Live status unavailable. The VM may be stopped or Proxmox is unreachable.
+                    </p>
+                  )}
+                  <DetailRow icon={Hash} label="Created" value={formatDate(vm.createdAt)} />
+                </CardContent>
+              </Card>
 
-        <ResizeDialog vm={vm} isAdmin={isAdmin} disabled={busy} onResized={load} />
+              <Card>
+                <CardHeader>
+                  <CardTitle>Configuration</CardTitle>
+                </CardHeader>
+                <CardContent className="divide-y">
+                  <DetailRow icon={Cpu} label="vCPU" value={`${vm.cpu} cores`} />
+                  <DetailRow icon={MemoryStick} label="Memory" value={formatRam(vm.ram)} />
+                  <DetailRow icon={HardDrive} label="Disk" value={`${vm.storage} GB`} />
+                  <DetailRow icon={Disc} label="OS image" value={vm.os} />
+                </CardContent>
+              </Card>
 
-        {!isLxc && <RebuildDialog vm={vm} disabled={busy} onRebuilt={load} />}
+              {canWrite && <NotesCard vmId={vm.id} initial={vm.description} onSaved={load} />}
+            </div>
 
-        {isAdmin && !isLxc && (
-          <AlertDialog>
-            <AlertDialogTrigger
-              render={
-                <Button variant="outline" disabled={busy}>
-                  <Package />
-                  Save as template
-                </Button>
-              }
-            />
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Convert to a template</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This stops {vm.name} and converts it into a reusable, shareable template on
-                  Proxmox. It will no longer appear as a VM. Best on a minimal, configured build.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <FormField label="Template name" htmlFor="tplName">
-                <Input
-                  id="tplName"
-                  value={tplName}
-                  onChange={(e) => setTplName(e.target.value)}
-                  placeholder="e.g. Debian 12 base"
-                />
-              </FormField>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={onConvert} disabled={pending === "convert"}>
-                  {pending === "convert" ? <Loader2 className="animate-spin" /> : <Package />}
-                  Convert
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+            <div className="grid gap-4 lg:col-span-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Connection details</CardTitle>
+                </CardHeader>
+                <CardContent className="divide-y">
+                  <div className="flex items-center justify-between gap-4 py-2.5 text-sm">
+                    <span className="flex items-center gap-2 text-muted-foreground">
+                      <Network className="size-4" />
+                      IP address
+                    </span>
+                    <span className="flex items-center gap-1 font-medium">
+                      {vm.ipAddress ?? "—"}
+                      {vm.ipAddress && (
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={onCopyIp}
+                          title="Copy IP address"
+                          aria-label="Copy IP address"
+                        >
+                          <Copy />
+                        </Button>
+                      )}
+                    </span>
+                  </div>
+                  <DetailRow icon={Server} label="Node" value={vm.proxmoxNode} />
+                  <DetailRow icon={Hash} label="VMID" value={vm.proxmoxVmId} />
+                </CardContent>
+              </Card>
+
+              {canWrite && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-sm">
+                      <Archive className="size-4 text-muted-foreground" />
+                      Backups
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm text-muted-foreground">
+                      Weekly MateStates backups with rolling retention
+                      {!isLxc ? ", plus instant snapshots for quick restore points" : ""}.
+                    </p>
+                    <Button variant="outline" size="sm" className="mt-3" onClick={() => setTab("backups")}>
+                      Manage backups
+                    </Button>
+                  </CardContent>
+                </Card>
+              )}
+
+              {canWrite && <TagsCard vmId={vm.id} initial={vm.tags} onSaved={load} />}
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-sm">
+                    <Lightbulb className="size-4 text-amber-500" />
+                    Optimization tips
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="grid gap-1.5 text-sm text-muted-foreground">
+                  {isLxc ? (
+                    <p>
+                      <span className="font-medium text-foreground">Lightweight by design</span> — this is an
+                      LXC container: it shares the host kernel, boots in seconds, and reports its IP and stats
+                      without a guest agent. Live migration, extra data disks, and snapshots aren&apos;t
+                      available for containers.
+                    </p>
+                  ) : (
+                    <>
+                      <p>
+                        <span className="font-medium text-foreground">VirtIO is already configured</span> —
+                        this VM uses a VirtIO SCSI disk and VirtIO network for max throughput.
+                      </p>
+                      <p>
+                        <span className="font-medium text-foreground">Install the guest agent</span> so memory
+                        stats and clean shutdown work. Inside the VM (Debian/Ubuntu):{" "}
+                        <code className="rounded bg-muted px-1 py-0.5 text-xs">
+                          sudo apt update &amp;&amp; sudo apt install qemu-guest-agent
+                        </code>
+                      </p>
+                    </>
+                  )}
+                  <p>
+                    <span className="font-medium text-foreground">Reach it from outside ProxMate</span> —
+                    use{" "}
+                    <Link href="/help" className="text-primary underline-offset-4 hover:underline">
+                      Tailscale (private SSH) or Cloudflare Tunnel (public web)
+                    </Link>
+                    . Don&apos;t ask for port forwarding — it isn&apos;t allowed on this cluster.
+                  </p>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="insights" className="pt-4">
+          <MetricsCard vmId={vm.id} tall />
+          <p className="mt-3 text-xs text-muted-foreground">
+            History comes from Proxmox&apos;s metric store — longer windows fill in as the VM keeps running.
+          </p>
+        </TabsContent>
+
+        {canWrite && (
+          <TabsContent value="backups">
+            <MateStatesPanel vmId={vm.id} vmName={vm.name} />
+            <BackupPolicyPanel vmId={vm.id} />
+            {!isLxc && <SnapshotsPanel vmId={vm.id} vmName={vm.name} />}
+          </TabsContent>
         )}
 
-        {isAdmin && !isLxc && (
-          <MigrateDialog vmId={vm.id} currentNode={vm.proxmoxNode} running={running} onDone={load} />
-        )}
+        <TabsContent value="activity" className="pt-4">
+          <ActivityCard vmId={vm.id} />
+        </TabsContent>
 
-        <div className="ml-auto">
-          <AlertDialog>
-            <AlertDialogTrigger
-              render={
-                <Button variant="destructive" disabled={busy}>
-                  <Trash2 />
-                  Delete
-                </Button>
-              }
-            />
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Delete {vm.name}?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This permanently destroys the VM and its disk on Proxmox. This cannot be undone.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction variant="destructive" onClick={onDelete} disabled={pending === "delete"}>
-                  {pending === "delete" ? <Loader2 className="animate-spin" /> : <Trash2 />}
-                  Delete VM
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </div>
-      </div>
-      )}
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Configuration</CardTitle>
-          </CardHeader>
-          <CardContent className="divide-y">
-            <DetailRow icon={Cpu} label="vCPU" value={`${vm.cpu} cores`} />
-            <DetailRow icon={MemoryStick} label="Memory" value={formatRam(vm.ram)} />
-            <DetailRow icon={HardDrive} label="Disk" value={`${vm.storage} GB`} />
-            <DetailRow icon={Disc} label="OS image" value={vm.os} />
-            <DetailRow icon={Server} label="Node" value={vm.proxmoxNode} />
-            <DetailRow icon={Hash} label="VMID" value={vm.proxmoxVmId} />
-            <DetailRow icon={Network} label="IP address" value={vm.ipAddress ?? "—"} />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Live status</CardTitle>
-          </CardHeader>
-          <CardContent className="divide-y">
-            {vm.live ? (
-              <>
-                <DetailRow icon={Play} label="State" value={vm.live.status} />
-                <DetailRow
-                  icon={Cpu}
-                  label="CPU usage"
-                  value={vm.live.cpu !== undefined ? `${(vm.live.cpu * 100).toFixed(1)}%` : "—"}
-                />
-                <DetailRow
-                  icon={MemoryStick}
-                  label="Memory used"
-                  value={
-                    vm.live.mem !== undefined
-                      ? `${formatBytes(vm.live.mem)} / ${formatBytes(vm.live.maxmem)}`
-                      : "—"
+        {canWrite && (
+          <TabsContent value="settings">
+            <Card className="mt-4">
+              <CardHeader>
+                <CardTitle className="text-sm">General</CardTitle>
+              </CardHeader>
+              <CardContent className="divide-y">
+                <SettingRow
+                  title="Name"
+                  description={
+                    <>
+                      <span className="font-medium text-foreground">{vm.name}</span> — shown here and on
+                      Proxmox.
+                    </>
+                  }
+                  action={
+                    <Button
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() => {
+                        setNewName(vm.name);
+                        setDialog("rename");
+                      }}
+                    >
+                      <Pencil />
+                      Rename
+                    </Button>
                   }
                 />
-                <DetailRow icon={RotateCw} label="Uptime" value={formatUptime(vm.live.uptime)} />
-              </>
-            ) : (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                Live status unavailable. The VM may be stopped or Proxmox is unreachable.
-              </p>
+                <SettingRow
+                  title="Size"
+                  description={`${vm.cpu} vCPU · ${formatRam(vm.ram)} · ${vm.storage} GB disk. Disk can only grow.`}
+                  action={
+                    <Button variant="outline" disabled={busy} onClick={() => setDialog("resize")}>
+                      <Scaling />
+                      Resize
+                    </Button>
+                  }
+                />
+              </CardContent>
+            </Card>
+
+            <PowerSchedulePanel vmId={vm.id} />
+
+            {!isLxc && <DisksPanel vmId={vm.id} onChanged={load} />}
+
+            {!isLxc && (
+              <PassthroughPanel
+                vmId={vm.id}
+                vmName={vm.name}
+                isAdmin={isAdmin}
+                canWrite={canWrite}
+                onChanged={load}
+              />
             )}
-            <DetailRow icon={Hash} label="Created" value={formatDate(vm.createdAt)} />
-          </CardContent>
-        </Card>
-      </div>
 
-      <MetricsCard vmId={vm.id} />
+            {isManager && <SharePanel vmId={vm.id} />}
 
-      {canWrite && <NotesCard vmId={vm.id} initial={vm.description} onSaved={load} />}
+            {isAdmin && !isLxc && (
+              <Card className="mt-4">
+                <CardHeader>
+                  <CardTitle className="text-sm">Admin</CardTitle>
+                </CardHeader>
+                <CardContent className="divide-y">
+                  <SettingRow
+                    title="Migrate to another node"
+                    description={`Currently on ${vm.proxmoxNode}. Live for a running VM; cross-architecture moves are blocked.`}
+                    action={
+                      <Button variant="outline" disabled={busy} onClick={() => setDialog("migrate")}>
+                        <ArrowLeftRight />
+                        Migrate
+                      </Button>
+                    }
+                  />
+                  <SettingRow
+                    title="Save as template"
+                    description="Stop this VM and convert it into a reusable Template Store image."
+                    action={
+                      <Button
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => {
+                          setTplName("");
+                          setDialog("convert");
+                        }}
+                      >
+                        <Package />
+                        Convert
+                      </Button>
+                    }
+                  />
+                </CardContent>
+              </Card>
+            )}
 
-      {canWrite && <TagsCard vmId={vm.id} initial={vm.tags} onSaved={load} />}
+            <Card className="mt-4 border-destructive/40">
+              <CardHeader>
+                <CardTitle className="text-sm text-destructive">Danger zone</CardTitle>
+              </CardHeader>
+              <CardContent className="divide-y">
+                {!isLxc && (
+                  <SettingRow
+                    title="Rebuild"
+                    description="Re-image from a fresh ISO or template. Keeps name and resources — erases the current disk."
+                    action={
+                      <Button variant="outline" disabled={busy} onClick={() => setDialog("rebuild")}>
+                        <RotateCcw />
+                        Rebuild
+                      </Button>
+                    }
+                  />
+                )}
+                <SettingRow
+                  title={isLxc ? "Delete container" : "Delete VM"}
+                  description="Permanently destroy it and its disk on Proxmox. This cannot be undone."
+                  action={
+                    <Button variant="destructive" disabled={busy} onClick={() => setDialog("delete")}>
+                      <Trash2 />
+                      Delete
+                    </Button>
+                  }
+                />
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+      </Tabs>
 
-      {canWrite && <PowerSchedulePanel vmId={vm.id} />}
+      {/* ── Dialogs (opened from the Actions menu and the Settings tab) ───────── */}
 
-      <ActivityCard vmId={vm.id} />
+      <AlertDialog open={dialog === "rename"} onOpenChange={(o: boolean) => setDialog(o ? "rename" : null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Rename {vm.name}</AlertDialogTitle>
+            <AlertDialogDescription>
+              Changes the VM&apos;s name here and on Proxmox. Letters, numbers and hyphens only.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <FormField label="New name" htmlFor="newName">
+            <Input
+              id="newName"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="e.g. web-server-02"
+            />
+          </FormField>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={onRename} disabled={pending === "rename"}>
+              {pending === "rename" ? <Loader2 className="animate-spin" /> : <Pencil />}
+              Rename
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
-      {canWrite && !isLxc && <SnapshotsPanel vmId={vm.id} vmName={vm.name} />}
-
-      {canWrite && <MateStatesPanel vmId={vm.id} vmName={vm.name} />}
-
-      {canWrite && <BackupPolicyPanel vmId={vm.id} />}
-
-      {canWrite && !isLxc && <DisksPanel vmId={vm.id} onChanged={load} />}
+      <ResizeDialog
+        vm={vm}
+        isAdmin={isAdmin}
+        open={dialog === "resize"}
+        onOpenChange={(o) => setDialog(o ? "resize" : null)}
+        onResized={load}
+      />
 
       {!isLxc && (
-        <PassthroughPanel
-          vmId={vm.id}
-          vmName={vm.name}
-          isAdmin={isAdmin}
-          canWrite={canWrite}
-          onChanged={load}
+        <RebuildDialog
+          vm={vm}
+          open={dialog === "rebuild"}
+          onOpenChange={(o) => setDialog(o ? "rebuild" : null)}
+          onRebuilt={load}
         />
       )}
 
-      {isManager && <SharePanel vmId={vm.id} />}
+      {isAdmin && !isLxc && (
+        <MigrateDialog
+          vmId={vm.id}
+          currentNode={vm.proxmoxNode}
+          running={running}
+          open={dialog === "migrate"}
+          onOpenChange={(o) => setDialog(o ? "migrate" : null)}
+          onDone={load}
+        />
+      )}
 
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-sm">
-            <Lightbulb className="size-4 text-amber-500" />
-            Optimization tips
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-1.5 text-sm text-muted-foreground">
-          {isLxc ? (
-            <p>
-              <span className="font-medium text-foreground">Lightweight by design</span> — this is an
-              LXC container: it shares the host kernel, boots in seconds, and reports its IP and stats
-              without a guest agent. Live migration, extra data disks, and snapshots aren&apos;t
-              available for containers.
-            </p>
-          ) : (
-            <>
-              <p>
-                <span className="font-medium text-foreground">VirtIO is already configured</span> —
-                this VM uses a VirtIO SCSI disk and VirtIO network for max throughput.
-              </p>
-              <p>
-                <span className="font-medium text-foreground">Install the guest agent</span> so memory
-                stats and clean shutdown work. Inside the VM (Debian/Ubuntu):{" "}
-                <code className="rounded bg-muted px-1 py-0.5 text-xs">
-                  sudo apt update &amp;&amp; sudo apt install qemu-guest-agent
-                </code>
-              </p>
-              <p>
-                <span className="font-medium text-foreground">Reuse it</span> — once configured,
-                convert the VM to a Template in Proxmox to clone new ones instantly.
-              </p>
-            </>
-          )}
-          <p>
-            <span className="font-medium text-foreground">Reach it from outside ProxMate</span> —
-            use{" "}
-            <Link href="/help" className="text-primary underline-offset-4 hover:underline">
-              Tailscale (private SSH) or Cloudflare Tunnel (public web)
-            </Link>
-            . Don&apos;t ask for port forwarding — it isn&apos;t allowed on this cluster.
-          </p>
-        </CardContent>
-      </Card>
+      <AlertDialog open={dialog === "convert"} onOpenChange={(o: boolean) => setDialog(o ? "convert" : null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Convert to a template</AlertDialogTitle>
+            <AlertDialogDescription>
+              This stops {vm.name} and converts it into a reusable, shareable template on
+              Proxmox. It will no longer appear as a VM. Best on a minimal, configured build.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <FormField label="Template name" htmlFor="tplName">
+            <Input
+              id="tplName"
+              value={tplName}
+              onChange={(e) => setTplName(e.target.value)}
+              placeholder="e.g. Debian 12 base"
+            />
+          </FormField>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={onConvert} disabled={pending === "convert"}>
+              {pending === "convert" ? <Loader2 className="animate-spin" /> : <Package />}
+              Convert
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={dialog === "delete"} onOpenChange={(o: boolean) => setDialog(o ? "delete" : null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {vm.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently destroys the {isLxc ? "container" : "VM"} and its disk on Proxmox. This
+              cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={onDelete} disabled={pending === "delete"}>
+              {pending === "delete" ? <Loader2 className="animate-spin" /> : <Trash2 />}
+              Delete {isLxc ? "container" : "VM"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
