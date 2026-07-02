@@ -72,7 +72,7 @@ You should see your VM at the top and your laptop (and any other devices on your
 
 ## Step 4 — SSH in from your laptop
 
-> 💡 **Tip:** once Tailscale is running inside the VM, ProxMate shows its **Tailscale IP**
+> **Tip:** once Tailscale is running inside the VM, ProxMate shows its **Tailscale IP**
 > (the `100.x` address) with a copy button right on the VM's Overview page, under
 > **Connection details** — no need to hunt for it.
 

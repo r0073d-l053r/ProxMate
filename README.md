@@ -21,59 +21,59 @@ from an ISO, a template, or a one-click cloud image (paste an SSH key → a read
 box in ~60 s) — and access them via an in-browser console, all without exposing your
 Proxmox admin panel.
 
-[Quick start](#-quick-start) · [Features](#-features) · [Screenshots](#-screenshots) · [Production](#-production-deployment) · [Docs](#-documentation)
+[Quick start](#quick-start) · [Features](#features) · [Screenshots](#screenshots) · [Production](#production-deployment) · [Docs](#documentation)
 
 </div>
 
 ---
 
-## ✨ Features
+## Features
 
-- 🔒 **Invite-only multi-tenancy** — invite links carry CPU/RAM/disk quotas; per-VM firewall keeps tenants off your LAN, your other guests, and the host
-- 🖥️ **VMs & LXC containers** — create from an ISO, the Template Store, or 16 curated cloud images; resize, rebuild, rename, snapshots, power schedules, tags & bulk actions
-- 🌐 **In-browser consoles** — graphical (noVNC) *and* a text console with clickable links, real copy/paste, and scrollback — no SSH, no open ports
-- 🛡️ **Serious auth** — TOTP 2FA, passkeys (WebAuthn), bring-your-own OIDC SSO, SMTP password resets, optional invite-enforced 2FA
-- 💾 **MateStates backups** — scheduled backups with rolling retention, one-click in-place restore, per-VM policies, quick snapshots
-- ⚖️ **Cluster operations** — automatic VM placement, live migration, DRS-style memory balancer, maintenance node-drain, GPU/PCI passthrough requests
-- 📈 **Operator visibility** — live admin monitor (1 Hz sparklines), rack-panel kiosk mode, audit log, Prometheus `/metrics`
-- 🔄 **In-app updates** — check the latest GitHub release and one-click rebuild onto it
+- **Invite-only multi-tenancy** — invite links carry CPU/RAM/disk quotas; per-VM firewall keeps tenants off your LAN, your other guests, and the host
+- **VMs & LXC containers** — create from an ISO, the Template Store, or 16 curated cloud images; resize, rebuild, rename, snapshots, power schedules, tags & bulk actions
+- **In-browser consoles** — graphical (noVNC) *and* a text console with clickable links, real copy/paste, and scrollback — no SSH, no open ports
+- **Serious auth** — TOTP 2FA, passkeys (WebAuthn), bring-your-own OIDC SSO, SMTP password resets, optional invite-enforced 2FA
+- **MateStates backups** — scheduled backups with rolling retention, one-click in-place restore, per-VM policies, quick snapshots
+- **Cluster operations** — automatic VM placement, live migration, DRS-style memory balancer, maintenance node-drain, GPU/PCI passthrough requests
+- **Operator visibility** — live admin monitor (1 Hz sparklines), rack-panel kiosk mode, audit log, Prometheus `/metrics`
+- **In-app updates** — check the latest GitHub release and one-click rebuild onto it
 
 <details>
-<summary><b>📋 Full feature matrix</b> — every feature, one table</summary>
+<summary><b>Full feature matrix</b> — every feature, one table</summary>
 <br/>
 
 | Feature | Description |
 |---|---|
-| 🔒 **Invite-Only Registration** | Admin-generated invite links with CPU/RAM/Storage quotas, with optional **enforced 2FA** on registration |
-| 🛡️ **Multi-Factor Auth (MFA/2FA)** | Secure accounts via TOTP (authenticator apps) with recovery codes, or passwordless **Passkeys (WebAuthn)** using biometric keys |
-| 🔑 **Single Sign-On (OIDC SSO)** | Bring-your-own SSO (Keycloak, Authentik, etc.) with custom group-to-admin mapping and optional JIT user provisioning |
-| ✉️ **SMTP & Password Recovery** | Email-based secure password resets, with a database-backed "contact admin" request queue if SMTP is disabled |
-| 🖥️ **VM Lifecycle Management** | Create, start, stop, restart, **rename**, and delete VMs — each VM page has editable **notes**, an **activity timeline**, and **CPU/memory history charts**. The create wizard offers one-click **size presets** (Small → X-Large) |
-| 📦 **LXC Containers** | Spin up lightweight **LXC containers** alongside full VMs — create from an OS template, start/stop/restart, in-browser console, tenant isolation, quotas, cpu/RAM/rootfs resize, and MateStates backups. Shares the host kernel, boots in seconds |
-| ☁️ **Cloud-Init Deploys** | One-click cloud images (16 curated distros + custom URLs), imported entirely through the Proxmox API — paste an SSH key for a ready-to-SSH box in ~60s, with optional first-boot **Docker** / **Tailscale** installs. **Save SSH keys** to your profile and pick them on deploy |
-| 📦 **Template Store** | Publish Proxmox templates as one-click OS builds — cloned and autoscaled on deploy, with OS-matched (or custom-uploaded) icons and admin-authored login notes |
-| ⚖️ **Automatic VM Placement** | Tenants never pick a node — the scheduler auto-places each VM on a node that has the chosen image, with the most free capacity |
-| 🔀 **Live VM Migration** | Admins move a VM to another cluster node with **no downtime** — live for running guests (incl. those on node-local storage), offline for stopped ones — and the VM's owner gets an emailed heads-up. Architecture-guardrailed (never x86↔ARM) |
-| 🧭 **Cluster Balancer & Maintenance** | DRS-style **memory-load balancing** (recommend-only or auto) that live-migrates guests off the busiest node, plus one-click **maintenance node-drain** to evacuate a host before downtime — with anti-affinity (`aa:` tags) and pinning guardrails |
-| 🎮 **GPU / PCI Passthrough** | Tenants request a GPU or other PCI device; admins review and attach an available device — with balancer/migration guardrails once attached |
-| 🌐 **In-Browser Console** | A **graphical (noVNC)** console *and* an **xterm.js text console** with **Ctrl/⌘-clickable links**, real copy/paste, and scrollback — both proxied securely through the backend, no SSH or open ports |
-| 💾 **MateStates Backups** | Scheduled weekly backups + one-click in-place restore, with rolling retention |
-| 📸 **Quick Snapshots** | Instant Proxmox snapshots — take / roll back / delete, with optional RAM-state capture — for "before I change something" restore points (distinct from durable MateStates backups) |
-| ⏰ **Power Schedule** | Auto start/stop any VM on a weekly schedule — handy for dev boxes that don't need to run overnight |
-| 🔄 **In-App Updates** | Admins check the latest GitHub release, see what's new, and (opt-in) one-click rebuild + restart onto the new version |
-| 📈 **Live Admin Monitor** | Per-VM CPU / memory / network sparklines at 1 Hz, with power controls, grouped by owner |
-| 🖥️ **Kiosk Mode** | A full-screen, touch-friendly command center for a rack-mounted panel — cluster gauges, quorum tile, per-node strip, activity ticker |
-| 🛡️ **Tenant Network Isolation** | Per-VM Proxmox firewall — MAC filtering, RFC1918 drop rules, and a configurable DNS allow-list — keeps guests off your LAN, your other VMs, and the host |
-| 📝 **Audit Log** | Who created / deleted / restored / started which VM, plus sign-ins — an admin-viewable activity trail |
-| 🚦 **Rate Limiting** | Built-in brute-force protection on the login / register / invite endpoints, plus per-account lockout with admin alerts |
-| 📊 **Resource Quotas** | Users can only provision resources within their assigned limits — with a built-in quota-increase request workflow |
-| 🧙 **First-Time Setup Wizard** | Guided OOBE to configure admin credentials and the Proxmox connection |
-| 🐳 **Docker + CI** | Multi-stage production images, plus GitHub Actions CI (typecheck, tests, image builds) and an automated test suite |
+| **Invite-Only Registration** | Admin-generated invite links with CPU/RAM/Storage quotas, with optional **enforced 2FA** on registration |
+| **Multi-Factor Auth (MFA/2FA)** | Secure accounts via TOTP (authenticator apps) with recovery codes, or passwordless **Passkeys (WebAuthn)** using biometric keys |
+| **Single Sign-On (OIDC SSO)** | Bring-your-own SSO (Keycloak, Authentik, etc.) with custom group-to-admin mapping and optional JIT user provisioning |
+| **SMTP & Password Recovery** | Email-based secure password resets, with a database-backed "contact admin" request queue if SMTP is disabled |
+| **VM Lifecycle Management** | Create, start, stop, restart, **rename**, and delete VMs — each VM page has editable **notes**, an **activity timeline**, and **CPU/memory history charts**. The create wizard offers one-click **size presets** (Small → X-Large) |
+| **LXC Containers** | Spin up lightweight **LXC containers** alongside full VMs — create from an OS template, start/stop/restart, in-browser console, tenant isolation, quotas, cpu/RAM/rootfs resize, and MateStates backups. Shares the host kernel, boots in seconds |
+| **Cloud-Init Deploys** | One-click cloud images (16 curated distros + custom URLs), imported entirely through the Proxmox API — paste an SSH key for a ready-to-SSH box in ~60s, with optional first-boot **Docker** / **Tailscale** installs. **Save SSH keys** to your profile and pick them on deploy |
+| **Template Store** | Publish Proxmox templates as one-click OS builds — cloned and autoscaled on deploy, with OS-matched (or custom-uploaded) icons and admin-authored login notes |
+| **Automatic VM Placement** | Tenants never pick a node — the scheduler auto-places each VM on a node that has the chosen image, with the most free capacity |
+| **Live VM Migration** | Admins move a VM to another cluster node with **no downtime** — live for running guests (incl. those on node-local storage), offline for stopped ones — and the VM's owner gets an emailed heads-up. Architecture-guardrailed (never x86↔ARM) |
+| **Cluster Balancer & Maintenance** | DRS-style **memory-load balancing** (recommend-only or auto) that live-migrates guests off the busiest node, plus one-click **maintenance node-drain** to evacuate a host before downtime — with anti-affinity (`aa:` tags) and pinning guardrails |
+| **GPU / PCI Passthrough** | Tenants request a GPU or other PCI device; admins review and attach an available device — with balancer/migration guardrails once attached |
+| **In-Browser Console** | A **graphical (noVNC)** console *and* an **xterm.js text console** with **Ctrl/Cmd-clickable links**, real copy/paste, and scrollback — both proxied securely through the backend, no SSH or open ports |
+| **MateStates Backups** | Scheduled weekly backups + one-click in-place restore, with rolling retention |
+| **Quick Snapshots** | Instant Proxmox snapshots — take / roll back / delete, with optional RAM-state capture — for "before I change something" restore points (distinct from durable MateStates backups) |
+| **Power Schedule** | Auto start/stop any VM on a weekly schedule — handy for dev boxes that don't need to run overnight |
+| **In-App Updates** | Admins check the latest GitHub release, see what's new, and (opt-in) one-click rebuild + restart onto the new version |
+| **Live Admin Monitor** | Per-VM CPU / memory / network sparklines at 1 Hz, with power controls, grouped by owner |
+| **Kiosk Mode** | A full-screen, touch-friendly command center for a rack-mounted panel — cluster gauges, quorum tile, per-node strip, activity ticker |
+| **Tenant Network Isolation** | Per-VM Proxmox firewall — MAC filtering, RFC1918 drop rules, and a configurable DNS allow-list — keeps guests off your LAN, your other VMs, and the host |
+| **Audit Log** | Who created / deleted / restored / started which VM, plus sign-ins — an admin-viewable activity trail |
+| **Rate Limiting** | Built-in brute-force protection on the login / register / invite endpoints, plus per-account lockout with admin alerts |
+| **Resource Quotas** | Users can only provision resources within their assigned limits — with a built-in quota-increase request workflow |
+| **First-Time Setup Wizard** | Guided OOBE to configure admin credentials and the Proxmox connection |
+| **Docker + CI** | Multi-stage production images, plus GitHub Actions CI (typecheck, tests, image builds) and an automated test suite |
 
 </details>
 
 <details>
-<summary><b>🛠️ Tech stack</b></summary>
+<summary><b>Tech stack</b></summary>
 <br/>
 
 | Layer | Technology |
@@ -90,7 +90,7 @@ Proxmox admin panel.
 
 ---
 
-## 📸 Screenshots
+## Screenshots
 
 <div align="center">
 
@@ -100,7 +100,7 @@ Proxmox admin panel.
 </div>
 
 <details>
-<summary><b>🖼️ More screenshots</b> — create wizard, Template Store, console, live monitor, setup (5)</summary>
+<summary><b>More screenshots</b> — create wizard, Template Store, console, live monitor, setup (5)</summary>
 <br/>
 <div align="center">
 
@@ -129,12 +129,12 @@ Proxmox admin panel.
 
 ---
 
-## 🚀 Quick start
+## Quick start
 
 **Prerequisites:** Node.js 20+, a Proxmox VE cluster (tested on PVE 9.2), and a
 [Proxmox API token](https://pve.proxmox.com/wiki/User_Management#pveum_tokens).
 
-> ⚠️ **The #1 setup pitfall:** Proxmox creates API tokens with *Privilege Separation*
+> **The #1 setup pitfall:** Proxmox creates API tokens with *Privilege Separation*
 > enabled, which leaves the token with an **empty permission set** (even for `root`) —
 > the connection test passes but storage lists come back empty and VM creation 403s.
 > Uncheck it, or grant the token a role — see the
@@ -163,7 +163,7 @@ invite links for your users from **Admin → Invites**.
 
 ---
 
-## 🐳 Production deployment
+## Production deployment
 
 ```bash
 cp .env.docker.example .env
@@ -184,7 +184,7 @@ tenant isolation, Keycloak SSO, SMTP, and the 2FA test matrix — is in
 
 ---
 
-## 🧪 Testing & CI
+## Testing & CI
 
 The backend ships a Vitest suite (~300 tests) covering the security-critical logic —
 quotas, the per-VM firewall builder, placement, retention, ownership, balancer/drain
@@ -200,7 +200,7 @@ separate [security workflow](.github/workflows/security.yml) (CodeQL, Trivy, SBO
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 All guides are also surfaced in-app under **Help & Docs**.
 
@@ -218,7 +218,7 @@ All guides are also surfaced in-app under **Help & Docs**.
 
 ---
 
-## 🤝 Community
+## Community
 
 Questions, ideas, or a homelab to show off? Join the
 [Discussions](https://github.com/r0073d-l053r/ProxMate/discussions):
@@ -230,7 +230,7 @@ Questions, ideas, or a homelab to show off? Join the
 
 ---
 
-## 📄 License
+## License
 
 Copyright © 2026 Brandon Jewell.
 

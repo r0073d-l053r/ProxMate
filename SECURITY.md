@@ -79,7 +79,7 @@ RFC1918 address** — that includes your LAN, your other VMs, and the Proxmox ho
 
 ### 3b. You must enable the Proxmox cluster firewall
 
-> ⚠️ **Per-VM firewall rules do nothing until the Proxmox *cluster* firewall is enabled.**
+> **Per-VM firewall rules do nothing until the Proxmox *cluster* firewall is enabled.**
 > Until then, VMs share your LAN with no isolation.
 
 Admin → Settings shows whether isolation is **Enforced**. If it says *"Not enforced yet,"*
