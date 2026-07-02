@@ -1,9 +1,3 @@
-<!--
-  Curated notes for the NEXT release. release.yml publishes this file as the
-  release body (the auto-generated PR list is appended below it), so rewrite it
-  as part of every release commit — it should describe exactly one version.
--->
-
 ## ✨ Highlights
 
 **The tenant VM page is now a DigitalOcean-style dashboard.** The detail page for a
