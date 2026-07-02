@@ -1064,3 +1064,24 @@ export async function restartVm(vm: VirtualMachine): Promise<void> {
   await pve.rebootVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kindOf(currentVm));
   await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'running' } });
 }
+
+/**
+ * Pause (QEMU suspend) a running VM — execution freezes with RAM resident, so
+ * resuming is instant. DB status stays "running" (the guest is still resident on
+ * the node and holding its resources); the live qmpstatus reports "paused".
+ * QEMU-only: Proxmox's LXC suspend is experimental, so containers are rejected.
+ */
+export async function pauseVm(vm: VirtualMachine): Promise<void> {
+  if (kindOf(vm) === 'lxc') throw new Error('Containers (LXC) cannot be paused');
+  const client = await pve.getClient();
+  const currentVm = await syncVmNode(vm);
+  await pve.suspendVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client);
+}
+
+/** Resume a paused VM. QEMU-only, the counterpart of {@link pauseVm}. */
+export async function resumeVm(vm: VirtualMachine): Promise<void> {
+  if (kindOf(vm) === 'lxc') throw new Error('Containers (LXC) cannot be paused');
+  const client = await pve.getClient();
+  const currentVm = await syncVmNode(vm);
+  await pve.resumeVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client);
+}

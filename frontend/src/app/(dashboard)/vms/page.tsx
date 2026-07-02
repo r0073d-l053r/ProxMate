@@ -11,6 +11,7 @@ import { formatRam, formatDate } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { OwnerGroupHeader } from "@/components/dashboard/owner-group-header";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
+import { TemplateIcon } from "@/components/template-icon";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -178,7 +179,14 @@ function VmTable({
             <TableCell className="text-muted-foreground">
               {vm.cpu} vCPU · {formatRam(vm.ram)} · {vm.storage} GB
             </TableCell>
-            <TableCell className="text-muted-foreground">{vm.os}</TableCell>
+            <TableCell className="text-muted-foreground">
+              <span className="flex max-w-52 items-center gap-1.5">
+                <TemplateIcon os={vm.os} name={vm.os} className="size-4 shrink-0" />
+                <span className="truncate" title={vm.os}>
+                  {vm.os}
+                </span>
+              </span>
+            </TableCell>
             <TableCell className="text-muted-foreground">{vm.ipAddress ?? "—"}</TableCell>
             <TableCell className="text-muted-foreground">{formatDate(vm.createdAt)}</TableCell>
           </TableRow>

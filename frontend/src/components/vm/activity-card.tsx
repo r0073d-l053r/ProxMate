@@ -16,6 +16,8 @@ const ACTIVITY_META: Record<string, { label: string; dot: string }> = {
   "vm.stop": { label: "Stopped", dot: "bg-amber-500" },
   "vm.stop_force": { label: "Force-stopped", dot: "bg-red-500" },
   "vm.restart": { label: "Restarted", dot: "bg-sky-500" },
+  "vm.pause": { label: "Paused", dot: "bg-amber-500" },
+  "vm.resume": { label: "Resumed", dot: "bg-emerald-500" },
   "vm.update": { label: "Notes updated", dot: "bg-muted-foreground" },
   "vm.resize": { label: "Resized", dot: "bg-sky-500" },
   "vm.rebuild": { label: "Rebuilt", dot: "bg-amber-500" },

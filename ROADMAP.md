@@ -136,3 +136,39 @@ then the **EDU** items. Status below reflects the CE build pass (shipped in **v0
 
 > **UI:** the admin **Usage** tab is now merged into **Users** (an in-page _Accounts / Usage_
 > toggle), so cluster ops live under one fewer nav entry.
+
+## The v0.5 arc — planned 2026-07-02
+
+Reviewed with the owner; in progress. Continues the DigitalOcean-parity push for tenants.
+
+**Console & UX batch (in progress):**
+
+- **Console power actions** — an Actions menu on the console page (start / pause / resume /
+  restart / shutdown / force stop) so you never leave the terminal to manage the machine.
+  Pause/resume = QEMU suspend (new `POST /api/vms/:id/pause` + `/resume`).
+- **Pop-out text console** — the xterm console in its own chromeless window, with a
+  **"Keep on top"** floating mode (Document Picture-in-Picture, Chrome/Edge) so the
+  terminal stays visible over other windows. Real copy/paste throughout.
+- **Live Insights** — the per-VM metrics view gains a **Live** mode ticking every second
+  (rolling window, y-axis zoomed to the activity); Day/Week stay on Proxmox RRD history.
+- **OS logos** on the VM list and detail pages; **typed-name delete confirmation** with a
+  download-your-backups warning.
+
+**Feature slate (planned):**
+
+1. **Per-VM resource alerts** — tenant-set thresholds (CPU %, memory %, disk-full via the
+   guest agent, unexpected stop) delivered as branded email/webhook, evaluated on the
+   existing 5-minute sampling tick.
+2. **Rescue mode** — one-click boot from an admin-designated rescue ISO with an
+   "exit rescue" that restores the original boot order (QEMU).
+3. **Reset guest password** — via the guest agent's dedicated `set-user-password` call
+   (QEMU + agent), for locked-out users on key-only cloud images.
+4. **Duplicate VM** — self-service clone of your own (stopped) VM: quota-checked,
+   auto-placed, isolation firewall before first boot.
+5. **Cloud image freshness** — per-template refresh + optional monthly schedule:
+   re-import the upstream cloud image as a new template and repoint the store entry, so
+   new deploys always boot a patched base (superseded templates kept until clone-free).
+6. **Backup download links** — when the deployment mounts the backup share
+   (`BACKUP_DOWNLOAD_DIR`), tenants can request a MateState download and receive a
+   **single-use, expiring link by email**. (Direct vzdump streaming stays impossible in
+   the API-only model — see candidate idea #4.)
