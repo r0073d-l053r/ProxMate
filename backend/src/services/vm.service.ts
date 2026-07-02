@@ -451,6 +451,78 @@ export async function deployFromTemplate(
   }
 }
 
+/**
+ * Self-service clone of a VM the caller can operate. Full-clones the source
+ * (storage-agnostic) to a new VMID on the same node, quota-checks the duplicate
+ * against the owner's caps, re-applies the tenant-isolation firewall before boot
+ * (the clone gets a fresh MAC, so rules must be rebuilt), and starts it. The
+ * source must be stopped — a clean full clone doesn't need a snapshot and can't
+ * copy a live disk out from under a running guest. QEMU-only (uses the qemu
+ * clone endpoint); the new VM is owned by the same user as the source.
+ */
+export async function duplicateVm(source: VirtualMachine, newName: string): Promise<VirtualMachine> {
+  if (kindOf(source) === 'lxc') throw new Error('Containers (LXC) can\'t be duplicated');
+
+  const client = await pve.getClient();
+  const current = await syncVmNode(source);
+
+  const status = await pve.getVmStatus(current.proxmoxNode, current.proxmoxVmId, client).catch(() => null);
+  if (status?.status === 'running') {
+    throw new Error('Stop the machine first — a duplicate is made from a stopped VM');
+  }
+
+  // Quota is charged to the source's owner (the duplicate belongs to them too).
+  const owner = await prisma.user.findUnique({ where: { id: current.userId } });
+  if (!owner) throw new Error('VM owner not found');
+  await assertWithinQuota(owner, {
+    name: newName, cpu: current.cpu, ram: current.ram, storage: current.storage, os: current.os,
+  });
+
+  const node = current.proxmoxNode;
+  const vmid = await pve.getNextVmId(client);
+  const isolate = (await getConfig('isolation_enabled')) !== 'false';
+
+  const vm = await prisma.virtualMachine.create({
+    data: {
+      userId: current.userId,
+      proxmoxVmId: vmid,
+      proxmoxNode: node,
+      name: newName,
+      description: `Copy of ${current.name}`,
+      type: 'qemu',
+      cpu: current.cpu,
+      ram: current.ram,
+      storage: current.storage,
+      os: current.os,
+      tags: current.tags,
+      status: 'creating',
+    },
+  });
+
+  try {
+    // Full clone (not linked): storage-agnostic and self-contained, so the copy
+    // survives the original being deleted.
+    const upid = await pve.cloneVm(
+      { node, templateVmid: current.proxmoxVmId, newVmid: vmid, name: newName, full: true },
+      client,
+    );
+    await pve.waitForTask(node, upid, client, 600_000);
+
+    if (isolate) {
+      const dnsServers = ((await getConfig('isolation_dns_servers')) ?? '').split(/[,\s]+/).filter(Boolean);
+      await pve.configureVmIsolation(node, vmid, { dnsServers }, client);
+    }
+
+    await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
+    const startUpid = await pve.startVm(node, vmid, client);
+    await pve.waitForTask(node, startUpid, client);
+    return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
+  } catch (err) {
+    await markVmError(vm.id, newName, err);
+    throw err;
+  }
+}
+
 /** Owner-or-admin only (owner-exclusive actions: delete, share management, convert). */
 export async function getOwnedVm(
   vmId: string,

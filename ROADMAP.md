@@ -165,8 +165,9 @@ Reviewed with the owner; in progress. Continues the DigitalOcean-parity push for
    "exit rescue" that restores the original boot order (QEMU).
 3. **Reset guest password** — via the guest agent's dedicated `set-user-password` call
    (QEMU + agent), for locked-out users on key-only cloud images.
-4. **Duplicate VM** — self-service clone of your own (stopped) VM: quota-checked,
-   auto-placed, isolation firewall before first boot.
+4. **Duplicate VM** ✅ — self-service full clone of your own **stopped** VM (`POST
+   /api/vms/:id/duplicate`): quota-checked against the owner's caps, isolation firewall
+   re-applied before first boot, from the VM's Actions menu. QEMU-only. _Done._
 5. **Cloud image freshness** ✅ — per-template **Refresh** button + an optional **monthly**
    auto-refresh (admin toggle): rebuild the template from its remembered source URL as a new
    Proxmox template, repoint the same store entry (deploy links/notes survive), and remove the
