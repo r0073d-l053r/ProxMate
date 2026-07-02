@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Save, Loader2, Trash2, RotateCcw, Calendar, Wrench, Archive } from "lucide-react";
+import { Save, Loader2, Trash2, RotateCcw, Calendar, Wrench, Archive, Download } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import type { MateState } from "@/lib/types";
 import { formatBytes, formatDate } from "@/lib/format";
@@ -26,16 +26,32 @@ const RETENTION = 2;
 
 export function MateStatesPanel({ vmId, vmName }: { vmId: string; vmName: string }) {
   const [items, setItems] = useState<MateState[] | null>(null);
+  const [downloadable, setDownloadable] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(() => {
     api
-      .get<MateState[]>(`/vms/${vmId}/matestates`)
-      .then((res) => setItems(res.data))
+      .get<{ downloadable: boolean; items: MateState[] }>(`/vms/${vmId}/matestates`)
+      .then((res) => {
+        setItems(res.data.items);
+        setDownloadable(res.data.downloadable);
+      })
       .catch((err) => toast.error(apiError(err)));
   }, [vmId]);
 
   useEffect(load, [load]);
+
+  async function requestDownload(ms: MateState) {
+    setBusy(`dl-${ms.id}`);
+    try {
+      const res = await api.post<{ to: string }>(`/vms/${vmId}/matestates/${ms.id}/download`);
+      toast.success(`Download link sent to ${res.data.to}. It works once and expires in an hour.`);
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function backup() {
     setBusy("create");
@@ -138,6 +154,18 @@ export function MateStatesPanel({ vmId, vmName }: { vmId: string; vmName: string
                 </div>
 
                 <div className="flex items-center gap-1">
+                  {downloadable && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy !== null || ms.status !== "ready"}
+                      onClick={() => requestDownload(ms)}
+                      title="Email me a one-time download link for this backup"
+                    >
+                      {busy === `dl-${ms.id}` ? <Loader2 className="animate-spin" /> : <Download />}
+                      Download
+                    </Button>
+                  )}
                   <AlertDialog>
                     <AlertDialogTrigger
                       render={
