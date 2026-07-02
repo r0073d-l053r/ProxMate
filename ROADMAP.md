@@ -167,9 +167,11 @@ Reviewed with the owner; in progress. Continues the DigitalOcean-parity push for
    (QEMU + agent), for locked-out users on key-only cloud images.
 4. **Duplicate VM** — self-service clone of your own (stopped) VM: quota-checked,
    auto-placed, isolation firewall before first boot.
-5. **Cloud image freshness** — per-template refresh + optional monthly schedule:
-   re-import the upstream cloud image as a new template and repoint the store entry, so
-   new deploys always boot a patched base (superseded templates kept until clone-free).
+5. **Cloud image freshness** ✅ — per-template **Refresh** button + an optional **monthly**
+   auto-refresh (admin toggle): rebuild the template from its remembered source URL as a new
+   Proxmox template, repoint the same store entry (deploy links/notes survive), and remove the
+   old template VM — safe because cloud images are full-cloned, so nothing depends on the old
+   base. New deploys always boot a patched image. _Done._
 6. **Backup download links** — when the deployment mounts the backup share
    (`BACKUP_DOWNLOAD_DIR`), tenants can request a MateState download and receive a
    **single-use, expiring link by email**. (Direct vzdump streaming stays impossible in

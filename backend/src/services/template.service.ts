@@ -46,6 +46,7 @@ export interface RegisterTemplateInput {
   notes?: string;
   cloudInit?: boolean;
   arch?: pve.Arch;
+  sourceUrl?: string; // cloud image URL, so the store can rebuild a fresh template
 }
 
 /** Register a Proxmox template into the store (or update an existing registration). */
@@ -98,6 +99,7 @@ export async function register(input: RegisterTemplateInput): Promise<Template> 
       diskGb,
       cloudInit,
       notes: input.notes ?? null,
+      sourceUrl: input.sourceUrl ?? null,
     },
   });
 }
@@ -361,12 +363,19 @@ export interface AddCloudImageInput {
 }
 
 /**
- * Build a cloud-init template from a cloud image, entirely via the Proxmox API:
- * download the image → import it as a VM disk + attach a cloud-init drive →
- * convert to a template → register it (flagged `cloudInit`). Long-running (the
- * image download is hundreds of MB). The source image is deleted once imported.
+ * Core cloud-image import, shared by {@link addCloudImage} and
+ * {@link refreshTemplate}: download the image → import it as a VM disk + attach a
+ * cloud-init drive → convert to a template. Returns the new template VMID, its
+ * node, disk size and arch. Does NOT register a store row (callers decide whether
+ * to create one or repoint an existing one). Cleans up its own artifacts on
+ * failure. Long-running (the image download is hundreds of MB).
  */
-export async function addCloudImage(input: AddCloudImageInput): Promise<Template> {
+async function buildCloudTemplateVm(opts: {
+  name: string;
+  imageUrl: string;
+  node?: string;
+  arch?: pve.Arch;
+}): Promise<{ node: string; vmid: number; diskGb: number; arch: pve.Arch }> {
   const client = await pve.getClient();
   const diskStorage = await getConfig('default_storage');
   const bridge = await getConfig('default_bridge');
@@ -374,16 +383,12 @@ export async function addCloudImage(input: AddCloudImageInput): Promise<Template
     throw new Error('Server defaults are not configured — finish setup first');
   }
 
-  // Arch comes from the image filename unless the caller pinned it; the build
-  // node (where the template — and all its clones — will live) must match it.
-  const arch = input.arch ?? archFromImageUrl(input.imageUrl);
-
-  // Place on a node that has the disk pool (default = best capacity) AND the
-  // matching CPU arch. Linked clones of the template stay on this node.
+  // Arch comes from the image filename unless pinned; the build node (where the
+  // template — and its full clones — live) must match it.
+  const arch = opts.arch ?? archFromImageUrl(opts.imageUrl);
   const node =
-    input.node ?? (await pve.pickBestNode({ cpu: 1, ramMb: 1024, storageGb: 4 }, diskStorage, client, undefined, arch));
+    opts.node ?? (await pve.pickBestNode({ cpu: 1, ramMb: 1024, storageGb: 4 }, diskStorage, client, undefined, arch));
 
-  // Need an import-capable storage on that node to land the downloaded image.
   const importStorages = await pve.getImportStorages(node, client);
   if (importStorages.length === 0) {
     throw new Error(`No storage on "${node}" accepts disk images (enable the "import" content type on a directory storage).`);
@@ -391,44 +396,105 @@ export async function addCloudImage(input: AddCloudImageInput): Promise<Template
   const isoStorage = (await getConfig('iso_storage')) ?? '';
   const importStorage = importStorages.includes(isoStorage) ? isoStorage : importStorages[0]!;
 
-  // Proxmox VM names must be DNS-ish; the store name keeps the admin's label.
-  const safeName = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'cloud-image';
-  const filename = `${safeName}-${Date.now()}.qcow2`; // import needs a disk-image extension
+  const safeName = opts.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'cloud-image';
+  const filename = `${safeName}-${Date.now()}.qcow2`;
   const importFrom = `${importStorage}:import/${filename}`;
   const vmid = await pve.getNextVmId(client);
 
-  // 1. Download the image (can take minutes for the larger images).
-  const dlUpid = await pve.downloadUrlToStorage(node, importStorage, { url: input.imageUrl, filename }, client);
+  const dlUpid = await pve.downloadUrlToStorage(node, importStorage, { url: opts.imageUrl, filename }, client);
   await pve.waitForTask(node, dlUpid, client, 900_000);
 
   try {
-    // 2. Create the VM importing that disk + a cloud-init drive.
     const createUpid = await pve.createCloudInitVm({ node, vmid, name: safeName, importFrom, diskStorage, bridge }, client);
     await pve.waitForTask(node, createUpid, client, 600_000);
-
-    // 3. Read the imported disk's real size, then convert to a template.
     const diskGb = pve.primaryDiskSizeGb(await pve.getVmConfig(node, vmid, client));
     await pve.convertToTemplate(node, vmid, client);
-
-    // 4. Register in the store as a cloud-init template.
-    const tpl = await register({
-      proxmoxVmId: vmid,
-      node,
-      name: input.name,
-      description: input.description,
-      os: input.os,
-      diskGb,
-      cloudInit: true,
-      arch,
-    });
     await pve.deleteStorageVolume(node, importFrom, client).catch(() => {}); // image no longer needed
-    return tpl;
+    return { node, vmid, diskGb, arch };
   } catch (err) {
-    // Best-effort cleanup of partial artifacts so a failed build leaves nothing.
     await pve.deleteStorageVolume(node, importFrom, client).catch(() => {});
     await pve.deleteVm(node, vmid, client).catch(() => {});
     throw err;
   }
+}
+
+/**
+ * Build a cloud-init template from a cloud image and register it in the store
+ * (flagged `cloudInit`), remembering the source URL so it can be refreshed later.
+ */
+export async function addCloudImage(input: AddCloudImageInput): Promise<Template> {
+  const built = await buildCloudTemplateVm({ name: input.name, imageUrl: input.imageUrl, node: input.node, arch: input.arch });
+  return register({
+    proxmoxVmId: built.vmid,
+    node: built.node,
+    name: input.name,
+    description: input.description,
+    os: input.os,
+    diskGb: built.diskGb,
+    cloudInit: true,
+    arch: built.arch,
+    sourceUrl: input.imageUrl,
+  });
+}
+
+/**
+ * Rebuild a cloud-image template from its remembered source URL so new deploys
+ * start from a freshly-downloaded (patched) base. Builds a NEW template VM, then
+ * repoints the SAME store row at it (keeping its id/name/notes/icon so deploy
+ * links and admin edits survive), and deletes the old Proxmox template VM. Safe
+ * because cloud-init templates are FULL-cloned on deploy — the old template has
+ * no linked clones depending on it. Admin-only.
+ */
+export async function refreshTemplate(id: string): Promise<Template> {
+  const tpl = await prisma.template.findUnique({ where: { id } });
+  if (!tpl) throw new Error('Template not found');
+  if (!tpl.cloudInit || !tpl.sourceUrl) {
+    throw new Error('Only cloud-image templates built from a URL can be refreshed');
+  }
+
+  const built = await buildCloudTemplateVm({
+    name: tpl.name,
+    imageUrl: tpl.sourceUrl,
+    arch: (tpl.arch as pve.Arch | null) ?? undefined,
+  });
+
+  const oldVmid = tpl.proxmoxVmId;
+  const oldNode = tpl.proxmoxNode;
+
+  // Repoint the store row at the new template VM (same id → deploy links hold).
+  const updated = await prisma.template.update({
+    where: { id },
+    data: {
+      proxmoxVmId: built.vmid,
+      proxmoxNode: built.node,
+      diskGb: built.diskGb,
+      arch: built.arch,
+      refreshedAt: new Date(),
+    },
+  });
+
+  // The old template VM is now unreferenced (cloud images are full-cloned) — remove it.
+  const client = await pve.getClient();
+  await pve.deleteVm(oldNode, oldVmid, client).catch((e) => console.warn('[template] old template cleanup failed:', e));
+
+  return updated;
+}
+
+/** Refresh every refreshable cloud-image template (scheduled monthly job). Best-effort. */
+export async function refreshAllTemplates(): Promise<{ refreshed: number; failed: number }> {
+  const templates = await prisma.template.findMany({ where: { cloudInit: true, NOT: { sourceUrl: null } } });
+  let refreshed = 0;
+  let failed = 0;
+  for (const t of templates) {
+    try {
+      await refreshTemplate(t.id);
+      refreshed += 1;
+    } catch (e) {
+      failed += 1;
+      console.warn(`[template] refresh of "${t.name}" failed:`, e);
+    }
+  }
+  return { refreshed, failed };
 }
 
 // ─── Cloud-init "extras" support (install Docker / Tailscale snippets) ─

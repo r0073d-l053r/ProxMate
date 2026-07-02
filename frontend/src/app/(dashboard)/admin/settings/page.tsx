@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { UpdatesCard } from "@/components/admin/updates-card";
 import { RescueIsoCard } from "@/components/admin/rescue-iso-card";
+import { TemplateRefreshCard } from "@/components/admin/template-refresh-card";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -428,6 +429,9 @@ export default function SettingsPage() {
 
       {/* Rescue ISO (VM Settings → Recovery) */}
       <RescueIsoCard />
+
+      {/* Cloud-image auto-refresh (monthly) */}
+      <TemplateRefreshCard />
 
       {/* Network isolation */}
       {isolation && (

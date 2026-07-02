@@ -14,11 +14,13 @@ import {
   unregister,
   updateTemplate,
   addCloudImage,
+  refreshTemplate,
   curatedImagesWithArch,
   getCloudInitExtras,
   enableCloudInitSnippets,
   cloudInitStatus,
 } from '../services/template.service.js';
+import { recordAudit } from '../services/audit.service.js';
 import type { AuthRequest } from '../types/index.js';
 
 const router = Router();
@@ -218,6 +220,24 @@ router.patch('/:id', requireAdmin, async (req: Request, res: Response) => {
     res.json(template);
   } catch {
     res.status(404).json({ error: 'Template not found' });
+  }
+});
+
+// ─── POST /api/templates/:id/refresh ──────────────────────────
+// Rebuild a cloud-image template from its source URL so new deploys start from a
+// freshly-downloaded, patched base. Admin-only; long-running (re-downloads the image).
+
+router.post('/:id/refresh', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const template = await refreshTemplate(req.params['id'] as string);
+    await recordAudit({
+      action: 'template.refresh', actor: (req as AuthRequest).user,
+      targetType: 'template', targetId: template.id, detail: template.name, req,
+    });
+    res.json(template);
+  } catch (err) {
+    const msg = pveMessage(err);
+    res.status(/can be refreshed|not found/i.test(msg) ? 409 : 502).json({ error: msg });
   }
 });
 
