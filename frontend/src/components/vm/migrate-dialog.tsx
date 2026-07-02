@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, MoveRight, ArrowLeftRight } from "lucide-react";
+import { Loader2, MoveRight } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import type { ClusterHealth } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -22,28 +22,34 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
-/** Admin-only: migrate a VM to another cluster node (live if running). */
+/**
+ * Admin-only: migrate a VM to another cluster node (live if running).
+ * Controlled: the detail page's Actions menu opens it via `open`/`onOpenChange`.
+ */
 export function MigrateDialog({
   vmId,
   currentNode,
   running,
+  open,
+  onOpenChange,
   onDone,
 }: {
   vmId: string;
   currentNode: string;
   running: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   onDone: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [nodes, setNodes] = useState<string[]>([]);
   const [target, setTarget] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
+    setTarget("");
     api
       .get<ClusterHealth>("/admin/nodes")
       .then((r) => setNodes(r.data.nodes.filter((n) => n.online && n.name !== currentNode).map((n) => n.name)))
@@ -55,7 +61,7 @@ export function MigrateDialog({
     try {
       await api.post(`/vms/${vmId}/migrate`, { targetNode: target });
       toast.success(`Migrating to ${target}…`);
-      setOpen(false);
+      onOpenChange(false);
       onDone();
     } catch (err) {
       toast.error(apiError(err));
@@ -65,20 +71,7 @@ export function MigrateDialog({
   }
 
   return (
-    <AlertDialog
-      open={open}
-      onOpenChange={(o: boolean) => {
-        setOpen(o);
-        if (!o) setTarget("");
-      }}
-    >
-      <AlertDialogTrigger
-        render={
-          <Button variant="outline" disabled={busy}>
-            <ArrowLeftRight /> Migrate
-          </Button>
-        }
-      />
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Migrate to another node</AlertDialogTitle>

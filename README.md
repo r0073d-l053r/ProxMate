@@ -15,13 +15,32 @@
 
 **A lightweight, invite-only cloud dashboard built on Proxmox VE.**
 
-ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cluster. Generate invite links with resource quotas, let users spin up VMs from an ISO **or a one-click cloud image** (paste an SSH key → a ready-to-SSH box in ~60s), and access them via an in-browser console — **graphical (noVNC)** or a **text console with clickable links, copy/paste & scrollback** — all without exposing your Proxmox admin panel.
+ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cluster.
+Hand out invite links with resource quotas, let users spin up VMs and LXC containers —
+from an ISO, a template, or a one-click cloud image (paste an SSH key → a ready-to-SSH
+box in ~60 s) — and access them via an in-browser console, all without exposing your
+Proxmox admin panel.
+
+[Quick start](#-quick-start) · [Features](#-features) · [Screenshots](#-screenshots) · [Production](#-production-deployment) · [Docs](#-documentation)
 
 </div>
 
 ---
 
 ## ✨ Features
+
+- 🔒 **Invite-only multi-tenancy** — invite links carry CPU/RAM/disk quotas; per-VM firewall keeps tenants off your LAN, your other guests, and the host
+- 🖥️ **VMs & LXC containers** — create from an ISO, the Template Store, or 16 curated cloud images; resize, rebuild, rename, snapshots, power schedules, tags & bulk actions
+- 🌐 **In-browser consoles** — graphical (noVNC) *and* a text console with clickable links, real copy/paste, and scrollback — no SSH, no open ports
+- 🛡️ **Serious auth** — TOTP 2FA, passkeys (WebAuthn), bring-your-own OIDC SSO, SMTP password resets, optional invite-enforced 2FA
+- 💾 **MateStates backups** — scheduled backups with rolling retention, one-click in-place restore, per-VM policies, quick snapshots
+- ⚖️ **Cluster operations** — automatic VM placement, live migration, DRS-style memory balancer, maintenance node-drain, GPU/PCI passthrough requests
+- 📈 **Operator visibility** — live admin monitor (1 Hz sparklines), rack-panel kiosk mode, audit log, Prometheus `/metrics`
+- 🔄 **In-app updates** — check the latest GitHub release and one-click rebuild onto it
+
+<details>
+<summary><b>📋 Full feature matrix</b> — every feature, one table</summary>
+<br/>
 
 | Feature | Description |
 |---|---|
@@ -36,18 +55,38 @@ ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cl
 | ⚖️ **Automatic VM Placement** | Tenants never pick a node — the scheduler auto-places each VM on a node that has the chosen image, with the most free capacity |
 | 🔀 **Live VM Migration** | Admins move a VM to another cluster node with **no downtime** — live for running guests (incl. those on node-local storage), offline for stopped ones — and the VM's owner gets an emailed heads-up. Architecture-guardrailed (never x86↔ARM) |
 | 🧭 **Cluster Balancer & Maintenance** | DRS-style **memory-load balancing** (recommend-only or auto) that live-migrates guests off the busiest node, plus one-click **maintenance node-drain** to evacuate a host before downtime — with anti-affinity (`aa:` tags) and pinning guardrails |
+| 🎮 **GPU / PCI Passthrough** | Tenants request a GPU or other PCI device; admins review and attach an available device — with balancer/migration guardrails once attached |
 | 🌐 **In-Browser Console** | A **graphical (noVNC)** console *and* an **xterm.js text console** with **Ctrl/⌘-clickable links**, real copy/paste, and scrollback — both proxied securely through the backend, no SSH or open ports |
 | 💾 **MateStates Backups** | Scheduled weekly backups + one-click in-place restore, with rolling retention |
 | 📸 **Quick Snapshots** | Instant Proxmox snapshots — take / roll back / delete, with optional RAM-state capture — for "before I change something" restore points (distinct from durable MateStates backups) |
 | ⏰ **Power Schedule** | Auto start/stop any VM on a weekly schedule — handy for dev boxes that don't need to run overnight |
 | 🔄 **In-App Updates** | Admins check the latest GitHub release, see what's new, and (opt-in) one-click rebuild + restart onto the new version |
 | 📈 **Live Admin Monitor** | Per-VM CPU / memory / network sparklines at 1 Hz, with power controls, grouped by owner |
+| 🖥️ **Kiosk Mode** | A full-screen, touch-friendly command center for a rack-mounted panel — cluster gauges, quorum tile, per-node strip, activity ticker |
 | 🛡️ **Tenant Network Isolation** | Per-VM Proxmox firewall — MAC filtering, RFC1918 drop rules, and a configurable DNS allow-list — keeps guests off your LAN, your other VMs, and the host |
 | 📝 **Audit Log** | Who created / deleted / restored / started which VM, plus sign-ins — an admin-viewable activity trail |
-| 🚦 **Rate Limiting** | Built-in brute-force protection on the login / register / invite endpoints |
-| 📊 **Resource Quotas** | Users can only provision resources within their assigned limits |
+| 🚦 **Rate Limiting** | Built-in brute-force protection on the login / register / invite endpoints, plus per-account lockout with admin alerts |
+| 📊 **Resource Quotas** | Users can only provision resources within their assigned limits — with a built-in quota-increase request workflow |
 | 🧙 **First-Time Setup Wizard** | Guided OOBE to configure admin credentials and the Proxmox connection |
 | 🐳 **Docker + CI** | Multi-stage production images, plus GitHub Actions CI (typecheck, tests, image builds) and an automated test suite |
+
+</details>
+
+<details>
+<summary><b>🛠️ Tech stack</b></summary>
+<br/>
+
+| Layer | Technology |
+|---|---|
+| **Frontend** | Next.js 16 (App Router), TailwindCSS v4, Shadcn/UI (Base UI), react-icons |
+| **Backend** | Node.js, Express 5, `ws` (WebSocket relay), `express-rate-limit`, `node-cron`, `nodemailer` |
+| **Database** | SQLite via Prisma ORM (migrations); PostgreSQL supported for scale-out |
+| **Auth** | JWT + bcrypt, OIDC SSO (`openid-client`), Passkeys (`@simplewebauthn/server`), TOTP 2FA (`otplib`), SMTP |
+| **Proxmox** | REST API with API Token authentication |
+| **Console** | noVNC (graphical) + xterm.js (text) over a WebSocket proxy |
+| **Testing / CI** | Vitest, Playwright, GitHub Actions (CodeQL, Trivy, SBOM) |
+
+</details>
 
 ---
 
@@ -55,9 +94,15 @@ ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cl
 
 <div align="center">
 
-### Admin Dashboard
 ![ProxMate Dashboard](docs/images/screenshot-dashboard.png)
 *Live cluster capacity and every virtual machine at a glance*
+
+</div>
+
+<details>
+<summary><b>🖼️ More screenshots</b> — create wizard, Template Store, console, live monitor, setup (5)</summary>
+<br/>
+<div align="center">
 
 ### Create a VM
 ![ProxMate New VM Wizard](docs/images/screenshot-newvm.png)
@@ -80,206 +125,124 @@ ProxMate gives you a DigitalOcean-style WebUI on top of your existing Proxmox cl
 *Guided wizard to create the admin account and connect your Proxmox cluster*
 
 </div>
+</details>
 
 ---
 
-## 🛠️ Tech Stack
+## 🚀 Quick start
 
-| Layer | Technology |
-|---|---|
-| **Frontend** | Next.js 16 (App Router), TailwindCSS v4, Shadcn/UI (Base UI), react-icons |
-| **Backend** | Node.js, Express 5, `ws` (WebSocket relay), `express-rate-limit`, `node-cron`, `nodemailer` |
-| **Database** | SQLite via Prisma ORM (migrations) |
-| **Auth** | JWT + bcrypt, OIDC SSO (`openid-client`), Passkeys (`@simplewebauthn/server`), TOTP 2FA (`otplib`), SMTP |
-| **Proxmox** | REST API with API Token authentication |
-| **Console** | noVNC (graphical) + xterm.js (text) over a WebSocket proxy |
-| **Testing / CI** | Vitest, GitHub Actions |
+**Prerequisites:** Node.js 20+, a Proxmox VE cluster (tested on PVE 9.2), and a
+[Proxmox API token](https://pve.proxmox.com/wiki/User_Management#pveum_tokens).
 
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-
-- **Node.js** 20+ and **npm**
-- **Proxmox VE** cluster with API access (tested against PVE 9.2)
-- A **Proxmox API Token** ([how to create one](https://pve.proxmox.com/wiki/User_Management#pveum_tokens))
-
-> ⚠️ **Important — API token permissions.** Proxmox creates API tokens with **Privilege Separation enabled** by default, which gives the token an *empty* permission set (even for `root`). ProxMate needs the token to actually have privileges, so either **uncheck "Privilege Separation"** when creating the token, or grant the token a role:
-> ```bash
-> # Option A: disable privilege separation (simplest)
-> pveum user token modify root@pam proxmate --privsep 0
->
-> # Option B: keep privsep, grant the token Administrator on /
-> pveum acl modify / --tokens 'root@pam!proxmate' --roles Administrator
-> ```
-> Symptoms of a privilege-separated token: the connection test passes but storage lists come back empty and VM creation fails with a 403.
-
-### Development Installation
+> ⚠️ **The #1 setup pitfall:** Proxmox creates API tokens with *Privilege Separation*
+> enabled, which leaves the token with an **empty permission set** (even for `root`) —
+> the connection test passes but storage lists come back empty and VM creation 403s.
+> Uncheck it, or grant the token a role — see the
+> [admin guide §1.1](./docs/admin-guide.md#11-create-the-api-token).
 
 ```bash
-# Clone the repo
 git clone https://github.com/r0073d-l053r/ProxMate.git
 cd ProxMate
 
-# Install backend dependencies
+# Backend (Express API on :4000)
 cd backend
 npm install
-cp ../.env.example .env       # Edit with your settings
-npx prisma migrate deploy     # Create the SQLite database + apply migrations
+cp ../.env.example .env        # edit if needed
+npx prisma migrate deploy
+npm run dev
 
-# Install frontend dependencies
-cd ../frontend
+# Frontend (Next.js on :3000) — second terminal
+cd frontend
 npm install
-
-# Start both servers (in separate terminals)
-cd ../backend && npm run dev   # Express API on :4000
-cd ../frontend && npm run dev  # Next.js on :3000
+npm run dev
 ```
 
-### First-Time Setup
+Open `http://localhost:3000` — the **setup wizard** walks you through creating the
+admin account, connecting Proxmox, and picking storage/network defaults. Then generate
+invite links for your users from **Admin → Invites**.
 
-1. Open `http://localhost:3000` in your browser
-2. You'll be redirected to the **Setup Wizard**
-3. Follow the 4 steps:
-   - **Step 1:** Create your admin account
-   - **Step 2:** Enter your Proxmox host URL and API token credentials, then test the connection
-   - **Step 3:** Select default storage pool, network bridge, and ISO storage from your cluster
-   - **Step 4:** Review and finalize
+---
 
-You'll be logged in as admin and ready to generate invite links for your users.
+## 🐳 Production deployment
+
+```bash
+cp .env.docker.example .env
+openssl rand -hex 32           # → paste into ENCRYPTION_KEY in .env
+docker compose up -d --build   # frontend :3000, API :4000
+```
+
+> **`ENCRYPTION_KEY` must stay constant** across restarts — it decrypts your stored
+> Proxmox token and JWT secret. Back it up. `NEXT_PUBLIC_API_URL` is baked into the
+> frontend at **build time**, so rebuild the frontend image if it changes.
+
+For a real public deployment, serve ProxMate from a **single HTTPS origin** (passkeys,
+`Secure` cookies, and OIDC SSO require it) behind Caddy / nginx / Traefik or a
+Cloudflare Tunnel. The complete runbook — reverse-proxy topology, env reference,
+tenant isolation, Keycloak SSO, SMTP, and the 2FA test matrix — is in
+**[DEPLOYMENT.md](./DEPLOYMENT.md)**; the hardening guide is
+**[SECURITY.md](./SECURITY.md)**.
 
 ---
 
 ## 🧪 Testing & CI
 
-The backend ships with a [Vitest](https://vitest.dev) suite covering the security-critical
-logic — quota enforcement, the per-VM firewall rule builder, node placement, MateState
-retention, ownership checks, cloud-init config, and `createVm`/`deployFromTemplate`
-orchestration against a mocked Proxmox API (no live cluster or DB needed):
+The backend ships a Vitest suite (~300 tests) covering the security-critical logic —
+quotas, the per-VM firewall builder, placement, retention, ownership, balancer/drain
+planning — against a mocked Proxmox API (no live cluster needed):
 
 ```bash
-cd backend && npm test        # or: npm run test:watch
+cd backend && npm test
 ```
 
-Every push and PR runs **GitHub Actions** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
-backend typecheck + tests, frontend lint + build, and a Docker build of both images.
-
----
-
-## 🐳 Production Deployment (Docker)
-
-ProxMate ships with a production `docker-compose.yml` (multi-stage builds; the API runs
-migrations on startup, the frontend is a Next.js standalone server, and the SQLite DB
-lives on a named volume).
-
-```bash
-# 1. Configure
-cp .env.docker.example .env
-#    - generate a stable encryption key:
-openssl rand -hex 32          # paste into ENCRYPTION_KEY in .env
-#    - set FRONTEND_URL and NEXT_PUBLIC_API_URL to the URLs your users will hit
-
-# 2. Build and start
-docker compose up -d --build
-
-# Frontend → http://localhost:3000   API → http://localhost:4000
-```
-
-> **`ENCRYPTION_KEY` must stay constant** across restarts — it decrypts your stored Proxmox
-> token and JWT secret. Back it up. `NEXT_PUBLIC_API_URL` is baked into the frontend at
-> **build time**, so rebuild the frontend image if it changes.
-
-**For a real public deployment**, serve ProxMate from a **single HTTPS origin** — passkeys,
-`Secure` cookies, and the OIDC SSO callback all require it. Put a reverse proxy
-(**Caddy / nginx / Traefik**, or a **Cloudflare Tunnel**) in front to terminate HTTPS and route
-`/api/*` to the backend and everything else to the frontend on one domain, then set in `.env`:
-
-```bash
-FRONTEND_URL=https://proxmate.example.com
-BACKEND_PUBLIC_URL=https://proxmate.example.com
-NEXT_PUBLIC_API_URL=https://proxmate.example.com/api   # baked in at build time → rebuild if changed
-WEBAUTHN_RP_ID=proxmate.example.com
-WEBAUTHN_ORIGIN=https://proxmate.example.com
-COOKIE_SECURE=true
-TRUST_PROXY=1            # real client IP for rate-limiting + audit behind the proxy
-BIND_ADDR=127.0.0.1     # only the local reverse proxy can reach the app ports
-```
-
-See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for the full production runbook (reverse-proxy /
-Cloudflare-Tunnel topology, tenant isolation, Keycloak OIDC SSO, SMTP, and the 2FA test matrix)
-and **[SECURITY.md](./SECURITY.md)** for the hardening guide.
-
----
-
-## 🔐 Security
-
-ProxMate is designed for sharing resources with people you don't fully trust (friends,
-family). It ships with tenant **network isolation** (a per-VM Proxmox firewall), **rate
-limiting** on the auth/invite endpoints, and an **audit log** of VM and sign-in activity.
-
-Before going public, read **[SECURITY.md](./SECURITY.md)** — it covers the isolation model
-(keeping guests off your LAN and away from your other VMs/host), the required Proxmox
-cluster-firewall step, least-privilege API tokens, and a production hardening checklist.
+Every push and PR runs [GitHub Actions](.github/workflows/ci.yml): backend typecheck +
+tests, frontend lint + build, Playwright, and Docker builds of both images, plus a
+separate [security workflow](.github/workflows/security.yml) (CodeQL, Trivy, SBOM).
 
 ---
 
 ## 📚 Documentation
 
-**[`docs/`](./docs/)** has the user- and admin-facing guides:
+All guides are also surfaced in-app under **Help & Docs**.
 
-- **[Production Deployment Runbook](./DEPLOYMENT.md)** — owners: step-by-step production setup guide including Caddy, Keycloak OIDC SSO, SMTP email config, and 2FA verification.
-- **[External access overview](./docs/external-access.md)** — the "no port forwarding" rule and which tool to pick for each use case.
-- **[Tailscale for SSH](./docs/tailscale-ssh.md)** — tenants: SSH into your VM from anywhere, no public IP needed.
-- **[Cloudflare Tunnels](./docs/cloudflare-tunnels.md)** — tenants: publish a public website from your VM without forwarding any port.
-- **[Admin guide](./docs/admin-guide.md)** — owners: cluster setup, firewall enforcement, adding cloud images, authentication settings (SMTP, MFA, OIDC SSO), and shipping a tenant-ready Linux template.
-- **[REST API & scaling](./docs/api.md)** — personal API tokens, the OpenAPI spec (`/api/openapi.json`), `/metrics`, and running on PostgreSQL.
-
-All of these are also surfaced inside the app under **Help & Docs** in the sidebar.
-
-See **[ROADMAP.md](./ROADMAP.md)** for planned and proposed features.
-
----
-
-## 📁 Project Structure
-
-```
-ProxMate/
-├── frontend/             # Next.js dashboard + setup wizard
-├── backend/              # Express API + Proxmox proxy + WebSocket relay (+ Vitest tests)
-├── docs/                 # User + admin guides (Tailscale, Cloudflare, etc.)
-├── .github/workflows/    # CI — typecheck, tests, Docker build
-├── docker-compose.yml    # Production orchestration
-├── SECURITY.md           # Hardening guide
-└── project-architecture.md  # Full architecture spec
-```
-
-See [project-architecture.md](./project-architecture.md) for the complete specification.
+| Guide | Audience | What's inside |
+|---|---|---|
+| [Production runbook](./DEPLOYMENT.md) | Owners | HTTPS origin, Caddy/Cloudflare Tunnel, Keycloak SSO, SMTP, 2FA matrix, kiosk autostart |
+| [Security guide](./SECURITY.md) | Owners | Tenant isolation model, cluster firewall step, least-privilege tokens, hardening checklist |
+| [Admin guide](./docs/admin-guide.md) | Owners | Cluster prep, API tokens, isolation enforcement, cloud images, auth settings, troubleshooting |
+| [External access overview](./docs/external-access.md) | Tenants | The "no port forwarding" rule and which tool fits each use case |
+| [Tailscale for SSH](./docs/tailscale-ssh.md) | Tenants | SSH into your VM from anywhere, no public IP |
+| [Cloudflare Tunnels](./docs/cloudflare-tunnels.md) | Tenants | Publish a public website from your VM without opening ports |
+| [REST API & scaling](./docs/api.md) | Developers | Personal `pm_…` tokens, OpenAPI spec, `/metrics`, PostgreSQL |
+| [Roadmap](./ROADMAP.md) | Everyone | Shipped, planned, and proposed features |
+| [Architecture spec](./project-architecture.md) | Contributors | Full system design — request flows, schema, security model |
 
 ---
 
-## Community and Discussions
+## 🤝 Community
 
-If you need help configuring ProxMate, want to suggest new features, or would like to share your virtual environment setup, we welcome you to join our discussions:
-- [General Discussions](https://github.com/r0073d-l053r/ProxMate/discussions/categories/general): Introduce yourself, meet other self-hosters, and talk about virtualization.
-- [Questions and Answers](https://github.com/r0073d-l053r/ProxMate/discussions/categories/q-a): Troubleshoot setup issues and get help from the community.
-- [Ideas and Feature Proposals](https://github.com/r0073d-l053r/ProxMate/discussions/categories/ideas): Suggest new dashboard capabilities and optimizations.
-- [Show and Tell](https://github.com/r0073d-l053r/ProxMate/discussions/categories/show-and-tell): Share your homelab architectures and custom ProxMate dashboards.
-
-We are committed to building a welcoming and collaborative space. Please check our [Contributing Guide](CONTRIBUTING.md) to learn how to get involved.
+Questions, ideas, or a homelab to show off? Join the
+[Discussions](https://github.com/r0073d-l053r/ProxMate/discussions):
+[Q&A](https://github.com/r0073d-l053r/ProxMate/discussions/categories/q-a) ·
+[Ideas](https://github.com/r0073d-l053r/ProxMate/discussions/categories/ideas) ·
+[Show & Tell](https://github.com/r0073d-l053r/ProxMate/discussions/categories/show-and-tell) ·
+[General](https://github.com/r0073d-l053r/ProxMate/discussions/categories/general)
+— and see the [Contributing Guide](CONTRIBUTING.md) for how to get involved.
 
 ---
 
-## License
+## 📄 License
 
 Copyright © 2026 Brandon Jewell.
 
 ProxMate is **open core**:
 
-- **Community Edition** (this repository) — free and open source under the **GNU Affero General Public License v3.0 (AGPLv3)**; see [LICENSE](./LICENSE).
-- **EDU Edition** — organization-scale features for schools and institutions, offered under a separate [commercial license](./COMMERCIAL-LICENSE.md).
+- **Community Edition** (this repository) — free and open source under the **GNU Affero
+  General Public License v3.0 (AGPLv3)**; see [LICENSE](./LICENSE).
+- **EDU Edition** — organization-scale features for schools and institutions, offered
+  under a separate [commercial license](./COMMERCIAL-LICENSE.md).
 
-See [LICENSING.md](./LICENSING.md) for the full picture, including dual-licensing options for businesses. "ProxMate" is a trademark of Brandon Jewell.
+See [LICENSING.md](./LICENSING.md) for the full picture, including dual-licensing
+options for businesses. "ProxMate" is a trademark of Brandon Jewell.
 
 ---
 
