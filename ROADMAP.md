@@ -161,10 +161,13 @@ Reviewed with the owner; in progress. Continues the DigitalOcean-parity push for
    as a branded email to the VM owner + the admin webhook, evaluated on the existing 5-minute
    sampling tick (no extra Proxmox calls). Managed from an **Alerts** card on the VM Settings tab.
    _Done._
-2. **Rescue mode** — one-click boot from an admin-designated rescue ISO with an
-   "exit rescue" that restores the original boot order (QEMU).
-3. **Reset guest password** — via the guest agent's dedicated `set-user-password` call
-   (QEMU + agent), for locked-out users on key-only cloud images.
+2. **Rescue mode** ✅ — one-click boot from an admin-designated rescue ISO (`POST
+   /api/vms/:id/rescue`), snapshotting the boot config so **exit rescue** restores it; the disk
+   stays attached for repair via the console. Admin picks the rescue ISO in Settings. QEMU-only.
+   _Done._
+3. **Reset guest password** ✅ — via the guest agent's dedicated `set-user-password` call
+   (`POST /api/vms/:id/reset-password`; QEMU + agent), for locked-out users on key-only cloud
+   images. CSPRNG password shown once, never stored. _Done._
 4. **Duplicate VM** ✅ — self-service full clone of your own **stopped** VM (`POST
    /api/vms/:id/duplicate`): quota-checked against the owner's caps, isolation firewall
    re-applied before first boot, from the VM's Actions menu. QEMU-only. _Done._
