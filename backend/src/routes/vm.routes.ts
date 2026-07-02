@@ -65,6 +65,7 @@ import {
 } from '../services/vm.service.js';
 import { getLiveStats } from '../services/live-stats.service.js';
 import { getConfig } from '../services/config.service.js';
+import { ALERT_METRICS } from '../services/alert.service.js';
 import type { RebuildSource } from '../services/vm.service.js';
 import type { AuthRequest } from '../types/index.js';
 
@@ -858,6 +859,64 @@ router.post('/:id/rescue/exit', async (req: Request, res: Response) => {
     const msg = pveMessage(err);
     res.status(/Not in rescue/.test(msg) ? 409 : 502).json({ error: msg });
   }
+});
+
+// ─── Per-VM alert rules ───────────────────────────────────────
+// Tenant-owned thresholds on a VM (CPU/memory/disk %, or an unexpected stop).
+// Evaluated on the resource-history scheduler tick; delivery emails the owner.
+
+const AlertSchema = z.object({
+  metric: z.enum(ALERT_METRICS),
+  // Percent threshold (ignored server-side for "down").
+  threshold: z.number().int().min(1).max(100).optional(),
+  sustainedMin: z.number().int().min(1).max(1440).default(5),
+});
+
+router.get('/:id/alerts', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getViewableVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  const rules = await prisma.alertRule.findMany({
+    where: { vmId: vm.id },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, metric: true, threshold: true, sustainedMin: true, enabled: true, lastFiredAt: true },
+  });
+  res.json(rules);
+});
+
+router.post('/:id/alerts', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getWritableVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  const parsed = AlertSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  const { metric, sustainedMin } = parsed.data;
+  // "down" has no threshold; the others require one.
+  const threshold = metric === 'down' ? 0 : parsed.data.threshold;
+  if (metric !== 'down' && threshold === undefined) {
+    res.status(400).json({ error: 'A threshold percentage is required for this metric.' });
+    return;
+  }
+  const rule = await prisma.alertRule.create({
+    data: { vmId: vm.id, userId: vm.userId, metric, threshold: threshold ?? 0, sustainedMin },
+    select: { id: true, metric: true, threshold: true, sustainedMin: true, enabled: true, lastFiredAt: true },
+  });
+  await recordAudit({ action: 'vm.alert_add', actor: user, targetType: 'vm', targetId: vm.id, detail: `${vm.name} · ${metric}`, req });
+  res.status(201).json(rule);
+});
+
+router.delete('/:id/alerts/:alertId', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getWritableVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  // Scope the delete to this VM so a rule id from another VM can't be removed.
+  const { count } = await prisma.alertRule.deleteMany({ where: { id: req.params['alertId'] as string, vmId: vm.id } });
+  if (count === 0) { res.status(404).json({ error: 'Alert not found' }); return; }
+  await recordAudit({ action: 'vm.alert_remove', actor: user, targetType: 'vm', targetId: vm.id, detail: vm.name, req });
+  res.json({ success: true });
 });
 
 // ─── GET /api/vms/:id/live-stats ──────────────────────────────

@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { runScheduledBackups, runDueBackups } from './matestate.service.js';
 import { runDuePowerActions, previousCronOccurrence } from './power-schedule.service.js';
 import { sampleResourceUsage, pruneResourceSamples } from './resource-history.service.js';
+import { evaluateAlerts } from './alert.service.js';
 import { runAutoBalance } from './cluster-balancer.service.js';
 import { getConfig, setConfig } from './config.service.js';
 
@@ -145,6 +146,9 @@ export function startScheduler(): void {
       const { sampled } = await sampleResourceUsage();
       const pruned = await pruneResourceSamples();
       if (sampled || pruned) console.log(`[scheduler] resource history: +${sampled} samples, -${pruned} pruned`);
+      // Evaluate per-VM tenant alerts on the same cadence (reuses the live sample).
+      const { fired } = await evaluateAlerts();
+      if (fired) console.log(`[scheduler] alerts: ${fired} fired`);
     } catch (err) {
       console.error('[scheduler] resource-history tick failed:', err);
     } finally {
@@ -152,7 +156,7 @@ export function startScheduler(): void {
     }
   });
 
-  console.log('[scheduler] per-tenant resource history active (5-min sampling)');
+  console.log('[scheduler] per-tenant resource history + alerts active (5-min sampling)');
 
   // Cluster Balancer: when auto mode is enabled, even out node memory load by
   // live-migrating guests. A no-op (and cheap) while the mode is off/recommend.
