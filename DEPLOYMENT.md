@@ -391,8 +391,8 @@ touch power controls.
 
 - **Enter from the app:** **Admin ▸ Monitor ▸ "Kiosk mode"**. The tap requests browser
   fullscreen (a user gesture is required) and routes to the chromeless kiosk.
-- **Exit:** the **✕** in the top-right corner returns to the dashboard; the **⛶** button toggles
-  fullscreen.
+- **Exit:** the **X (close)** button in the top-right corner returns to the dashboard; the
+  **fullscreen toggle** button switches full-screen on and off.
 - **Admin-only:** the kiosk shows cluster-wide data, so it's gated to admins (and the underlying
   `/api/admin/*` feeds are admin-gated server-side).
 - It keeps the panel awake via the **Screen Wake Lock API** and hides the cursor for a true
@@ -401,7 +401,7 @@ touch power controls.
 ```mermaid
 flowchart LR
   M["Admin ▸ Monitor<br/>'Kiosk mode' button"] -->|requestFullscreen + route| K["/kiosk<br/>(chromeless, admin-only)"]
-  K -->|"✕ exit"| M
+  K -->|"exit"| M
   P["Pi boots Chromium<br/>--kiosk https://HOST/kiosk"] --> K
 ```
 

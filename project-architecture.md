@@ -573,9 +573,9 @@ NEXT_PUBLIC_API_URL=http://localhost:4000/api
 | Cross-tenant access (app layer) | Every VM/console action is authorized via `getOwnedVm`; quotas enforced per user |
 | Proxmox credentials in client | Proxmox API token **never** leaves the Express backend; stored AES-256-GCM encrypted |
 | VM-create param injection | `name`, `os`, and `node` strictly validated (no comma/path injection into Proxmox config) |
-| Invite token brute-force | Tokens are 32-byte crypto-random, single-use (atomic claim), with expiry. ⚠️ App-level rate limiting is **not** built in — add it at the reverse proxy |
+| Invite token brute-force | Tokens are 32-byte crypto-random, single-use (atomic claim), with expiry. App-level rate limiting is **not** built in — add it at the reverse proxy |
 | Account enumeration | Login runs bcrypt even for unknown emails (constant-time-ish) |
-| JWT theft | 24h JWTs with random `jti`; backed by a `Session` row for server-side revocation. ⚠️ Token is stored in **localStorage** (not httpOnly cookies) — XSS-readable; mitigate via strict CSP and consider a cookie-based session for hardening |
+| JWT theft | 24h JWTs with random `jti`; backed by a `Session` row for server-side revocation. Token is stored in **localStorage** (not httpOnly cookies) — XSS-readable; mitigate via strict CSP and consider a cookie-based session for hardening |
 | NoVNC hijacking | WebSocket upgrade requires valid JWT; VM ownership verified before proxy starts; one-time VNC tickets |
 | SQL injection | Prisma parameterized queries; Zod input validation |
 | XSS | React/Next.js built-in escaping; add a Content-Security-Policy at the proxy (Helmet is enabled but CSP is not configured) |

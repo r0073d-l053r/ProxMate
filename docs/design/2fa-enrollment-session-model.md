@@ -1,6 +1,6 @@
 # Design proposal: no session until post-2FA login (enrollment-token model)
 
-**Status:** ✅ implemented on `fix/mobile-invite-2fa-onboarding` (2026-06-25) — all decisions in §7 shipped as written. Pending: live single-phone walk-through on the deployment.
+**Status:** implemented on `fix/mobile-invite-2fa-onboarding` (2026-06-25) — all decisions in §7 shipped as written. Pending: live single-phone walk-through on the deployment.
 **Author:** Claude (Opus) for r0073d-l053r
 **Date:** 2026-06-25
 **Scope:** backend auth core (`register`, `login`, 2FA/passkey enrollment) + the registration/onboarding frontend. No schema change.
