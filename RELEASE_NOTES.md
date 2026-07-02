@@ -1,45 +1,76 @@
 ## ✨ Highlights
 
-**Your VM's Tailscale IP is now one click away.** When Tailscale is running inside a
-VM or container, its tailnet address shows up right on the machine's page — copy it and
-SSH in from any device on your tailnet, no hunting through `tailscale status`.
+**A big one.** v0.5.0 is a feature-packed release focused on the tenant experience — a
+DigitalOcean-style console workflow, self-service recovery and cloning, proactive
+monitoring alerts, always-fresh cloud images, and downloadable backups. Six new
+capabilities, all reachable from a machine's page.
 
-### 🔗 Tailscale IP on the VM page
+### 🖥️ A better console
 
-- A new **Tailscale IP** row appears under **Connection details** on a machine's
-  Overview tab, right below its LAN IP, with a one-click copy button — but only when
-  Tailscale is actually running inside the guest.
-- Detected automatically from the same network info ProxMate already reads (the QEMU
-  guest agent for VMs, Proxmox's container introspection for LXC) — nothing to configure
-  beyond installing Tailscale in your machine. It's recognized by the `tailscale`
-  interface or by Tailscale's address range (100.64.0.0/10), and clears itself if
-  Tailscale stops.
-- Works for both full VMs and LXC containers, and it's exposed on the public REST API
-  (`tailscaleIp`) too.
+- **Power actions on the console page** — an **Actions** menu (Start / Pause / Resume /
+  Restart / Shut down / Force stop) so you can manage a machine without leaving its
+  terminal. Pause/Resume use QEMU suspend, so resuming is instant.
+- **Pop-out text console** — open the terminal in its own window, and with **"Keep on top"**
+  (on Chrome/Edge) float it above everything else while you work — VMware/DigitalOcean style,
+  with real copy/paste.
+- **Live Insights** — a machine's metrics view now has a **Live** mode that updates **every
+  second** with the chart zoomed to the actual activity, so a quiet VM no longer looks flat.
+  Day and Week keep the historical view.
 
-### 🐛 Fix: Tailscale no longer hijacks the "IP address" field
+### 🛟 Self-service recovery & cloning
 
-Previously, if a machine's Tailscale interface happened to be listed first, its `100.x`
-address could show up as the machine's main **IP address** instead of its real LAN IP.
-Tailscale addresses are now kept in their own field and can never shadow the LAN IP.
+- **Reset guest password** — locked out of a key-only cloud image? Set a new password for a
+  user inside the machine (via the guest agent) and it's shown to you once. On the Settings tab.
+- **Rescue mode** — one click boots a broken VM from an admin-designated rescue ISO with your
+  disk still attached; **Exit rescue** restores the original boot order. (Admins pick the rescue
+  ISO under Admin → Settings.)
+- **Duplicate a VM** — clone your own stopped VM into a brand-new one from the Actions menu:
+  same size, disk, and tags, quota-checked, and firewalled before first boot.
 
-### 📸 Refreshed README screenshots
+### 🔔 Monitoring alerts
 
-Every screenshot in the project README (except the console shot) was recaptured against
-the current UI — the dashboard, live monitor, Template Store, create-a-VM wizard, and
-setup wizard now reflect how ProxMate actually looks today.
+- **Per-VM resource alerts** — set thresholds on a machine (**CPU %, memory %, disk full, or an
+  unexpected stop**) with a "for N minutes" window, and get a branded email (and your admin's
+  webhook) when one trips. Managed from an **Alerts** card on the Settings tab; checked on the
+  existing sampling cycle so it adds no load.
+
+### ♻️ Fresher images & downloadable backups
+
+- **Cloud-image freshness** — admins can **Refresh** a cloud-image template (or enable a **monthly
+  auto-refresh**) to rebuild it from the latest upstream image, so new deploys always start from a
+  patched base. Existing VMs are untouched.
+- **Backup downloads** — when the admin mounts the backup share, tenants get a **Download** button
+  on each backup that emails them a **single-use, one-hour link**. (See upgrade notes.)
+
+### ✨ Polish
+
+- **OS logos** next to the operating system on the VM list, the machine header, and its
+  configuration.
+- **Safer deletes** — deleting a machine now requires typing its exact name and reminds you to grab
+  a backup first.
+- Removed the redundant "Live" badge from the machine header.
 
 ## 🔄 Upgrade notes
 
-- **One small database migration** (`add_tailscale_ip`), applied automatically when the
-  API container starts — no manual step. No new environment variables, no breaking
-  changes.
+- **Four database migrations** (`add_rescue_state`, `add_alert_rules`, `add_template_source`,
+  `add_download_token`) apply **automatically** when the API container starts — no manual step.
+- **No breaking changes.** New **optional** settings:
+  - `BACKUP_DOWNLOAD_DIR` — mount your backup share into the API container and point this at it to
+    turn on **tenant backup downloads** (requires SMTP). Left unset, the feature stays hidden. See
+    [DEPLOYMENT.md](./DEPLOYMENT.md).
+  - `TEMPLATE_REFRESH_CRON` (default: 1st of the month) and the **Admin → Settings** toggle control
+    the monthly cloud-image auto-refresh; `ALERT_COOLDOWN_MIN` tunes alert re-fire spacing.
 - Standard update: **Admin → Settings → Updates → Install update**, or pull + rebuild
   (`docker compose up -d --build`).
 
 ## 🧪 Verification
 
-- Backend: typecheck + full Vitest suite green (**331 tests**, +9 for Tailscale-IP
-  detection across both guest kinds and the LAN-IP shadow regression). Frontend:
-  typecheck, lint, and production build green; the new row was verified in-browser
-  against a guest advertising a Tailscale interface.
+- Backend: typecheck + full Vitest suite green (**372 tests**, +58 across the six features —
+  including the alert sustain/cooldown state machine, rescue boot-config snapshot/restore, and the
+  path-traversal-hardened backup-download resolver). Frontend: typecheck, lint, and production build
+  green; every feature was verified in-browser against a mock cluster, and the public backup-download
+  route was exercised end-to-end (stream once, then single-use 404) on a live server.
+- A modulo-bias weakness in the new password generator was caught by CodeQL and fixed (unbiased
+  `crypto.randomInt`) with a regression test.
+- Live-cluster paths (rescue, password reset, duplicate, real image refresh, mounted-share download)
+  are best verified on real hardware after upgrading.
