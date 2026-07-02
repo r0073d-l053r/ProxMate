@@ -3,6 +3,7 @@ import { runScheduledBackups, runDueBackups } from './matestate.service.js';
 import { runDuePowerActions, previousCronOccurrence } from './power-schedule.service.js';
 import { sampleResourceUsage, pruneResourceSamples } from './resource-history.service.js';
 import { evaluateAlerts } from './alert.service.js';
+import { refreshAllTemplates } from './template.service.js';
 import { runAutoBalance } from './cluster-balancer.service.js';
 import { getConfig, setConfig } from './config.service.js';
 
@@ -21,14 +22,17 @@ let powerTask: ReturnType<typeof cron.schedule> | null = null;
 let backupTask: ReturnType<typeof cron.schedule> | null = null;
 let historyTask: ReturnType<typeof cron.schedule> | null = null;
 let balancerTask: ReturnType<typeof cron.schedule> | null = null;
+let templateTask: ReturnType<typeof cron.schedule> | null = null;
 let running = false;
 let powerRunning = false;
 let backupRunning = false;
 let historyRunning = false;
 let balancerRunning = false;
+let templateRunning = false;
 
 const DEFAULT_SCHEDULE = '0 3 * * 0'; // Sun 03:00
 const DEFAULT_BALANCER_SCHEDULE = '*/15 * * * *'; // every 15 min (auto mode only)
+const DEFAULT_TEMPLATE_SCHEDULE = '0 4 1 * *'; // 1st of the month, 04:00 (when enabled)
 
 /** The effective weekly schedule (env override, validated, else the default). */
 function resolveSchedule(): string {
@@ -177,4 +181,26 @@ export function startScheduler(): void {
   });
 
   console.log(`[scheduler] cluster balancer active (${balancerExpr}, auto mode only)`);
+
+  // Cloud-image freshness: monthly, rebuild every refreshable template so new
+  // deploys start from a patched base. Off unless the admin enables it
+  // (`template_refresh_enabled`); the tick itself is a no-op while disabled.
+  const templateExpr = process.env['TEMPLATE_REFRESH_CRON'] && cron.validate(process.env['TEMPLATE_REFRESH_CRON'])
+    ? process.env['TEMPLATE_REFRESH_CRON']
+    : DEFAULT_TEMPLATE_SCHEDULE;
+  templateTask = cron.schedule(templateExpr, async () => {
+    if (templateRunning) return;
+    if ((await getConfig('template_refresh_enabled')) !== 'true') return;
+    templateRunning = true;
+    try {
+      const { refreshed, failed } = await refreshAllTemplates();
+      if (refreshed || failed) console.log(`[scheduler] template refresh: ${refreshed} ok, ${failed} failed`);
+    } catch (err) {
+      console.error('[scheduler] template-refresh tick failed:', err);
+    } finally {
+      templateRunning = false;
+    }
+  });
+
+  console.log(`[scheduler] cloud-image refresh scheduled (${templateExpr}, when enabled)`);
 }

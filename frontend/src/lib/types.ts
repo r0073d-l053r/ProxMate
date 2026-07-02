@@ -456,6 +456,10 @@ export interface Template {
   cloudInit: boolean;
   icon: string | null;
   published: boolean;
+  /** Cloud image URL it was built from (set for importer-built templates). */
+  sourceUrl: string | null;
+  /** Last successful refresh, or null if never refreshed. */
+  refreshedAt: string | null;
   createdAt: string;
 }
 
