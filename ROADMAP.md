@@ -156,9 +156,11 @@ Reviewed with the owner; in progress. Continues the DigitalOcean-parity push for
 
 **Feature slate (planned):**
 
-1. **Per-VM resource alerts** — tenant-set thresholds (CPU %, memory %, disk-full via the
-   guest agent, unexpected stop) delivered as branded email/webhook, evaluated on the
-   existing 5-minute sampling tick.
+1. **Per-VM resource alerts** ✅ — tenant-set thresholds (CPU %, memory %, disk-full via the
+   guest agent, unexpected stop) with a sustained-duration + cooldown state machine, delivered
+   as a branded email to the VM owner + the admin webhook, evaluated on the existing 5-minute
+   sampling tick (no extra Proxmox calls). Managed from an **Alerts** card on the VM Settings tab.
+   _Done._
 2. **Rescue mode** — one-click boot from an admin-designated rescue ISO with an
    "exit rescue" that restores the original boot order (QEMU).
 3. **Reset guest password** — via the guest agent's dedicated `set-user-password` call
