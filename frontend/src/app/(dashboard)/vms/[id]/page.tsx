@@ -52,6 +52,7 @@ import { BackupPolicyPanel } from "@/components/vm/backup-policy-panel";
 import { SharePanel } from "@/components/vm/share-panel";
 import { DisksPanel } from "@/components/vm/disks-panel";
 import { PassthroughPanel } from "@/components/vm/passthrough-panel";
+import { RecoveryPanel } from "@/components/vm/recovery-panel";
 import { useAuthStore } from "@/lib/auth-store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -507,6 +508,22 @@ export default function VmDetailPage() {
         </Card>
       )}
 
+      {vm.rescueBoot && (
+        <Card className="mb-6 border-amber-500/40 bg-amber-500/5">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm text-muted-foreground">
+            <span>
+              <span className="font-medium text-foreground">Rescue mode</span> — this machine is booted
+              from the rescue ISO. Repair it via the console, then exit rescue to boot from disk again.
+            </span>
+            {canWrite && (
+              <Button variant="outline" size="sm" onClick={() => setTab("settings")}>
+                Manage in Settings
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <Tabs value={activeTab} onValueChange={(v) => setTab(v as TabValue)}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -773,6 +790,8 @@ export default function VmDetailPage() {
                 onChanged={load}
               />
             )}
+
+            {!isLxc && <RecoveryPanel vm={vm} busy={busy} onChanged={load} />}
 
             {isManager && <SharePanel vmId={vm.id} />}
 

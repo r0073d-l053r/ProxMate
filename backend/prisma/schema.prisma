@@ -168,6 +168,10 @@ model VirtualMachine {
   // LAN IP stays accurate. Cleared when Tailscale stops advertising.
   tailscaleIp   String?
 
+  // Non-null while the VM is booted into rescue mode: a JSON snapshot of the
+  // pre-rescue { boot, ide3 } config lines, restored on "exit rescue".
+  rescueBoot    String?
+
   // Optional user labels for grouping/filtering (lowercase, comma-separated).
   tags          String?
 
