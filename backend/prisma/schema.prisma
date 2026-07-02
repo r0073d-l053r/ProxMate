@@ -163,6 +163,11 @@ model VirtualMachine {
   status        String    @default("creating") // creating | running | stopped | error
   ipAddress     String?
 
+  // The guest's Tailscale address (100.64.0.0/10), when Tailscale runs inside it —
+  // read from the same interface listing as ipAddress and kept separate so the
+  // LAN IP stays accurate. Cleared when Tailscale stops advertising.
+  tailscaleIp   String?
+
   // Optional user labels for grouping/filtering (lowercase, comma-separated).
   tags          String?
 

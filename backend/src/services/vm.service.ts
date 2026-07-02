@@ -780,10 +780,13 @@ export async function getVmWithLiveStatus(
 }
 
 /**
- * Best-effort refresh of guest IPs via the QEMU guest agent, caching each result
- * on `VirtualMachine.ipAddress`. Only running VMs are queried (the agent is
- * unreachable otherwise) and failures are swallowed — a missing agent never
- * breaks the list, it just leaves the IP blank. Mutates + returns the same array.
+ * Best-effort refresh of guest IPs via the QEMU guest agent, caching the results
+ * on `VirtualMachine.ipAddress` / `.tailscaleIp`. Only running VMs are queried
+ * (the agent is unreachable otherwise) and failures are swallowed — a missing
+ * agent never breaks the list, it just leaves the IP blank. The LAN IP is sticky
+ * (never cleared, so a brief agent hiccup keeps the last known address); the
+ * Tailscale IP is cleared when it stops being advertised, since a stale tailnet
+ * address is misleading. Mutates + returns the same array.
  */
 export async function refreshVmIps<T extends VirtualMachine>(vms: T[]): Promise<T[]> {
   const running = vms.filter((v) => v.status === 'running');
@@ -791,15 +794,26 @@ export async function refreshVmIps<T extends VirtualMachine>(vms: T[]): Promise<
   const client = await pve.getClient();
   await Promise.all(
     running.map(async (vm) => {
-      // LXC has no guest agent — Proxmox reads the container's IP directly.
-      const ip =
+      // LXC has no guest agent — Proxmox reads the container's IPs directly.
+      const { ip, tailscaleIp } =
         kindOf(vm) === 'lxc'
-          ? await pve.getLxcIpAddress(vm.proxmoxNode, vm.proxmoxVmId, client)
-          : await pve.getVmIpAddress(vm.proxmoxNode, vm.proxmoxVmId, client);
+          ? await pve.getLxcIps(vm.proxmoxNode, vm.proxmoxVmId, client)
+          : await pve.getVmIps(vm.proxmoxNode, vm.proxmoxVmId, client);
+      const data: { ipAddress?: string; tailscaleIp?: string | null } = {};
       if (ip && ip !== vm.ipAddress) {
         vm.ipAddress = ip;
+        data.ipAddress = ip;
+      }
+      // Only meaningful when the interface listing was readable at all — a null
+      // ip AND null tailscaleIp usually means the agent was unreachable, so we
+      // leave the cached tailnet address alone rather than flap it.
+      if ((ip || tailscaleIp) && tailscaleIp !== vm.tailscaleIp) {
+        vm.tailscaleIp = tailscaleIp;
+        data.tailscaleIp = tailscaleIp;
+      }
+      if (Object.keys(data).length > 0) {
         await prisma.virtualMachine
-          .update({ where: { id: vm.id }, data: { ipAddress: ip } })
+          .update({ where: { id: vm.id }, data })
           .catch(() => undefined);
       }
     }),
