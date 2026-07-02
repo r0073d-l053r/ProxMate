@@ -66,6 +66,8 @@ export interface VirtualMachine {
   os: string;
   status: VmStatus;
   ipAddress: string | null;
+  /** The guest's Tailscale (100.x) address, when Tailscale runs inside it. */
+  tailscaleIp: string | null;
   tags: string | null;
   createdAt: string;
   updatedAt: string;

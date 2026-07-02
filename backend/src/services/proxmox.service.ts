@@ -620,26 +620,54 @@ export async function getTemplateNodes(volid: string, client?: AxiosInstance): P
   return result;
 }
 
+/** Both addresses we surface for a guest: the LAN IP and (if present) Tailscale's. */
+export interface GuestIps {
+  ip: string | null;
+  tailscaleIp: string | null;
+}
+
 /**
- * Best-effort LXC container IP (no guest agent needed — Proxmox reads it from the
- * container's network namespace). Returns the first non-loopback IPv4, or null.
+ * True for addresses in Tailscale's CGNAT range, 100.64.0.0/10 (second octet
+ * 64–127). Used to keep a guest's tailnet address out of the "IP address" field
+ * and surface it separately — otherwise a running Tailscale can shadow the LAN IP.
  */
-export async function getLxcIpAddress(node: string, vmid: number, client?: AxiosInstance): Promise<string | null> {
+export function isTailscaleIp(ip: string): boolean {
+  const m = ip.match(/^100\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/);
+  if (!m) return false;
+  const second = Number(m[1]);
+  return second >= 64 && second <= 127;
+}
+
+const isTailscaleIface = (name?: string) => (name ?? '').toLowerCase().startsWith('tailscale');
+
+/**
+ * Best-effort LXC container IPs (no guest agent needed — Proxmox reads them from
+ * the container's network namespace). Returns the first non-loopback IPv4 as the
+ * LAN address, plus the Tailscale address (by interface name or CGNAT range).
+ */
+export async function getLxcIps(node: string, vmid: number, client?: AxiosInstance): Promise<GuestIps> {
   const c = client ?? (await getClient());
   try {
     const res = await c.get<{ data: Array<{ name?: string; inet?: string }> }>(
       `/nodes/${node}/lxc/${vmid}/interfaces`,
       { timeout: 2000 },
     );
+    let lan: string | null = null;
+    let ts: string | null = null;
     for (const iface of res.data.data ?? []) {
       if (iface.name === 'lo') continue;
       // `inet` is a CIDR like "192.168.50.40/24"; strip the prefix.
       const ip = iface.inet?.split('/')[0];
-      if (ip && !ip.startsWith('127.')) return ip;
+      if (!ip || ip.startsWith('127.')) continue;
+      if (isTailscaleIface(iface.name) || isTailscaleIp(ip)) {
+        if (!ts) ts = ip;
+      } else if (!lan) {
+        lan = ip;
+      }
     }
-    return null;
+    return { ip: lan, tailscaleIp: ts };
   } catch {
-    return null; // container stopped, or interfaces unavailable
+    return { ip: null, tailscaleIp: null }; // container stopped, or interfaces unavailable
   }
 }
 
@@ -1727,16 +1755,18 @@ interface AgentNetworkInterface {
 }
 
 /**
- * Best-effort guest IP via the QEMU guest agent. Returns the first non-loopback
- * IPv4 (preferred) or global IPv6, or null when the agent isn't installed/running
+ * Best-effort guest IPs via the QEMU guest agent. The LAN address is the first
+ * non-loopback IPv4 (preferred) or global IPv6; a Tailscale address (interface
+ * named tailscale* or an IPv4 in 100.64.0.0/10) is reported separately so it
+ * never shadows the LAN IP. Null fields when the agent isn't installed/running
  * (VM off, or the guest has no `qemu-guest-agent` daemon). Fail-fast (short
  * timeout) so it never hangs a VM list.
  */
-export async function getVmIpAddress(
+export async function getVmIps(
   node: string,
   vmid: number,
   client?: AxiosInstance,
-): Promise<string | null> {
+): Promise<GuestIps> {
   const c = client ?? (await getClient());
   try {
     const res = await c.get<{ data: { result?: AgentNetworkInterface[] } }>(
@@ -1745,17 +1775,26 @@ export async function getVmIpAddress(
     );
     let v4: string | null = null;
     let v6: string | null = null;
+    let ts: string | null = null;
     for (const iface of res.data.data?.result ?? []) {
       if (iface.name === 'lo') continue;
+      const tsIface = isTailscaleIface(iface.name);
       for (const addr of iface['ip-addresses'] ?? []) {
         const ip = addr['ip-address'];
         if (!ip) continue;
-        if (addr['ip-address-type'] === 'ipv4' && !v4 && !ip.startsWith('127.')) v4 = ip;
-        else if (addr['ip-address-type'] === 'ipv6' && !v6 && !ip.startsWith('::1') && !ip.toLowerCase().startsWith('fe80')) v6 = ip;
+        if (addr['ip-address-type'] === 'ipv4' && !ip.startsWith('127.')) {
+          if (tsIface || isTailscaleIp(ip)) {
+            if (!ts) ts = ip;
+          } else if (!v4) {
+            v4 = ip;
+          }
+        } else if (addr['ip-address-type'] === 'ipv6' && !tsIface && !v6 && !ip.startsWith('::1') && !ip.toLowerCase().startsWith('fe80')) {
+          v6 = ip;
+        }
       }
     }
-    return v4 ?? v6;
+    return { ip: v4 ?? v6, tailscaleIp: ts };
   } catch {
-    return null; // agent absent/not running, or VM stopped
+    return { ip: null, tailscaleIp: null }; // agent absent/not running, or VM stopped
   }
 }

@@ -30,6 +30,7 @@ import {
   Terminal,
   Trash2,
 } from "lucide-react";
+import { SiTailscale } from "react-icons/si";
 import { api, apiError } from "@/lib/api";
 import type { VmDetail } from "@/lib/types";
 import { copyText } from "@/lib/clipboard";
@@ -289,10 +290,9 @@ export default function VmDetailPage() {
     }
   }
 
-  async function onCopyIp() {
-    if (!vm?.ipAddress) return;
-    const ok = await copyText(vm.ipAddress);
-    if (ok) toast.success("IP address copied.");
+  async function onCopy(label: string, value: string) {
+    const ok = await copyText(value);
+    if (ok) toast.success(`${label} copied.`);
     else toast.error("Couldn't copy — select the address and copy manually.");
   }
 
@@ -570,7 +570,7 @@ export default function VmDetailPage() {
                         <Button
                           variant="ghost"
                           size="icon-xs"
-                          onClick={onCopyIp}
+                          onClick={() => onCopy("IP address", vm.ipAddress!)}
                           title="Copy IP address"
                           aria-label="Copy IP address"
                         >
@@ -579,6 +579,29 @@ export default function VmDetailPage() {
                       )}
                     </span>
                   </div>
+                  {vm.tailscaleIp && (
+                    <div className="flex items-center justify-between gap-4 py-2.5 text-sm">
+                      <span
+                        className="flex items-center gap-2 text-muted-foreground"
+                        title="Tailscale is running inside this machine — reach it at this address from any device on your tailnet."
+                      >
+                        <SiTailscale className="size-4" />
+                        Tailscale IP
+                      </span>
+                      <span className="flex items-center gap-1 font-medium">
+                        {vm.tailscaleIp}
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={() => onCopy("Tailscale IP", vm.tailscaleIp!)}
+                          title="Copy Tailscale IP"
+                          aria-label="Copy Tailscale IP"
+                        >
+                          <Copy />
+                        </Button>
+                      </span>
+                    </div>
+                  )}
                   <DetailRow icon={Server} label="Node" value={vm.proxmoxNode} />
                   <DetailRow icon={Hash} label="VMID" value={vm.proxmoxVmId} />
                 </CardContent>
