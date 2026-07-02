@@ -1091,11 +1091,14 @@ export async function resumeVm(vm: VirtualMachine): Promise<void> {
 
 const PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
 
-/** A CSPRNG-generated, unambiguous (no 0/O/1/l/I) 20-char guest password. */
+/**
+ * A CSPRNG-generated, unambiguous (no 0/O/1/l/I) 20-char guest password.
+ * Uses `crypto.randomInt` for an *unbiased* index into the alphabet — plain
+ * `randomBytes % length` skews toward the first (256 % length) characters.
+ */
 export function generateGuestPassword(): string {
-  const bytes = crypto.randomBytes(20);
   let out = '';
-  for (const b of bytes) out += PASSWORD_ALPHABET[b % PASSWORD_ALPHABET.length];
+  for (let i = 0; i < 20; i++) out += PASSWORD_ALPHABET[crypto.randomInt(PASSWORD_ALPHABET.length)];
   return out;
 }
 

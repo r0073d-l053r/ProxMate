@@ -56,6 +56,23 @@ describe('generateGuestPassword', () => {
       expect(p).toMatch(/^[ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789]+$/);
     }
   });
+
+  it('draws from the alphabet without modulo bias (uniform-ish over a large sample)', () => {
+    // crypto.randomInt is unbiased; `randomBytes % 56` would skew the first 32
+    // chars ~14% high. Over 56k chars every symbol should be well within a
+    // generous band of the ~1000 expected — a plain-modulo regression would
+    // push the first bucket toward ~1140 and a late one toward ~875.
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    const counts = new Map<string, number>();
+    const N = 1000;
+    for (let i = 0; i < N; i++) for (const ch of generateGuestPassword()) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+    const expected = (N * 20) / alphabet.length; // ~357
+    for (const ch of alphabet) {
+      const c = counts.get(ch) ?? 0;
+      expect(c).toBeGreaterThan(expected * 0.7);
+      expect(c).toBeLessThan(expected * 1.3);
+    }
+  });
 });
 
 describe('resetGuestPassword', () => {
