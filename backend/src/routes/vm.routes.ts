@@ -67,6 +67,7 @@ import {
 import { getLiveStats } from '../services/live-stats.service.js';
 import { getConfig } from '../services/config.service.js';
 import { ALERT_METRICS } from '../services/alert.service.js';
+import { downloadsEnabled, requestBackupDownload, DownloadError } from '../services/download.service.js';
 import type { RebuildSource } from '../services/vm.service.js';
 import type { AuthRequest } from '../types/index.js';
 
@@ -1103,7 +1104,33 @@ router.get('/:id/matestates', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getViewableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
-  res.json(await listForVm(vm.id));
+  // `downloadable` tells the panel whether to show a Download button (needs the
+  // admin-mounted backup share + SMTP). Cheap boolean, computed once.
+  res.json({ downloadable: await downloadsEnabled(), items: await listForVm(vm.id) });
+});
+
+// Request a one-time emailed download link for a specific MateState. Requires
+// the backup share mounted (BACKUP_DOWNLOAD_DIR) + SMTP; the link is sent to the
+// requesting user's own email.
+router.post('/:id/matestates/:msid/download', async (req: Request, res: Response) => {
+  const authUser = (req as AuthRequest).user;
+  const vm = await getWritableVm(req.params['id'] as string, authUser);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  const user = await prisma.user.findUnique({ where: { id: authUser.id }, select: { id: true, email: true } });
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+
+  try {
+    const appUrl = (await getConfig('frontend_url')) ?? process.env['BACKEND_PUBLIC_URL'] ?? process.env['FRONTEND_URL'] ?? '';
+    const { emailedTo } = await requestBackupDownload(req.params['msid'] as string, vm.id, user, appUrl);
+    await recordAudit({
+      action: 'matestate.download', actor: authUser, targetType: 'matestate', targetId: req.params['msid'] as string,
+      detail: `download link for ${vm.name}`, req,
+    });
+    res.json({ emailed: true, to: emailedTo });
+  } catch (err) {
+    if (err instanceof DownloadError) { res.status(409).json({ error: err.message }); return; }
+    res.status(502).json({ error: pveMessage(err) });
+  }
 });
 
 router.post('/:id/matestates', async (req: Request, res: Response) => {
