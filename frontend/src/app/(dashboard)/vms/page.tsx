@@ -126,16 +126,19 @@ function VmTable({
   onTagClick?: (t: string) => void;
 }) {
   return (
-    <Table>
+    // Fixed layout + explicit column widths so every owner group's grid lines up
+    // top-to-bottom (an auto table sizes columns to its own content, so the
+    // boundaries drift between sections).
+    <Table className="table-fixed">
       <TableHeader>
         <TableRow>
           {selection && <TableHead className="w-8" />}
-          <TableHead>Name</TableHead>
-          <TableHead>Status</TableHead>
-          <TableHead>Resources</TableHead>
-          <TableHead>OS</TableHead>
-          <TableHead>IP address</TableHead>
-          <TableHead>Created</TableHead>
+          <TableHead className="w-[24%]">Name</TableHead>
+          <TableHead className="w-[11%]">Status</TableHead>
+          <TableHead className="w-[18%]">Resources</TableHead>
+          <TableHead className="w-[16%]">OS</TableHead>
+          <TableHead className="w-[14%]">IP address</TableHead>
+          <TableHead className="w-[17%]">Created</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -152,8 +155,12 @@ function VmTable({
                 />
               </TableCell>
             )}
-            <TableCell>
-              <Link href={`/vms/${vm.id}`} className="font-medium hover:underline">
+            <TableCell className="overflow-hidden">
+              <Link
+                href={`/vms/${vm.id}`}
+                className="font-medium hover:underline align-middle inline-block max-w-full truncate"
+                title={vm.name}
+              >
                 {vm.name}
               </Link>
               {vm.type === "lxc" && (
