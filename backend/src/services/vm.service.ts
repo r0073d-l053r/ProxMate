@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import type { User, VirtualMachine, Template } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { getConfig } from './config.service.js';
@@ -1084,4 +1085,88 @@ export async function resumeVm(vm: VirtualMachine): Promise<void> {
   const client = await pve.getClient();
   const currentVm = await syncVmNode(vm);
   await pve.resumeVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client);
+}
+
+// ─── Guest password reset ─────────────────────────────────────
+
+const PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+
+/** A CSPRNG-generated, unambiguous (no 0/O/1/l/I) 20-char guest password. */
+export function generateGuestPassword(): string {
+  const bytes = crypto.randomBytes(20);
+  let out = '';
+  for (const b of bytes) out += PASSWORD_ALPHABET[b % PASSWORD_ALPHABET.length];
+  return out;
+}
+
+/**
+ * Reset a user's password inside the guest via the QEMU guest agent (its
+ * dedicated set-user-password call — no shell involved). For tenants locked
+ * out of key-only cloud images. Returns the new password exactly once; it is
+ * never stored or logged. QEMU + running agent required.
+ */
+export async function resetGuestPassword(vm: VirtualMachine, username: string): Promise<string> {
+  if (kindOf(vm) === 'lxc') throw new Error('Password reset needs the QEMU guest agent — containers are not supported');
+  const client = await pve.getClient();
+  const currentVm = await syncVmNode(vm);
+  const password = generateGuestPassword();
+  await pve.setGuestUserPassword(currentVm.proxmoxNode, currentVm.proxmoxVmId, username, password, client);
+  return password;
+}
+
+// ─── Rescue mode ──────────────────────────────────────────────
+
+/**
+ * Boot a VM from the admin-designated rescue ISO. The current { boot, ide3 }
+ * config is snapshotted on `rescueBoot` first so {@link exitRescue} can put
+ * everything back. The VM is force-stopped if running (rescue exists for
+ * machines that won't boot or can't shut down cleanly), reconfigured, then
+ * started into the ISO.
+ */
+export async function enterRescue(vm: VirtualMachine): Promise<VirtualMachine> {
+  if (kindOf(vm) === 'lxc') throw new Error('Rescue mode is for VMs — containers share the host kernel');
+  if (vm.rescueBoot) throw new Error('Already in rescue mode');
+  const iso = await getConfig('rescue_iso');
+  if (!iso) throw new Error('No rescue ISO is configured — an admin can set one under Admin → Settings');
+
+  const client = await pve.getClient();
+  const current = await syncVmNode(vm);
+  const cfg = await pve.getVmConfig(current.proxmoxNode, current.proxmoxVmId, client);
+  const snap: pve.RescueSnapshot = { boot: cfg['boot'] ?? null, ide3: cfg['ide3'] ?? null };
+
+  const status = await pve.getVmStatus(current.proxmoxNode, current.proxmoxVmId, client).catch(() => null);
+  if (status?.status === 'running') {
+    const upid = await pve.stopVm(current.proxmoxNode, current.proxmoxVmId, client);
+    await pve.waitForTask(current.proxmoxNode, upid, client);
+  }
+
+  await pve.applyRescueConfig(current.proxmoxNode, current.proxmoxVmId, iso, client);
+  const updated = await prisma.virtualMachine.update({
+    where: { id: current.id },
+    data: { rescueBoot: JSON.stringify(snap), status: 'running' },
+  });
+  await pve.startVm(current.proxmoxNode, current.proxmoxVmId, client);
+  return updated;
+}
+
+/** Leave rescue mode: stop, restore the snapshotted boot config, boot from disk. */
+export async function exitRescue(vm: VirtualMachine): Promise<VirtualMachine> {
+  if (!vm.rescueBoot) throw new Error('Not in rescue mode');
+  const snap = JSON.parse(vm.rescueBoot) as pve.RescueSnapshot;
+
+  const client = await pve.getClient();
+  const current = await syncVmNode(vm);
+  const status = await pve.getVmStatus(current.proxmoxNode, current.proxmoxVmId, client).catch(() => null);
+  if (status?.status === 'running') {
+    const upid = await pve.stopVm(current.proxmoxNode, current.proxmoxVmId, client);
+    await pve.waitForTask(current.proxmoxNode, upid, client);
+  }
+
+  await pve.restoreBootConfig(current.proxmoxNode, current.proxmoxVmId, snap, client);
+  const updated = await prisma.virtualMachine.update({
+    where: { id: current.id },
+    data: { rescueBoot: null, status: 'running' },
+  });
+  await pve.startVm(current.proxmoxNode, current.proxmoxVmId, client);
+  return updated;
 }
