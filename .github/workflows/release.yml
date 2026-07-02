@@ -2,13 +2,16 @@ name: Release
 
 # Publishes a GitHub Release whenever a version tag is pushed, so ProxMate's
 # in-app "Check for updates" (which reads the latest published release) has a
-# "Latest" to find. Cutting a release is then just:
+# "Latest" to find. Cutting a release is:
 #
-#   1. bump "version" in backend/package.json (e.g. 0.2.0)
-#   2. git commit -am "release: v0.2.0"
-#   3. git tag v0.2.0 && git push origin main --tags
+#   1. bump "version" in backend/package.json AND frontend/package.json (e.g. 0.4.2)
+#   2. rewrite RELEASE_NOTES.md with curated, human-readable notes for this version
+#      (what changed, why it matters, upgrade notes) — it becomes the release body
+#   3. git commit -am "release: v0.4.2"
+#   4. git tag v0.4.2 && git push origin main --tags
 #
-# This workflow turns step 3 into a published release with auto-generated notes.
+# The release body = RELEASE_NOTES.md, with the auto-generated PR list appended
+# below it for traceability.
 
 on:
   push:
@@ -26,8 +29,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Guard: if a tag is ever pushed without curated notes, fall back to a
+      # stub so the release still publishes (with the auto-notes below it).
+      - name: Ensure release notes exist
+        run: |
+          if [ ! -f RELEASE_NOTES.md ]; then
+            echo "_No curated notes for this release — see the auto-generated changelog below._" > RELEASE_NOTES.md
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          body_path: RELEASE_NOTES.md
           generate_release_notes: true
           name: ${{ github.ref_name }}
