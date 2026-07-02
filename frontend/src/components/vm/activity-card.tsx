@@ -23,6 +23,7 @@ const ACTIVITY_META: Record<string, { label: string; dot: string }> = {
   "vm.rescue_exit": { label: "Left rescue mode", dot: "bg-emerald-500" },
   "vm.alert_add": { label: "Alert added", dot: "bg-muted-foreground" },
   "vm.alert_remove": { label: "Alert removed", dot: "bg-muted-foreground" },
+  "vm.duplicate": { label: "Duplicated", dot: "bg-emerald-500" },
   "vm.update": { label: "Notes updated", dot: "bg-muted-foreground" },
   "vm.resize": { label: "Resized", dot: "bg-sky-500" },
   "vm.rebuild": { label: "Rebuilt", dot: "bg-amber-500" },
