@@ -12,6 +12,10 @@ name: Release
 #
 # The release body = RELEASE_NOTES.md, with the auto-generated PR list appended
 # below it for traceability.
+#
+# Note: the in-app updater (Admin -> Settings -> Updates) renders the release
+# body as PLAIN TEXT, so keep RELEASE_NOTES.md free of HTML (comments included);
+# the publish step below strips HTML comments as a safety net.
 
 on:
   push:
@@ -31,11 +35,14 @@ jobs:
 
       # Guard: if a tag is ever pushed without curated notes, fall back to a
       # stub so the release still publishes (with the auto-notes below it).
-      - name: Ensure release notes exist
+      # Also strip HTML comments — the in-app updater shows the body as plain
+      # text, so an instructional <!-- --> block would be visible to admins.
+      - name: Prepare release notes
         run: |
           if [ ! -f RELEASE_NOTES.md ]; then
             echo "_No curated notes for this release — see the auto-generated changelog below._" > RELEASE_NOTES.md
           fi
+          perl -0777 -pi -e 's/<!--.*?-->\s*//gs' RELEASE_NOTES.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
