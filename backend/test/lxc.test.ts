@@ -8,7 +8,7 @@ import {
   createLxc,
   listLxcTemplates,
   getTemplateNodes,
-  getLxcIpAddress,
+  getLxcIps,
   configureVmIsolation,
   restoreBackup,
   startVm,
@@ -130,20 +130,46 @@ describe('getTemplateNodes', () => {
   });
 });
 
-describe('getLxcIpAddress', () => {
-  it('returns the first non-loopback IPv4, stripping the CIDR prefix', async () => {
+describe('getLxcIps', () => {
+  it('returns the first non-loopback IPv4 as the LAN IP, stripping the CIDR prefix', async () => {
     const c = fakeClient();
     c.get.mockResolvedValue({
       data: { data: [{ name: 'lo', inet: '127.0.0.1/8' }, { name: 'eth0', inet: '192.168.50.40/24' }] },
     });
-    expect(await getLxcIpAddress(NODE, VMID, asClient(c))).toBe('192.168.50.40');
+    expect(await getLxcIps(NODE, VMID, asClient(c))).toEqual({ ip: '192.168.50.40', tailscaleIp: null });
     expect(c.get.mock.calls[0]![0]).toBe(`/nodes/${NODE}/lxc/${VMID}/interfaces`);
   });
 
-  it('returns null when interfaces are unavailable (container stopped)', async () => {
+  it('reports a tailscale0 interface separately, never as the LAN IP', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue({
+      data: {
+        data: [
+          { name: 'lo', inet: '127.0.0.1/8' },
+          // Tailscale first in the listing — must not shadow the LAN address.
+          { name: 'tailscale0', inet: '100.101.102.103/32' },
+          { name: 'eth0', inet: '192.168.50.40/24' },
+        ],
+      },
+    });
+    expect(await getLxcIps(NODE, VMID, asClient(c))).toEqual({
+      ip: '192.168.50.40',
+      tailscaleIp: '100.101.102.103',
+    });
+  });
+
+  it('classifies a CGNAT-range address as Tailscale even under another interface name', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue({
+      data: { data: [{ name: 'ts0', inet: '100.64.0.9/32' }, { name: 'eth0', inet: '10.1.2.3/24' }] },
+    });
+    expect(await getLxcIps(NODE, VMID, asClient(c))).toEqual({ ip: '10.1.2.3', tailscaleIp: '100.64.0.9' });
+  });
+
+  it('returns nulls when interfaces are unavailable (container stopped)', async () => {
     const c = fakeClient();
     c.get.mockRejectedValue(new Error('not running'));
-    expect(await getLxcIpAddress(NODE, VMID, asClient(c))).toBeNull();
+    expect(await getLxcIps(NODE, VMID, asClient(c))).toEqual({ ip: null, tailscaleIp: null });
   });
 });
 

@@ -17,6 +17,11 @@ const vmSchema = {
     os: { type: 'string' },
     status: { type: 'string', enum: ['creating', 'running', 'stopped', 'error'] },
     ipAddress: { type: 'string', nullable: true },
+    tailscaleIp: {
+      type: 'string',
+      nullable: true,
+      description: "The guest's Tailscale (100.64.0.0/10) address, when Tailscale runs inside it",
+    },
     proxmoxNode: { type: 'string' },
     proxmoxVmId: { type: 'integer' },
   },
