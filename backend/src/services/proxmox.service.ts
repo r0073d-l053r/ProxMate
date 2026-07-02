@@ -1694,6 +1694,24 @@ export async function rebootVm(node: string, vmid: number, client?: AxiosInstanc
   return res.data.data;
 }
 
+/**
+ * Pause a running VM (QEMU suspend: execution freezes, RAM stays resident, the
+ * console shows the frozen frame). QEMU-only — LXC suspend is experimental in
+ * Proxmox and not exposed here.
+ */
+export async function suspendVm(node: string, vmid: number, client?: AxiosInstance): Promise<string> {
+  const c = client ?? (await getClient());
+  const res = await c.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/status/suspend`);
+  return res.data.data;
+}
+
+/** Resume a paused (suspended) VM. QEMU-only, the counterpart of {@link suspendVm}. */
+export async function resumeVm(node: string, vmid: number, client?: AxiosInstance): Promise<string> {
+  const c = client ?? (await getClient());
+  const res = await c.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/status/resume`);
+  return res.data.data;
+}
+
 export interface PveVmStatus {
   status: string; // running | stopped
   qmpstatus?: string;
