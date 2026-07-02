@@ -84,7 +84,7 @@ import {
 type Transition = "starting" | "stopping" | "restarting" | null;
 
 /** Which of the page's modal dialogs is open (all driven from the Actions menu). */
-type ActiveDialog = "rename" | "resize" | "rebuild" | "convert" | "migrate" | "delete" | null;
+type ActiveDialog = "rename" | "resize" | "rebuild" | "convert" | "migrate" | "duplicate" | "delete" | null;
 
 /** DigitalOcean-style top-level sections of the detail page. */
 const TAB_VALUES = ["overview", "insights", "backups", "activity", "settings"] as const;
@@ -147,6 +147,7 @@ export default function VmDetailPage() {
   const [elapsed, setElapsed] = useState(0);
   const [tplName, setTplName] = useState("");
   const [newName, setNewName] = useState("");
+  const [dupName, setDupName] = useState("");
   // Typed-name confirmation for the destructive delete — must match vm.name exactly.
   const [deleteText, setDeleteText] = useState("");
   const [dialog, setDialog] = useState<ActiveDialog>(null);
@@ -290,6 +291,23 @@ export default function VmDetailPage() {
       await api.post(`/vms/${id}/convert-template`, { name: tplName.trim() });
       toast.success("Converted to a template — find it in the Template Store.");
       router.push("/templates");
+    } catch (err) {
+      toast.error(apiError(err));
+      setPending(null);
+    }
+  }
+
+  async function onDuplicate() {
+    const trimmed = dupName.trim();
+    if (!/^[a-zA-Z0-9-]+$/.test(trimmed)) {
+      toast.error("Use letters, numbers and hyphens only.");
+      return;
+    }
+    setPending("duplicate");
+    try {
+      const res = await api.post<{ id: string }>(`/vms/${id}/duplicate`, { name: trimmed });
+      toast.success("Duplicated — opening the copy.");
+      router.push(`/vms/${res.data.id}`);
     } catch (err) {
       toast.error(apiError(err));
       setPending(null);
@@ -465,6 +483,18 @@ export default function VmDetailPage() {
                     <DropdownMenuItem disabled={busy} onClick={() => setDialog("rebuild")}>
                       <RotateCcw />
                       Rebuild
+                    </DropdownMenuItem>
+                  )}
+                  {!isLxc && (
+                    <DropdownMenuItem
+                      disabled={busy}
+                      onClick={() => {
+                        setDupName(`${vm.name}-copy`);
+                        setDialog("duplicate");
+                      }}
+                    >
+                      <Copy />
+                      Duplicate
                     </DropdownMenuItem>
                   )}
                 </DropdownMenuGroup>
@@ -923,6 +953,35 @@ export default function VmDetailPage() {
           onDone={load}
         />
       )}
+
+      <AlertDialog open={dialog === "duplicate"} onOpenChange={(o: boolean) => setDialog(o ? "duplicate" : null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Duplicate {vm.name}</AlertDialogTitle>
+            <AlertDialogDescription>
+              Makes a full, independent copy — same size, OS, disk contents and tags — as a brand-new
+              machine you own. The source must be{" "}
+              <span className="font-medium text-foreground">stopped</span> first, and the copy counts
+              against your quota. It boots on its own once ready.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <FormField label="New machine name" htmlFor="dupName">
+            <Input
+              id="dupName"
+              value={dupName}
+              onChange={(e) => setDupName(e.target.value)}
+              placeholder="e.g. web-server-02"
+            />
+          </FormField>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={onDuplicate} disabled={pending === "duplicate" || !dupName.trim()}>
+              {pending === "duplicate" ? <Loader2 className="animate-spin" /> : <Copy />}
+              Duplicate
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={dialog === "convert"} onOpenChange={(o: boolean) => setDialog(o ? "convert" : null)}>
         <AlertDialogContent>
