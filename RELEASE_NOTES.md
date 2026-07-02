@@ -1,51 +1,45 @@
 ## ✨ Highlights
 
-**The tenant VM page is now a DigitalOcean-style dashboard.** The detail page for a
-VM/container used to be one long scroll of ~12 stacked cards; it's now organized the way
-you'd expect from a cloud provider, and much easier to navigate.
+**Your VM's Tailscale IP is now one click away.** When Tailscale is running inside a
+VM or container, its tailnet address shows up right on the machine's page — copy it and
+SSH in from any device on your tailnet, no hunting through `tailscale status`.
 
-### 🗂️ Tabbed VM detail page
+### 🔗 Tailscale IP on the VM page
 
-- **Five tabs** — **Overview** (live status, configuration, notes · connection details
-  with one-click IP copy, backups summary, tags, tips), **Insights** (larger CPU/memory
-  history charts, hour/day/week), **Backups & Snapshots** (MateStates, backup policy,
-  quick snapshots), **Activity** (event timeline), and **Settings**.
-- **Header actions** — the wall of ~10 buttons is gone. The page header now has a
-  **Console** menu (Graphical noVNC / Text console) and an **Actions** menu
-  (Start / Stop / Restart · Rename / Resize / Rebuild · admin: Migrate / Save as
-  template · Delete), with items enabled/disabled by power state.
-- **Settings tab, DigitalOcean-style** — labeled rows with one action each: General
-  (rename, resize), power schedule, data disks, GPU/PCI passthrough, sharing, an Admin
-  section (migrate, convert to template), and a red **Danger zone** (rebuild, delete).
-- **Deep-linkable tabs** — `?tab=backups` etc., kept in the URL without polluting
-  browser history.
-- **Everything still enforced** — read-only shares see only Overview / Insights /
-  Activity; LXC containers hide all QEMU-only features (rebuild, migrate, convert,
-  data disks, passthrough, snapshots) and say "Delete container".
-- Admin pages (`/admin/*`) are intentionally unchanged.
+- A new **Tailscale IP** row appears under **Connection details** on a machine's
+  Overview tab, right below its LAN IP, with a one-click copy button — but only when
+  Tailscale is actually running inside the guest.
+- Detected automatically from the same network info ProxMate already reads (the QEMU
+  guest agent for VMs, Proxmox's container introspection for LXC) — nothing to configure
+  beyond installing Tailscale in your machine. It's recognized by the `tailscale`
+  interface or by Tailscale's address range (100.64.0.0/10), and clears itself if
+  Tailscale stops.
+- Works for both full VMs and LXC containers, and it's exposed on the public REST API
+  (`tailscaleIp`) too.
 
-### 📖 README overhaul
+### 🐛 Fix: Tailscale no longer hijacks the "IP address" field
 
-- The README no longer requires endless scrolling: a compact feature summary up top,
-  with the **full feature matrix, tech stack, and extra screenshots in collapsible
-  sections** (one hero screenshot stays visible), a tightened quick start, and a
-  documentation table linking every guide in `docs/`.
-- Added the missing **GPU/PCI passthrough** and **kiosk mode** rows to the feature
-  matrix.
+Previously, if a machine's Tailscale interface happened to be listed first, its `100.x`
+address could show up as the machine's main **IP address** instead of its real LAN IP.
+Tailscale addresses are now kept in their own field and can never shadow the LAN IP.
 
-### 🔧 Release tooling
+### 📸 Refreshed README screenshots
 
-- Releases are now published with **curated, human-written notes** (this file) instead
-  of only the auto-generated PR list.
+Every screenshot in the project README (except the console shot) was recaptured against
+the current UI — the dashboard, live monitor, Template Store, create-a-VM wizard, and
+setup wizard now reflect how ProxMate actually looks today.
 
 ## 🔄 Upgrade notes
 
-- **No database migrations, no new environment variables, no breaking changes.**
+- **One small database migration** (`add_tailscale_ip`), applied automatically when the
+  API container starts — no manual step. No new environment variables, no breaking
+  changes.
 - Standard update: **Admin → Settings → Updates → Install update**, or pull + rebuild
   (`docker compose up -d --build`).
 
 ## 🧪 Verification
 
-- Backend: typecheck + full Vitest suite green (~300 tests). Frontend: typecheck, lint,
-  unit tests, and production build green; the new page was click-verified in-browser
-  (all five tabs, both menus, LXC + read-only gating) against an isolated test stack.
+- Backend: typecheck + full Vitest suite green (**331 tests**, +9 for Tailscale-IP
+  detection across both guest kinds and the LAN-IP shadow regression). Frontend:
+  typecheck, lint, and production build green; the new row was verified in-browser
+  against a guest advertising a Tailscale interface.
