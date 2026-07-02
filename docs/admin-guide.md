@@ -23,7 +23,7 @@ In Proxmox: **Datacenter → Permissions → API Tokens → Add**.
 - **Token ID:** `proxmate`
 - **Privilege Separation:** **uncheck this box** — see below
 
-> ⚠️ **The #1 setup pitfall.** Proxmox enables Privilege Separation by default,
+> **The #1 setup pitfall.** Proxmox enables Privilege Separation by default,
 > which gives the token an *empty* permission set even when the user is `root`.
 > If you forget this, ProxMate's connection test passes, storage lists come back
 > empty, and VM creation 403s.
