@@ -61,6 +61,7 @@ import {
   resetGuestPassword,
   enterRescue,
   exitRescue,
+  duplicateVm,
   syncVmNode,
 } from '../services/vm.service.js';
 import { getLiveStats } from '../services/live-stats.service.js';
@@ -785,6 +786,43 @@ router.post('/:id/resume', async (req: Request, res: Response) => {
     res.json({ success: true, status: 'running' });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── POST /api/vms/:id/duplicate ──────────────────────────────
+// Self-service full clone of a stopped VM. Quota-checked against the owner's
+// caps, isolation firewall re-applied before boot. QEMU-only. Runs in the
+// background (clone can take a while) and returns 202 with the new VM id.
+
+const DuplicateSchema = z.object({
+  name: z.string().min(1).max(63).regex(/^[a-zA-Z0-9-]+$/, 'Letters, numbers and hyphens only'),
+});
+
+router.post('/:id/duplicate', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getWritableVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') {
+    res.status(409).json({ error: 'Containers (LXC) can\'t be duplicated' });
+    return;
+  }
+  const parsed = DuplicateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const copy = await duplicateVm(vm, parsed.data.name);
+    await recordAudit({
+      action: 'vm.duplicate', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `${vm.name} → ${copy.name}`, req,
+    });
+    res.status(201).json(copy);
+  } catch (err) {
+    if (err instanceof QuotaError) { res.status(403).json({ error: 'Quota exceeded', details: err.details }); return; }
+    const msg = pveMessage(err);
+    res.status(/Stop the machine|can't be duplicated/.test(msg) ? 409 : 502).json({ error: msg });
   }
 });
 
