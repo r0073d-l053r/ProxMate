@@ -314,6 +314,17 @@ export interface ProxmoxIso {
   size?: number;
 }
 
+export type AlertMetric = "cpu" | "memory" | "disk" | "down";
+
+export interface AlertRule {
+  id: string;
+  metric: AlertMetric;
+  threshold: number;
+  sustainedMin: number;
+  enabled: boolean;
+  lastFiredAt: string | null;
+}
+
 /** An LXC OS template (vztmpl) available on the cluster. */
 export interface LxcTemplate {
   volid: string;

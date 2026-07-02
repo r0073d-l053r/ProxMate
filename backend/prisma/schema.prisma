@@ -192,6 +192,7 @@ model VirtualMachine {
   matestates    MateState[]
   shares        VmShare[]
   passthroughRequests PassthroughRequest[]
+  alertRules    AlertRule[]
 
   @@index([userId])
   @@index([proxmoxVmId])
@@ -296,6 +297,32 @@ model ResourceSample {
   createdAt DateTime @default(now())
 
   @@index([createdAt])
+  @@index([userId])
+}
+
+// A tenant-defined alert on one of their VMs. Evaluated on the resource-history
+// scheduler tick against live stats; fires a branded email (+ optional admin
+// webhook) when the condition holds for `sustainedMin` minutes, then respects a
+// cooldown. userId is denormalized (delivery target) like the other logs.
+model AlertRule {
+  id            String    @id @default(cuid())
+  vmId          String
+  userId        String                       // VM owner — the alert's recipient
+  metric        String                       // "cpu" | "memory" | "disk" | "down"
+  threshold     Int       @default(0)        // percent (0..100); ignored for "down"
+  sustainedMin  Int       @default(5)        // condition must hold this many minutes
+  enabled       Boolean   @default(true)
+
+  // Evaluation state (managed by the alert service, not the user):
+  breachingSince DateTime?                    // when the condition first became true (null = not breaching)
+  lastFiredAt    DateTime?                    // last time this rule sent — for cooldown
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  vm            VirtualMachine @relation(fields: [vmId], references: [id], onDelete: Cascade)
+
+  @@index([vmId])
   @@index([userId])
 }
 
