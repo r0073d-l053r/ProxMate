@@ -56,8 +56,11 @@ import {
   startVm,
   stopVm,
   restartVm,
+  pauseVm,
+  resumeVm,
   syncVmNode,
 } from '../services/vm.service.js';
+import { getLiveStats } from '../services/live-stats.service.js';
 import type { RebuildSource } from '../services/vm.service.js';
 import type { AuthRequest } from '../types/index.js';
 
@@ -731,6 +734,68 @@ router.post('/:id/restart', async (req: Request, res: Response) => {
     await restartVm(vm);
     await recordAudit({ action: 'vm.restart', actor: user, targetType: 'vm', targetId: vm.id, detail: vm.name, req });
     res.json({ success: true, status: 'running' });
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── POST /api/vms/:id/pause + /resume ────────────────────────
+// QEMU suspend/resume: freeze a running VM with its RAM resident (instant to
+// resume). Containers (LXC) can't be paused — Proxmox's LXC suspend is
+// experimental — so they get a clean 409 instead of a Proxmox error.
+
+router.post('/:id/pause', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getWritableVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') {
+    res.status(409).json({ error: 'Containers (LXC) cannot be paused' });
+    return;
+  }
+
+  try {
+    await pauseVm(vm);
+    await recordAudit({ action: 'vm.pause', actor: user, targetType: 'vm', targetId: vm.id, detail: vm.name, req });
+    res.json({ success: true, status: 'paused' });
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+router.post('/:id/resume', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getWritableVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') {
+    res.status(409).json({ error: 'Containers (LXC) cannot be paused' });
+    return;
+  }
+
+  try {
+    await resumeVm(vm);
+    await recordAudit({ action: 'vm.resume', actor: user, targetType: 'vm', targetId: vm.id, detail: vm.name, req });
+    res.json({ success: true, status: 'running' });
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── GET /api/vms/:id/live-stats ──────────────────────────────
+// Lightweight per-VM live sample for the Insights "Live" chart's 1 s ticks.
+// Served from the same cached /cluster/resources call the admin monitor uses
+// (750 ms TTL, request-coalesced), so per-second polling adds no Proxmox load.
+// Viewable by read-only shares too — it's the same data the detail page shows.
+
+router.get('/:id/live-stats', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getViewableVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+
+  try {
+    const all = await getLiveStats();
+    const s = all[vm.proxmoxVmId];
+    if (!s) { res.json({ status: vm.status, cpu: 0, maxcpu: vm.cpu, mem: 0, maxmem: 0 }); return; }
+    res.json({ status: s.status, cpu: s.cpu, maxcpu: s.maxcpu, mem: s.mem, maxmem: s.maxmem, uptime: s.uptime });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }

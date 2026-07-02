@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, RefreshCw, Circle, SquareTerminal } from "lucide-react";
+import { Loader2, RefreshCw, Circle, SquareTerminal, PictureInPicture2 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -9,6 +9,38 @@ import { ConsoleTopBar, type ConsoleMode } from "./console-top-bar";
 import "@xterm/xterm/css/xterm.css";
 
 type ConnState = "connecting" | "connected" | "disconnected" | "error" | "unsupported";
+
+// Document Picture-in-Picture (Chrome/Edge 116+): the only browser surface that
+// genuinely stays on top of other windows — perfect for a floating terminal.
+interface DocumentPip {
+  requestWindow(opts?: { width?: number; height?: number }): Promise<Window>;
+}
+function getDocumentPip(): DocumentPip | null {
+  const w = window as unknown as { documentPictureInPicture?: DocumentPip };
+  return w.documentPictureInPicture ?? null;
+}
+
+/** Clone every stylesheet into the PiP window so the terminal renders identically. */
+function copyStylesTo(pip: Window): void {
+  for (const sheet of Array.from(document.styleSheets)) {
+    try {
+      const css = Array.from(sheet.cssRules)
+        .map((r) => r.cssText)
+        .join("\n");
+      const style = pip.document.createElement("style");
+      style.textContent = css;
+      pip.document.head.appendChild(style);
+    } catch {
+      // Cross-origin sheet — link it instead.
+      if (sheet.href) {
+        const link = pip.document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = sheet.href;
+        pip.document.head.appendChild(link);
+      }
+    }
+  }
+}
 
 const enc = new TextEncoder();
 
@@ -51,12 +83,18 @@ export function SerialConsole({
   id,
   mode,
   onModeChange,
+  popout = false,
 }: {
   id: string;
-  mode: ConsoleMode;
-  onModeChange: (mode: ConsoleMode) => void;
+  mode?: ConsoleMode;
+  onModeChange?: (mode: ConsoleMode) => void;
+  /** Chromeless variant for the pop-out window: no top bar, fills the viewport. */
+  popout?: boolean;
 }) {
   const mountRef = useRef<HTMLDivElement>(null); // xterm mounts here
+  const bodyRef = useRef<HTMLDivElement>(null); // the terminal box — moved into PiP
+  const homeRef = useRef<HTMLDivElement>(null); // where the box returns after PiP
+  const pipRef = useRef<Window | null>(null);
   const termRef = useRef<TerminalLike | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const fitRef = useRef<{ fit(): void } | null>(null);
@@ -64,6 +102,50 @@ export function SerialConsole({
 
   const [state, setState] = useState<ConnState>("connecting");
   const [error, setError] = useState<string | null>(null);
+  const [pipActive, setPipActive] = useState(false);
+  const pipSupported = typeof window !== "undefined" && getDocumentPip() !== null;
+
+  /** Float the terminal in an always-on-top PiP window (Chrome/Edge). */
+  const enterPip = useCallback(async () => {
+    const dpip = getDocumentPip();
+    const body = bodyRef.current;
+    if (!dpip || !body || pipRef.current) return;
+    try {
+      const pip = await dpip.requestWindow({ width: 880, height: 440 });
+      pipRef.current = pip;
+      copyStylesTo(pip);
+      pip.document.title = "ProxMate console";
+      pip.document.body.style.margin = "0";
+      pip.document.body.style.background = "#000";
+      pip.document.body.appendChild(body);
+      body.style.height = "100vh";
+      setPipActive(true);
+      const refit = () => fitRef.current?.fit();
+      pip.addEventListener("resize", refit);
+      setTimeout(refit, 50);
+      pip.addEventListener("pagehide", () => {
+        pipRef.current = null;
+        body.style.height = "";
+        homeRef.current?.appendChild(body);
+        setPipActive(false);
+        setTimeout(() => fitRef.current?.fit(), 50);
+      });
+      termRef.current?.focus();
+    } catch {
+      pipRef.current = null; // user gesture denied / unsupported — button stays available
+    }
+  }, []);
+
+  // Leaving the page while the terminal floats: close the PiP window with it.
+  useEffect(() => {
+    return () => {
+      try {
+        pipRef.current?.close();
+      } catch {
+        /* already closed */
+      }
+    };
+  }, []);
 
   /** Frame + send one terminal control message to Proxmox (text opcode). */
   const sendFrame = useCallback((frame: string) => {
@@ -205,61 +287,98 @@ export function SerialConsole({
     return () => ro.disconnect();
   }, []);
 
+  const statusIndicator = (
+    <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+      <Circle
+        className={cn(
+          "size-2 fill-current",
+          state === "connected" && "text-emerald-500",
+          state === "connecting" && "text-amber-500",
+          (state === "disconnected" || state === "error" || state === "unsupported") && "text-muted-foreground",
+        )}
+      />
+      {state === "connecting" && "Connecting…"}
+      {state === "connected" && "Connected"}
+      {state === "disconnected" && "Disconnected"}
+      {state === "error" && "Error"}
+      {state === "unsupported" && "No text console"}
+    </span>
+  );
+
   return (
-    <div className="mx-auto flex h-[calc(100vh-6.5rem)] max-w-6xl flex-col">
-      <ConsoleTopBar id={id} mode={mode} onModeChange={onModeChange}>
-        <span className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
-          <SquareTerminal className="size-3.5" /> Ctrl/⌘-click links to open
-        </span>
-        <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
-          <Circle
-            className={cn(
-              "size-2 fill-current",
-              state === "connected" && "text-emerald-500",
-              state === "connecting" && "text-amber-500",
-              (state === "disconnected" || state === "error" || state === "unsupported") && "text-muted-foreground",
+    <div className={cn("mx-auto flex flex-col", popout ? "h-screen w-full p-2" : "h-[calc(100vh-6.5rem)] max-w-6xl")}>
+      {popout ? (
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
+          {statusIndicator}
+          <div className="flex items-center gap-2">
+            <span className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
+              <SquareTerminal className="size-3.5" /> Ctrl/⌘-click links · copy/paste works
+            </span>
+            {pipSupported && (
+              <Button variant="outline" size="sm" onClick={enterPip} disabled={pipActive} title="Float the terminal in a window that stays on top (Chrome/Edge)">
+                <PictureInPicture2 /> {pipActive ? "Floating" : "Keep on top"}
+              </Button>
             )}
-          />
-          {state === "connecting" && "Connecting…"}
-          {state === "connected" && "Connected"}
-          {state === "disconnected" && "Disconnected"}
-          {state === "error" && "Error"}
-          {state === "unsupported" && "No text console"}
-        </span>
-        <Button variant="outline" size="sm" onClick={connect} disabled={state === "unsupported"}>
-          <RefreshCw /> Reconnect
-        </Button>
-      </ConsoleTopBar>
-
-      <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl bg-black p-2 ring-1 ring-foreground/10">
-        <div ref={mountRef} className="h-full w-full" />
-
-        {state === "connecting" && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-sm text-white/70">
-            <Loader2 className="size-4 animate-spin" /> Opening text console…
-          </div>
-        )}
-
-        {state === "unsupported" && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
-            <p className="max-w-md text-sm text-white/70">
-              This VM has no text console — it was created without a serial port (typical for ISO
-              installs). Cloud-init VMs include one automatically. Use the graphical console instead.
-            </p>
-            <Button variant="outline" size="sm" onClick={() => onModeChange("graphical")}>
-              <SquareTerminal /> Switch to graphical console
-            </Button>
-          </div>
-        )}
-
-        {state === "error" && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
-            <p className="max-w-sm text-sm text-white/70">{error ?? "The console session ended."}</p>
-            <Button variant="outline" size="sm" onClick={connect}>
+            <Button variant="outline" size="sm" onClick={connect} disabled={state === "unsupported"}>
               <RefreshCw /> Reconnect
             </Button>
           </div>
-        )}
+        </div>
+      ) : (
+        <ConsoleTopBar id={id} mode={mode ?? "text"} onModeChange={onModeChange ?? (() => undefined)}>
+          <span className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
+            <SquareTerminal className="size-3.5" /> Ctrl/⌘-click links to open
+          </span>
+          {statusIndicator}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              window.open(`/console-popout/${id}`, `proxmate-console-${id}`, "popup,width=960,height=540")
+            }
+            title="Open this text console in its own window"
+          >
+            <PictureInPicture2 /> Pop out
+          </Button>
+          <Button variant="outline" size="sm" onClick={connect} disabled={state === "unsupported"}>
+            <RefreshCw /> Reconnect
+          </Button>
+        </ConsoleTopBar>
+      )}
+
+      <div ref={homeRef} className="min-h-0 flex-1">
+        <div ref={bodyRef} className="relative h-full w-full overflow-hidden rounded-xl bg-black p-2 ring-1 ring-foreground/10">
+          <div ref={mountRef} className="h-full w-full" />
+
+          {state === "connecting" && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-sm text-white/70">
+              <Loader2 className="size-4 animate-spin" /> Opening text console…
+            </div>
+          )}
+
+          {state === "unsupported" && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
+              <p className="max-w-md text-sm text-white/70">
+                This VM has no text console — it was created without a serial port (typical for ISO
+                installs). Cloud-init VMs include one automatically. Use the graphical console instead.
+              </p>
+              {!popout && onModeChange && (
+                <Button variant="outline" size="sm" onClick={() => onModeChange("graphical")}>
+                  <SquareTerminal /> Switch to graphical console
+                </Button>
+              )}
+            </div>
+          )}
+
+          {state === "error" && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
+              <p className="max-w-sm text-sm text-white/70">{error ?? "The console session ended."}</p>
+              <Button variant="outline" size="sm" onClick={connect}>
+                <RefreshCw /> Reconnect
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
