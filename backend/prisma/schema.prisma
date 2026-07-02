@@ -266,6 +266,23 @@ model SystemConfig {
   updatedAt   DateTime  @updatedAt
 }
 
+// A single-use, expiring token that lets a tenant download one MateState backup
+// file over HTTP. Only the token's SHA-256 hash is stored; the raw token is
+// emailed. Requires an admin-mounted backup share (BACKUP_DOWNLOAD_DIR) — the
+// Proxmox API can't stream vzdump bytes, so ProxMate reads the file off the mount.
+model DownloadToken {
+  id          String    @id @default(cuid())
+  tokenHash   String    @unique
+  userId      String                              // who requested it (for audit)
+  mateStateId String                              // the MateState being downloaded
+  filename    String                              // vzdump basename, validated + resolved under the mount
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([expiresAt])
+}
+
 // Append-only record of who did what, for trust/debugging/accountability on a
 // multi-tenant box. Deliberately NOT relationally tied to User: actorEmail is
 // denormalized so the trail survives a user (and their cascade) being deleted.

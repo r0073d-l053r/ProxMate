@@ -173,7 +173,9 @@ Reviewed with the owner; in progress. Continues the DigitalOcean-parity push for
    Proxmox template, repoint the same store entry (deploy links/notes survive), and remove the
    old template VM — safe because cloud images are full-cloned, so nothing depends on the old
    base. New deploys always boot a patched image. _Done._
-6. **Backup download links** — when the deployment mounts the backup share
-   (`BACKUP_DOWNLOAD_DIR`), tenants can request a MateState download and receive a
-   **single-use, expiring link by email**. (Direct vzdump streaming stays impossible in
-   the API-only model — see candidate idea #4.)
+6. **Backup download links** ✅ — when the deployment mounts the backup share
+   (`BACKUP_DOWNLOAD_DIR`) and SMTP is configured, tenants get a **Download** button on each
+   MateState that emails them a **single-use, 1-hour link** (`GET /api/downloads/:token`,
+   public/token-authed, path-traversal-hardened, streams straight off the mount). The feature
+   hides itself when the share isn't mounted. (Direct vzdump streaming via the Proxmox API stays
+   impossible — this reads the file off the mount instead.) _Done._

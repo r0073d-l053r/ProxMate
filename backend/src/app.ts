@@ -14,6 +14,7 @@ import sshKeyRoutes from './routes/ssh-key.routes.js';
 import apiTokenRoutes from './routes/api-token.routes.js';
 import quotaRequestRoutes from './routes/quota-request.routes.js';
 import passthroughRequestRoutes from './routes/passthrough-request.routes.js';
+import downloadRoutes from './routes/download.routes.js';
 import { openApiSpec } from './lib/openapi.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { observability } from './middleware/observability.js';
@@ -101,6 +102,8 @@ app.use('/api/ssh-keys', sshKeyRoutes);
 app.use('/api/api-tokens', apiTokenRoutes);
 app.use('/api/quota-requests', quotaRequestRoutes);
 app.use('/api/passthrough-requests', passthroughRequestRoutes);
+// Public (token-authenticated) backup downloads — no session required.
+app.use('/api/downloads', downloadRoutes);
 // console.routes (VNC WebSocket proxy) is attached to the HTTP upgrade event in index.ts
 
 // ─── Global Error Handler ─────────────────────────────────────
