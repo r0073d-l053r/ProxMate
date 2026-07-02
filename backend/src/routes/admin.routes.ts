@@ -73,7 +73,7 @@ router.get('/audit', async (req: Request, res: Response) => {
 // Returns current config (never the Proxmox token secret).
 
 router.get('/settings', async (_req: Request, res: Response) => {
-  const [host, tokenId, verifySsl, storage, bridge, isoStorage, backupStorage, rescueIso] = await Promise.all([
+  const [host, tokenId, verifySsl, storage, bridge, isoStorage, backupStorage, rescueIso, templateRefresh] = await Promise.all([
     getConfig('proxmox_host'),
     getConfig('proxmox_token_id'),
     getConfig('proxmox_verify_ssl'),
@@ -82,6 +82,7 @@ router.get('/settings', async (_req: Request, res: Response) => {
     getConfig('iso_storage'),
     getConfig('backup_storage'),
     getConfig('rescue_iso'),
+    getConfig('template_refresh_enabled'),
   ]);
 
   const mail = await getMailConfig();
@@ -90,6 +91,7 @@ router.get('/settings', async (_req: Request, res: Response) => {
     proxmox: { host, tokenId, verifySsl: verifySsl === 'true', hasSecret: !!(await getConfig('proxmox_token_secret')) },
     defaults: { storage, bridge, isoStorage, backupStorage },
     rescueIso,
+    templateRefreshEnabled: templateRefresh === 'true',
     smtp: mail
       ? { configured: true, host: mail.host, port: mail.port, secure: mail.secure, user: mail.user ?? '', from: mail.from, hasPass: !!mail.pass }
       : { configured: false },
@@ -315,6 +317,22 @@ router.put('/settings/rescue', async (req: Request, res: Response) => {
     return;
   }
   await setConfig('rescue_iso', parsed.data.iso.trim());
+  res.json({ success: true });
+});
+
+// ─── PUT /api/admin/settings/template-refresh ─────────────────
+// Toggle the monthly cloud-image auto-refresh (rebuilds every refreshable
+// template so new deploys start from a patched base).
+
+const TemplateRefreshSchema = z.object({ enabled: z.boolean() });
+
+router.put('/settings/template-refresh', async (req: Request, res: Response) => {
+  const parsed = TemplateRefreshSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  await setConfig('template_refresh_enabled', String(parsed.data.enabled));
   res.json({ success: true });
 });
 

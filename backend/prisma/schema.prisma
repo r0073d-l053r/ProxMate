@@ -341,6 +341,11 @@ model Template {
   icon          String?                       // custom icon data-URI (admin upload); null = auto OS icon
   published     Boolean   @default(true)
 
+  // Cloud-image provenance — set for templates built by the importer. Lets the
+  // store re-download the upstream image and rebuild a fresh, patched template.
+  sourceUrl     String?                       // the cloud image URL it was built from
+  refreshedAt   DateTime?                     // last successful refresh (null = never refreshed)
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 

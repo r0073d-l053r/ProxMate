@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
+import { formatRelative } from "@/lib/format";
 import { useAuthStore } from "@/lib/auth-store";
 import type { Template, DiscoveredTemplate, CuratedImage } from "@/lib/types";
 import { PageHeader } from "@/components/dashboard/page-header";
@@ -235,6 +236,9 @@ function TemplateCard({
             <HardDrive className="size-3.5" /> {t.diskGb} GB base
           </span>
           <div className="flex items-center gap-1">
+            {isAdmin && !editing && t.cloudInit && t.sourceUrl && (
+              <RefreshTemplateButton t={t} onDone={onChange} />
+            )}
             {isAdmin && !editing && (
               <Button size="icon-sm" variant="ghost" onClick={() => setEditing(true)} title="Edit notes & icon">
                 <Pencil />
@@ -279,6 +283,49 @@ function UnregisterButton({ id, onDone }: { id: string; onDone: () => void }) {
       }}
     >
       {busy ? <Loader2 className="animate-spin" /> : <Trash2 />}
+    </Button>
+  );
+}
+
+/**
+ * Admin: rebuild a cloud-image template from its source URL so new deploys start
+ * from a freshly-downloaded, patched base. Long-running (re-downloads the image);
+ * repoints the same store entry and removes the old Proxmox template.
+ */
+function RefreshTemplateButton({ t, onDone }: { t: Template; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Button
+      size="icon-sm"
+      variant="ghost"
+      disabled={busy}
+      title={
+        t.refreshedAt
+          ? `Rebuild from the latest cloud image (last refreshed ${formatRelative(t.refreshedAt)})`
+          : "Rebuild from the latest cloud image"
+      }
+      onClick={async () => {
+        if (
+          !window.confirm(
+            "Rebuild this template from the latest upstream cloud image?\n\n" +
+              "New deploys will start from the fresh, patched image. Existing VMs are unaffected. " +
+              "This re-downloads the image and can take a few minutes.",
+          )
+        )
+          return;
+        setBusy(true);
+        try {
+          await api.post(`/templates/${t.id}/refresh`);
+          toast.success("Template refreshed from the latest cloud image.");
+          onDone();
+        } catch (err) {
+          toast.error(apiError(err));
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
     </Button>
   );
 }
