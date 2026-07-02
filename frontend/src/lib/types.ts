@@ -68,6 +68,8 @@ export interface VirtualMachine {
   ipAddress: string | null;
   /** The guest's Tailscale (100.x) address, when Tailscale runs inside it. */
   tailscaleIp: string | null;
+  /** Non-null while booted into rescue mode (snapshot of the pre-rescue boot config). */
+  rescueBoot: string | null;
   tags: string | null;
   createdAt: string;
   updatedAt: string;
@@ -101,6 +103,8 @@ export interface VmLiveStatus {
 
 export interface VmDetail extends VirtualMachine {
   live: VmLiveStatus | null;
+  /** Whether the admin has designated a rescue ISO (QEMU only). */
+  rescueAvailable?: boolean;
 }
 
 /** One 1 s sample from GET /vms/:id/live-stats (cached cluster/resources). */

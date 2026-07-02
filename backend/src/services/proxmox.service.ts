@@ -1712,6 +1712,67 @@ export async function resumeVm(node: string, vmid: number, client?: AxiosInstanc
   return res.data.data;
 }
 
+/**
+ * Set a user's password inside the guest via the QEMU guest agent's dedicated
+ * `set-user-password` call (no arbitrary command execution involved). Requires
+ * the agent to be installed and running; Proxmox errors clearly when it isn't.
+ */
+export async function setGuestUserPassword(
+  node: string,
+  vmid: number,
+  username: string,
+  password: string,
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  await c.post(
+    `/nodes/${node}/qemu/${vmid}/agent/set-user-password`,
+    new URLSearchParams({ username, password }),
+  );
+}
+
+// ─── Rescue mode ──────────────────────────────────────────────
+// Boot a VM from an admin-designated rescue ISO: the ISO goes on the ide3 slot
+// (ide2 belongs to the cloud-init drive / install ISO) and the boot order is
+// pinned to it. The prior boot config is snapshotted so exit can restore it.
+
+export interface RescueSnapshot {
+  boot: string | null; // previous `boot` line (null = Proxmox default order)
+  ide3: string | null; // previous ide3 device, if any
+}
+
+/** Attach the rescue ISO on ide3 and make it the sole boot device. */
+export async function applyRescueConfig(
+  node: string,
+  vmid: number,
+  isoVolid: string,
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  await c.put(
+    `/nodes/${node}/qemu/${vmid}/config`,
+    new URLSearchParams({ ide3: `${isoVolid},media=cdrom`, boot: 'order=ide3' }),
+  );
+}
+
+/** Restore the pre-rescue boot config (and ide3 slot) from its snapshot. */
+export async function restoreBootConfig(
+  node: string,
+  vmid: number,
+  snap: RescueSnapshot,
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams();
+  const del: string[] = [];
+  if (snap.boot) params.set('boot', snap.boot);
+  else del.push('boot');
+  if (snap.ide3) params.set('ide3', snap.ide3);
+  else del.push('ide3');
+  if (del.length > 0) params.set('delete', del.join(','));
+  await c.put(`/nodes/${node}/qemu/${vmid}/config`, params);
+}
+
 export interface PveVmStatus {
   status: string; // running | stopped
   qmpstatus?: string;

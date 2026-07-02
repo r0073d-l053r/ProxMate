@@ -58,9 +58,13 @@ import {
   restartVm,
   pauseVm,
   resumeVm,
+  resetGuestPassword,
+  enterRescue,
+  exitRescue,
   syncVmNode,
 } from '../services/vm.service.js';
 import { getLiveStats } from '../services/live-stats.service.js';
+import { getConfig } from '../services/config.service.js';
 import type { RebuildSource } from '../services/vm.service.js';
 import type { AuthRequest } from '../types/index.js';
 
@@ -269,7 +273,10 @@ router.get('/:id', async (req: Request, res: Response) => {
   if (!resolved) { res.status(404).json({ error: 'VM not found' }); return; }
 
   const withStatus = await getVmWithLiveStatus(resolved.vm);
-  res.json({ ...withStatus, access: resolved.access });
+  // Whether the admin has designated a rescue ISO — lets the UI explain the
+  // Rescue card's disabled state instead of failing on click.
+  const rescueAvailable = kindOf(resolved.vm) !== 'lxc' && !!(await getConfig('rescue_iso'));
+  res.json({ ...withStatus, access: resolved.access, rescueAvailable });
 });
 
 // ─── GET /api/vms/:id/metrics ─────────────────────────────────
@@ -777,6 +784,79 @@ router.post('/:id/resume', async (req: Request, res: Response) => {
     res.json({ success: true, status: 'running' });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── POST /api/vms/:id/reset-password ─────────────────────────
+// Set a guest user's password via the QEMU guest agent (dedicated call, no
+// shell). The CSPRNG password is returned exactly once and never stored; the
+// audit entry records the username only.
+
+const ResetPasswordSchema = z.object({
+  username: z.string().min(1).max(64).regex(/^[a-zA-Z0-9._][a-zA-Z0-9._-]*$/, 'Invalid username'),
+});
+
+router.post('/:id/reset-password', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getWritableVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') {
+    res.status(409).json({ error: 'Password reset needs the QEMU guest agent — containers are not supported' });
+    return;
+  }
+  const parsed = ResetPasswordSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const password = await resetGuestPassword(vm, parsed.data.username);
+    await recordAudit({
+      action: 'vm.reset_password', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `${vm.name} · user ${parsed.data.username}`, req,
+    });
+    res.json({ password });
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── POST /api/vms/:id/rescue + /rescue/exit ──────────────────
+// Boot from the admin-designated rescue ISO (force-stopping first if needed),
+// or restore the snapshotted boot config and boot from disk again.
+
+router.post('/:id/rescue', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getWritableVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') {
+    res.status(409).json({ error: 'Rescue mode is for VMs — containers share the host kernel' });
+    return;
+  }
+
+  try {
+    await enterRescue(vm);
+    await recordAudit({ action: 'vm.rescue_enter', actor: user, targetType: 'vm', targetId: vm.id, detail: vm.name, req });
+    res.json({ success: true, rescue: true });
+  } catch (err) {
+    const msg = pveMessage(err);
+    res.status(/configured|Already in rescue/.test(msg) ? 409 : 502).json({ error: msg });
+  }
+});
+
+router.post('/:id/rescue/exit', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getWritableVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+
+  try {
+    await exitRescue(vm);
+    await recordAudit({ action: 'vm.rescue_exit', actor: user, targetType: 'vm', targetId: vm.id, detail: vm.name, req });
+    res.json({ success: true, rescue: false });
+  } catch (err) {
+    const msg = pveMessage(err);
+    res.status(/Not in rescue/.test(msg) ? 409 : 502).json({ error: msg });
   }
 });
 
