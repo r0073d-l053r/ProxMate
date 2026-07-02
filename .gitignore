@@ -34,6 +34,7 @@ npm-debug.log*
 
 # AI agent / local dev tooling (not for public repo)
 .claude/
+/CLAUDE.md
 frontend/AGENTS.md
 frontend/CLAUDE.md
 completed-tasks.md
