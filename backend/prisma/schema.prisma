@@ -247,7 +247,7 @@ model MateState {
   proxmoxNode   String                              // where the backup currently lives
   storage       String                              // Proxmox storage holding the backup
   volid         String    @unique                   // e.g. local:backup/vzdump-qemu-100-…
-  size          Int       @default(0)               // bytes
+  size          BigInt    @default(0)               // bytes (BigInt: real backups exceed Int32's ~2.1 GB)
   status        String    @default("creating")      // creating | ready | restoring | error
   kind          String    @default("scheduled")     // scheduled | manual
   notes         String?
