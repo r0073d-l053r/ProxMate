@@ -33,6 +33,16 @@ export function listForVm(vmId: string): Promise<MateState[]> {
 }
 
 /**
+ * Shape a MateState for a JSON API response. `size` is a `BigInt` in the DB
+ * (backups routinely exceed Int32's ~2.1 GB), and `JSON.stringify` throws on
+ * BigInt — so convert it to a Number (byte counts stay well under
+ * Number.MAX_SAFE_INTEGER). Without this the whole matestates response 500s.
+ */
+export function serializeMateState(ms: MateState): Omit<MateState, 'size'> & { size: number } {
+  return { ...ms, size: Number(ms.size) };
+}
+
+/**
  * Prune older MateStates so only the N most recent `ready` ones remain.
  * Deletes both the DB rows and the underlying Proxmox backup files.
  * Errors during file deletion are logged but do not block the prune
@@ -80,7 +90,7 @@ export async function createMateState(
       proxmoxNode: vm.proxmoxNode,
       storage,
       volid: `pending:${vm.proxmoxVmId}:${Date.now()}`,
-      size: 0,
+      size: BigInt(0),
       status: 'creating',
       kind,
     },
@@ -101,7 +111,7 @@ export async function createMateState(
 
     const updated = await prisma.mateState.update({
       where: { id: placeholder.id },
-      data: { volid: fresh.volid, size: fresh.size, status: 'ready' },
+      data: { volid: fresh.volid, size: BigInt(Math.trunc(fresh.size ?? 0)), status: 'ready' },
     });
 
     await pruneOldMateStates(vm.id, vm.backupKeep ?? MATESTATE_RETENTION);
