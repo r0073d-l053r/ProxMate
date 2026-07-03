@@ -1,37 +1,49 @@
 ## Highlights
 
-**MateStates backups over ~2.1 GB no longer break the backups panel.** If a VM had a
-backup larger than about 2.1 GB, opening its MateStates section returned a server error
-(HTTP 500) and **no backups were listed at all** — the backups themselves were safe on
-Proxmox storage the whole time; only the listing failed. Updating to this release repairs
-the condition automatically.
+**Restore a VM from a backup you downloaded — migrate between clusters or ProxMate
+instances.** The create-VM wizard gains a new source at the bottom of the list,
+**"Restore from old build — upload your MateState backup."** Download a backup from the
+MateState email link on one ProxMate, upload it here, and it comes back as a new machine —
+the missing half of a full self-service migration path.
 
-## Fixes
+## Features
 
-- **Backup size overflow (500 on the MateStates list).** A backup's size in **bytes** was
-  stored in a 32-bit integer column, which tops out at 2,147,483,647 (~2.1 GB). The
-  database itself stored the larger value fine, but the ORM refused to read the row back
-  ("value does not fit in an INT32"), which failed the entire backups query — so the API
-  answered 500 and the panel showed nothing. The column is now a 64-bit integer
-  (`BigInt`), sizes are converted to a JSON-safe number at the API boundary, and a
-  regression test pins a 3 GB backup listing correctly.
+- **Restore from an uploaded MateState backup.** A tenant uploads the vzdump archive they
+  downloaded (`.vma.zst` for VMs, `.tar.zst` for containers) and ProxMate restores it as a
+  brand-new guest. The wizard streams the file with a progress bar; sizing comes from inside
+  the backup (and is charged against the uploader's quota). Under the hood:
+  - Quota is checked from the archive's **embedded config before anything is restored**.
+  - Every volume is **remapped onto this cluster's default disk storage** (a backup from
+    another cluster names storages that may not exist here), and the guest gets **fresh MAC
+    addresses** so it can't collide with the original.
+  - The **tenant-isolation firewall is applied before first boot**, and the uploaded archive
+    is removed afterward (it was only a transport carrier).
+  - Works for both QEMU VMs and LXC containers.
 
 ## Upgrade notes
 
-- **Patch release — one automatic database migration, no new environment variables, no
-  breaking changes.** The migration (`matestate_size_bigint`) applies itself when the API
-  container starts. It is non-destructive: the table is rebuilt with the wider column and
-  **every existing row is copied over**, including the oversized value that triggered the
-  bug — so previously "missing" backups reappear immediately after the update.
+- **No database migrations, no breaking changes.** One new **optional** environment variable,
+  `RESTORE_UPLOAD_MAX_GB` (default `50`, `0` disables the cap).
+- **The feature is off until you opt in.** It reuses the backup-downloads mount
+  (`BACKUP_DOWNLOAD_DIR`), but for *uploads* that mount must be **read-write** — mount it `rw`
+  (not `:ro`) and the wizard option appears automatically; leave it `:ro` to keep downloads
+  only. The option stays hidden when the mount is absent or read-only.
+- **Cloudflare note:** the free Cloudflare plan caps request bodies at ~100 MB, so multi-GB
+  uploads through a Cloudflare Tunnel are rejected at the edge — upload from a LAN / Tailscale
+  origin, or raise the plan limit.
 - Standard update: **Admin → Settings → Updates → Install update**, or pull + rebuild
   (`docker compose up -d --build`).
-- After updating, open a VM's MateStates section to confirm the list loads (including any
-  backup larger than 2.1 GB).
 
 ## Verification
 
-- Backend suite green: **375 tests** (3 new regression tests covering a 3 GB backup size —
-  Number conversion and JSON-safe serialization). Typecheck and lint clean.
-- The failure mode was reproduced from a production report (500 on
-  `GET /api/vms/:id/matestates` with a multi-GB backup present) and traced to the ORM's
-  INT32 read guard; the fix targets that exact path.
+- Backend suite green: **389 tests** (14 new — config parsing, strict filename + path-traversal
+  sanitization, quota-reject cleanup, isolation-before-boot ordering, LXC handling). Typecheck
+  and lint clean on both backend and frontend; frontend production build green.
+- Verified end-to-end in a browser on a mock-Proxmox rig: a tenant uploads an archive → progress
+  bar → the restored VM page renders running with the backup's exact resources and a fresh
+  identity, and the uploaded archive is removed from the mount.
+- **CodeQL:** the upload route's filesystem paths are re-derived through a containment sanitizer
+  (basename → strict pattern → resolve-under-root → containment check); no open code-scanning
+  alerts.
+- Restore behavior against a **live** multi-node cluster is pending hardware verification (the
+  mock exercises the ProxMate plumbing, not Proxmox's own vzdump restore).
