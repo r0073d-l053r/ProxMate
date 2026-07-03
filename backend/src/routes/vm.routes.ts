@@ -1,5 +1,9 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
+import multer from 'multer';
+import path from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { promises as fsp, existsSync } from 'node:fs';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { enforceMfaSetup } from '../middleware/mfa.js';
@@ -69,6 +73,13 @@ import { getLiveStats } from '../services/live-stats.service.js';
 import { getConfig } from '../services/config.service.js';
 import { ALERT_METRICS } from '../services/alert.service.js';
 import { downloadsEnabled, requestBackupDownload, DownloadError } from '../services/download.service.js';
+import {
+  restoreUploadsEnabled,
+  restoreFromUpload,
+  uploadDir,
+  VZDUMP_UPLOAD_RE,
+  RestoreUploadError,
+} from '../services/restore-upload.service.js';
 import type { RebuildSource } from '../services/vm.service.js';
 import type { AuthRequest } from '../types/index.js';
 
@@ -160,6 +171,117 @@ router.get('/lxc-templates', async (_req: Request, res: Response) => {
   try {
     res.json(await listLxcTemplates());
   } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── Restore from an uploaded MateState backup ────────────────
+// The migration path between clusters / ProxMate instances: upload the vzdump
+// archive from a MateState download email → restore it as a new guest.
+// Declared before `/:id` so "restore-capability"/"restore-upload" aren't VM ids.
+
+router.get('/restore-capability', async (_req: Request, res: Response) => {
+  // Tells the create wizard whether to show "Restore from old build" (needs the
+  // backup share mounted read-write).
+  res.json({ enabled: await restoreUploadsEnabled() });
+});
+
+// Uploads can be tens of GB; cap is env-tunable (0 disables the cap).
+const RESTORE_UPLOAD_MAX_GB = Math.max(0, parseInt(process.env['RESTORE_UPLOAD_MAX_GB'] || '50', 10) || 0);
+
+const restoreUploadMulter = multer({
+  storage: multer.diskStorage({
+    // Stream straight onto the mounted backup share (container tmp may be tiny),
+    // under a dot-name Proxmox's vzdump content scan ignores until we rename.
+    destination: (_req, _file, cb) => {
+      const dir = uploadDir();
+      if (dir) cb(null, dir);
+      else cb(new RestoreUploadError('Backup uploads are not enabled on this server.'), '');
+    },
+    filename: (_req, _file, cb) => cb(null, `.proxmate-upload-${randomBytes(8).toString('hex')}.part`),
+  }),
+  limits: RESTORE_UPLOAD_MAX_GB > 0 ? { fileSize: RESTORE_UPLOAD_MAX_GB * 1024 ** 3 } : undefined,
+  fileFilter: (_req, file, cb) => {
+    const name = path.basename(file.originalname);
+    if (name !== file.originalname || !VZDUMP_UPLOAD_RE.test(name)) {
+      cb(new RestoreUploadError('That file is not a vzdump backup archive (expected a downloaded MateState like vzdump-qemu-….vma.zst).'));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+const RestoreUploadSchema = z.object({
+  name: z.string().min(1).max(63).regex(/^[a-zA-Z0-9-]+$/, 'Use letters, numbers and hyphens only'),
+});
+
+router.post('/restore-upload', async (req: Request, res: Response) => {
+  if (!(await restoreUploadsEnabled())) {
+    res.status(409).json({ error: 'Backup uploads are not enabled on this server (the backup share must be mounted read-write).' });
+    return;
+  }
+  const { id } = (req as AuthRequest).user;
+  const user = await prisma.user.findUnique({ where: { id } });
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+
+  // Run multer explicitly so its errors map to proper HTTP responses.
+  const uploadErr = await new Promise<unknown>((resolve) =>
+    restoreUploadMulter.single('file')(req, res, resolve),
+  );
+  const file = (req as Request & { file?: Express.Multer.File }).file;
+  const dropTemp = async () => { if (file) await fsp.unlink(file.path).catch(() => undefined); };
+
+  if (uploadErr) {
+    await dropTemp();
+    if (uploadErr instanceof multer.MulterError && uploadErr.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({ error: `That file is larger than the server's ${RESTORE_UPLOAD_MAX_GB} GB upload limit (RESTORE_UPLOAD_MAX_GB).` });
+      return;
+    }
+    const msg = uploadErr instanceof Error ? uploadErr.message : 'Upload failed';
+    res.status(uploadErr instanceof RestoreUploadError ? 400 : 502).json({ error: msg });
+    return;
+  }
+  if (!file) { res.status(400).json({ error: 'No backup file was uploaded.' }); return; }
+
+  const parsed = RestoreUploadSchema.safeParse(req.body);
+  if (!parsed.success) {
+    await dropTemp();
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+
+  // Promote the finished temp file to its real vzdump name (making it visible
+  // to Proxmox's storage scan). Refuse to clobber an existing backup.
+  const filename = path.basename(file.originalname);
+  const finalPath = path.join(path.dirname(file.path), filename);
+  if (existsSync(finalPath)) {
+    await dropTemp();
+    res.status(409).json({ error: 'A backup file with this exact name already exists on the server. Rename your file (keep the vzdump-… pattern) and retry.' });
+    return;
+  }
+
+  try {
+    await fsp.rename(file.path, finalPath);
+    const vm = await restoreFromUpload(user, { filename, name: parsed.data.name });
+    await recordAudit({
+      action: 'vm.restore_upload',
+      actor: user,
+      targetType: 'vm',
+      targetId: vm.id,
+      detail: `${vm.name} restored from uploaded ${filename} (vmid ${vm.proxmoxVmId} on ${vm.proxmoxNode})`,
+      req,
+    });
+    res.status(201).json({ vm, status: vm.status });
+  } catch (err) {
+    await dropTemp();
+    if (err instanceof QuotaError) {
+      res.status(403).json({ error: 'Quota exceeded', details: err.details });
+      return;
+    }
+    if (err instanceof RestoreUploadError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
     res.status(502).json({ error: pveMessage(err) });
   }
 });

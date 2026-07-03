@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, Loader2, Plus, Rocket, HardDrive, KeyRound, Server, Container } from "lucide-react";
+import { ArrowLeft, Loader2, Plus, Rocket, HardDrive, KeyRound, Server, Container, ArchiveRestore } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import type { MeResponse, ProxmoxIso, LxcTemplate, Template, VirtualMachine, SshKey } from "@/lib/types";
@@ -29,8 +29,12 @@ import {
 const RAM_OPTIONS = [1, 2, 4, 8, 16, 32];
 const CUSTOM = "custom";
 const CONTAINER = "container"; // LXC container source
+const RESTORE = "restore"; // restore an uploaded MateState backup
 const CUSTOM_DISK_DEFAULT = 20;
 const CONTAINER_DISK_DEFAULT = 8;
+
+/** A downloaded MateState is a vzdump archive — same shape the backend enforces. */
+const VZDUMP_FILE_RE = /^vzdump-(qemu|lxc)-\d+-[\w.-]+\.(vma|tar)(\.(zst|gz|lzo))?$/;
 
 /** One-click "T-shirt" sizes that pre-fill cpu/ram/disk; disk is clamped up to a
  *  template's base. Tweak any field afterwards — these are just sensible starts. */
@@ -87,6 +91,10 @@ export default function NewVmWizard() {
   const [cloudFeatures, setCloudFeatures] = useState<{ id: string; label: string; hint: string }[]>([]);
   const [cloudNodes, setCloudNodes] = useState<Record<string, string[]>>({}); // node → present snippet files
   const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
+  // Restore-from-upload only:
+  const [restoreEnabled, setRestoreEnabled] = useState(false);
+  const [backupFile, setBackupFile] = useState<File | null>(null);
+  const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
@@ -105,8 +113,10 @@ export default function NewVmWizard() {
       api.get<SshKey[]>("/ssh-keys").catch(() => ({ data: [] as SshKey[] })),
       // LXC OS templates (vztmpl) available on the cluster. Never block the wizard.
       api.get<LxcTemplate[]>("/vms/lxc-templates").catch(() => ({ data: [] as LxcTemplate[] })),
+      // Whether restore-from-upload is available (backup share mounted rw). Never block.
+      api.get<{ enabled: boolean }>("/vms/restore-capability").catch(() => ({ data: { enabled: false } })),
     ])
-      .then(([meRes, isosRes, tplRes, extrasRes, keysRes, lxcRes]) => {
+      .then(([meRes, isosRes, tplRes, extrasRes, keysRes, lxcRes, restoreRes]) => {
         setQuota(meRes.data.user.quota);
         setIsos(isosRes.data);
         setTemplates(tplRes.data);
@@ -114,6 +124,7 @@ export default function NewVmWizard() {
         setCloudNodes(extrasRes.data.nodes ?? {});
         setSavedKeys(keysRes.data ?? []);
         setLxcTemplates(lxcRes.data ?? []);
+        setRestoreEnabled(restoreRes.data.enabled === true);
 
         // Deep-link preselect: /vms/new?template=<id> (e.g. the store's Deploy button).
         const wanted = searchParams.get("template");
@@ -129,7 +140,9 @@ export default function NewVmWizard() {
   }, [searchParams]);
 
   const isContainer = source === CONTAINER;
-  const template = source === CUSTOM || isContainer ? null : templates.find((t) => t.id === source) ?? null;
+  const isRestore = source === RESTORE;
+  const template =
+    source === CUSTOM || isContainer || isRestore ? null : templates.find((t) => t.id === source) ?? null;
   const isCustom = source === CUSTOM;
   const isCloud = !!template?.cloudInit;
   const nodeSnippets = isCloud && template ? cloudNodes[template.proxmoxNode] ?? [] : [];
@@ -171,7 +184,7 @@ export default function NewVmWizard() {
     setSelectedFeatures([]);
     if (v === CUSTOM) {
       setStorageGb(CUSTOM_DISK_DEFAULT);
-    } else if (v === CONTAINER) {
+    } else if (v === CONTAINER || v === RESTORE) {
       setStorageGb(CONTAINER_DISK_DEFAULT);
     } else {
       const t = templates.find((x) => x.id === v);
@@ -183,6 +196,15 @@ export default function NewVmWizard() {
   function validate(): boolean {
     const e: Record<string, string> = {};
     if (!/^[a-zA-Z0-9-]+$/.test(name)) e.name = "Use letters, numbers and hyphens only";
+    if (isRestore) {
+      // Sizing comes from inside the backup (quota is enforced server-side from
+      // the archive's embedded config), so only the name + file matter here.
+      if (!backupFile) e.backupFile = "Choose your downloaded MateState backup file";
+      else if (!VZDUMP_FILE_RE.test(backupFile.name))
+        e.backupFile = "That doesn't look like a MateState backup (expected vzdump-…-….vma.zst / .tar.zst)";
+      setErrors(e);
+      return Object.keys(e).length === 0;
+    }
     if (cpu < 1) e.cpu = "At least 1 vCPU";
     else if (!isAdmin && cpu > cpuLeft) e.cpu = `Exceeds your remaining ${cpuLeft} vCPU`;
     if (!isAdmin && ramGb * 1024 > ramLeftMb) e.ram = `Exceeds your remaining ${formatRam(ramLeftMb)}`;
@@ -214,7 +236,19 @@ export default function NewVmWizard() {
     if (!validate()) return;
     setSubmitting(true);
     try {
-      if (isCustom) {
+      if (isRestore) {
+        const form = new FormData();
+        form.append("name", name);
+        form.append("file", backupFile!);
+        const res = await api.post<{ vm: VirtualMachine }>("/vms/restore-upload", form, {
+          onUploadProgress: (p) => {
+            if (p.total) setUploadPct(Math.round((p.loaded / p.total) * 100));
+          },
+        });
+        setUploadPct(null);
+        toast.success(`"${name}" is being restored from your backup.`);
+        router.push(`/vms/${res.data.vm.id}`);
+      } else if (isCustom) {
         const res = await api.post<{ vm: VirtualMachine }>("/vms", {
           name,
           cpu,
@@ -261,6 +295,7 @@ export default function NewVmWizard() {
       }
     } catch (err) {
       toast.error(apiError(err));
+      setUploadPct(null);
       setSubmitting(false);
     }
   }
@@ -303,9 +338,11 @@ export default function NewVmWizard() {
                       ? "Install a fresh OS from an ISO image."
                       : isContainer
                         ? "A lightweight Linux container (LXC) from an OS template — boots in seconds."
-                        : template
-                          ? `${template.description || template.os || "Linux template"} · ${template.diskGb} GB base`
-                          : undefined
+                        : isRestore
+                          ? "Rebuild a machine from a MateState backup you downloaded — perfect for migrating between clusters or ProxMate instances."
+                          : template
+                            ? `${template.description || template.os || "Linux template"} · ${template.diskGb} GB base`
+                            : undefined
                   }
                 >
                   <Select value={source} onValueChange={(v) => onSourceChange(v as string)}>
@@ -337,6 +374,17 @@ export default function NewVmWizard() {
                           ))}
                         </SelectGroup>
                       )}
+                      {restoreEnabled && (
+                        <SelectGroup>
+                          <SelectSeparator />
+                          <SelectItem value={RESTORE}>
+                            <span className="flex items-center gap-2">
+                              <ArchiveRestore className="size-3.5" /> Restore from old build
+                              <span className="text-muted-foreground">· upload your MateState backup</span>
+                            </span>
+                          </SelectItem>
+                        </SelectGroup>
+                      )}
                     </SelectContent>
                   </Select>
                 </FormField>
@@ -354,6 +402,8 @@ export default function NewVmWizard() {
                   <Input id="name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
                 </FormField>
 
+                {!isRestore && (
+                <>
                 <FormField label="Size" hint="A quick start — fine-tune any field below.">
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {SIZE_PRESETS.map((p) => {
@@ -433,6 +483,57 @@ export default function NewVmWizard() {
                     onChange={(e) => setStorageGb(Number(e.target.value))}
                   />
                 </FormField>
+                </>
+                )}
+
+                {isRestore && (
+                  <>
+                    <FormField
+                      label="MateState backup file"
+                      htmlFor="backup-file"
+                      error={errors.backupFile}
+                      hint="The vzdump archive from your MateState download email (.vma.zst for VMs, .tar.zst for containers)."
+                    >
+                      <Input
+                        id="backup-file"
+                        type="file"
+                        accept=".zst,.gz,.lzo,.vma,.tar"
+                        onChange={(e) => {
+                          setBackupFile(e.target.files?.[0] ?? null);
+                          setErrors({});
+                        }}
+                        className="cursor-pointer file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1 file:text-xs file:font-medium"
+                      />
+                    </FormField>
+
+                    {uploadPct !== null && (
+                      <div>
+                        <div className="mb-1 flex justify-between text-xs text-muted-foreground">
+                          <span>Uploading backup…</span>
+                          <span>{uploadPct}%</span>
+                        </div>
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                          <div
+                            className="h-full rounded-full bg-primary transition-all"
+                            style={{ width: `${uploadPct}%` }}
+                          />
+                        </div>
+                        {uploadPct === 100 && (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Upload complete — restoring on the cluster (this can take a few minutes)…
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Server className="size-3.5" />
+                      The machine keeps the CPU, memory and disk sizes stored inside the backup (they
+                      count against your quota), gets a fresh network identity, and is placed on the
+                      best node automatically.
+                    </p>
+                  </>
+                )}
 
                 {isCloud && (
                   <>
@@ -636,7 +737,7 @@ export default function NewVmWizard() {
                   </>
                 )}
 
-                {!isCustom && !isContainer && (
+                {!isCustom && !isContainer && !isRestore && (
                   <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                     <HardDrive className="size-3.5" />
                     Clones stay on the template&apos;s node and storage — fast and space-efficient.
@@ -650,10 +751,20 @@ export default function NewVmWizard() {
                     <Plus />
                   ) : isContainer ? (
                     <Container />
+                  ) : isRestore ? (
+                    <ArchiveRestore />
                   ) : (
                     <Rocket />
                   )}
-                  {isCustom ? "Create VM" : isContainer ? "Create container" : "Deploy"}
+                  {isCustom
+                    ? "Create VM"
+                    : isContainer
+                      ? "Create container"
+                      : isRestore
+                        ? uploadPct !== null
+                          ? "Restoring…"
+                          : "Upload & restore"
+                        : "Deploy"}
                 </Button>
               </form>
             </CardContent>
