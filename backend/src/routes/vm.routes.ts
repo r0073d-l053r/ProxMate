@@ -76,8 +76,10 @@ import { downloadsEnabled, requestBackupDownload, DownloadError } from '../servi
 import {
   restoreUploadsEnabled,
   restoreFromUpload,
+  resolveUnderUploadDir,
   uploadDir,
   VZDUMP_UPLOAD_RE,
+  TEMP_UPLOAD_RE,
   RestoreUploadError,
 } from '../services/restore-upload.service.js';
 import type { RebuildSource } from '../services/vm.service.js';
@@ -229,7 +231,11 @@ router.post('/restore-upload', async (req: Request, res: Response) => {
     restoreUploadMulter.single('file')(req, res, resolve),
   );
   const file = (req as Request & { file?: Express.Multer.File }).file;
-  const dropTemp = async () => { if (file) await fsp.unlink(file.path).catch(() => undefined); };
+  // Never touch the filesystem with request-derived strings directly: re-derive
+  // both paths from their basenames under the upload root (strict-pattern +
+  // containment sanitizer in restore-upload.service).
+  const tempPath = file ? resolveUnderUploadDir(file.path, TEMP_UPLOAD_RE) : null;
+  const dropTemp = async () => { if (tempPath) await fsp.unlink(tempPath).catch(() => undefined); };
 
   if (uploadErr) {
     await dropTemp();
@@ -252,8 +258,13 @@ router.post('/restore-upload', async (req: Request, res: Response) => {
 
   // Promote the finished temp file to its real vzdump name (making it visible
   // to Proxmox's storage scan). Refuse to clobber an existing backup.
-  const filename = path.basename(file.originalname);
-  const finalPath = path.join(path.dirname(file.path), filename);
+  const finalPath = resolveUnderUploadDir(file.originalname, VZDUMP_UPLOAD_RE);
+  if (!tempPath || !finalPath) {
+    await dropTemp();
+    res.status(400).json({ error: 'That file is not a vzdump backup archive.' });
+    return;
+  }
+  const filename = path.basename(finalPath);
   if (existsSync(finalPath)) {
     await dropTemp();
     res.status(409).json({ error: 'A backup file with this exact name already exists on the server. Rename your file (keep the vzdump-… pattern) and retry.' });
@@ -261,7 +272,7 @@ router.post('/restore-upload', async (req: Request, res: Response) => {
   }
 
   try {
-    await fsp.rename(file.path, finalPath);
+    await fsp.rename(tempPath, finalPath);
     const vm = await restoreFromUpload(user, { filename, name: parsed.data.name });
     await recordAudit({
       action: 'vm.restore_upload',

@@ -46,6 +46,29 @@ export async function restoreUploadsEnabled(): Promise<boolean> {
 
 export class RestoreUploadError extends Error {}
 
+/** The dot-name multer writes uploads under before they're validated + renamed. */
+export const TEMP_UPLOAD_RE = /^\.proxmate-upload-[a-f0-9]{16}\.part$/;
+
+/**
+ * Re-derive a TRUSTED absolute path from a possibly tainted one: reduce to a
+ * bare basename, require it to match `expect`, resolve it under the upload
+ * root, and verify containment (same hardening as the download side's
+ * resolveBackupFile). Returns null for anything path-like or foreign — the
+ * only way a client-influenced string may reach the filesystem.
+ */
+export function resolveUnderUploadDir(candidate: string, expect: RegExp): string | null {
+  const dir = uploadDir();
+  if (!dir) return null;
+  const base = path.basename(candidate);
+  if (!expect.test(base)) return null;
+  const root = path.resolve(dir);
+  const full = path.resolve(root, base);
+  if (!full.startsWith(root + path.sep)) return null;
+  const rel = path.relative(root, full);
+  if (rel.startsWith('..') || path.isAbsolute(rel) || rel !== base) return null;
+  return full;
+}
+
 export interface ParsedBackupConfig {
   cores: number;
   memoryMb: number;
