@@ -4,7 +4,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
-import { siteUrl, siteConfig } from "@/lib/site";
+import { siteConfig, resolveSiteOrigin } from "@/lib/site";
 
 const geistSans = Geist({
   variable: "--font-sans",
@@ -18,50 +18,56 @@ const geistMono = Geist_Mono({
 
 const ogTitle = "ProxMate — Invite-only cloud for your Proxmox cluster";
 
-export const metadata: Metadata = {
-  metadataBase: new URL(siteUrl),
-  applicationName: siteConfig.name,
-  title: {
-    default: ogTitle,
-    template: "%s · ProxMate",
-  },
-  description: siteConfig.description,
-  authors: [{ name: siteConfig.name }],
-  creator: siteConfig.name,
-  publisher: siteConfig.name,
-  alternates: { canonical: "/" },
-  // Private control plane — keep it out of search (the meta half; robots.ts is
-  // the crawler half). Shareability is unaffected: preview bots ignore robots.
-  robots: {
-    index: false,
-    follow: false,
-    nocache: true,
-    googleBot: { index: false, follow: false, noimageindex: true },
-  },
-  // og/twitter IMAGES come from the opengraph-image.png / twitter-image.png
-  // file conventions (with their .alt.txt) — Next merges them in, so we only
-  // set the text fields here to avoid duplicate <meta> tags.
-  openGraph: {
-    type: "website",
-    siteName: siteConfig.name,
-    title: ogTitle,
-    description: siteConfig.shortDescription,
-    url: "/",
-    locale: "en_US",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: ogTitle,
-    description: siteConfig.shortDescription,
-  },
-  appleWebApp: {
-    capable: true,
-    title: siteConfig.name,
-    statusBarStyle: "black-translucent",
-  },
-  // Stop iOS Safari auto-linkifying numeric strings (VM IDs, IPs) as phone numbers.
-  formatDetection: { telephone: false, email: false, address: false },
-};
+// Request-aware so the OG image URL resolves to whatever origin the instance is
+// actually served on (tunnel host, LAN IP, localhost) — a static build-time
+// origin baked the wrong host and broke link-preview images. `metadataBase`
+// makes the file-convention opengraph-image.png / twitter-image.png absolute.
+export async function generateMetadata(): Promise<Metadata> {
+  return {
+    metadataBase: new URL(await resolveSiteOrigin()),
+    applicationName: siteConfig.name,
+    title: {
+      default: ogTitle,
+      template: "%s · ProxMate",
+    },
+    description: siteConfig.description,
+    authors: [{ name: siteConfig.name }],
+    creator: siteConfig.name,
+    publisher: siteConfig.name,
+    alternates: { canonical: "/" },
+    // Private control plane — keep it out of search (the meta half; robots.ts is
+    // the crawler half). Shareability is unaffected: preview bots ignore robots.
+    robots: {
+      index: false,
+      follow: false,
+      nocache: true,
+      googleBot: { index: false, follow: false, noimageindex: true },
+    },
+    // og/twitter IMAGES come from the opengraph-image.png / twitter-image.png
+    // file conventions (with their .alt.txt) — Next merges them in, so we only
+    // set the text fields here to avoid duplicate <meta> tags.
+    openGraph: {
+      type: "website",
+      siteName: siteConfig.name,
+      title: ogTitle,
+      description: siteConfig.shortDescription,
+      url: "/",
+      locale: "en_US",
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: ogTitle,
+      description: siteConfig.shortDescription,
+    },
+    appleWebApp: {
+      capable: true,
+      title: siteConfig.name,
+      statusBarStyle: "black-translucent",
+    },
+    // Stop iOS Safari auto-linkifying numeric strings (VM IDs, IPs) as phone numbers.
+    formatDetection: { telephone: false, email: false, address: false },
+  };
+}
 
 export const viewport: Viewport = {
   themeColor: [
