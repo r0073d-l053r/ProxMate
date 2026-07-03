@@ -24,6 +24,7 @@ import { convertVmToTemplate } from '../services/template.service.js';
 import { isValidCron } from '../services/power-schedule.service.js';
 import {
   listForVm,
+  serializeMateState,
   createMateState,
   restoreFromMateState,
   deleteMateState,
@@ -1106,7 +1107,8 @@ router.get('/:id/matestates', async (req: Request, res: Response) => {
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   // `downloadable` tells the panel whether to show a Download button (needs the
   // admin-mounted backup share + SMTP). Cheap boolean, computed once.
-  res.json({ downloadable: await downloadsEnabled(), items: await listForVm(vm.id) });
+  const items = (await listForVm(vm.id)).map(serializeMateState);
+  res.json({ downloadable: await downloadsEnabled(), items });
 });
 
 // Request a one-time emailed download link for a specific MateState. Requires
@@ -1143,7 +1145,7 @@ router.post('/:id/matestates', async (req: Request, res: Response) => {
       action: 'matestate.create', actor: user, targetType: 'matestate', targetId: ms.id,
       detail: `manual backup of ${vm.name}`, req,
     });
-    res.status(201).json(ms);
+    res.status(201).json(serializeMateState(ms));
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }
