@@ -953,9 +953,12 @@ export async function setVmName(
   vmid: number,
   name: string,
   client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
 ): Promise<void> {
   const c = client ?? (await getClient());
-  await c.put(`/nodes/${node}/qemu/${vmid}/config`, new URLSearchParams({ name }));
+  // QEMU calls it `name`; LXC calls it `hostname`.
+  const key = kind === 'lxc' ? 'hostname' : 'name';
+  await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams({ [key]: name }));
 }
 
 /** Grow a guest disk to an absolute size in GB (Proxmox only supports growing).
@@ -1265,6 +1268,82 @@ export async function restoreBackup(
   if (opts.storage) params.set('storage', opts.storage);
   const res = await c.post<{ data: string }>(`/nodes/${opts.node}/qemu`, params);
   return res.data.data;
+}
+
+/**
+ * Restore a backup as a brand-NEW guest (fresh VMID — no force/overwrite).
+ * `unique=1` regenerates the NIC MAC addresses so a guest migrated from another
+ * cluster/instance can't collide with (or spoof) the original. `storage` remaps
+ * every restored volume onto that pool — essential cross-cluster, where the
+ * storage names inside the archive's config may not exist here.
+ */
+export async function restoreNewGuest(
+  opts: { node: string; vmid: number; volid: string; storage?: string },
+  client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
+): Promise<string> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams({
+    vmid: String(opts.vmid),
+    unique: '1',
+  });
+  if (opts.storage) params.set('storage', opts.storage);
+  if (kind === 'lxc') {
+    params.set('ostemplate', opts.volid);
+    params.set('restore', '1');
+  } else {
+    params.set('archive', opts.volid);
+  }
+  const res = await c.post<{ data: string }>(`/nodes/${opts.node}/${kind}`, params);
+  return res.data.data;
+}
+
+/**
+ * Read the guest config embedded in a vzdump archive (no restore needed).
+ * Returns the raw `key: value` config text — used to quota-check an uploaded
+ * backup before committing to restore it.
+ */
+export async function extractBackupConfig(
+  node: string,
+  volid: string,
+  client?: AxiosInstance,
+): Promise<string> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: string }>(
+    `/nodes/${node}/vzdump/extractconfig?volume=${encodeURIComponent(volid)}`,
+  );
+  return res.data.data;
+}
+
+/**
+ * Online nodes whose `storage` listing actually contains the backup `volid`.
+ * Mirrors getIsoNodes: with node-local backup storage a file written via the
+ * mounted share only exists on one node — restoring anywhere else would fail
+ * asynchronously in Proxmox.
+ */
+export async function getBackupNodes(
+  storage: string,
+  volid: string,
+  client?: AxiosInstance,
+): Promise<string[]> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources');
+  const nodeNames = res.data.data
+    .filter((i) => i.type === 'node' && i.status === 'online' && i.node)
+    .map((i) => i.node!);
+
+  const result: string[] = [];
+  for (const node of nodeNames) {
+    try {
+      const content = await c.get<{ data: Array<{ volid: string }> }>(
+        `/nodes/${node}/storage/${storage}/content?content=backup`,
+      );
+      if (content.data.data?.some((i) => i.volid === volid)) result.push(node);
+    } catch {
+      // backup storage not present/readable on this node → not a candidate
+    }
+  }
+  return result;
 }
 
 // ─── Snapshots (live, in-place point-in-time — distinct from vzdump backups) ──

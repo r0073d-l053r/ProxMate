@@ -27,6 +27,10 @@ import { startScheduler } from './services/scheduler.service.js';
 const PORT = parseInt(process.env.PORT || '4000', 10);
 
 const server = http.createServer(app);
+// Node kills any request still streaming after 5 minutes by default
+// (requestTimeout=300s) — a multi-GB MateState backup upload takes longer.
+// Disable the whole-request timer; headersTimeout (60s) still guards slowloris.
+server.requestTimeout = 0;
 setupConsoleWebSocket(server);
 
 server.listen(PORT, () => {
