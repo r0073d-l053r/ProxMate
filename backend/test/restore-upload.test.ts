@@ -32,9 +32,12 @@ import { assertWithinQuota } from '../src/services/vm.service.js';
 import {
   parseBackupConfig,
   restoreFromUpload,
+  resolveUnderUploadDir,
   RestoreUploadError,
   VZDUMP_UPLOAD_RE,
+  TEMP_UPLOAD_RE,
 } from '../src/services/restore-upload.service.js';
+import path from 'node:path';
 
 const QEMU_CFG = `boot: order=scsi0
 cores: 4
@@ -89,6 +92,40 @@ describe('VZDUMP_UPLOAD_RE', () => {
     expect(VZDUMP_UPLOAD_RE.test('../etc/passwd')).toBe(false);
     expect(VZDUMP_UPLOAD_RE.test('backup.zip')).toBe(false);
     expect(VZDUMP_UPLOAD_RE.test('vzdump-qemu-104-x.vma.zst.exe')).toBe(false);
+  });
+});
+
+describe('resolveUnderUploadDir (path-injection sanitizer)', () => {
+  beforeEach(() => {
+    vi.mocked(backupDir).mockReturnValue('/nonexistent-test-mount');
+  });
+
+  it('resolves a clean vzdump basename under the upload root', () => {
+    const out = resolveUnderUploadDir('vzdump-qemu-104-2026_07_03-03_00_00.vma.zst', VZDUMP_UPLOAD_RE);
+    expect(out).not.toBeNull();
+    expect(path.basename(out!)).toBe('vzdump-qemu-104-2026_07_03-03_00_00.vma.zst');
+    expect(out!.startsWith(path.resolve('/nonexistent-test-mount'))).toBe(true);
+  });
+
+  it('reduces path-like input to its basename — traversal segments never survive', () => {
+    // The basename of a traversal path is not a valid vzdump name → null.
+    expect(resolveUnderUploadDir('../../etc/passwd', VZDUMP_UPLOAD_RE)).toBeNull();
+    expect(resolveUnderUploadDir('..\\..\\windows\\system32\\config', VZDUMP_UPLOAD_RE)).toBeNull();
+    // A valid-looking name buried in a path resolves to just the basename (contained).
+    const out = resolveUnderUploadDir('/tmp/elsewhere/vzdump-qemu-1-x.vma.zst', VZDUMP_UPLOAD_RE);
+    expect(out).toBe(path.resolve('/nonexistent-test-mount', 'vzdump-qemu-1-x.vma.zst'));
+  });
+
+  it('rejects anything that fails the expected pattern', () => {
+    expect(resolveUnderUploadDir('backup.zip', VZDUMP_UPLOAD_RE)).toBeNull();
+    expect(resolveUnderUploadDir('.proxmate-upload-0123456789abcdef.part', VZDUMP_UPLOAD_RE)).toBeNull();
+    expect(resolveUnderUploadDir('vzdump-qemu-1-x.vma.zst', TEMP_UPLOAD_RE)).toBeNull();
+    expect(resolveUnderUploadDir('.proxmate-upload-0123456789abcdef.part', TEMP_UPLOAD_RE)).not.toBeNull();
+  });
+
+  it('returns null when the feature is disabled (no mount)', () => {
+    vi.mocked(backupDir).mockReturnValue(null);
+    expect(resolveUnderUploadDir('vzdump-qemu-1-x.vma.zst', VZDUMP_UPLOAD_RE)).toBeNull();
   });
 });
 
