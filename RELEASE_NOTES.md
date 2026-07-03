@@ -1,45 +1,37 @@
 ## Highlights
 
-**Shared links now show a proper preview image.** When you paste a ProxMate link into
-Slack, Discord, iMessage, X, or anywhere else that unfurls URLs, the card now renders the
-branded ProxMate thumbnail instead of an empty box — on every instance, with no extra setup.
+**MateStates backups over ~2.1 GB no longer break the backups panel.** If a VM had a
+backup larger than about 2.1 GB, opening its MateStates section returned a server error
+(HTTP 500) and **no backups were listed at all** — the backups themselves were safe on
+Proxmox storage the whole time; only the listing failed. Updating to this release repairs
+the condition automatically.
 
 ## Fixes
 
-- **Open Graph / Twitter share image now unfurls.** Previously a shared link showed the
-  title and description but an **empty image slot**. The image asset existed and was valid;
-  the problem was the URL it pointed at. ProxMate derived the preview-image origin from a
-  **build-time** value, and the Docker images default `NEXT_PUBLIC_SITE_URL` to
-  `http://localhost:3000` — so any instance built without that variable told link-preview
-  bots to fetch `http://localhost:3000/opengraph-image.png`, which they can't reach.
-
-  The origin is now resolved from the **actual incoming request** (`x-forwarded-host` /
-  `Host` + `x-forwarded-proto`). Link previews resolve correctly on any self-hosted
-  instance behind a tunnel or reverse proxy **with zero configuration**. Setting
-  `NEXT_PUBLIC_SITE_URL` explicitly still takes precedence; a `localhost` value is treated
-  as unset so the development default can no longer break production unfurls.
-
-- **Refreshed share card ("Refined Dark").** The 1200x630 Open Graph / Twitter image was
-  redrawn — ProxMate logo and wordmark, the "Share your homelab. Keep your boundaries."
-  headline, subtext, and a blue-to-teal accent underline on the dark brand background.
+- **Backup size overflow (500 on the MateStates list).** A backup's size in **bytes** was
+  stored in a 32-bit integer column, which tops out at 2,147,483,647 (~2.1 GB). The
+  database itself stored the larger value fine, but the ORM refused to read the row back
+  ("value does not fit in an INT32"), which failed the entire backups query — so the API
+  answered 500 and the panel showed nothing. The column is now a 64-bit integer
+  (`BigInt`), sizes are converted to a JSON-safe number at the API boundary, and a
+  regression test pins a 3 GB backup listing correctly.
 
 ## Upgrade notes
 
-- **Patch release — no database migrations, no new environment variables, no breaking
-  changes.**
-- A rebuild is all that is required. `NEXT_PUBLIC_SITE_URL` is now **optional**: leave it
-  unset and previews follow whatever origin the instance is served on; set it if you want
-  to pin the origin explicitly.
+- **Patch release — one automatic database migration, no new environment variables, no
+  breaking changes.** The migration (`matestate_size_bigint`) applies itself when the API
+  container starts. It is non-destructive: the table is rebuilt with the wider column and
+  **every existing row is copied over**, including the oversized value that triggered the
+  bug — so previously "missing" backups reappear immediately after the update.
 - Standard update: **Admin → Settings → Updates → Install update**, or pull + rebuild
   (`docker compose up -d --build`).
-- After updating, re-share a link (some platforms cache old unfurls — a card validator or a
-  cache-busting query string forces a refresh) to confirm the image renders.
+- After updating, open a VM's MateStates section to confirm the list loads (including any
+  backup larger than 2.1 GB).
 
 ## Verification
 
-- Confirmed against a production build (`next build` + `next start`): a proxied request with
-  `Host: proxmate.myhomelab.pro` + `x-forwarded-proto: https` yields
-  `https://proxmate.myhomelab.pro/opengraph-image.png`; an `x-forwarded-host` request yields
-  that host; a direct request yields the local origin. The image route returns
-  `200 image/png`.
-- Frontend typecheck, lint, and production build all green.
+- Backend suite green: **375 tests** (3 new regression tests covering a 3 GB backup size —
+  Number conversion and JSON-safe serialization). Typecheck and lint clean.
+- The failure mode was reproduced from a production report (500 on
+  `GET /api/vms/:id/matestates` with a multi-GB backup present) and traced to the ORM's
+  INT32 read guard; the fix targets that exact path.
