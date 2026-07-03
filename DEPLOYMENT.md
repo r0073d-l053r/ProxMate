@@ -126,6 +126,20 @@ Fill in the **PRODUCTION** block (replace the domain). The key values:
 | `TRUST_PROXY` | `1` | One proxy hop (Caddy) → real client IP for rate-limit + audit. |
 | `BIND_ADDR` | `127.0.0.1` | Only the local reverse proxy can reach the app ports. |
 | `BACKUP_DOWNLOAD_DIR` | *(optional)* e.g. `/backups` | **Enables tenant backup downloads.** Mount your backup share (the same NFS/CIFS/PBS-dir Proxmox writes vzdumps to) into the API container and point this at it. Tenants then get a **Download** button on each MateState that emails them a single-use, 1-hour link; ProxMate streams the file off this mount (the Proxmox API can't stream vzdump bytes). Requires SMTP. Leave unset to keep the feature off. |
+| `RESTORE_UPLOAD_MAX_GB` | *(optional)* default `50` | Size cap for **restore-from-upload** (below). `0` disables the cap. |
+
+> **Restore from old build (upload a MateState backup).** When `BACKUP_DOWNLOAD_DIR` is
+> mounted **read-write** (`rw`, not `:ro`), the create-VM wizard gains a **"Restore from old
+> build"** source: a tenant uploads a vzdump archive they previously downloaded and ProxMate
+> restores it as a new machine — the migration path between clusters or ProxMate instances.
+> The upload is streamed onto the mount (the Proxmox API can't accept backup uploads), the
+> embedded config is quota-checked via `vzdump extractconfig` before anything is restored,
+> volumes are remapped onto the default disk storage, the guest gets fresh MAC addresses, and
+> the tenant-isolation firewall is applied before first boot. The uploaded file is removed
+> after the restore. Mount the share `:ro` to keep downloads but disable uploads.
+> **Cloudflare note:** the free Cloudflare plan caps request bodies at ~100 MB, so multi-GB
+> uploads through a Cloudflare Tunnel will be rejected at the edge — upload from the LAN /
+> Tailscale origin instead, or raise the plan limit.
 
 > If you ever change `NEXT_PUBLIC_API_URL`, you must **rebuild** the frontend image
 > (it's compiled in, not read at runtime).
