@@ -1,14 +1,55 @@
 // Absolute origin + shared copy for SEO metadata (OG/canonical/manifest).
 //
-// `siteUrl` must be the EXTERNALLY reachable origin (the Cloudflare Tunnel
-// hostname), because link-preview bots fetch the OG image over the public
-// internet — an internal container address (http://app:3000) yields broken
-// unfurls. Override per-deployment with NEXT_PUBLIC_SITE_URL (the NEXT_PUBLIC_
-// prefix makes it available at render time; it's only a public origin, so no
-// secret is exposed). The trailing slash is stripped to avoid `//og` artifacts.
-export const siteUrl =
-  process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") ||
-  "https://proxmate.myhomelab.pro";
+// The origin must be the EXTERNALLY reachable one, because link-preview bots
+// fetch the OG image over the public internet — an internal/localhost address
+// yields a broken unfurl (the image URL can't be reached). We resolve it, in
+// order: an explicit operator override, then the actual request origin, then a
+// last-ditch default.
+
+const DEFAULT_ORIGIN = "https://proxmate.myhomelab.pro";
+
+/**
+ * An explicit, externally-reachable origin set by the operator via
+ * NEXT_PUBLIC_SITE_URL. The Docker images bake `NEXT_PUBLIC_SITE_URL=
+ * http://localhost:3000` as a dev default, so a localhost value is treated as
+ * "unset" — otherwise every unfurl bot would be handed a localhost og:image URL
+ * it can't fetch (this was the "no image on shared links" bug). Trailing slash
+ * stripped to avoid `//og` artifacts.
+ */
+function explicitSiteUrl(): string | null {
+  const raw = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "");
+  if (!raw) return null;
+  if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(raw)) return null;
+  return raw;
+}
+
+/** Build-time best guess (explicit override, else default). Kept for any
+ *  non-request context; request-aware code should prefer `resolveSiteOrigin`. */
+export const siteUrl = explicitSiteUrl() ?? DEFAULT_ORIGIN;
+
+/**
+ * Resolve the absolute origin for OG/canonical URLs. Prefers an explicit
+ * NEXT_PUBLIC_SITE_URL, then the **actual request origin** (so link previews
+ * work on any self-hosted instance with zero config, behind a tunnel/proxy),
+ * then the default. Server-only (reads request headers) — call from
+ * `generateMetadata`.
+ */
+export async function resolveSiteOrigin(): Promise<string> {
+  const explicit = explicitSiteUrl();
+  if (explicit) return explicit;
+  try {
+    const { headers } = await import("next/headers");
+    const h = await headers();
+    const host = h.get("x-forwarded-host") ?? h.get("host");
+    if (host) {
+      const proto = (h.get("x-forwarded-proto") ?? "https").split(",")[0]!.trim();
+      return `${proto}://${host}`;
+    }
+  } catch {
+    // headers() unavailable (static/build context) — fall through to default.
+  }
+  return DEFAULT_ORIGIN;
+}
 
 export const siteConfig = {
   name: "ProxMate",
