@@ -129,6 +129,21 @@ describe('announcementEmail', () => {
     expect(email.html).not.toContain('<script>x</script>');
     expect(email.html).toContain('&lt;script&gt;');
   });
+
+  it('adds an unsubscribe footer link (html + text) when a URL is provided', () => {
+    const url = 'https://pm.example/api/broadcast/unsubscribe?token=user1.abc';
+    const email = announcementEmail('Maintenance', 'Details.', url);
+    expect(email.html).toContain(`href="${url}"`);
+    expect(email.html).toMatch(/Unsubscribe/);
+    expect(email.html).toContain('security emails are unaffected');
+    expect(email.text).toContain(url);
+  });
+
+  it('omits the unsubscribe footer when no URL is provided', () => {
+    const email = announcementEmail('Maintenance', 'Details.');
+    expect(email.html).not.toMatch(/Unsubscribe/);
+    expect(email.text).not.toMatch(/Unsubscribe/);
+  });
 });
 
 describe('vmMaintenanceEmail', () => {

@@ -247,6 +247,7 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
       twoFactorEnabled: user.twoFactorEnabled,
       require2fa: user.require2fa,
       mfaSetupRequired: await isMfaSetupRequired(user.id),
+      broadcastOptOut: user.broadcastOptOut,
       createdAt: user.createdAt,
       quota: {
         cpu: { used: usedCpu, max: user.maxCpu },
@@ -255,6 +256,26 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
       },
     },
   });
+});
+
+// ─── PUT /api/auth/email-preferences ──────────────────────────
+// Community Edition: opt in/out of admin broadcast (announcement) emails.
+// Transactional / security / notification emails are unaffected by this flag.
+
+const EmailPrefsSchema = z.object({ broadcastOptOut: z.boolean() });
+
+router.put('/email-preferences', requireAuth, async (req: Request, res: Response) => {
+  const parsed = EmailPrefsSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid preference.' }); return; }
+  const u = (req as AuthRequest).user;
+  await prisma.user.update({ where: { id: u.id }, data: { broadcastOptOut: parsed.data.broadcastOptOut } });
+  await recordAudit({
+    action: parsed.data.broadcastOptOut ? 'user.broadcast_optout' : 'user.broadcast_optin',
+    actor: u,
+    detail: 'via email preferences',
+    req,
+  });
+  res.json({ success: true, broadcastOptOut: parsed.data.broadcastOptOut });
 });
 
 // ─── 2FA (TOTP) management — authenticated ────────────────────

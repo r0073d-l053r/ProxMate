@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ShieldCheck, ShieldOff, Loader2, KeyRound, Copy, Fingerprint, Plus, Trash2, KeySquare, Terminal } from "lucide-react";
+import { ShieldCheck, ShieldOff, Loader2, KeyRound, Copy, Fingerprint, Plus, Trash2, KeySquare, Terminal, Mail } from "lucide-react";
 import { startRegistration } from "@simplewebauthn/browser";
 import { api, apiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
@@ -36,6 +36,8 @@ export default function SecurityPage() {
   const [tokenName, setTokenName] = useState("");
   const [creatingToken, setCreatingToken] = useState(false);
   const [newToken, setNewToken] = useState<string | null>(null);
+  const [broadcastOptOut, setBroadcastOptOut] = useState<boolean | null>(null);
+  const [savingPrefs, setSavingPrefs] = useState(false);
   const setStoreMfa = useAuthStore((s) => s.setMfaSetupRequired);
 
   const load = useCallback(() => {
@@ -62,9 +64,23 @@ export default function SecurityPage() {
         const required = !!r.data.user.mfaSetupRequired;
         setMfaRequired(required);
         setStoreMfa(required);
+        setBroadcastOptOut(!!r.data.user.broadcastOptOut);
       })
       .catch(() => {});
   }, [setStoreMfa]);
+
+  async function saveEmailPrefs(optOut: boolean) {
+    setSavingPrefs(true);
+    try {
+      await api.put("/auth/email-preferences", { broadcastOptOut: optOut });
+      setBroadcastOptOut(optOut);
+      toast.success(optOut ? "You won't receive announcement emails." : "Announcement emails re-enabled.");
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setSavingPrefs(false);
+    }
+  }
 
   async function saveSshKey() {
     setSavingKey(true);
@@ -530,6 +546,43 @@ export default function SecurityPage() {
               Create token
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Mail className="size-5" /> Email preferences
+          </CardTitle>
+          <CardDescription>
+            Announcement emails are the broadcasts your administrator sends to all users (maintenance
+            notices, general updates). Security and account emails — password resets, sign-in alerts —
+            are always delivered.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {broadcastOptOut === null ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> Loading…
+            </div>
+          ) : (
+            <label className="flex cursor-pointer items-start gap-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 size-4 accent-primary"
+                checked={!broadcastOptOut}
+                disabled={savingPrefs}
+                onChange={(e) => saveEmailPrefs(!e.target.checked)}
+              />
+              <span>
+                <span className="font-medium">Receive announcement emails</span>
+                <span className="block text-xs text-muted-foreground">
+                  Uncheck to unsubscribe from admin broadcasts. Every broadcast also carries an
+                  unsubscribe link.
+                </span>
+              </span>
+            </label>
+          )}
         </CardContent>
       </Card>
     </div>
