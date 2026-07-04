@@ -1,49 +1,43 @@
 ## Highlights
 
-**Restore a VM from a backup you downloaded — migrate between clusters or ProxMate
-instances.** The create-VM wizard gains a new source at the bottom of the list,
-**"Restore from old build — upload your MateState backup."** Download a backup from the
-MateState email link on one ProxMate, upload it here, and it comes back as a new machine —
-the missing half of a full self-service migration path.
+**Users can now unsubscribe from admin broadcast emails (Community Edition).** Every
+announcement an admin sends from **Settings → Broadcast email** now carries a personal
+**unsubscribe link**, and each account gets a **Security → Email preferences** toggle.
+Opted-out users are skipped on the next broadcast — while password resets, sign-in alerts,
+and VM notifications keep arriving exactly as before.
 
 ## Features
 
-- **Restore from an uploaded MateState backup.** A tenant uploads the vzdump archive they
-  downloaded (`.vma.zst` for VMs, `.tar.zst` for containers) and ProxMate restores it as a
-  brand-new guest. The wizard streams the file with a progress bar; sizing comes from inside
-  the backup (and is charged against the uploader's quota). Under the hood:
-  - Quota is checked from the archive's **embedded config before anything is restored**.
-  - Every volume is **remapped onto this cluster's default disk storage** (a backup from
-    another cluster names storages that may not exist here), and the guest gets **fresh MAC
-    addresses** so it can't collide with the original.
-  - The **tenant-isolation firewall is applied before first boot**, and the uploaded archive
-    is removed afterward (it was only a transport carrier).
-  - Works for both QEMU VMs and LXC containers.
+- **Broadcast opt-out, two ways.** Each broadcast email footer has an **Unsubscribe** link
+  (per-recipient, HMAC-signed — valid only for that account, no expiry to manage), and the
+  in-app **Security → Email preferences** card lets a user unsubscribe or re-subscribe at
+  any time. Both paths are recorded in the audit log.
+- **Scanner-proof unsubscribe.** The link opens a confirmation page and only an explicit
+  button press opts the user out — so corporate mail scanners (e.g. Outlook SafeLinks) that
+  prefetch every link in an email can't silently unsubscribe your users.
+- **Admins see the reach.** The broadcast send result now reports how many users were
+  skipped as unsubscribed (toast + audit detail), so "sent to 12 (3 unsubscribed)" is
+  visible at a glance.
+- **Scope is deliberately narrow.** The opt-out affects **only** admin broadcasts.
+  Transactional, security, and event-notification emails are untouched. _(This opt-out is a
+  Community Edition feature: the EDU edition will not include it, since instructors must be
+  able to reach every student.)_
 
 ## Upgrade notes
 
-- **No database migrations, no breaking changes.** One new **optional** environment variable,
-  `RESTORE_UPLOAD_MAX_GB` (default `50`, `0` disables the cap).
-- **The feature is off until you opt in.** It reuses the backup-downloads mount
-  (`BACKUP_DOWNLOAD_DIR`), but for *uploads* that mount must be **read-write** — mount it `rw`
-  (not `:ro`) and the wizard option appears automatically; leave it `:ro` to keep downloads
-  only. The option stays hidden when the mount is absent or read-only.
-- **Cloudflare note:** the free Cloudflare plan caps request bodies at ~100 MB, so multi-GB
-  uploads through a Cloudflare Tunnel are rejected at the edge — upload from a LAN / Tailscale
-  origin, or raise the plan limit.
+- **One database migration** (`add_broadcast_opt_out` — a single default-false column on
+  `User`), applied automatically on deploy. No new environment variables; no breaking
+  changes. Existing users all stay subscribed until they opt out.
+- The unsubscribe link uses your existing public URL (frontend origin `/api`), so no extra
+  routing setup is needed.
 - Standard update: **Admin → Settings → Updates → Install update**, or pull + rebuild
   (`docker compose up -d --build`).
 
 ## Verification
 
-- Backend suite green: **389 tests** (14 new — config parsing, strict filename + path-traversal
-  sanitization, quota-reject cleanup, isolation-before-boot ordering, LXC handling). Typecheck
-  and lint clean on both backend and frontend; frontend production build green.
-- Verified end-to-end in a browser on a mock-Proxmox rig: a tenant uploads an archive → progress
-  bar → the restored VM page renders running with the backup's exact resources and a fresh
-  identity, and the uploaded archive is removed from the mount.
-- **CodeQL:** the upload route's filesystem paths are re-derived through a containment sanitizer
-  (basename → strict pattern → resolve-under-root → containment check); no open code-scanning
-  alerts.
-- Restore behavior against a **live** multi-node cluster is pending hardware verification (the
-  mock exercises the ProxMate plumbing, not Proxmox's own vzdump restore).
+- Backend suite green: **396 tests** (7 new — unsubscribe-token round-trip/tamper/cross-user
+  forgery/malformed-input cases, and unsubscribe-footer rendering + HTML-escaping in the
+  announcement template). Typecheck and lint clean on backend and frontend; frontend
+  production build green.
+- The broadcast query filters opted-out users server-side and the skipped count is returned
+  in the API response and written to the audit log.

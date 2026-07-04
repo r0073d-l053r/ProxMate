@@ -24,6 +24,7 @@ interface BroadcastResult {
   sent: number;
   failed: number;
   total: number;
+  skipped: number; // users who unsubscribed from broadcasts
 }
 
 /**
@@ -44,11 +45,12 @@ export function BroadcastCard() {
         subject: subject.trim(),
         message: message.trim(),
       });
-      const { sent, failed, total } = res.data;
+      const { sent, failed, total, skipped } = res.data;
+      const optedOut = skipped ? ` (${skipped} unsubscribed)` : "";
       if (failed === 0) {
-        toast.success(`Announcement sent to all ${total} user${total === 1 ? "" : "s"}.`);
+        toast.success(`Announcement sent to ${total} user${total === 1 ? "" : "s"}${optedOut}.`);
       } else {
-        toast.warning(`Sent to ${sent} of ${total} — ${failed} failed (check SMTP and addresses).`);
+        toast.warning(`Sent to ${sent} of ${total} — ${failed} failed (check SMTP and addresses)${optedOut}.`);
       }
       setOpen(false);
       setSubject("");
@@ -69,7 +71,8 @@ export function BroadcastCard() {
         <CardDescription>
           Email an announcement to <span className="font-medium text-foreground">every user</span> — e.g.
           planned maintenance, expected downtime, or an all-clear. Uses your configured SMTP and the
-          ProxMate-branded email template.
+          ProxMate-branded email template. Users who unsubscribed from announcements are skipped
+          (security and account emails are never affected).
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">

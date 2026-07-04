@@ -279,10 +279,14 @@ export function inviteEmail(opts: {
 /**
  * Branded admin broadcast — a maintenance/downtime/general announcement sent to
  * every user. The admin controls the subject and free-text message (preserved
- * line breaks, HTML-escaped).
+ * line breaks, HTML-escaped). When a per-recipient `unsubscribeUrl` is provided
+ * (Community Edition), the footer carries an unsubscribe link — it opts the
+ * recipient out of broadcasts only, never transactional/security email.
  */
-export function announcementEmail(subject: string, message: string): RenderedEmail {
-  const text = `${subject}\n\n${message}`;
+export function announcementEmail(subject: string, message: string, unsubscribeUrl?: string): RenderedEmail {
+  const text =
+    `${subject}\n\n${message}` +
+    (unsubscribeUrl ? `\n\n—\nUnsubscribe from these announcements: ${unsubscribeUrl}` : '');
   const bodyRows =
     h1(escapeHtml(subject)) +
     `<div style="font-family:${FONT}; font-size:15px; line-height:1.6; color:${BODY}; white-space:pre-wrap;">${escapeHtml(message)}</div>` +
@@ -290,8 +294,11 @@ export function announcementEmail(subject: string, message: string): RenderedEma
       color: MUTED,
       size: 13,
       mt: 24,
-      mb: 0,
-    });
+      mb: unsubscribeUrl ? 6 : 0,
+    }) +
+    (unsubscribeUrl
+      ? `<p style="margin:0; font-size:12px; line-height:1.6; color:${FAINT};"><a href="${escapeHtml(unsubscribeUrl)}" style="color:${MUTED}; text-decoration:underline;">Unsubscribe</a> from announcement emails — account and security emails are unaffected.</p>`
+      : '');
   return { subject, text, html: wrapEmail(subject, bodyRows) };
 }
 
