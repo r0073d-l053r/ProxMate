@@ -1,5 +1,5 @@
-import { Router, urlencoded, type Request, type Response } from 'express';
-import { unsubscribeToken, verifyUnsubscribeToken, setBroadcastOptOut } from '../services/broadcast-optout.service.js';
+import { Router, type Request, type Response } from 'express';
+import { verifyUnsubscribeToken, setBroadcastOptOut } from '../services/broadcast-optout.service.js';
 import { recordAudit } from '../services/audit.service.js';
 
 /**
@@ -12,11 +12,13 @@ import { recordAudit } from '../services/audit.service.js';
  * Corporate mail scanners (Outlook SafeLinks etc.) prefetch every GET in an
  * email — if the GET itself unsubscribed, scanners would silently opt out every
  * recipient. Only the explicit POST changes anything.
+ *
+ * The confirmation form deliberately carries NO fields: it POSTs back to the
+ * same URL (empty form action = current URL, query string included), so the
+ * token rides the query string on both steps and no request-derived value is
+ * ever rendered into the HTML (no reflected-input path, by construction).
  */
 const router = Router();
-
-// The POST comes from the plain HTML <form> below (form-urlencoded, no JS).
-router.use(urlencoded({ extended: false }));
 
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 
@@ -46,17 +48,14 @@ router.get('/unsubscribe', (req: Request, res: Response) => {
   const userId = verifyUnsubscribeToken(String(req.query['token'] ?? ''));
   res.type('html');
   if (!userId) { res.status(404).send(invalidPage); return; }
-  // Never echo the request's token into the page: re-derive the canonical token
-  // from the *verified* user id (the HMAC is deterministic, so it's the same
-  // value) — provably server-generated, no reflected-input path into the HTML.
-  const canonicalToken = unsubscribeToken(userId);
+  // Static page — the form has no fields and POSTs back to this same URL
+  // (query string, and thus the token, preserved by the browser).
   res.send(
     page(
       'Unsubscribe',
       `<h1 style="margin:0 0 10px;font-size:17px;color:#18181b;">Unsubscribe from announcements?</h1>
 <p style="margin:0 0 22px;font-size:14px;line-height:1.6;color:#3f3f46;">You'll stop receiving announcement emails your administrator sends to all users (maintenance notices, general updates). Security and account emails — password resets, sign-in alerts — are <strong>not</strong> affected.</p>
-<form method="post" action="unsubscribe" style="margin:0;">
-<input type="hidden" name="token" value="${canonicalToken}"/>
+<form method="post" style="margin:0;">
 <button type="submit" style="padding:11px 26px;font-family:${FONT};font-size:15px;font-weight:600;color:#fff;background:#18181b;border:0;border-radius:8px;cursor:pointer;">Unsubscribe</button>
 </form>
 <p style="margin:18px 0 0;font-size:12px;color:#71717a;">Changed your mind later? Re-enable them in ProxMate under <strong>Security &rarr; Email preferences</strong>.</p>`,
@@ -64,12 +63,12 @@ router.get('/unsubscribe', (req: Request, res: Response) => {
   );
 });
 
-// ─── POST /api/broadcast/unsubscribe ──────────────────────────
-// The explicit action. Idempotent; audited with the user as the actor.
+// ─── POST /api/broadcast/unsubscribe?token=… ──────────────────
+// The explicit action (token from the query string, same as the GET).
+// Idempotent; audited with the user as the actor.
 
 router.post('/unsubscribe', async (req: Request, res: Response) => {
-  const token = String((req.body as Record<string, unknown>)?.['token'] ?? '');
-  const userId = verifyUnsubscribeToken(token);
+  const userId = verifyUnsubscribeToken(String(req.query['token'] ?? ''));
   res.type('html');
   if (!userId) { res.status(404).send(invalidPage); return; }
 
