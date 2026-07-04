@@ -33,6 +33,11 @@ model User {
   maxRam        Int       @default(0)      // total RAM in MB
   maxStorage    Int       @default(0)      // total disk in GB
 
+  // Community Edition: opted out of admin broadcast (announcement) emails.
+  // Transactional / security / notification emails are unaffected. The EDU
+  // edition deliberately has no opt-out (instructors must reach every student).
+  broadcastOptOut Boolean @default(false)
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
