@@ -1,5 +1,5 @@
 import { Router, urlencoded, type Request, type Response } from 'express';
-import { verifyUnsubscribeToken, setBroadcastOptOut } from '../services/broadcast-optout.service.js';
+import { unsubscribeToken, verifyUnsubscribeToken, setBroadcastOptOut } from '../services/broadcast-optout.service.js';
 import { recordAudit } from '../services/audit.service.js';
 
 /**
@@ -43,17 +43,20 @@ const invalidPage = page(
 // Confirmation page only — never mutates (scanner-prefetch safe).
 
 router.get('/unsubscribe', (req: Request, res: Response) => {
-  const token = String(req.query['token'] ?? '');
-  const userId = verifyUnsubscribeToken(token);
+  const userId = verifyUnsubscribeToken(String(req.query['token'] ?? ''));
   res.type('html');
   if (!userId) { res.status(404).send(invalidPage); return; }
+  // Never echo the request's token into the page: re-derive the canonical token
+  // from the *verified* user id (the HMAC is deterministic, so it's the same
+  // value) — provably server-generated, no reflected-input path into the HTML.
+  const canonicalToken = unsubscribeToken(userId);
   res.send(
     page(
       'Unsubscribe',
       `<h1 style="margin:0 0 10px;font-size:17px;color:#18181b;">Unsubscribe from announcements?</h1>
 <p style="margin:0 0 22px;font-size:14px;line-height:1.6;color:#3f3f46;">You'll stop receiving announcement emails your administrator sends to all users (maintenance notices, general updates). Security and account emails — password resets, sign-in alerts — are <strong>not</strong> affected.</p>
 <form method="post" action="unsubscribe" style="margin:0;">
-<input type="hidden" name="token" value="${token}"/>
+<input type="hidden" name="token" value="${canonicalToken}"/>
 <button type="submit" style="padding:11px 26px;font-family:${FONT};font-size:15px;font-weight:600;color:#fff;background:#18181b;border:0;border-radius:8px;cursor:pointer;">Unsubscribe</button>
 </form>
 <p style="margin:18px 0 0;font-size:12px;color:#71717a;">Changed your mind later? Re-enable them in ProxMate under <strong>Security &rarr; Email preferences</strong>.</p>`,
