@@ -49,6 +49,7 @@ import {
 } from '../services/update.service.js';
 import { getMailConfig, saveMailConfig, verifyMailConfig, isMailConfigured, sendMail } from '../services/mail.service.js';
 import { announcementEmail } from '../lib/email-templates.js';
+import { unsubscribeToken } from '../services/broadcast-optout.service.js';
 import { getNotifyConfig, saveNotifyConfig, sendTestNotification, NOTIFY_EVENTS } from '../services/notify.service.js';
 import * as sso from '../services/sso.service.js';
 import { listResetRequests, adminResetPassword } from '../services/password-reset.service.js';
@@ -662,19 +663,36 @@ router.post('/broadcast', async (req: Request, res: Response) => {
     return;
   }
 
-  const users = await prisma.user.findMany({ select: { email: true } });
-  const mail = announcementEmail(parsed.data.subject, parsed.data.message);
-  const results = await Promise.allSettled(users.map((u) => sendMail({ to: u.email, ...mail })));
+  // Community Edition: honor each user's broadcast opt-out (Security → Email
+  // preferences, or the unsubscribe link in a previous broadcast). Transactional
+  // and notification emails are unaffected by this flag.
+  const [users, skipped] = await Promise.all([
+    prisma.user.findMany({ where: { broadcastOptOut: false }, select: { id: true, email: true } }),
+    prisma.user.count({ where: { broadcastOptOut: true } }),
+  ]);
+
+  // Per-recipient unsubscribe link (in prod the frontend origin also serves /api).
+  const appUrl = ((await getConfig('frontend_url')) ?? process.env['BACKEND_PUBLIC_URL'] ?? process.env['FRONTEND_URL'] ?? '')
+    .replace(/\/+$/, '');
+  const results = await Promise.allSettled(
+    users.map((u) => {
+      const unsubscribeUrl = appUrl
+        ? `${appUrl}/api/broadcast/unsubscribe?token=${unsubscribeToken(u.id)}`
+        : undefined;
+      const mail = announcementEmail(parsed.data.subject, parsed.data.message, unsubscribeUrl);
+      return sendMail({ to: u.email, ...mail });
+    }),
+  );
   const sent = results.filter((r) => r.status === 'fulfilled').length;
   const failed = results.length - sent;
 
   await recordAudit({
     action: 'admin.broadcast',
     actor: (req as AuthRequest).user,
-    detail: `"${parsed.data.subject}" → ${sent}/${results.length} delivered`,
+    detail: `"${parsed.data.subject}" → ${sent}/${results.length} delivered${skipped ? `, ${skipped} opted out` : ''}`,
     req,
   });
-  res.json({ ok: failed === 0, sent, failed, total: results.length });
+  res.json({ ok: failed === 0, sent, failed, total: results.length, skipped });
 });
 
 // ─── Cluster Balancer (DRS-style workload balancing) ──────────

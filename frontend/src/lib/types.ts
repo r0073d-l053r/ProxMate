@@ -30,6 +30,8 @@ export interface MeResponse {
     twoFactorEnabled?: boolean;
     require2fa?: boolean;
     mfaSetupRequired?: boolean;
+    // CE: opted out of admin broadcast (announcement) emails. Security emails unaffected.
+    broadcastOptOut?: boolean;
   };
 }
 
