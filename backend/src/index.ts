@@ -23,6 +23,7 @@ import { app } from './app.js';
 import { logger } from './lib/logger.js';
 import { setupConsoleWebSocket } from './routes/console.routes.js';
 import { startScheduler } from './services/scheduler.service.js';
+import { reconcileInterruptedPassthroughApplies } from './services/passthrough-request.service.js';
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 
@@ -36,4 +37,9 @@ setupConsoleWebSocket(server);
 server.listen(PORT, () => {
   logger.info({ port: PORT, env: process.env.NODE_ENV || 'development' }, `ProxMate API running on http://localhost:${PORT}`);
   startScheduler();
+  // Recover any passthrough approval that was mid-flight when the process last
+  // stopped (a long disk relocation can outlast a deploy). Best-effort.
+  void reconcileInterruptedPassthroughApplies().catch((err) =>
+    logger.error({ err }, 'passthrough startup reconcile failed'),
+  );
 });

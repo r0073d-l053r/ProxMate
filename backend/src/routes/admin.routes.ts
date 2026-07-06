@@ -33,7 +33,8 @@ import {
 } from '../services/cluster-balancer.service.js';
 import {
   listPendingPassthroughRequests,
-  approvePassthroughRequest,
+  beginPassthroughApproval,
+  applyPassthroughApproval,
   denyPassthroughRequest,
   detachPassthrough,
   PassthroughRequestError,
@@ -577,20 +578,36 @@ const ApprovePassthroughSchema = z.object({
 router.post('/passthrough-requests/:id/approve', async (req: Request, res: Response) => {
   const parsed = ApprovePassthroughSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Choose a PCI mapping to attach.' }); return; }
+  const user = (req as AuthRequest).user;
+  const id = req.params['id'] as string;
   try {
-    const r = await approvePassthroughRequest(
-      req.params['id'] as string,
-      (req as AuthRequest).user.id,
-      parsed.data.mapping,
+    // Validate + plan synchronously (fast), then apply in the background: the
+    // apply may stop the VM and offline-migrate it to the device's node —
+    // minutes of disk copy an edge proxy would time out on. Progress lands on
+    // the request row (applyState) for the admin UI to poll; the worker writes
+    // the completion/failure audit entries.
+    const plan = await beginPassthroughApproval(id, parsed.data.mapping);
+    void applyPassthroughApproval(id, user.id).catch((err) =>
+      console.error('[passthrough] apply failed:', err),
     );
     await recordAudit({
-      action: 'passthrough.approve',
-      actor: (req as AuthRequest).user,
+      action: 'passthrough.approve_started',
+      actor: user,
       targetType: 'vm',
-      detail: `${r.vmName} ← mapping ${r.mapping}${r.wasRunning ? ' (VM stopped to attach)' : ''}`,
+      detail:
+        `${plan.vmName} ← mapping ${parsed.data.mapping}` +
+        (plan.willMigrate
+          ? ` (will migrate ${plan.sourceNode} → ${plan.targetNode}${plan.targetstorage ? `, disks → ${plan.targetstorage}` : ''})`
+          : ` (already on ${plan.targetNode})`),
       req,
     });
-    res.json({ success: true, wasRunning: r.wasRunning });
+    res.status(202).json({
+      started: true,
+      targetNode: plan.targetNode,
+      willMigrate: plan.willMigrate,
+      targetstorage: plan.targetstorage ?? null,
+      bootWarnings: plan.bootWarnings,
+    });
   } catch (err) {
     if (err instanceof PassthroughRequestError) {
       res.status(err.status).json({ error: err.message });
