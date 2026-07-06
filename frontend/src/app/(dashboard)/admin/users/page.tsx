@@ -13,11 +13,12 @@ import type {
   PendingPassthroughRequest,
   PciMapping,
 } from "@/lib/types";
-import { formatRam, formatDate } from "@/lib/format";
+import { formatRam, formatDate, formatBytes, formatUptime } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { UsageReport } from "@/components/admin/usage-report";
 import { FormField } from "@/components/form-field";
 import { Card, CardContent } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -228,7 +229,7 @@ export default function UsersPage() {
               const stateLabel: Record<string, string> = {
                 queued: "Queued…",
                 stopping: "Stopping the VM…",
-                migrating: `Migrating to ${p.targetNode ?? "the device's node"}… (disk moves can take minutes)`,
+                migrating: `Migrating to ${p.targetNode ?? "the device's node"}…`,
                 attaching: "Attaching the device…",
               };
               return (
@@ -264,8 +265,34 @@ export default function UsersPage() {
                       </div>
                     )}
                     {inFlight && (
-                      <div className="mt-0.5 flex items-center gap-1.5 text-xs font-medium text-primary">
-                        <Loader2 className="size-3 animate-spin" /> {stateLabel[p.applyState!] ?? "Applying…"}
+                      <div className="mt-0.5 grid gap-1">
+                        <div className="flex items-center gap-1.5 text-xs font-medium text-primary">
+                          <Loader2 className="size-3 animate-spin" /> {stateLabel[p.applyState!] ?? "Applying…"}
+                        </div>
+                        {p.applyState === "migrating" && (
+                          <div className="max-w-sm pl-4">
+                            {/* Real transfer data drives the bar; without it yet, an
+                                indeterminate (unfilled) bar is more honest than a fake
+                                percentage — Proxmox usually reports one within a few
+                                seconds of the move starting. */}
+                            <Progress value={p.migration ? p.migration.percent : null}>
+                              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                                <span>
+                                  {p.migration
+                                    ? `${formatBytes(p.migration.transferredBytes)} of ${formatBytes(p.migration.totalBytes)}`
+                                    : "Starting the disk transfer…"}
+                                </span>
+                                <span className="shrink-0 tabular-nums">
+                                  {p.migration &&
+                                    `${p.migration.percent.toFixed(1)}%` +
+                                      (p.migration.etaSeconds != null
+                                        ? ` · ~${formatUptime(p.migration.etaSeconds)} left`
+                                        : "")}
+                                </span>
+                              </div>
+                            </Progress>
+                          </div>
+                        )}
                       </div>
                     )}
                     {p.applyState === "failed" && p.applyError && (
