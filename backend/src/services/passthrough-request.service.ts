@@ -1,7 +1,9 @@
 import type { VirtualMachine } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import * as pve from './proxmox.service.js';
-import { syncVmNode } from './vm.service.js';
+import { syncVmNode, migrateVmToNode, startVm } from './vm.service.js';
+import { getConfig } from './config.service.js';
+import { recordAudit } from './audit.service.js';
 
 /** A passthrough-request error carrying an HTTP status the route can surface. */
 export class PassthroughRequestError extends Error {
@@ -19,22 +21,23 @@ const HOSTPCI_INDEX = 0;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Poll a VM until it reports stopped (or the timeout elapses). */
+/** Poll a VM until it reports stopped. Returns false if the timeout elapses. */
 async function waitStopped(
   node: string,
   vmid: number,
   client: Awaited<ReturnType<typeof pve.getClient>>,
-  timeoutMs = 30_000,
-): Promise<void> {
+  timeoutMs = 120_000,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     await sleep(1000);
     try {
-      if ((await pve.getVmStatus(node, vmid, client, 'qemu')).status === 'stopped') return;
+      if ((await pve.getVmStatus(node, vmid, client, 'qemu')).status === 'stopped') return true;
     } catch {
-      return; // gone / unreadable — nothing to wait for
+      return true; // gone / unreadable — nothing to wait for
     }
   }
+  return false;
 }
 
 /**
@@ -77,9 +80,16 @@ export interface PendingPassthroughRequest {
   createdAt: string;
   user: { id: string; email: string; displayName: string };
   vm: { id: string; name: string; node: string; vmid: number };
+  // Background-apply progress (null until an approval is started).
+  applyState: string | null; // queued | stopping | migrating | attaching | failed
+  applyError: string | null;
+  targetNode: string | null;
+  mapping: string | null;
+  /** Best-effort q35/OVMF/EFI readiness warnings (empty when unreadable). */
+  bootWarnings: string[];
 }
 
-/** Pending requests + VM + requester (admin review queue). */
+/** Pending requests + VM + requester + apply progress (admin review queue). */
 export async function listPendingPassthroughRequests(): Promise<PendingPassthroughRequest[]> {
   const rows = await prisma.passthroughRequest.findMany({
     where: { status: 'pending' },
@@ -89,66 +99,296 @@ export async function listPendingPassthroughRequests(): Promise<PendingPassthrou
       vm: { select: { id: true, name: true, proxmoxNode: true, proxmoxVmId: true } },
     },
   });
-  return rows.map((r) => ({
+  if (rows.length === 0) return [];
+
+  // Best-effort boot-readiness per VM so the admin sees q35/OVMF warnings
+  // BEFORE approving. Never blocks the queue if a config read fails.
+  let client: Awaited<ReturnType<typeof pve.getClient>> | null = null;
+  try {
+    client = await pve.getClient();
+  } catch {
+    /* Proxmox unreachable — list without warnings */
+  }
+  const warnings = await Promise.all(
+    rows.map(async (r) => {
+      if (!client) return [];
+      try {
+        const cfg = await pve.getVmConfig(r.vm.proxmoxNode, r.vm.proxmoxVmId, client, 'qemu');
+        return pve.passthroughBootReadiness(cfg).warnings;
+      } catch {
+        return [];
+      }
+    }),
+  );
+
+  return rows.map((r, i) => ({
     id: r.id,
     reason: r.reason,
     createdAt: r.createdAt.toISOString(),
     user: { id: r.user.id, email: r.user.email, displayName: r.user.displayName },
     vm: { id: r.vm.id, name: r.vm.name, node: r.vm.proxmoxNode, vmid: r.vm.proxmoxVmId },
+    applyState: r.applyState,
+    applyError: r.applyError,
+    targetNode: r.targetNode,
+    mapping: r.mapping,
+    bootWarnings: warnings[i]!,
   }));
 }
 
+/** How the apply will (or did) place the VM relative to the device's node. */
+export interface PassthroughPlan {
+  targetNode: string;
+  willMigrate: boolean;
+  /** Set when the VM's disks must be relocated onto this storage on the target. */
+  targetstorage?: string;
+  bootWarnings: string[];
+}
+
+const IN_FLIGHT = new Set(['queued', 'stopping', 'migrating', 'attaching']);
+
 /**
- * Approve: validate the chosen mapping exists, stop the VM if running (Proxmox
- * rejects `hostpci` on a running guest), attach `hostpci0=mapping=<name>`, flag
- * the VM `hasPassthrough` (so the balancer/drain skip it), and resolve the
- * request. Returns info for the audit log / caller.
+ * Resolve where the VM must run for `mapping` to work, and how to get it there.
+ * Proxmox PCI mappings are node-scoped: the VM can only start on a node that
+ * has a device entry for the mapping. Already on one → no migration. On the
+ * wrong node → plan an offline migration, relocating disks when the target
+ * lacks the VM's storage (targetstorage). Throws PassthroughRequestError with
+ * an actionable message when no placement can work.
  */
-export async function approvePassthroughRequest(
+async function planPassthroughPlacement(
+  vm: VirtualMachine,
+  mapping: pve.PciMapping,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<PassthroughPlan> {
+  if (mapping.nodes.length === 0) {
+    throw new PassthroughRequestError(
+      `Mapping "${mapping.id}" has no per-node device entries — add the device to the mapping in Proxmox (Datacenter → Resource Mappings).`,
+      400,
+    );
+  }
+  const online = new Set((await pve.getNodes(client)).filter((n) => n.status === 'online').map((n) => n.node));
+  const candidates = mapping.nodes.filter((n) => online.has(n));
+  if (candidates.length === 0) {
+    throw new PassthroughRequestError(
+      `Every node hosting "${mapping.id}" (${mapping.nodes.join(', ')}) is currently offline.`,
+      409,
+    );
+  }
+
+  // Boot readiness is informational (never a hard block, never auto-rewritten):
+  // flipping an installed guest to OVMF/q35 can break its boot — worse than a
+  // device that needs manual host attention.
+  const config = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
+  const readiness = pve.passthroughBootReadiness(config);
+
+  // Already on a node that has the device → nothing to move.
+  if (candidates.includes(vm.proxmoxNode)) {
+    return { targetNode: vm.proxmoxNode, willMigrate: false, bootWarnings: readiness.warnings };
+  }
+
+  // Pick the best target among the device's nodes (capacity-scored, arch-aware).
+  const arch = (await pve.getNodeArchMap(client)).get(vm.proxmoxNode);
+  const targetNode =
+    candidates.length === 1
+      ? candidates[0]!
+      : await pve.pickBestNode(
+          { cpu: vm.cpu, ramMb: vm.ram, storageGb: vm.storage },
+          (await getConfig('default_storage')) ?? undefined,
+          client,
+          candidates,
+          arch && arch !== 'unknown' ? arch : undefined,
+        );
+
+  // Disk placement: if any of the VM's volumes live on storage the target node
+  // doesn't have, the offline migration must relocate them (targetstorage).
+  const volumeStorages = pve.getVolumeStorages(config);
+  const targetStorages = await pve.getNodeImagesStorages(targetNode, client);
+  const available = new Set(targetStorages.map((s) => s.storage));
+  const missing = volumeStorages.filter((s) => !available.has(s));
+
+  let targetstorage: string | undefined;
+  if (missing.length > 0) {
+    if (targetStorages.length === 0) {
+      throw new PassthroughRequestError(
+        `Node ${targetNode} has no storage that can hold disk images — the VM's disks (on ${missing.join(', ')}) can't be relocated there.`,
+        409,
+      );
+    }
+    // Prefer the cluster's default disk pool when the target has it; otherwise
+    // the images-capable storage with the most free space.
+    const defaultStorage = await getConfig('default_storage');
+    const preferred = defaultStorage ? targetStorages.find((s) => s.storage === defaultStorage) : undefined;
+    const pick =
+      preferred ?? [...targetStorages].sort((a, b) => (b.availBytes ?? -1) - (a.availBytes ?? -1))[0]!;
+    const needBytes = vm.storage * 1024 ** 3;
+    if (pick.availBytes !== null && pick.availBytes < needBytes) {
+      throw new PassthroughRequestError(
+        `Storage "${pick.storage}" on ${targetNode} has ~${Math.floor(pick.availBytes / 1024 ** 3)} GB free, but the VM needs ${vm.storage} GB. Free up space or add storage on ${targetNode}.`,
+        409,
+      );
+    }
+    targetstorage = pick.storage;
+  }
+
+  return { targetNode, willMigrate: true, targetstorage, bootWarnings: readiness.warnings };
+}
+
+/**
+ * Phase 1 of approval (synchronous): validate the request + mapping, compute
+ * the placement plan, and mark the request queued. The route then fires
+ * `applyPassthroughApproval` in the background (a stop + offline migration with
+ * disk relocation can take many minutes — far past edge-proxy timeouts) and
+ * returns 202 with the plan so the admin sees what's about to happen.
+ */
+export async function beginPassthroughApproval(
   id: string,
-  adminId: string,
   mapping: string,
-): Promise<{ email: string; vmName: string; mapping: string; wasRunning: boolean }> {
-  const row = await prisma.passthroughRequest.findUnique({ where: { id }, include: { user: true, vm: true } });
+): Promise<PassthroughPlan & { vmName: string; sourceNode: string }> {
+  const row = await prisma.passthroughRequest.findUnique({ where: { id }, include: { vm: true } });
   if (!row) throw new PassthroughRequestError('Request not found', 404);
   if (row.status !== 'pending') throw new PassthroughRequestError('This request was already resolved.', 409);
+  if (row.applyState && IN_FLIGHT.has(row.applyState)) {
+    throw new PassthroughRequestError('This approval is already being applied.', 409);
+  }
   if (row.vm.type !== 'qemu') throw new PassthroughRequestError('PCI passthrough is only available for VMs.', 400);
 
   const client = await pve.getClient();
-  const mappings = await pve.listPciMappings(client);
-  if (!mappings.some((m) => m.id === mapping)) {
+  const map = (await pve.listPciMappings(client)).find((m) => m.id === mapping);
+  if (!map) {
     throw new PassthroughRequestError(`No PCI mapping named "${mapping}" exists on the cluster.`, 400);
   }
 
   const vm = await syncVmNode(row.vm);
+  const plan = await planPassthroughPlacement(vm, map, client);
 
-  // hostpci can only be set on a stopped VM — stop it first if needed.
+  await prisma.passthroughRequest.update({
+    where: { id },
+    data: { mapping, targetNode: plan.targetNode, applyState: 'queued', applyError: null },
+  });
+  return { ...plan, vmName: vm.name, sourceNode: vm.proxmoxNode };
+}
+
+/**
+ * Phase 2 (background worker): stop → migrate (if needed) → attach → resolve →
+ * restart. Progress is persisted on the request row (`applyState`) for the UI.
+ *
+ * Rollback rules — the VM must never be left broken:
+ *  - fail before/during migrate → VM untouched on the source node (Proxmox
+ *    migration failures leave the source intact); restarted if we stopped it.
+ *  - fail at attach (after a migrate) → VM stays on the target WITHOUT the
+ *    device (fully bootable); restarted if we stopped it; request stays
+ *    pending+failed so a retry (which no-ops the migration) is one click.
+ *  - `hasPassthrough` is only ever set after a successful attach.
+ */
+export async function applyPassthroughApproval(id: string, adminId: string): Promise<void> {
+  const setState = (data: Record<string, unknown>) =>
+    prisma.passthroughRequest.update({ where: { id }, data });
+
+  const row = await prisma.passthroughRequest.findUnique({ where: { id }, include: { user: true, vm: true } });
+  if (!row || row.status !== 'pending' || row.applyState !== 'queued' || !row.mapping || !row.targetNode) return;
+  const admin = await prisma.user.findUnique({ where: { id: adminId } });
+  const actor = { id: adminId, email: admin?.email ?? null };
+  const mapping = row.mapping;
+
+  let vm = await syncVmNode(row.vm);
+  const sourceNode = vm.proxmoxNode;
   let wasRunning = false;
+  let migrated = false;
+
+  const client = await pve.getClient();
   try {
-    const st = await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
-    if (st.status !== 'stopped') {
-      wasRunning = true;
-      await pve.stopVm(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
-      await waitStopped(vm.proxmoxNode, vm.proxmoxVmId, client);
+    // ── Stop (hostpci needs a stopped guest; offline migration too) ──
+    await setState({ applyState: 'stopping' });
+    try {
+      const st = await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
+      wasRunning = st.status !== 'stopped';
+    } catch {
+      /* status unknown — treat as stopped; later steps surface real problems */
     }
-  } catch {
-    /* status unknown — the attach below will surface any real problem */
+    if (wasRunning) {
+      await pve.stopVm(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
+      if (!(await waitStopped(vm.proxmoxNode, vm.proxmoxVmId, client))) {
+        throw new PassthroughRequestError(`"${vm.name}" did not stop within 2 minutes — try again once it's down.`, 409);
+      }
+      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
+    }
+
+    // ── Migrate to the device's node (offline; relocate disks if planned) ──
+    if (row.targetNode !== vm.proxmoxNode) {
+      await setState({ applyState: 'migrating' });
+      // Re-resolve the storage plan against live state (it may have changed
+      // between begin and now); cheap compared to the migration itself.
+      const map = (await pve.listPciMappings(client)).find((m) => m.id === mapping);
+      if (!map) throw new PassthroughRequestError(`Mapping "${mapping}" no longer exists.`, 409);
+      const plan = await planPassthroughPlacement(vm, map, client);
+      if (plan.willMigrate) {
+        vm = await migrateVmToNode(vm, plan.targetNode, {
+          offline: true,
+          targetstorage: plan.targetstorage,
+          notifyOwner: true,
+          actorId: adminId,
+        });
+        migrated = true;
+        await setState({ targetNode: plan.targetNode });
+      }
+    }
+
+    // ── Attach (pcie only on q35 — Proxmox refuses to start i440fx + pcie=1) ──
+    await setState({ applyState: 'attaching' });
+    const config = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
+    const readiness = pve.passthroughBootReadiness(config);
+    await pve.attachPci(vm.proxmoxNode, vm.proxmoxVmId, HOSTPCI_INDEX, mapping, client, { pcie: readiness.q35 });
+
+    await prisma.$transaction([
+      prisma.virtualMachine.update({ where: { id: vm.id }, data: { hasPassthrough: true } }),
+      prisma.passthroughRequest.update({
+        where: { id },
+        data: { status: 'approved', applyState: 'done', resolvedAt: new Date(), resolvedById: adminId },
+      }),
+    ]);
+
+    // ── Restart if we took it down (best-effort: a start failure here is a
+    // host-side passthrough problem — device attached, admin investigates) ──
+    let startNote = '';
+    if (wasRunning) {
+      try {
+        await startVm(vm);
+      } catch (err) {
+        startNote = ` Start failed after attach: ${pve.pveMessage(err)} — check host IOMMU/VFIO and the device on ${vm.proxmoxNode}.`;
+        await setState({ applyError: startNote.trim() });
+      }
+    }
+
+    await recordAudit({
+      action: 'passthrough.approve',
+      actor,
+      targetType: 'vm',
+      targetId: vm.id,
+      detail:
+        `${vm.name} ← mapping ${mapping}` +
+        (migrated ? ` (migrated ${sourceNode} → ${vm.proxmoxNode})` : '') +
+        (readiness.warnings.length ? ` [warnings: ${readiness.warnings.length}]` : '') +
+        startNote,
+    });
+  } catch (err) {
+    const message = err instanceof PassthroughRequestError ? err.message : pve.pveMessage(err);
+    await setState({ applyState: 'failed', applyError: message }).catch(() => undefined);
+    // Leave the VM usable: restart it where it now lives if we stopped it.
+    if (wasRunning) {
+      try {
+        vm = await syncVmNode(vm);
+        await startVm(vm);
+      } catch {
+        /* it stays stopped — the admin sees the failure reason either way */
+      }
+    }
+    await recordAudit({
+      action: 'passthrough.apply_failed',
+      actor,
+      targetType: 'vm',
+      targetId: vm.id,
+      detail: `${vm.name} ← mapping ${mapping}: ${message}`,
+    });
   }
-
-  await pve.attachPci(vm.proxmoxNode, vm.proxmoxVmId, HOSTPCI_INDEX, mapping, client);
-
-  await prisma.$transaction([
-    prisma.virtualMachine.update({
-      where: { id: vm.id },
-      // If we stopped it to attach, reflect that; otherwise leave status alone.
-      data: { hasPassthrough: true, ...(wasRunning ? { status: 'stopped' } : {}) },
-    }),
-    prisma.passthroughRequest.update({
-      where: { id },
-      data: { status: 'approved', mapping, resolvedAt: new Date(), resolvedById: adminId },
-    }),
-  ]);
-  return { email: row.user.email, vmName: vm.name, mapping, wasRunning };
 }
 
 /** Deny: mark resolved without touching the VM. */
@@ -159,6 +399,9 @@ export async function denyPassthroughRequest(
   const row = await prisma.passthroughRequest.findUnique({ where: { id }, include: { user: true, vm: true } });
   if (!row) throw new PassthroughRequestError('Request not found', 404);
   if (row.status !== 'pending') throw new PassthroughRequestError('This request was already resolved.', 409);
+  if (row.applyState && IN_FLIGHT.has(row.applyState)) {
+    throw new PassthroughRequestError('An approval is currently being applied to this request.', 409);
+  }
   await prisma.passthroughRequest.update({
     where: { id },
     data: { status: 'denied', resolvedAt: new Date(), resolvedById: adminId },
