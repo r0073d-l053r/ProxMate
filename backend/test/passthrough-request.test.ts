@@ -22,6 +22,11 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   pickBestNode: vi.fn(),
   getStorages: vi.fn(),
   getNodeImagesStorages: vi.fn(),
+  getCloudInitDrives: vi.fn(),
+  deleteVmConfigKeys: vi.fn(),
+  addCloudInitDrive: vi.fn(),
+  startVm: vi.fn(),
+  waitForTask: vi.fn(),
   getVolumeStorages: vi.fn(),
   passthroughBootReadiness: vi.fn(),
   pveMessage: (e: unknown) => (e instanceof Error ? e.message : 'proxmox error'),
@@ -67,6 +72,10 @@ const getArchMap = vi.mocked(pve.getNodeArchMap);
 const pickBest = vi.mocked(pve.pickBestNode);
 const getStorages = vi.mocked(pve.getStorages);
 const getImagesStorages = vi.mocked(pve.getNodeImagesStorages);
+const getCiDrives = vi.mocked(pve.getCloudInitDrives);
+const delConfigKeys = vi.mocked(pve.deleteVmConfigKeys);
+const addCiDrive = vi.mocked(pve.addCloudInitDrive);
+const pveStart = vi.mocked(pve.startVm);
 const getVolStorages = vi.mocked(pve.getVolumeStorages);
 const readiness = vi.mocked(pve.passthroughBootReadiness);
 const syncNode = vi.mocked(syncVmNode);
@@ -102,6 +111,8 @@ beforeEach(() => {
   getStorages.mockResolvedValue([{ storage: 'tank', type: 'zfspool' }] as never);
   getImagesStorages.mockResolvedValue([] as never);
   getVmStatus.mockResolvedValue({ status: 'stopped' } as never);
+  getCiDrives.mockReturnValue([]);
+  pveStart.mockResolvedValue('UPID:fake' as never);
   config.mockResolvedValue(null);
   migrate.mockImplementation(async (vm: never, target: string) => ({ ...(vm as object), proxmoxNode: target }) as never);
   start.mockResolvedValue(undefined as never);
@@ -369,6 +380,26 @@ describe('applyPassthroughApproval (background worker)', () => {
     });
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: 'passthrough.apply_failed' }));
   });
+
+  it('drops a cross-type cloud-init drive pre-move (brief bounce), regenerates it on the target storage', async () => {
+    prFindUnique.mockResolvedValue(queuedRow());
+    listMappings.mockResolvedValue([{ id: 'gpu0', nodes: ['pve-4'] }] as never);
+    getVolStorages.mockReturnValue(['tank']);
+    getImagesStorages.mockResolvedValue([{ storage: 'tank-files', type: 'nfs', shared: true, availBytes: 5000 * GB }] as never);
+    getCiDrives.mockReturnValue([{ slot: 'ide2', storage: 'tank' }]); // zfspool CI vol, target is nfs-only
+    // running → bounce-stop, then stopped for delete, running again post-bounce, stopped for attach…
+    getVmStatus.mockResolvedValueOnce({ status: 'running' } as never).mockResolvedValue({ status: 'stopped' } as never);
+
+    await applyPassthroughApproval('q1', 'admin');
+
+    // Dropped on the source before the move, regenerated on the target storage after.
+    expect(delConfigKeys).toHaveBeenCalledWith('pve-0', 100, ['ide2'], expect.anything());
+    expect(pveStart).toHaveBeenCalledWith('pve-0', 100, expect.anything(), 'qemu'); // bounce back up for the live copy
+    expect(migrate).toHaveBeenCalledWith(expect.anything(), 'pve-4', expect.objectContaining({ offline: false, targetstorage: 'tank-files' }));
+    expect(addCiDrive).toHaveBeenCalledWith('pve-4', 100, 'ide2', 'tank-files', expect.anything());
+    expect(attachPci).toHaveBeenCalledWith('pve-4', 100, 0, 'gpu0', expect.anything(), { pcie: true });
+    expect(tx).toHaveBeenCalled();
+  }, 20_000);
 
   it('an attach failure AFTER migration restarts the VM on the target (bootable, no device, retryable)', async () => {
     prFindUnique.mockResolvedValue(queuedRow());

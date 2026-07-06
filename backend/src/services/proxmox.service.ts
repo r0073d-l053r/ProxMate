@@ -1099,6 +1099,49 @@ export function getVolumeStorages(config: Record<string, string>): string[] {
   return [...storages];
 }
 
+/** A generated cloud-init drive in a VM config (its content is derived from
+ *  config keys — ciuser/sshkeys/ipconfig/cicustom — so it can be dropped and
+ *  regenerated on another storage; Proxmox can't storage-migrate it across
+ *  storage types, even live). */
+export interface CloudInitDrive {
+  slot: string; // e.g. "ide2"
+  storage: string;
+}
+
+/** Find generated cloud-init drives (volid contains "cloudinit"). */
+export function getCloudInitDrives(config: Record<string, string>): CloudInitDrive[] {
+  const out: CloudInitDrive[] = [];
+  for (const [k, v] of Object.entries(config)) {
+    if (!/^(ide|scsi|sata)\d+$/.test(k)) continue;
+    const m = /^([A-Za-z0-9_.-]+):[^,]*cloudinit/.exec(String(v));
+    if (m) out.push({ slot: k, storage: m[1]! });
+  }
+  return out;
+}
+
+/** Delete config keys (e.g. drop a cloud-init drive before a cross-type move). */
+export async function deleteVmConfigKeys(
+  node: string,
+  vmid: number,
+  keys: string[],
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  await c.put(`/nodes/${node}/qemu/${vmid}/config`, new URLSearchParams({ delete: keys.join(',') }));
+}
+
+/** (Re)create a generated cloud-init drive at `slot` on `storage`. */
+export async function addCloudInitDrive(
+  node: string,
+  vmid: number,
+  slot: string,
+  storage: string,
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  await c.put(`/nodes/${node}/qemu/${vmid}/config`, new URLSearchParams({ [slot]: `${storage}:cloudinit` }));
+}
+
 /**
  * Boot-readiness check for PCI/GPU passthrough. Passthrough (GPUs especially)
  * generally wants machine=q35 + bios=ovmf + an EFI disk. We only WARN — never
