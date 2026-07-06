@@ -1163,9 +1163,16 @@ export async function getMigrationProgress(vmid: number, client?: AxiosInstance)
   const c = client ?? (await getClient());
   const active = await getActiveMigrationTask(vmid, c);
   if (!active) return null;
+  // Proxmox's task-log endpoint pages from the START (`start`/`limit` are an
+  // offset/count from line 1, not "last N lines" — a negative `start` errors,
+  // and there's no total-count field to page backward from), so a small
+  // `limit` here would keep re-reading the OLDEST lines and never see fresh
+  // progress once a migration outlives it. `limit: 0` is Proxmox's documented
+  // "no limit" — the response is one line of text per second of migration, so
+  // even an hours-long transfer stays a trivial payload for an occasional poll.
   const res = await c.get<{ data: Array<{ t: string }> }>(
     `/nodes/${active.node}/tasks/${encodeURIComponent(active.upid)}/log`,
-    { params: { limit: 200 } },
+    { params: { limit: 0 } },
   );
   const lines = (res.data.data ?? []).map((l) => l.t);
   return (

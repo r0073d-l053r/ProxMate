@@ -212,7 +212,9 @@ describe('getMigrationProgress', () => {
     });
     const p = await getMigrationProgress(108, asClient(c));
     expect(p).toMatchObject({ percent: 75, totalBytes: 8 * GB });
-    expect(c.get).toHaveBeenCalledWith('/nodes/pve/tasks/UPID%3Apve%3Amigrate108%3A/log', { params: { limit: 200 } });
+    // limit: 0 = Proxmox's "no limit" — start/limit page from the oldest line,
+    // so a small limit would keep re-reading stale history on a long migration.
+    expect(c.get).toHaveBeenCalledWith('/nodes/pve/tasks/UPID%3Apve%3Amigrate108%3A/log', { params: { limit: 0 } });
   });
 
   it('returns a zeroed placeholder when the task is active but has not logged progress yet', async () => {
@@ -225,5 +227,27 @@ describe('getMigrationProgress', () => {
     });
     const p = await getMigrationProgress(108, asClient(c));
     expect(p).toEqual({ percent: 0, transferredBytes: 0, totalBytes: 0, elapsedSeconds: 0, etaSeconds: null });
+  });
+
+  it('requests the whole log (limit: 0) so a long migration is never stuck reading its oldest lines', async () => {
+    // Regression test: Proxmox's start/limit paginate from the OLDEST line
+    // (there's no "last N lines" mode, and no total-count to page back from),
+    // so a fixed small limit would keep returning the same early lines forever
+    // once a migration outlives it — observed live on a 512 GB transfer whose
+    // log grew past 200 lines. Simulate that: 500 old lines, then the real
+    // latest one at the end.
+    const c = fakeClient();
+    const oldLines = Array.from({ length: 500 }, (_, i) => `mirror-scsi0: transferred ${i}.0 MiB of 512.0 GiB (0.0${i}%) in ${i}s`);
+    c.get.mockImplementation((url: string) => {
+      if (url === '/cluster/tasks') {
+        return Promise.resolve({ data: { data: [{ id: '108', type: 'qmigrate', node: 'pve', upid: 'UPID:pve:x:', endtime: undefined }] } });
+      }
+      return Promise.resolve({
+        data: { data: [...oldLines, { t: 'mirror-scsi0: transferred 37.6 GiB of 512.0 GiB (7.34%) in 8m 11s' }].map((t) => (typeof t === 'string' ? { t } : t)) },
+      });
+    });
+    const p = await getMigrationProgress(108, asClient(c));
+    expect(p!.percent).toBe(7.3); // matches the LATEST line, not an early one from the log's start
+    expect(c.get).toHaveBeenLastCalledWith(expect.stringContaining('/log'), { params: { limit: 0 } });
   });
 });
