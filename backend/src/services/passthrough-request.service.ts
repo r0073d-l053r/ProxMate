@@ -87,6 +87,8 @@ export interface PendingPassthroughRequest {
   mapping: string | null;
   /** Best-effort q35/OVMF/EFI readiness warnings (empty when unreadable). */
   bootWarnings: string[];
+  /** Live transfer progress for the admin loading bar, only while applyState === 'migrating'. */
+  migration: pve.MigrationProgress | null;
 }
 
 /** Pending requests + VM + requester + apply progress (admin review queue). */
@@ -121,6 +123,19 @@ export async function listPendingPassthroughRequests(): Promise<PendingPassthrou
     }),
   );
 
+  // Live transfer progress for the admin loading bar — only worth a Proxmox
+  // call for the (typically 0 or 1) request currently mid-migration.
+  const migrations = await Promise.all(
+    rows.map(async (r) => {
+      if (!client || r.applyState !== 'migrating') return null;
+      try {
+        return await pve.getMigrationProgress(r.vm.proxmoxVmId, client);
+      } catch {
+        return null;
+      }
+    }),
+  );
+
   return rows.map((r, i) => ({
     id: r.id,
     reason: r.reason,
@@ -132,6 +147,7 @@ export async function listPendingPassthroughRequests(): Promise<PendingPassthrou
     targetNode: r.targetNode,
     mapping: r.mapping,
     bootWarnings: warnings[i]!,
+    migration: migrations[i]!,
   }));
 }
 
