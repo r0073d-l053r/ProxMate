@@ -76,6 +76,18 @@ export default function UsersPage() {
 
   useEffect(load, [load]);
 
+  // While a passthrough approval is applying (stop → migrate → attach can take
+  // minutes), poll the queue so the admin watches the state advance and sees
+  // the failure reason if it breaks. Stops by itself once nothing is in flight.
+  const applying = passthroughReqs.some(
+    (p) => p.applyState && ["queued", "stopping", "migrating", "attaching"].includes(p.applyState),
+  );
+  useEffect(() => {
+    if (!applying) return;
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, [applying, load]);
+
   async function resolveQuota(id: string, action: "approve" | "deny") {
     try {
       await api.post(`/admin/quota-requests/${id}/${action}`);
@@ -93,15 +105,26 @@ export default function UsersPage() {
       return;
     }
     try {
-      await api.post(
-        `/admin/passthrough-requests/${id}/${action}`,
-        action === "approve" ? { mapping } : {},
-      );
-      toast.success(
-        action === "approve"
-          ? "Passthrough approved — device attached (VM stopped if it was running)."
-          : "Passthrough request denied.",
-      );
+      const res = await api.post<{
+        started?: boolean;
+        targetNode?: string;
+        willMigrate?: boolean;
+        targetstorage?: string | null;
+        bootWarnings?: string[];
+      }>(`/admin/passthrough-requests/${id}/${action}`, action === "approve" ? { mapping } : {});
+      if (action === "approve") {
+        const d = res.data;
+        toast.success(
+          d.willMigrate
+            ? `Approval started — migrating the VM to ${d.targetNode}${d.targetstorage ? ` (disks → ${d.targetstorage})` : ""}, then attaching. This can take a few minutes.`
+            : `Approval started — the VM is already on ${d.targetNode}; attaching the device.`,
+        );
+        if (d.bootWarnings?.length) {
+          toast.warning(`Boot readiness: ${d.bootWarnings[0]}${d.bootWarnings.length > 1 ? ` (+${d.bootWarnings.length - 1} more)` : ""}`);
+        }
+      } else {
+        toast.success("Passthrough request denied.");
+      }
       load();
     } catch (err) {
       toast.error(apiError(err));
@@ -197,50 +220,86 @@ export default function UsersPage() {
                 (Datacenter → Resource Mappings → PCI) before you can approve — see the admin guide.
               </p>
             )}
-            {passthroughReqs.map((p) => (
-              <div
-                key={p.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background p-2.5"
-              >
-                <div className="min-w-0 text-sm">
-                  <div className="font-medium">
-                    {p.vm.name}{" "}
-                    <span className="text-xs font-normal text-muted-foreground">
-                      · vmid {p.vm.vmid} on {p.vm.node}
-                    </span>
+            {passthroughReqs.map((p) => {
+              const chosen = pciMappings.find((m) => m.id === (mappingChoice[p.id] ?? ""));
+              const willMigrate = !!chosen && chosen.nodes.length > 0 && !chosen.nodes.includes(p.vm.node);
+              const inFlight =
+                !!p.applyState && ["queued", "stopping", "migrating", "attaching"].includes(p.applyState);
+              const stateLabel: Record<string, string> = {
+                queued: "Queued…",
+                stopping: "Stopping the VM…",
+                migrating: `Migrating to ${p.targetNode ?? "the device's node"}… (disk moves can take minutes)`,
+                attaching: "Attaching the device…",
+              };
+              return (
+                <div
+                  key={p.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background p-2.5"
+                >
+                  <div className="min-w-0 text-sm">
+                    <div className="font-medium">
+                      {p.vm.name}{" "}
+                      <span className="text-xs font-normal text-muted-foreground">
+                        · vmid {p.vm.vmid} on {p.vm.node}
+                      </span>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {p.user.displayName} · {p.user.email}
+                    </div>
+                    {p.reason && (
+                      <div className="mt-0.5 text-xs italic text-muted-foreground">&ldquo;{p.reason}&rdquo;</div>
+                    )}
+                    {p.bootWarnings.length > 0 && !inFlight && (
+                      <div className="mt-0.5 text-xs text-amber-600 dark:text-amber-500">
+                        {p.bootWarnings.map((w) => (
+                          <div key={w}>⚠ {w}</div>
+                        ))}
+                      </div>
+                    )}
+                    {!inFlight && chosen && (
+                      <div className="mt-0.5 text-xs text-muted-foreground">
+                        {willMigrate
+                          ? `Approving migrates the VM ${p.vm.node} → ${chosen.nodes.join(" / ")} (the device's node) — live while it runs — then briefly stops it to attach the device.`
+                          : "The VM is already on the device's node — no migration needed."}
+                      </div>
+                    )}
+                    {inFlight && (
+                      <div className="mt-0.5 flex items-center gap-1.5 text-xs font-medium text-primary">
+                        <Loader2 className="size-3 animate-spin" /> {stateLabel[p.applyState!] ?? "Applying…"}
+                      </div>
+                    )}
+                    {p.applyState === "failed" && p.applyError && (
+                      <div className="mt-0.5 text-xs text-destructive">
+                        Last attempt failed: {p.applyError} — fix the cause and approve again.
+                      </div>
+                    )}
                   </div>
-                  <div className="text-xs text-muted-foreground">
-                    {p.user.displayName} · {p.user.email}
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      aria-label="PCI mapping"
+                      value={mappingChoice[p.id] ?? ""}
+                      onChange={(e) => setMappingChoice((m) => ({ ...m, [p.id]: e.target.value }))}
+                      disabled={pciMappings.length === 0 || inFlight}
+                      className="rounded-md border bg-background px-2 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                    >
+                      <option value="">Select mapping…</option>
+                      {pciMappings.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.id}
+                          {m.nodes.length ? ` (${m.nodes.join(", ")})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <Button size="sm" variant="outline" disabled={inFlight} onClick={() => resolvePassthrough(p.id, "approve")}>
+                      <Check /> {p.applyState === "failed" ? "Retry" : "Approve"}
+                    </Button>
+                    <Button size="sm" variant="ghost" disabled={inFlight} onClick={() => resolvePassthrough(p.id, "deny")}>
+                      <X /> Deny
+                    </Button>
                   </div>
-                  {p.reason && (
-                    <div className="mt-0.5 text-xs italic text-muted-foreground">&ldquo;{p.reason}&rdquo;</div>
-                  )}
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <select
-                    aria-label="PCI mapping"
-                    value={mappingChoice[p.id] ?? ""}
-                    onChange={(e) => setMappingChoice((m) => ({ ...m, [p.id]: e.target.value }))}
-                    disabled={pciMappings.length === 0}
-                    className="rounded-md border bg-background px-2 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-                  >
-                    <option value="">Select mapping…</option>
-                    {pciMappings.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.id}
-                        {m.nodes.length ? ` (${m.nodes.join(", ")})` : ""}
-                      </option>
-                    ))}
-                  </select>
-                  <Button size="sm" variant="outline" onClick={() => resolvePassthrough(p.id, "approve")}>
-                    <Check /> Approve
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => resolvePassthrough(p.id, "deny")}>
-                    <X /> Deny
-                  </Button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </CardContent>
         </Card>
       )}

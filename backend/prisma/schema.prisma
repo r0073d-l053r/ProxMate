@@ -214,6 +214,17 @@ model PassthroughRequest {
   reason       String?
   status       String    @default("pending") // pending | approved | denied
   mapping      String?                        // Proxmox PCI mapping name chosen at approval
+  // Background-apply progress: approving may stop + offline-migrate the VM to
+  // the device's node (minutes of disk copy), so the route returns 202 and the
+  // worker records its state here for the admin UI to poll. A failed apply
+  // leaves status=pending (retryable) with the reason in applyError.
+  applyState   String?                        // queued | stopping | migrating | attaching | done | failed
+  applyError   String?
+  targetNode   String?                        // node the apply migrated (or kept) the VM on
+  // Cloud-init drives the apply dropped pre-migration (JSON [{slot,storage}]),
+  // cleared once regenerated. Lets a startup reconciler restore them if the
+  // backend restarts mid-migration (a long copy can outlast a deploy).
+  ciDropped    String?
   createdAt    DateTime  @default(now())
   resolvedAt   DateTime?
   resolvedById String?                        // admin who approved/denied
