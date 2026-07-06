@@ -1047,6 +1047,145 @@ export async function migrateVm(
   return res.data.data;
 }
 
+// ─── Migration progress (for an admin-facing loading bar) ────
+
+export interface MigrationProgress {
+  /** 0-100, aggregated across every disk the migration is transferring. */
+  percent: number;
+  transferredBytes: number;
+  totalBytes: number;
+  /** Longest elapsed time reported across the migration's disk transfers. */
+  elapsedSeconds: number;
+  /** Estimated remaining seconds, or null until there's enough data to project. */
+  etaSeconds: number | null;
+}
+
+const LOG_SIZE_UNITS: Record<string, number> = {
+  b: 1,
+  kib: 1024,
+  mib: 1024 ** 2,
+  gib: 1024 ** 3,
+  tib: 1024 ** 4,
+};
+
+/** Parse a Proxmox log size like "512.0 GiB" / "309.0 MiB" into bytes. */
+function parseLogSize(value: string, unit: string): number {
+  return Number(value) * (LOG_SIZE_UNITS[unit.toLowerCase()] ?? 1);
+}
+
+/** Parse a Proxmox log elapsed-time like "1h 2m 3s" / "3m 4s" / "12s" into seconds. */
+function parseLogElapsed(text: string): number {
+  const m = /(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?/.exec(text.trim());
+  if (!m) return 0;
+  return Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0);
+}
+
+// A leading "YYYY-MM-DD HH:MM:SS " timestamp precedes some (not all) log lines.
+const LOG_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+/;
+
+// Matches Proxmox's per-disk migration progress lines, one per drive, e.g.:
+//   "drive-scsi0: transferred 1.0 GiB of 8.0 GiB (12.88%) in 12s"
+//   "mirror-scsi0: transferred 309.0 MiB of 512.0 GiB (0.06%) in 8s"
+const PROGRESS_LINE_RE =
+  /^(drive-\S+|mirror-\S+):\s*transferred\s+([\d.]+)\s*(\w+)\s+of\s+([\d.]+)\s*(\w+)\s+\(([\d.]+)%\)\s+in\s+(.+)$/;
+
+/**
+ * Parse a migration task's log tail into an aggregate transfer progress across
+ * every disk it's copying in parallel (a multi-disk VM logs one line per
+ * drive; later lines for the same drive supersede earlier ones). Returns null
+ * when the log has no progress lines yet — a task just starting, or a
+ * migration path (e.g. an offline storage move) that doesn't report per-disk
+ * transfer percentages the same way.
+ */
+export function parseMigrationProgress(logLines: string[]): MigrationProgress | null {
+  const perDrive = new Map<string, { transferred: number; total: number; elapsed: number }>();
+  for (const raw of logLines) {
+    const m = PROGRESS_LINE_RE.exec(raw.replace(LOG_TIMESTAMP_RE, '').trim());
+    if (!m) continue;
+    const [, drive, tVal, tUnit, totVal, totUnit, , elapsed] = m;
+    perDrive.set(drive!, {
+      transferred: parseLogSize(tVal!, tUnit!),
+      total: parseLogSize(totVal!, totUnit!),
+      elapsed: parseLogElapsed(elapsed!),
+    });
+  }
+  if (perDrive.size === 0) return null;
+
+  let transferredBytes = 0;
+  let totalBytes = 0;
+  let elapsedSeconds = 0;
+  for (const d of perDrive.values()) {
+    transferredBytes += d.transferred;
+    totalBytes += d.total;
+    elapsedSeconds = Math.max(elapsedSeconds, d.elapsed);
+  }
+  const percent = totalBytes > 0 ? Math.min(100, (transferredBytes / totalBytes) * 100) : 0;
+  // Projected from elapsed/percent so far — needs a little progress before it's
+  // meaningful (avoids a wild estimate off the very first sampled line).
+  const etaSeconds =
+    percent > 0.5 && elapsedSeconds > 0 ? Math.round((elapsedSeconds / percent) * (100 - percent)) : null;
+  return {
+    percent: Math.round(percent * 10) / 10,
+    transferredBytes,
+    totalBytes,
+    elapsedSeconds,
+    etaSeconds,
+  };
+}
+
+/**
+ * The currently-running migration task for a guest, if any. `/cluster/tasks`
+ * lists tasks cluster-wide with no `endtime` while still running — generic
+ * across nodes, no topology assumptions.
+ */
+async function getActiveMigrationTask(
+  vmid: number,
+  client: AxiosInstance,
+): Promise<{ node: string; upid: string } | null> {
+  const res = await client.get<{
+    data: Array<{ id?: string; type?: string; node?: string; upid?: string; endtime?: number }>;
+  }>('/cluster/tasks');
+  const task = (res.data.data ?? []).find(
+    (t) => t.type === 'qmigrate' && t.id === String(vmid) && !t.endtime && t.node && t.upid,
+  );
+  return task ? { node: task.node!, upid: task.upid! } : null;
+}
+
+/**
+ * Live progress of a guest's in-flight migration, for an admin-facing progress
+ * bar. Returns null when there's no migration currently running for this VM
+ * (not started yet, already finished, or between other apply steps). When a
+ * migration IS running but hasn't logged a transfer percentage yet, returns a
+ * zeroed placeholder rather than null, so the caller can still show "started,
+ * still measuring" instead of nothing.
+ */
+export async function getMigrationProgress(vmid: number, client?: AxiosInstance): Promise<MigrationProgress | null> {
+  const c = client ?? (await getClient());
+  const active = await getActiveMigrationTask(vmid, c);
+  if (!active) return null;
+  // Proxmox's task-log endpoint pages from the START (`start`/`limit` are an
+  // offset/count from line 1, not "last N lines" — a negative `start` errors,
+  // and there's no total-count field to page backward from), so a small
+  // `limit` here would keep re-reading the OLDEST lines and never see fresh
+  // progress once a migration outlives it. `limit: 0` is Proxmox's documented
+  // "no limit" — the response is one line of text per second of migration, so
+  // even an hours-long transfer stays a trivial payload for an occasional poll.
+  const res = await c.get<{ data: Array<{ t: string }> }>(
+    `/nodes/${active.node}/tasks/${encodeURIComponent(active.upid)}/log`,
+    { params: { limit: 0 } },
+  );
+  const lines = (res.data.data ?? []).map((l) => l.t);
+  return (
+    parseMigrationProgress(lines) ?? {
+      percent: 0,
+      transferredBytes: 0,
+      totalBytes: 0,
+      elapsedSeconds: 0,
+      etaSeconds: null,
+    }
+  );
+}
+
 /** A storage on a specific node that can hold VM disk images. */
 export interface NodeImagesStorage {
   storage: string;

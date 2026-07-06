@@ -87,6 +87,8 @@ export interface PendingPassthroughRequest {
   mapping: string | null;
   /** Best-effort q35/OVMF/EFI readiness warnings (empty when unreadable). */
   bootWarnings: string[];
+  /** Live transfer progress for the admin loading bar, only while applyState === 'migrating'. */
+  migration: pve.MigrationProgress | null;
 }
 
 /** Pending requests + VM + requester + apply progress (admin review queue). */
@@ -121,6 +123,19 @@ export async function listPendingPassthroughRequests(): Promise<PendingPassthrou
     }),
   );
 
+  // Live transfer progress for the admin loading bar — only worth a Proxmox
+  // call for the (typically 0 or 1) request currently mid-migration.
+  const migrations = await Promise.all(
+    rows.map(async (r) => {
+      if (!client || r.applyState !== 'migrating') return null;
+      try {
+        return await pve.getMigrationProgress(r.vm.proxmoxVmId, client);
+      } catch {
+        return null;
+      }
+    }),
+  );
+
   return rows.map((r, i) => ({
     id: r.id,
     reason: r.reason,
@@ -132,6 +147,7 @@ export async function listPendingPassthroughRequests(): Promise<PendingPassthrou
     targetNode: r.targetNode,
     mapping: r.mapping,
     bootWarnings: warnings[i]!,
+    migration: migrations[i]!,
   }));
 }
 
@@ -491,13 +507,18 @@ export async function applyPassthroughApproval(id: string, adminId: string): Pro
 /**
  * Startup recovery. A passthrough apply runs in the background, and a large disk
  * relocation can take hours — longer than a ProxMate deploy. If the backend
- * restarts mid-apply the worker is gone, but the Proxmox migration may have
- * finished on its own, leaving the guest on the target with its cloud-init drive
- * dropped and the DB node stale. Runs once at boot: for every apply left in
- * flight, re-sync the true node, restore any dropped cloud-init drive (on the
- * storage the guest now uses), and mark the request failed-retryable so the
- * admin gets a clear "review and approve again". We never auto-resume — guessing
- * the exact interrupted step is unsafe. Best-effort; never throws.
+ * restarts mid-apply the worker is gone, but a ProxMate restart does NOT kill an
+ * in-flight Proxmox migration task — it keeps copying independently. Runs once
+ * at boot: for every apply left in flight —
+ *   - if its migration is STILL actively running on Proxmox, leave it alone
+ *     entirely (Proxmox holds a migrate lock and rejects config writes anyway;
+ *     the next restart checks again), so a long relocation is never disturbed;
+ *   - otherwise (migration gone — finished or genuinely aborted), re-sync the
+ *     true node, restore any dropped cloud-init drive (on the storage the guest
+ *     now uses), and mark the request failed-retryable so the admin gets a
+ *     clear "review and approve again".
+ * We never auto-resume the remaining steps — guessing which one was interrupted
+ * is unsafe. Best-effort; never throws.
  */
 export async function reconcileInterruptedPassthroughApplies(): Promise<number> {
   let rows: Array<{ id: string; vmId: string; ciDropped: string | null }>;
@@ -509,17 +530,36 @@ export async function reconcileInterruptedPassthroughApplies(): Promise<number> 
   } catch {
     return 0; // DB not ready — never block boot
   }
+  if (rows.length === 0) return 0;
+
+  let client: Awaited<ReturnType<typeof pve.getClient>> | null = null;
+  try {
+    client = await pve.getClient();
+  } catch {
+    /* Proxmox unreachable at boot — nothing to recover yet; try again next restart */
+  }
 
   let recovered = 0;
   for (const row of rows) {
     try {
       const dbVm = await prisma.virtualMachine.findUnique({ where: { id: row.vmId } });
+      if (!dbVm) continue; // the VM was deleted while the apply was in flight
       // Correct the DB node in case a migration completed after the worker died.
-      const vm = dbVm ? await syncVmNode(dbVm) : null;
+      const vm = await syncVmNode(dbVm);
 
-      if (row.ciDropped && vm) {
+      if (client) {
+        const migrating = await pve.getMigrationProgress(vm.proxmoxVmId, client).catch(() => null);
+        if (migrating) {
+          console.log(
+            `[passthrough] ${row.id}: migration for VM ${vm.proxmoxVmId} is still running ` +
+              `(${migrating.percent}%) — leaving it to finish, will re-check next restart`,
+          );
+          continue;
+        }
+      }
+
+      if (row.ciDropped && client) {
         const drives = JSON.parse(row.ciDropped) as Array<{ slot: string; storage: string }>;
-        const client = await pve.getClient();
         const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
         // Regenerate on whatever storage the guest's disks now live on (source
         // or target, wherever it ended up); fall back to the recorded storage.

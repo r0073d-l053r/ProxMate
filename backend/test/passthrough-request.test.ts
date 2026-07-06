@@ -29,6 +29,7 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   waitForTask: vi.fn(),
   getVolumeStorages: vi.fn(),
   passthroughBootReadiness: vi.fn(),
+  getMigrationProgress: vi.fn(),
   pveMessage: (e: unknown) => (e instanceof Error ? e.message : 'proxmox error'),
 }));
 vi.mock('../src/services/vm.service.js', () => ({
@@ -45,6 +46,7 @@ import { syncVmNode, migrateVmToNode, startVm } from '../src/services/vm.service
 import { getConfig } from '../src/services/config.service.js';
 import { recordAudit } from '../src/services/audit.service.js';
 import {
+  listPendingPassthroughRequests,
   createPassthroughRequest,
   beginPassthroughApproval,
   applyPassthroughApproval,
@@ -81,6 +83,7 @@ const addCiDrive = vi.mocked(pve.addCloudInitDrive);
 const pveStart = vi.mocked(pve.startVm);
 const getVolStorages = vi.mocked(pve.getVolumeStorages);
 const readiness = vi.mocked(pve.passthroughBootReadiness);
+const getMigrationProgress = vi.mocked(pve.getMigrationProgress);
 const syncNode = vi.mocked(syncVmNode);
 const migrate = vi.mocked(migrateVmToNode);
 const start = vi.mocked(startVm);
@@ -110,6 +113,7 @@ beforeEach(() => {
   getArchMap.mockResolvedValue(new Map([['pve-0', 'amd64'], ['pve-4', 'amd64']]) as never);
   getVmConfig.mockResolvedValue({} as never);
   readiness.mockReturnValue(READY);
+  getMigrationProgress.mockResolvedValue(null);
   getVolStorages.mockReturnValue([]);
   getStorages.mockResolvedValue([{ storage: 'tank', type: 'zfspool' }] as never);
   getImagesStorages.mockResolvedValue([] as never);
@@ -119,6 +123,60 @@ beforeEach(() => {
   config.mockResolvedValue(null);
   migrate.mockImplementation(async (vm: never, target: string) => ({ ...(vm as object), proxmoxNode: target }) as never);
   start.mockResolvedValue(undefined as never);
+});
+
+describe('listPendingPassthroughRequests', () => {
+  const row = (over: Record<string, unknown> = {}) =>
+    ({
+      id: 'q1',
+      reason: null,
+      createdAt: new Date('2026-07-01T00:00:00Z'),
+      applyState: null,
+      applyError: null,
+      targetNode: null,
+      mapping: null,
+      user: { id: 'u1', email: 'u1@x.test', displayName: 'User One' },
+      vm: qemuVm(),
+      ...over,
+    }) as never;
+
+  it('returns [] without touching Proxmox when there are no pending requests', async () => {
+    prFindMany.mockResolvedValue([] as never);
+    expect(await listPendingPassthroughRequests()).toEqual([]);
+    expect(getClient).not.toHaveBeenCalled();
+  });
+
+  it('does not fetch migration progress for a request that is not migrating', async () => {
+    prFindMany.mockResolvedValue([row({ applyState: 'queued' })] as never);
+    const [r] = await listPendingPassthroughRequests();
+    expect(r!.migration).toBeNull();
+    expect(getMigrationProgress).not.toHaveBeenCalled();
+  });
+
+  it('attaches migration progress for a request currently migrating', async () => {
+    const progress = { percent: 42, transferredBytes: 1, totalBytes: 2, elapsedSeconds: 3, etaSeconds: 4 };
+    getMigrationProgress.mockResolvedValue(progress as never);
+    prFindMany.mockResolvedValue([row({ applyState: 'migrating', targetNode: 'pve-4' })] as never);
+    const [r] = await listPendingPassthroughRequests();
+    expect(getMigrationProgress).toHaveBeenCalledWith(100, {});
+    expect(r!.migration).toEqual(progress);
+  });
+
+  it('degrades to migration: null if the Proxmox read fails (never breaks the queue)', async () => {
+    getMigrationProgress.mockRejectedValue(new Error('timeout'));
+    prFindMany.mockResolvedValue([row({ applyState: 'migrating' })] as never);
+    const [r] = await listPendingPassthroughRequests();
+    expect(r!.migration).toBeNull();
+  });
+
+  it('lists with empty warnings/migration when Proxmox is unreachable', async () => {
+    getClient.mockRejectedValue(new Error('connect refused'));
+    prFindMany.mockResolvedValue([row({ applyState: 'migrating' })] as never);
+    const [r] = await listPendingPassthroughRequests();
+    expect(r!.bootWarnings).toEqual([]);
+    expect(r!.migration).toBeNull();
+    expect(getMigrationProgress).not.toHaveBeenCalled();
+  });
 });
 
 describe('createPassthroughRequest', () => {
@@ -475,6 +533,27 @@ describe('reconcileInterruptedPassthroughApplies (startup recovery)', () => {
     const n = await reconcileInterruptedPassthroughApplies();
     expect(n).toBe(1);
     expect(addCiDrive).not.toHaveBeenCalled();
+  });
+
+  it('leaves a still-migrating VM completely alone (a ProxMate restart does not kill the Proxmox task)', async () => {
+    prFindMany.mockResolvedValue([{ id: 'q1', vmId: 'vm1', ciDropped: JSON.stringify([{ slot: 'ide2', storage: 'tank' }]) }] as never);
+    vmFindUnique.mockResolvedValue(qemuVm());
+    getMigrationProgress.mockResolvedValue({ percent: 12, transferredBytes: 1, totalBytes: 2, elapsedSeconds: 3, etaSeconds: 4 } as never);
+
+    const n = await reconcileInterruptedPassthroughApplies();
+
+    expect(n).toBe(0);
+    expect(getVmConfig).not.toHaveBeenCalled(); // never reads/writes config on a locked (migrating) VM
+    expect(addCiDrive).not.toHaveBeenCalled();
+    expect(prUpdate).not.toHaveBeenCalled(); // left pending/migrating for the next restart to re-check
+  });
+
+  it('does not crash when checking migration status errors, and proceeds to recover', async () => {
+    prFindMany.mockResolvedValue([{ id: 'q1', vmId: 'vm1', ciDropped: null }] as never);
+    vmFindUnique.mockResolvedValue(qemuVm());
+    getMigrationProgress.mockRejectedValue(new Error('proxmox unreachable'));
+    const n = await reconcileInterruptedPassthroughApplies();
+    expect(n).toBe(1);
   });
 });
 
