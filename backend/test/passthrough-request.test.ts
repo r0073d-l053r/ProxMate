@@ -113,6 +113,7 @@ beforeEach(() => {
   getArchMap.mockResolvedValue(new Map([['pve-0', 'amd64'], ['pve-4', 'amd64']]) as never);
   getVmConfig.mockResolvedValue({} as never);
   readiness.mockReturnValue(READY);
+  getMigrationProgress.mockResolvedValue(null);
   getVolStorages.mockReturnValue([]);
   getStorages.mockResolvedValue([{ storage: 'tank', type: 'zfspool' }] as never);
   getImagesStorages.mockResolvedValue([] as never);
@@ -532,6 +533,27 @@ describe('reconcileInterruptedPassthroughApplies (startup recovery)', () => {
     const n = await reconcileInterruptedPassthroughApplies();
     expect(n).toBe(1);
     expect(addCiDrive).not.toHaveBeenCalled();
+  });
+
+  it('leaves a still-migrating VM completely alone (a ProxMate restart does not kill the Proxmox task)', async () => {
+    prFindMany.mockResolvedValue([{ id: 'q1', vmId: 'vm1', ciDropped: JSON.stringify([{ slot: 'ide2', storage: 'tank' }]) }] as never);
+    vmFindUnique.mockResolvedValue(qemuVm());
+    getMigrationProgress.mockResolvedValue({ percent: 12, transferredBytes: 1, totalBytes: 2, elapsedSeconds: 3, etaSeconds: 4 } as never);
+
+    const n = await reconcileInterruptedPassthroughApplies();
+
+    expect(n).toBe(0);
+    expect(getVmConfig).not.toHaveBeenCalled(); // never reads/writes config on a locked (migrating) VM
+    expect(addCiDrive).not.toHaveBeenCalled();
+    expect(prUpdate).not.toHaveBeenCalled(); // left pending/migrating for the next restart to re-check
+  });
+
+  it('does not crash when checking migration status errors, and proceeds to recover', async () => {
+    prFindMany.mockResolvedValue([{ id: 'q1', vmId: 'vm1', ciDropped: null }] as never);
+    vmFindUnique.mockResolvedValue(qemuVm());
+    getMigrationProgress.mockRejectedValue(new Error('proxmox unreachable'));
+    const n = await reconcileInterruptedPassthroughApplies();
+    expect(n).toBe(1);
   });
 });
 
