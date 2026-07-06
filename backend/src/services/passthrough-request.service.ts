@@ -323,8 +323,25 @@ export async function applyPassthroughApproval(id: string, adminId: string): Pro
   let wasRunning = false;
   let stoppedByUs = false;
   let migrated = false;
+  // Generated cloud-init drives can't be storage-migrated across storage TYPES
+  // (not even live — Proxmox copies them via storage_migrate, not NBD). Their
+  // content is derived from config keys, so we drop them before the move and
+  // regenerate them on the target storage while the guest is stopped to attach.
+  let ciDropped: pve.CloudInitDrive[] = [];
+  let ciRestored = false;
+  let ciTargetStorage: string | undefined;
 
   const client = await pve.getClient();
+
+  const stopAndWait = async (): Promise<void> => {
+    await pve.stopVm(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
+    if (!(await waitStopped(vm.proxmoxNode, vm.proxmoxVmId, client))) {
+      throw new PassthroughRequestError(`"${vm.name}" did not stop within 2 minutes — try again once it's down.`, 409);
+    }
+    stoppedByUs = true;
+    await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
+  };
+
   try {
     try {
       const st = await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
@@ -342,6 +359,27 @@ export async function applyPassthroughApproval(id: string, adminId: string): Pro
       if (!map) throw new PassthroughRequestError(`Mapping "${mapping}" no longer exists.`, 409);
       const plan = await planPassthroughPlacement(vm, map, client, { running: wasRunning });
       if (plan.willMigrate) {
+        // Cloud-init drives whose storage the target doesn't have must be
+        // dropped pre-move (regenerated after). Removing a cdrom-slot drive
+        // needs the guest stopped, so a running guest gets a brief bounce —
+        // the long disk copy still happens live afterwards.
+        if (plan.targetstorage) {
+          const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
+          const targetAvail = new Set((await pve.getNodeImagesStorages(plan.targetNode, client)).map((s) => s.storage));
+          const toDrop = pve.getCloudInitDrives(cfg).filter((d) => !targetAvail.has(d.storage));
+          if (toDrop.length > 0) {
+            if (wasRunning) await stopAndWait();
+            await pve.deleteVmConfigKeys(vm.proxmoxNode, vm.proxmoxVmId, toDrop.map((d) => d.slot), client);
+            ciDropped = toDrop;
+            ciTargetStorage = plan.targetstorage;
+            if (wasRunning) {
+              const upid = await pve.startVm(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
+              await pve.waitForTask(vm.proxmoxNode, upid, client);
+              stoppedByUs = false;
+              await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
+            }
+          }
+        }
         vm = await migrateVmToNode(vm, plan.targetNode, {
           offline: !wasRunning,
           targetstorage: plan.targetstorage,
@@ -359,12 +397,15 @@ export async function applyPassthroughApproval(id: string, adminId: string): Pro
     // ── Stop (hostpci can only be set on a stopped guest) ──
     if (wasRunning) {
       await setState({ applyState: 'stopping' });
-      await pve.stopVm(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
-      if (!(await waitStopped(vm.proxmoxNode, vm.proxmoxVmId, client))) {
-        throw new PassthroughRequestError(`"${vm.name}" did not stop within 2 minutes — try again once it's down.`, 409);
+      await stopAndWait();
+    }
+
+    // ── Regenerate dropped cloud-init drives on the target storage ──
+    if (ciDropped.length > 0) {
+      for (const d of ciDropped) {
+        await pve.addCloudInitDrive(vm.proxmoxNode, vm.proxmoxVmId, d.slot, ciTargetStorage ?? d.storage, client);
       }
-      stoppedByUs = true;
-      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
+      ciRestored = true;
     }
 
     // ── Attach (pcie only on q35 — Proxmox refuses to start i440fx + pcie=1) ──
@@ -405,10 +446,25 @@ export async function applyPassthroughApproval(id: string, adminId: string): Pro
         startNote,
     });
   } catch (err) {
-    const message = err instanceof PassthroughRequestError ? err.message : pve.pveMessage(err);
+    let message = err instanceof PassthroughRequestError ? err.message : pve.pveMessage(err);
+    if (/cannot migrate from storage type/i.test(message) && !wasRunning) {
+      message += ' Tip: start the VM and approve again — live migration can move disks across storage types.';
+    }
     await setState({ applyState: 'failed', applyError: message }).catch(() => undefined);
+    // Put back any cloud-init drive we dropped (on the storage matching
+    // wherever the guest now lives), so its next boot still gets its config.
+    if (ciDropped.length > 0 && !ciRestored) {
+      try {
+        vm = await syncVmNode(vm);
+        for (const d of ciDropped) {
+          await pve.addCloudInitDrive(vm.proxmoxNode, vm.proxmoxVmId, d.slot, migrated ? (ciTargetStorage ?? d.storage) : d.storage, client);
+        }
+      } catch {
+        /* best-effort — the failure reason is already surfaced */
+      }
+    }
     // Leave the VM usable: a failed LIVE migrate never stopped it, so only
-    // restart when WE took it down (post-migrate stop/attach failures).
+    // restart when WE took it down (bounce/stop/attach failures).
     if (stoppedByUs) {
       try {
         vm = await syncVmNode(vm);
