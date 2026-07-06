@@ -259,6 +259,17 @@ export interface MyPassthroughRequest {
   resolvedAt: string | null;
 }
 
+/** Live transfer progress of an in-flight VM migration (for a loading bar). */
+export interface MigrationProgress {
+  /** 0-100, aggregated across every disk the migration is transferring. */
+  percent: number;
+  transferredBytes: number;
+  totalBytes: number;
+  elapsedSeconds: number;
+  /** Estimated remaining seconds, or null until there's enough data to project. */
+  etaSeconds: number | null;
+}
+
 /** A pending passthrough request in the admin review queue. */
 export interface PendingPassthroughRequest {
   id: string;
@@ -274,6 +285,8 @@ export interface PendingPassthroughRequest {
   mapping: string | null;
   /** q35 / OVMF / EFI-disk readiness warnings for the VM (may be empty). */
   bootWarnings: string[];
+  /** Live migration transfer progress, only while applyState === "migrating". */
+  migration: MigrationProgress | null;
 }
 
 /** An admin-defined Proxmox PCI resource mapping (what a passthrough attaches). */
