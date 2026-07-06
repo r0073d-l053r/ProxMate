@@ -1013,13 +1013,20 @@ export async function removeDisk(node: string, vmid: number, slot: string, clien
   }
 }
 
-/** Migrate a VM to another node; `online` for a live migration of a running guest. Returns the task UPID. */
+/**
+ * Migrate a VM to another node; `online` for a live migration of a running
+ * guest. `opts.targetstorage` (offline migration) relocates every local disk
+ * onto that storage on the target node — required when the source disks live on
+ * storage the target doesn't have (e.g. a node-local ZFS pool). Returns the
+ * task UPID.
+ */
 export async function migrateVm(
   node: string,
   vmid: number,
   target: string,
   online: boolean,
   client?: AxiosInstance,
+  opts: { targetstorage?: string } = {},
 ): Promise<string> {
   const c = client ?? (await getClient());
   const params = new URLSearchParams({ target });
@@ -1030,9 +1037,88 @@ export async function migrateVm(
     // of refusing. A no-op for VMs already on shared storage (Ceph/NFS), where
     // only RAM transfers. Same-named storage on the target is assumed.
     params.set('with-local-disks', '1');
+  } else if (opts.targetstorage) {
+    params.set('targetstorage', opts.targetstorage);
   }
   const res = await c.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/migrate`, params);
   return res.data.data;
+}
+
+/** A storage on a specific node that can hold VM disk images. */
+export interface NodeImagesStorage {
+  storage: string;
+  type: string;
+  shared: boolean;
+  availBytes: number | null; // free space, when the node reports it
+}
+
+/**
+ * Storages on `node` that are enabled, active, and can hold disk images —
+ * the candidates for relocating a VM's disks during an offline migration.
+ */
+export async function getNodeImagesStorages(
+  node: string,
+  client?: AxiosInstance,
+): Promise<NodeImagesStorage[]> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{
+    data: Array<{ storage: string; type: string; content?: string; shared?: number; active?: number; enabled?: number; avail?: number }>;
+  }>(`/nodes/${node}/storage`, { params: { enabled: 1, content: 'images' } });
+  return (res.data.data ?? [])
+    .filter((s) => s.active !== 0)
+    .map((s) => ({
+      storage: s.storage,
+      type: s.type,
+      shared: s.shared === 1,
+      availBytes: typeof s.avail === 'number' ? s.avail : null,
+    }));
+}
+
+// Config keys whose values reference a disk volume (storage:volid,…). cdroms and
+// detached "none" drives are filtered by value, not key.
+const VOLUME_KEY_RE = /^(scsi|virtio|sata|ide|efidisk|tpmstate)\d+$/;
+
+/**
+ * The distinct storage names a VM's volumes live on (from its config). Includes
+ * the EFI/TPM state disks — they migrate too. Skips cdroms and empty drives.
+ */
+export function getVolumeStorages(config: Record<string, string>): string[] {
+  const storages = new Set<string>();
+  for (const [k, v] of Object.entries(config)) {
+    if (!VOLUME_KEY_RE.test(k)) continue;
+    const raw = String(v);
+    if (raw === 'none' || /(?:^|,)media=cdrom(?:,|$)/.test(raw)) continue;
+    const m = /^([A-Za-z0-9_.-]+):/.exec(raw);
+    if (m) storages.add(m[1]!);
+  }
+  return [...storages];
+}
+
+/**
+ * Boot-readiness check for PCI/GPU passthrough. Passthrough (GPUs especially)
+ * generally wants machine=q35 + bios=ovmf + an EFI disk. We only WARN — never
+ * rewrite an existing guest's firmware/machine type: switching an installed
+ * guest from SeaBIOS to OVMF typically makes it unbootable, which is strictly
+ * worse than a GPU that needs manual host-side attention.
+ */
+export function passthroughBootReadiness(config: Record<string, string>): {
+  q35: boolean;
+  ovmf: boolean;
+  efidisk: boolean;
+  warnings: string[];
+} {
+  const q35 = /q35/i.test(config['machine'] ?? '');
+  const ovmf = /^ovmf$/i.test((config['bios'] ?? '').trim());
+  const efidisk = 'efidisk0' in config;
+  const warnings: string[] = [];
+  if (!q35) {
+    warnings.push(
+      'Machine type is not q35 — the device will be attached as legacy PCI (no pcie=1). GPUs usually need q35.',
+    );
+  }
+  if (!ovmf) warnings.push('BIOS is not OVMF (UEFI) — GPU passthrough usually needs OVMF. Changing firmware on an installed guest can break its boot, so ProxMate will not change it automatically.');
+  if (ovmf && !efidisk) warnings.push('OVMF is set but the VM has no EFI disk (efidisk0) — add one in Proxmox or boot settings will not persist.');
+  return { q35, ovmf, efidisk, warnings };
 }
 
 /** Read a guest's config as a string map. Works for both QEMU and LXC. */
@@ -1121,9 +1207,11 @@ export async function listPciMappings(client?: AxiosInstance): Promise<PciMappin
 }
 
 /**
- * Attach a PCI resource mapping to a VM at `hostpci{index}`. `pcie=1` selects
- * PCIe (q35). The VM must be stopped. The admin is responsible for the VM being
- * compatible (q35 + OVMF for a GPU) and for host VFIO/IOMMU setup.
+ * Attach a PCI resource mapping to a VM at `hostpci{index}`. `pcie=1` selects a
+ * PCIe slot — valid only on machine=q35 (Proxmox refuses to START a non-q35
+ * guest with pcie=1), so callers pass `opts.pcie=false` for i440fx guests and
+ * the device lands in a legacy PCI slot instead. The VM must be stopped. The
+ * admin remains responsible for host VFIO/IOMMU setup.
  */
 export async function attachPci(
   node: string,
@@ -1131,11 +1219,13 @@ export async function attachPci(
   index: number,
   mapping: string,
   client?: AxiosInstance,
+  opts: { pcie?: boolean } = {},
 ): Promise<void> {
   const c = client ?? (await getClient());
+  const value = opts.pcie === false ? `mapping=${mapping}` : `mapping=${mapping},pcie=1`;
   await c.put(
     `/nodes/${node}/qemu/${vmid}/config`,
-    new URLSearchParams({ [`hostpci${index}`]: `mapping=${mapping},pcie=1` }),
+    new URLSearchParams({ [`hostpci${index}`]: value }),
   );
 }
 

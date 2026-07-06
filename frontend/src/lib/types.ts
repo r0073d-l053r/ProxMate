@@ -266,6 +266,14 @@ export interface PendingPassthroughRequest {
   createdAt: string;
   user: { id: string; email: string; displayName: string };
   vm: { id: string; name: string; node: string; vmid: number };
+  // Background-apply progress: approving may stop + migrate the VM to the
+  // device's node before attaching. null until an approval is started.
+  applyState: "queued" | "stopping" | "migrating" | "attaching" | "failed" | null;
+  applyError: string | null;
+  targetNode: string | null;
+  mapping: string | null;
+  /** q35 / OVMF / EFI-disk readiness warnings for the VM (may be empty). */
+  bootWarnings: string[];
 }
 
 /** An admin-defined Proxmox PCI resource mapping (what a passthrough attaches). */

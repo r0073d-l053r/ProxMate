@@ -607,7 +607,14 @@ export async function annotateAccess<T extends { id: string; userId: string }>(
 export async function migrateVmToNode(
   vm: VirtualMachine,
   targetNode: string,
-  opts: { notifyOwner?: boolean; actorId?: string } = {},
+  opts: {
+    notifyOwner?: boolean;
+    actorId?: string;
+    /** Force an offline migration (caller has already stopped the guest). */
+    offline?: boolean;
+    /** Offline only: relocate all local disks onto this storage on the target. */
+    targetstorage?: string;
+  } = {},
 ): Promise<VirtualMachine> {
   if (targetNode === vm.proxmoxNode) throw new Error('The VM is already on that node.');
   // Containers can't be live-migrated in ProxMate's API-only model (LXC has no
@@ -615,6 +622,8 @@ export async function migrateVmToNode(
   // from manual moves, the balancer, and drains. Keep them pinned.
   if (kindOf(vm) === 'lxc') throw new Error('Live migration isn’t supported for containers (LXC).');
   // A guest with PCI/GPU passthrough is pinned to its host — can't be migrated.
+  // (The passthrough-approval flow migrates BEFORE it attaches, so this guard
+  // never applies there; it protects generic admin/balancer moves.)
   if (vm.hasPassthrough) throw new Error('A VM with PCI/GPU passthrough can’t be migrated. Detach the device first.');
   const client = await pve.getClient();
 
@@ -630,8 +639,10 @@ export async function migrateVmToNode(
     throw new Error(`Architecture mismatch: ${vm.proxmoxNode} is ${src}, ${targetNode} is ${dst}.`);
   }
 
-  const online = (await getVmWithLiveStatus(vm)).live?.status === 'running';
-  const upid = await pve.migrateVm(vm.proxmoxNode, vm.proxmoxVmId, targetNode, online, client);
+  const online = opts.offline ? false : (await getVmWithLiveStatus(vm)).live?.status === 'running';
+  const upid = await pve.migrateVm(vm.proxmoxNode, vm.proxmoxVmId, targetNode, online, client, {
+    ...(opts.targetstorage && !online ? { targetstorage: opts.targetstorage } : {}),
+  });
 
   // Heads-up to the owner as the move starts (best-effort; never blocks the
   // migration). Only for admin-initiated moves, and not when the admin is moving
