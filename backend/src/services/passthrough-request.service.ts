@@ -372,6 +372,9 @@ export async function applyPassthroughApproval(id: string, adminId: string): Pro
             await pve.deleteVmConfigKeys(vm.proxmoxNode, vm.proxmoxVmId, toDrop.map((d) => d.slot), client);
             ciDropped = toDrop;
             ciTargetStorage = plan.targetstorage;
+            // Persist so a startup reconciler can restore these if we're killed
+            // (backend restart) before the regenerate step below.
+            await setState({ ciDropped: JSON.stringify(toDrop.map((d) => ({ slot: d.slot, storage: d.storage }))) });
             if (wasRunning) {
               const upid = await pve.startVm(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
               await pve.waitForTask(vm.proxmoxNode, upid, client);
@@ -406,6 +409,7 @@ export async function applyPassthroughApproval(id: string, adminId: string): Pro
         await pve.addCloudInitDrive(vm.proxmoxNode, vm.proxmoxVmId, d.slot, ciTargetStorage ?? d.storage, client);
       }
       ciRestored = true;
+      await setState({ ciDropped: null }); // regenerated — no longer needs recovery
     }
 
     // ── Attach (pcie only on q35 — Proxmox refuses to start i440fx + pcie=1) ──
@@ -459,8 +463,9 @@ export async function applyPassthroughApproval(id: string, adminId: string): Pro
         for (const d of ciDropped) {
           await pve.addCloudInitDrive(vm.proxmoxNode, vm.proxmoxVmId, d.slot, migrated ? (ciTargetStorage ?? d.storage) : d.storage, client);
         }
+        await setState({ ciDropped: null }); // restored — reconciler needn't
       } catch {
-        /* best-effort — the failure reason is already surfaced */
+        /* best-effort — leave ciDropped set so the startup reconciler retries */
       }
     }
     // Leave the VM usable: a failed LIVE migrate never stopped it, so only
@@ -481,6 +486,74 @@ export async function applyPassthroughApproval(id: string, adminId: string): Pro
       detail: `${vm.name} ← mapping ${mapping}: ${message}`,
     });
   }
+}
+
+/**
+ * Startup recovery. A passthrough apply runs in the background, and a large disk
+ * relocation can take hours — longer than a ProxMate deploy. If the backend
+ * restarts mid-apply the worker is gone, but the Proxmox migration may have
+ * finished on its own, leaving the guest on the target with its cloud-init drive
+ * dropped and the DB node stale. Runs once at boot: for every apply left in
+ * flight, re-sync the true node, restore any dropped cloud-init drive (on the
+ * storage the guest now uses), and mark the request failed-retryable so the
+ * admin gets a clear "review and approve again". We never auto-resume — guessing
+ * the exact interrupted step is unsafe. Best-effort; never throws.
+ */
+export async function reconcileInterruptedPassthroughApplies(): Promise<number> {
+  let rows: Array<{ id: string; vmId: string; ciDropped: string | null }>;
+  try {
+    rows = await prisma.passthroughRequest.findMany({
+      where: { status: 'pending', applyState: { in: [...IN_FLIGHT] } },
+      select: { id: true, vmId: true, ciDropped: true },
+    });
+  } catch {
+    return 0; // DB not ready — never block boot
+  }
+
+  let recovered = 0;
+  for (const row of rows) {
+    try {
+      const dbVm = await prisma.virtualMachine.findUnique({ where: { id: row.vmId } });
+      // Correct the DB node in case a migration completed after the worker died.
+      const vm = dbVm ? await syncVmNode(dbVm) : null;
+
+      if (row.ciDropped && vm) {
+        const drives = JSON.parse(row.ciDropped) as Array<{ slot: string; storage: string }>;
+        const client = await pve.getClient();
+        const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
+        // Regenerate on whatever storage the guest's disks now live on (source
+        // or target, wherever it ended up); fall back to the recorded storage.
+        const diskStorage = pve.getVolumeStorages(cfg)[0];
+        const present = new Set(pve.getCloudInitDrives(cfg).map((d) => d.slot));
+        for (const d of drives) {
+          if (!present.has(d.slot)) {
+            await pve.addCloudInitDrive(vm.proxmoxNode, vm.proxmoxVmId, d.slot, diskStorage ?? d.storage, client);
+          }
+        }
+      }
+
+      await prisma.passthroughRequest.update({
+        where: { id: row.id },
+        data: {
+          applyState: 'failed',
+          applyError:
+            'Interrupted by a ProxMate restart while applying. The VM was left safe — review it and approve again.',
+          ciDropped: null,
+        },
+      });
+      await recordAudit({
+        action: 'passthrough.apply_interrupted',
+        targetType: 'vm',
+        targetId: row.vmId,
+        detail: 'recovered on startup',
+      }).catch(() => undefined);
+      recovered += 1;
+    } catch (err) {
+      console.error(`[passthrough] startup reconcile of ${row.id} failed:`, err);
+    }
+  }
+  if (recovered > 0) console.log(`[passthrough] recovered ${recovered} interrupted apply(s) on startup`);
+  return recovered;
 }
 
 /** Deny: mark resolved without touching the VM. */
