@@ -614,6 +614,9 @@ export async function migrateVmToNode(
     offline?: boolean;
     /** Offline only: relocate all local disks onto this storage on the target. */
     targetstorage?: string;
+    /** Max time to wait for the migrate task (default 30 min). Disk relocation
+     *  of a large guest can take hours — callers doing storage moves raise it. */
+    timeoutMs?: number;
   } = {},
 ): Promise<VirtualMachine> {
   if (targetNode === vm.proxmoxNode) throw new Error('The VM is already on that node.');
@@ -653,8 +656,9 @@ export async function migrateVmToNode(
     );
   }
 
-  // The migrate task runs on the source node; a live migration can take a while.
-  await pve.waitForTask(vm.proxmoxNode, upid, client, 1_800_000);
+  // The migrate task runs on the source node; a live migration can take a
+  // while, and an offline storage relocation can take much longer.
+  await pve.waitForTask(vm.proxmoxNode, upid, client, opts.timeoutMs ?? 1_800_000);
   return prisma.virtualMachine.update({ where: { id: vm.id }, data: { proxmoxNode: targetNode } });
 }
 
