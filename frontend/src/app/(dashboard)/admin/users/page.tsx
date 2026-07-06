@@ -259,7 +259,7 @@ export default function UsersPage() {
                     {!inFlight && chosen && (
                       <div className="mt-0.5 text-xs text-muted-foreground">
                         {willMigrate
-                          ? `Approving will stop the VM and migrate it ${p.vm.node} → ${chosen.nodes.join(" / ")} (the device's node), then attach.`
+                          ? `Approving migrates the VM ${p.vm.node} → ${chosen.nodes.join(" / ")} (the device's node) — live while it runs — then briefly stops it to attach the device.`
                           : "The VM is already on the device's node — no migration needed."}
                       </div>
                     )}

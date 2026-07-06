@@ -38,12 +38,11 @@ describe('migrateVm', () => {
     expect(body['online']).toBeUndefined();
   });
 
-  it('ignores targetstorage on a live migration (online path is with-local-disks)', async () => {
+  it('passes targetstorage alongside with-local-disks on a live migration (NBD mirror works across storage types)', async () => {
     const c = fakeClient();
-    await migrateVm('pve-0', 100, 'pve-4', true, asClient(c), { targetstorage: 'local-zfs' });
+    await migrateVm('pve-0', 100, 'pve-4', true, asClient(c), { targetstorage: 'tank-files' });
     const body = bodyOf(c.post.mock.calls[0]!);
-    expect(body['online']).toBe('1');
-    expect(body['targetstorage']).toBeUndefined();
+    expect(body).toMatchObject({ online: '1', 'with-local-disks': '1', targetstorage: 'tank-files' });
   });
 });
 
@@ -67,7 +66,7 @@ describe('getNodeImagesStorages', () => {
 });
 
 describe('getVolumeStorages', () => {
-  it('collects storages from disk/EFI/TPM volumes and skips cdroms + empty drives', () => {
+  it('collects storages from disk/EFI/TPM volumes and skips ISO cdroms + empty drives', () => {
     expect(
       getVolumeStorages({
         scsi0: 'tank:vm-108-disk-0,size=32G',
@@ -79,6 +78,15 @@ describe('getVolumeStorages', () => {
         net0: 'virtio=AA:BB,bridge=vmbr0',
       }).sort(),
     ).toEqual(['local-zfs', 'tank']);
+  });
+
+  it('includes generated cloud-init drives — they migrate as volumes despite media=cdrom', () => {
+    expect(
+      getVolumeStorages({
+        scsi0: 'ceph:vm-9-disk-0,size=32G',
+        ide2: 'tank:vm-9-cloudinit,media=cdrom,size=4M',
+      }).sort(),
+    ).toEqual(['ceph', 'tank']);
   });
 });
 

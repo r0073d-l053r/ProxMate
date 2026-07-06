@@ -1037,9 +1037,12 @@ export async function migrateVm(
     // of refusing. A no-op for VMs already on shared storage (Ceph/NFS), where
     // only RAM transfers. Same-named storage on the target is assumed.
     params.set('with-local-disks', '1');
-  } else if (opts.targetstorage) {
-    params.set('targetstorage', opts.targetstorage);
   }
+  // Storage relocation. Live migration mirrors disks over NBD, which works
+  // across storage TYPES (zfs → nfs, lvm → dir, …); offline migration instead
+  // needs a common export/import format between the two storage types, so
+  // offline callers should prefer a same-type target storage.
+  if (opts.targetstorage) params.set('targetstorage', opts.targetstorage);
   const res = await c.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/migrate`, params);
   return res.data.data;
 }
@@ -1080,14 +1083,16 @@ const VOLUME_KEY_RE = /^(scsi|virtio|sata|ide|efidisk|tpmstate)\d+$/;
 
 /**
  * The distinct storage names a VM's volumes live on (from its config). Includes
- * the EFI/TPM state disks — they migrate too. Skips cdroms and empty drives.
+ * the EFI/TPM state disks and generated cloud-init drives — those migrate as
+ * volumes even though cloud-init presents as a cdrom. Only ISO cdroms and empty
+ * drives are skipped (Proxmox doesn't storage-migrate ISO content).
  */
 export function getVolumeStorages(config: Record<string, string>): string[] {
   const storages = new Set<string>();
   for (const [k, v] of Object.entries(config)) {
     if (!VOLUME_KEY_RE.test(k)) continue;
     const raw = String(v);
-    if (raw === 'none' || /(?:^|,)media=cdrom(?:,|$)/.test(raw)) continue;
+    if (raw === 'none' || raw.includes(':iso/')) continue;
     const m = /^([A-Za-z0-9_.-]+):/.exec(raw);
     if (m) storages.add(m[1]!);
   }

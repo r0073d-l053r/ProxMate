@@ -20,6 +20,7 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   getNodes: vi.fn(),
   getNodeArchMap: vi.fn(),
   pickBestNode: vi.fn(),
+  getStorages: vi.fn(),
   getNodeImagesStorages: vi.fn(),
   getVolumeStorages: vi.fn(),
   passthroughBootReadiness: vi.fn(),
@@ -64,6 +65,7 @@ const getDevices = vi.mocked(pve.getPassthroughDevices);
 const getNodes = vi.mocked(pve.getNodes);
 const getArchMap = vi.mocked(pve.getNodeArchMap);
 const pickBest = vi.mocked(pve.pickBestNode);
+const getStorages = vi.mocked(pve.getStorages);
 const getImagesStorages = vi.mocked(pve.getNodeImagesStorages);
 const getVolStorages = vi.mocked(pve.getVolumeStorages);
 const readiness = vi.mocked(pve.passthroughBootReadiness);
@@ -97,7 +99,9 @@ beforeEach(() => {
   getVmConfig.mockResolvedValue({} as never);
   readiness.mockReturnValue(READY);
   getVolStorages.mockReturnValue([]);
+  getStorages.mockResolvedValue([{ storage: 'tank', type: 'zfspool' }] as never);
   getImagesStorages.mockResolvedValue([] as never);
+  getVmStatus.mockResolvedValue({ status: 'stopped' } as never);
   config.mockResolvedValue(null);
   migrate.mockImplementation(async (vm: never, target: string) => ({ ...(vm as object), proxmoxNode: target }) as never);
   start.mockResolvedValue(undefined as never);
@@ -232,6 +236,33 @@ describe('beginPassthroughApproval (validate + plan)', () => {
     await expect(beginPassthroughApproval('q1', 'gpu0')).rejects.toMatchObject({ status: 409 });
   });
 
+  it('prefers a SAME-TYPE storage for a stopped guest (offline needs format compatibility), even over more space', async () => {
+    prFindUnique.mockResolvedValue(pendingRow());
+    listMappings.mockResolvedValue([{ id: 'gpu0', nodes: ['pve-4'] }] as never);
+    getVolStorages.mockReturnValue(['tank']); // zfspool (per getStorages default)
+    getImagesStorages.mockResolvedValue([
+      { storage: 'huge-nfs', type: 'nfs', shared: true, availBytes: 5000 * GB },
+      { storage: 'small-zfs', type: 'zfspool', shared: false, availBytes: 300 * GB },
+    ] as never);
+
+    const plan = await beginPassthroughApproval('q1', 'gpu0'); // VM stopped (default)
+    expect(plan.targetstorage).toBe('small-zfs');
+  });
+
+  it('ignores storage types for a RUNNING guest (live NBD mirror crosses types) — picks the most free', async () => {
+    prFindUnique.mockResolvedValue(pendingRow());
+    listMappings.mockResolvedValue([{ id: 'gpu0', nodes: ['pve-4'] }] as never);
+    getVmStatus.mockResolvedValue({ status: 'running' } as never);
+    getVolStorages.mockReturnValue(['tank']);
+    getImagesStorages.mockResolvedValue([
+      { storage: 'huge-nfs', type: 'nfs', shared: true, availBytes: 5000 * GB },
+      { storage: 'small-zfs', type: 'zfspool', shared: false, availBytes: 300 * GB },
+    ] as never);
+
+    const plan = await beginPassthroughApproval('q1', 'gpu0');
+    expect(plan.targetstorage).toBe('huge-nfs');
+  });
+
   it('uses pickBestNode when the mapping spans multiple online nodes', async () => {
     prFindUnique.mockResolvedValue(pendingRow());
     getNodes.mockResolvedValue([
@@ -274,7 +305,7 @@ describe('applyPassthroughApproval (background worker)', () => {
     expect(attachPci).not.toHaveBeenCalled();
   });
 
-  it('stops a running VM, migrates offline with disk relocation, attaches, resolves, restarts', async () => {
+  it('LIVE-migrates a running VM with disk relocation, then stops on the target, attaches, resolves, restarts', async () => {
     prFindUnique.mockResolvedValue(queuedRow());
     listMappings.mockResolvedValue([{ id: 'gpu0', nodes: ['pve-4'] }] as never);
     getVolStorages.mockReturnValue(['tank']);
@@ -284,13 +315,15 @@ describe('applyPassthroughApproval (background worker)', () => {
 
     await applyPassthroughApproval('q1', 'admin');
 
-    expect(stopVm).toHaveBeenCalledWith('pve-0', 100, expect.anything(), 'qemu');
+    // Migration comes FIRST and is live (offline:false) — the guest keeps
+    // running through the disk copy; downtime is only the attach window.
     expect(migrate).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'vm1' }),
       'pve-4',
-      expect.objectContaining({ offline: true, targetstorage: 'local-zfs', notifyOwner: true, actorId: 'admin' }),
+      expect.objectContaining({ offline: false, targetstorage: 'local-zfs', notifyOwner: true, actorId: 'admin' }),
     );
-    // Attach happens on the NEW node with pcie (q35 ready).
+    // The stop happens on the NEW node, after the migration.
+    expect(stopVm).toHaveBeenCalledWith('pve-4', 100, expect.anything(), 'qemu');
     expect(attachPci).toHaveBeenCalledWith('pve-4', 100, 0, 'gpu0', expect.anything(), { pcie: true });
     expect(tx).toHaveBeenCalled(); // hasPassthrough + approved/done
     expect(start).toHaveBeenCalled(); // was running → restarted
@@ -316,23 +349,43 @@ describe('applyPassthroughApproval (background worker)', () => {
     expect(attachPci).toHaveBeenCalledWith('pve-4', 100, 0, 'gpu0', expect.anything(), { pcie: false });
   });
 
-  it('a migration failure marks failed with the reason, restarts the VM, never flags hasPassthrough', async () => {
+  it('a live-migration failure marks failed with the reason and leaves the still-running VM alone', async () => {
     prFindUnique.mockResolvedValue(queuedRow());
     listMappings.mockResolvedValue([{ id: 'gpu0', nodes: ['pve-4'] }] as never);
     getVolStorages.mockReturnValue([]);
-    getVmStatus.mockResolvedValueOnce({ status: 'running' } as never).mockResolvedValue({ status: 'stopped' } as never);
+    getVmStatus.mockResolvedValue({ status: 'running' } as never);
     migrate.mockRejectedValue(new Error('storage copy failed'));
 
     await applyPassthroughApproval('q1', 'admin');
 
+    // Migration is first now — the guest was never stopped, so no restart.
+    expect(stopVm).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
     expect(attachPci).not.toHaveBeenCalled();
     expect(tx).not.toHaveBeenCalled();
     expect(prUpdate).toHaveBeenCalledWith({
       where: { id: 'q1' },
       data: { applyState: 'failed', applyError: 'storage copy failed' },
     });
-    expect(start).toHaveBeenCalled(); // restarted where it still lives
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: 'passthrough.apply_failed' }));
+  });
+
+  it('an attach failure AFTER migration restarts the VM on the target (bootable, no device, retryable)', async () => {
+    prFindUnique.mockResolvedValue(queuedRow());
+    listMappings.mockResolvedValue([{ id: 'gpu0', nodes: ['pve-4'] }] as never);
+    getVolStorages.mockReturnValue([]);
+    getVmStatus.mockResolvedValueOnce({ status: 'running' } as never).mockResolvedValue({ status: 'stopped' } as never);
+    attachPci.mockRejectedValue(new Error('hostpci rejected'));
+
+    await applyPassthroughApproval('q1', 'admin');
+
+    expect(migrate).toHaveBeenCalled();
+    expect(tx).not.toHaveBeenCalled(); // hasPassthrough never set
+    expect(start).toHaveBeenCalled(); // we stopped it → restarted on the target
+    expect(prUpdate).toHaveBeenCalledWith({
+      where: { id: 'q1' },
+      data: { applyState: 'failed', applyError: 'hostpci rejected' },
+    });
   }, 15_000);
 });
 

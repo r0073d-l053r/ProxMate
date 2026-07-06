@@ -158,6 +158,7 @@ async function planPassthroughPlacement(
   vm: VirtualMachine,
   mapping: pve.PciMapping,
   client: Awaited<ReturnType<typeof pve.getClient>>,
+  opts: { running: boolean },
 ): Promise<PassthroughPlan> {
   if (mapping.nodes.length === 0) {
     throw new PassthroughRequestError(
@@ -213,12 +214,26 @@ async function planPassthroughPlacement(
         409,
       );
     }
-    // Prefer the cluster's default disk pool when the target has it; otherwise
-    // the images-capable storage with the most free space.
+    // Live migration mirrors disks over NBD (any storage type works). OFFLINE
+    // migration needs a common export/import format between the source and
+    // target storage TYPES (e.g. zfspool → nfs is impossible offline), so for a
+    // stopped guest prefer a same-type storage on the target first.
+    const bySpace = (list: pve.NodeImagesStorage[]) =>
+      [...list].sort((a, b) => (b.availBytes ?? -1) - (a.availBytes ?? -1));
+    let compatible = targetStorages;
+    if (!opts.running) {
+      const typeByName = new Map((await pve.getStorages(client)).map((s) => [s.storage, s.type]));
+      const sourceTypes = new Set(missing.map((s) => typeByName.get(s)).filter(Boolean));
+      const sameType = targetStorages.filter((s) => sourceTypes.has(s.type));
+      if (sameType.length > 0) compatible = sameType;
+      // No same-type storage on the target: attempt the best available anyway —
+      // some type pairs do share a format — but the error, if Proxmox refuses,
+      // is surfaced verbatim to the admin (start the VM to move it live, or add
+      // a compatible storage).
+    }
     const defaultStorage = await getConfig('default_storage');
-    const preferred = defaultStorage ? targetStorages.find((s) => s.storage === defaultStorage) : undefined;
-    const pick =
-      preferred ?? [...targetStorages].sort((a, b) => (b.availBytes ?? -1) - (a.availBytes ?? -1))[0]!;
+    const preferred = defaultStorage ? compatible.find((s) => s.storage === defaultStorage) : undefined;
+    const pick = preferred ?? bySpace(compatible)[0]!;
     const needBytes = vm.storage * 1024 ** 3;
     if (pick.availBytes !== null && pick.availBytes < needBytes) {
       throw new PassthroughRequestError(
@@ -258,7 +273,13 @@ export async function beginPassthroughApproval(
   }
 
   const vm = await syncVmNode(row.vm);
-  const plan = await planPassthroughPlacement(vm, map, client);
+  let running = false;
+  try {
+    running = (await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu')).status !== 'stopped';
+  } catch {
+    /* status unknown — plan as stopped (stricter storage rules) */
+  }
+  const plan = await planPassthroughPlacement(vm, map, client, { running });
 
   await prisma.passthroughRequest.update({
     where: { id },
@@ -268,14 +289,22 @@ export async function beginPassthroughApproval(
 }
 
 /**
- * Phase 2 (background worker): stop → migrate (if needed) → attach → resolve →
+ * Phase 2 (background worker): migrate (if needed) → stop → attach → resolve →
  * restart. Progress is persisted on the request row (`applyState`) for the UI.
  *
+ * Migration comes FIRST, and is LIVE for a running guest: the device isn't
+ * attached yet, so nothing pins the VM, and live migration mirrors disks over
+ * NBD — which works across storage types (offline can't, e.g. zfspool → nfs)
+ * and shrinks the downtime to just the stop-attach-start window at the end. A
+ * guest that's already stopped migrates offline (same-type storage preferred
+ * by the planner for format compatibility).
+ *
  * Rollback rules — the VM must never be left broken:
- *  - fail before/during migrate → VM untouched on the source node (Proxmox
- *    migration failures leave the source intact); restarted if we stopped it.
- *  - fail at attach (after a migrate) → VM stays on the target WITHOUT the
- *    device (fully bootable); restarted if we stopped it; request stays
+ *  - fail during a live migrate → the guest keeps RUNNING on the source node
+ *    (Proxmox aborts leave the source intact); nothing to undo.
+ *  - fail during an offline migrate → the guest stays intact on the source.
+ *  - fail at attach (after a migrate) → the guest stays on the target WITHOUT
+ *    the device (fully bootable); restarted if we stopped it; the request stays
  *    pending+failed so a retry (which no-ops the migration) is one click.
  *  - `hasPassthrough` is only ever set after a successful attach.
  */
@@ -292,37 +321,29 @@ export async function applyPassthroughApproval(id: string, adminId: string): Pro
   let vm = await syncVmNode(row.vm);
   const sourceNode = vm.proxmoxNode;
   let wasRunning = false;
+  let stoppedByUs = false;
   let migrated = false;
 
   const client = await pve.getClient();
   try {
-    // ── Stop (hostpci needs a stopped guest; offline migration too) ──
-    await setState({ applyState: 'stopping' });
     try {
       const st = await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
       wasRunning = st.status !== 'stopped';
     } catch {
       /* status unknown — treat as stopped; later steps surface real problems */
     }
-    if (wasRunning) {
-      await pve.stopVm(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
-      if (!(await waitStopped(vm.proxmoxNode, vm.proxmoxVmId, client))) {
-        throw new PassthroughRequestError(`"${vm.name}" did not stop within 2 minutes — try again once it's down.`, 409);
-      }
-      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
-    }
 
-    // ── Migrate to the device's node (offline; relocate disks if planned) ──
+    // ── Migrate to the device's node (live while running / offline if not) ──
     if (row.targetNode !== vm.proxmoxNode) {
       await setState({ applyState: 'migrating' });
-      // Re-resolve the storage plan against live state (it may have changed
-      // between begin and now); cheap compared to the migration itself.
+      // Re-resolve the plan against live state (it may have changed between
+      // begin and now); cheap compared to the migration itself.
       const map = (await pve.listPciMappings(client)).find((m) => m.id === mapping);
       if (!map) throw new PassthroughRequestError(`Mapping "${mapping}" no longer exists.`, 409);
-      const plan = await planPassthroughPlacement(vm, map, client);
+      const plan = await planPassthroughPlacement(vm, map, client, { running: wasRunning });
       if (plan.willMigrate) {
         vm = await migrateVmToNode(vm, plan.targetNode, {
-          offline: true,
+          offline: !wasRunning,
           targetstorage: plan.targetstorage,
           notifyOwner: true,
           actorId: adminId,
@@ -333,6 +354,17 @@ export async function applyPassthroughApproval(id: string, adminId: string): Pro
         migrated = true;
         await setState({ targetNode: plan.targetNode });
       }
+    }
+
+    // ── Stop (hostpci can only be set on a stopped guest) ──
+    if (wasRunning) {
+      await setState({ applyState: 'stopping' });
+      await pve.stopVm(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
+      if (!(await waitStopped(vm.proxmoxNode, vm.proxmoxVmId, client))) {
+        throw new PassthroughRequestError(`"${vm.name}" did not stop within 2 minutes — try again once it's down.`, 409);
+      }
+      stoppedByUs = true;
+      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
     }
 
     // ── Attach (pcie only on q35 — Proxmox refuses to start i440fx + pcie=1) ──
@@ -375,8 +407,9 @@ export async function applyPassthroughApproval(id: string, adminId: string): Pro
   } catch (err) {
     const message = err instanceof PassthroughRequestError ? err.message : pve.pveMessage(err);
     await setState({ applyState: 'failed', applyError: message }).catch(() => undefined);
-    // Leave the VM usable: restart it where it now lives if we stopped it.
-    if (wasRunning) {
+    // Leave the VM usable: a failed LIVE migrate never stopped it, so only
+    // restart when WE took it down (post-migrate stop/attach failures).
+    if (stoppedByUs) {
       try {
         vm = await syncVmNode(vm);
         await startVm(vm);

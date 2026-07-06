@@ -612,7 +612,8 @@ export async function migrateVmToNode(
     actorId?: string;
     /** Force an offline migration (caller has already stopped the guest). */
     offline?: boolean;
-    /** Offline only: relocate all local disks onto this storage on the target. */
+    /** Relocate all local disks onto this storage on the target. Live moves
+     *  mirror across storage types; offline needs format-compatible types. */
     targetstorage?: string;
     /** Max time to wait for the migrate task (default 30 min). Disk relocation
      *  of a large guest can take hours — callers doing storage moves raise it. */
@@ -644,7 +645,7 @@ export async function migrateVmToNode(
 
   const online = opts.offline ? false : (await getVmWithLiveStatus(vm)).live?.status === 'running';
   const upid = await pve.migrateVm(vm.proxmoxNode, vm.proxmoxVmId, targetNode, online, client, {
-    ...(opts.targetstorage && !online ? { targetstorage: opts.targetstorage } : {}),
+    ...(opts.targetstorage ? { targetstorage: opts.targetstorage } : {}),
   });
 
   // Heads-up to the owner as the move starts (best-effort; never blocks the
