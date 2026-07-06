@@ -221,6 +221,10 @@ model PassthroughRequest {
   applyState   String?                        // queued | stopping | migrating | attaching | done | failed
   applyError   String?
   targetNode   String?                        // node the apply migrated (or kept) the VM on
+  // Cloud-init drives the apply dropped pre-migration (JSON [{slot,storage}]),
+  // cleared once regenerated. Lets a startup reconciler restore them if the
+  // backend restarts mid-migration (a long copy can outlast a deploy).
+  ciDropped    String?
   createdAt    DateTime  @default(now())
   resolvedAt   DateTime?
   resolvedById String?                        // admin who approved/denied

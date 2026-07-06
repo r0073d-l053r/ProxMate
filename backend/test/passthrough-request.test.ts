@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
     passthroughRequest: { findFirst: vi.fn(), create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
-    virtualMachine: { update: vi.fn() },
+    virtualMachine: { update: vi.fn(), findUnique: vi.fn() },
     user: { findUnique: vi.fn() },
     $transaction: vi.fn(),
   },
@@ -48,6 +48,7 @@ import {
   createPassthroughRequest,
   beginPassthroughApproval,
   applyPassthroughApproval,
+  reconcileInterruptedPassthroughApplies,
   denyPassthroughRequest,
   detachPassthrough,
 } from '../src/services/passthrough-request.service.js';
@@ -56,7 +57,9 @@ const prFindFirst = vi.mocked(prisma.passthroughRequest.findFirst);
 const prCreate = vi.mocked(prisma.passthroughRequest.create);
 const prFindUnique = vi.mocked(prisma.passthroughRequest.findUnique);
 const prUpdate = vi.mocked(prisma.passthroughRequest.update);
+const prFindMany = vi.mocked(prisma.passthroughRequest.findMany);
 const vmUpdate = vi.mocked(prisma.virtualMachine.update);
+const vmFindUnique = vi.mocked(prisma.virtualMachine.findUnique);
 const userFind = vi.mocked(prisma.user.findUnique);
 const tx = vi.mocked(prisma.$transaction);
 const getClient = vi.mocked(pve.getClient);
@@ -418,6 +421,61 @@ describe('applyPassthroughApproval (background worker)', () => {
       data: { applyState: 'failed', applyError: 'hostpci rejected' },
     });
   }, 15_000);
+});
+
+describe('reconcileInterruptedPassthroughApplies (startup recovery)', () => {
+  it('is a no-op when nothing was in flight', async () => {
+    prFindMany.mockResolvedValue([] as never);
+    expect(await reconcileInterruptedPassthroughApplies()).toBe(0);
+    expect(prUpdate).not.toHaveBeenCalled();
+  });
+
+  it('never throws if the DB is not ready at boot', async () => {
+    prFindMany.mockRejectedValue(new Error('db not ready'));
+    expect(await reconcileInterruptedPassthroughApplies()).toBe(0);
+  });
+
+  it('restores a dropped cloud-init drive on the disks new storage and marks failed-retryable', async () => {
+    prFindMany.mockResolvedValue([{ id: 'q1', vmId: 'vm1', ciDropped: JSON.stringify([{ slot: 'ide2', storage: 'tank' }]) }] as never);
+    vmFindUnique.mockResolvedValue(qemuVm({ proxmoxNode: 'pve-4' }));
+    // migration had completed → disks now on tank-files; the CI drive is missing
+    getVmConfig.mockResolvedValue({ scsi0: 'tank-files:vm-1-disk-0' } as never);
+    getVolStorages.mockReturnValue(['tank-files']);
+    getCiDrives.mockReturnValue([]);
+
+    const n = await reconcileInterruptedPassthroughApplies();
+
+    expect(n).toBe(1);
+    expect(addCiDrive).toHaveBeenCalledWith('pve-4', 100, 'ide2', 'tank-files', expect.anything());
+    expect(prUpdate).toHaveBeenCalledWith({
+      where: { id: 'q1' },
+      data: expect.objectContaining({ applyState: 'failed', ciDropped: null }),
+    });
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: 'passthrough.apply_interrupted' }));
+  });
+
+  it('does not double-add a cloud-init drive that is already present', async () => {
+    prFindMany.mockResolvedValue([{ id: 'q1', vmId: 'vm1', ciDropped: JSON.stringify([{ slot: 'ide2', storage: 'tank' }]) }] as never);
+    vmFindUnique.mockResolvedValue(qemuVm());
+    getVmConfig.mockResolvedValue({ scsi0: 'tank:vm-1-disk-0', ide2: 'tank:vm-1-cloudinit,media=cdrom' } as never);
+    getVolStorages.mockReturnValue(['tank']);
+    getCiDrives.mockReturnValue([{ slot: 'ide2', storage: 'tank' }]); // already there
+
+    await reconcileInterruptedPassthroughApplies();
+    expect(addCiDrive).not.toHaveBeenCalled();
+    expect(prUpdate).toHaveBeenCalledWith({
+      where: { id: 'q1' },
+      data: expect.objectContaining({ applyState: 'failed' }),
+    });
+  });
+
+  it('marks an interrupted apply failed even with no cloud-init to restore', async () => {
+    prFindMany.mockResolvedValue([{ id: 'q1', vmId: 'vm1', ciDropped: null }] as never);
+    vmFindUnique.mockResolvedValue(qemuVm());
+    const n = await reconcileInterruptedPassthroughApplies();
+    expect(n).toBe(1);
+    expect(addCiDrive).not.toHaveBeenCalled();
+  });
 });
 
 describe('denyPassthroughRequest', () => {
