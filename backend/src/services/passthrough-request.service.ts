@@ -326,6 +326,9 @@ export async function applyPassthroughApproval(id: string, adminId: string): Pro
           targetstorage: plan.targetstorage,
           notifyOwner: true,
           actorId: adminId,
+          // Relocating a large guest's disks (hundreds of GB over the wire)
+          // can far exceed the default 30-min task wait — allow up to 6 hours.
+          timeoutMs: 6 * 60 * 60 * 1000,
         });
         migrated = true;
         await setState({ targetNode: plan.targetNode });
