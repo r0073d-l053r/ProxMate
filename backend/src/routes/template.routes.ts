@@ -19,6 +19,8 @@ import {
   getCloudInitExtras,
   enableCloudInitSnippets,
   cloudInitStatus,
+  getCloudInitConfig,
+  setCloudInitConfig,
 } from '../services/template.service.js';
 import { recordAudit } from '../services/audit.service.js';
 import type { AuthRequest } from '../types/index.js';
@@ -66,6 +68,8 @@ const DeploySchema = z.object({
   installDocker: z.boolean().optional(),
   installTailscale: z.boolean().optional(),
   installGuestAgent: z.boolean().optional(),
+  installSuperfile: z.boolean().optional(),
+  features: z.array(z.string().max(64)).max(20).optional(),
 });
 
 router.post('/deploy', async (req: Request, res: Response) => {
@@ -129,6 +133,34 @@ router.post('/cloud-init-extras/enable', requireAdmin, async (_req: Request, res
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }
+});
+
+// Admin-configurable cloud-init selection: which catalog features are OFFERED as
+// tenant checkboxes, and which are ALWAYS-ON (installed on every VM). No Proxmox
+// dependency, so this also works during the setup wizard.
+router.get('/cloud-init-config', requireAdmin, async (_req: Request, res: Response) => {
+  res.json(await getCloudInitConfig());
+});
+
+const CloudInitConfigSchema = z.object({
+  offered: z.array(z.string().max(64)).max(64),
+  base: z.array(z.string().max(64)).max(64),
+});
+router.put('/cloud-init-config', requireAdmin, async (req: Request, res: Response) => {
+  const parsed = CloudInitConfigSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid feature selection.' });
+    return;
+  }
+  await setCloudInitConfig(parsed.data.offered, parsed.data.base);
+  await recordAudit({
+    action: 'cloudinit.config',
+    actor: (req as AuthRequest).user,
+    targetType: 'system',
+    detail: `offered=${parsed.data.offered.length}, base=${parsed.data.base.length}`,
+    req,
+  });
+  res.json(await getCloudInitConfig());
 });
 
 // Build a cloud-init template from a cloud image (download → import → convert).

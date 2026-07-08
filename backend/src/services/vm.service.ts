@@ -6,6 +6,7 @@ import { notify } from './notify.service.js';
 import { isMailConfigured, sendMail } from './mail.service.js';
 import { vmMaintenanceEmail } from '../lib/email-templates.js';
 import * as pve from './proxmox.service.js';
+import { getOfferedFeatureIds, getBaseFeatureIds } from './template.service.js';
 
 /** The Proxmox guest kind for a VM row (defaults to QEMU for legacy/unset rows). */
 export const kindOf = (vm: { type?: string | null }): pve.GuestKind => (vm.type === 'lxc' ? 'lxc' : 'qemu');
@@ -304,12 +305,22 @@ export interface DeployTemplateInput {
   installDocker?: boolean; // attach the cloud-init "extras" vendor snippet
   installTailscale?: boolean;
   installGuestAgent?: boolean; // installs qemu-guest-agent so the VM reports its IP
+  installSuperfile?: boolean; // installs superfile (spf), a headless terminal file manager
+  /** Selected cloud-init extra ids (data-driven; supersedes the install* booleans). */
+  features?: string[];
 }
 
 /** Cloud-init knobs shared by template deploys and rebuilds. */
 type CloudInitInput = Pick<
   DeployTemplateInput,
-  'sshKey' | 'username' | 'password' | 'installDocker' | 'installTailscale' | 'installGuestAgent'
+  | 'sshKey'
+  | 'username'
+  | 'password'
+  | 'installDocker'
+  | 'installTailscale'
+  | 'installGuestAgent'
+  | 'installSuperfile'
+  | 'features'
 >;
 
 /**
@@ -345,24 +356,43 @@ async function configureClonedVm(
   // reachable on first boot (no installer). Hostname = VM name.
   if (template.cloudInit) {
     let vendorSnippet: string | undefined;
-    const features: string[] = [];
-    if (cloud.installDocker) features.push('docker');
-    if (cloud.installTailscale) features.push('tailscale');
-    if (cloud.installGuestAgent) features.push('guest-agent');
+    // Selected optional extras: prefer the `features` id array (data-driven), still
+    // honor the legacy install* booleans (back-compat). Only ids the admin actually
+    // OFFERS are accepted — never arbitrary tenant input, never a de-offered feature.
+    const offered = new Set(await getOfferedFeatureIds());
+    const selected = new Set<string>();
+    for (const id of cloud.features ?? []) if (offered.has(id)) selected.add(id);
+    if (cloud.installDocker && offered.has('docker')) selected.add('docker');
+    if (cloud.installTailscale && offered.has('tailscale')) selected.add('tailscale');
+    if (cloud.installGuestAgent && offered.has('guest-agent')) selected.add('guest-agent');
+    if (cloud.installSuperfile && offered.has('superfile')) selected.add('superfile');
+
+    // The admin-configured always-on base rides on EVERY cloud-init VM — but only
+    // when on-demand snippet writing is set up, since that's what makes a mandatory
+    // base practical without exponential manual placement.
+    const baseIds = pve.snippetWriteConfig() ? await getBaseFeatureIds() : [];
+    const features = [...new Set([...baseIds, ...selected])];
     if (features.length > 0) {
-      // The matching snippet (combined for multiple features) must already be on
-      // this node — admins place it; the API can't write snippets. Fail clearly
-      // rather than letting cloud-init reference a missing file.
-      const snippetStorage = (await getConfig('iso_storage')) ?? 'local';
-      const file = pve.cloudInitSnippetFile(features);
-      const ready = await pve.nodesWithSnippet(snippetStorage, file, client);
-      if (!ready.includes(node)) {
-        throw new Error(
-          `The selected setup (${features.join(' + ')}) isn't installed on node "${node}" — ` +
-            `an admin needs to add its snippet (Template Store → Cloud-init extras).`,
-        );
+      // Preferred: write the exact combo on-demand to the shared, container-mounted
+      // snippet storage (no manual placement, no 2ⁿ pre-placed files). Returns null
+      // when that isn't configured — then fall back to the historical model where
+      // the matching snippet must already be on this node (admins place it; the API
+      // can't write snippets), failing clearly rather than referencing a missing file.
+      const onDemand = await pve.ensureCloudInitSnippet(features);
+      if (onDemand) {
+        vendorSnippet = onDemand;
+      } else {
+        const snippetStorage = (await getConfig('iso_storage')) ?? 'local';
+        const file = pve.cloudInitSnippetFile(features);
+        const ready = await pve.nodesWithSnippet(snippetStorage, file, client);
+        if (!ready.includes(node)) {
+          throw new Error(
+            `The selected setup (${features.join(' + ')}) isn't installed on node "${node}" — ` +
+              `an admin needs to add its snippet (Template Store → Cloud-init extras).`,
+          );
+        }
+        vendorSnippet = `${snippetStorage}:snippets/${file}`;
       }
-      vendorSnippet = `${snippetStorage}:snippets/${file}`;
     }
     await pve.setCloudInitConfig(
       node,

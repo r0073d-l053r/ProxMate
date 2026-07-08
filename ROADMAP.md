@@ -98,9 +98,18 @@ rough priority bands, not commitments. Have an idea? Open a
   the quota-request flow): a tenant requests GPU/PCI passthrough for a VM they own → an
   admin reviews and attaches an available Proxmox **PCI resource mapping**
   (`hostpciN: mapping=<name>`), or denies. Host VFIO/IOMMU setup + defining the mapping
-  stays the admin's job (API-only, documented). Attaching requires the VM stopped; a
-  passthrough VM can't be live-migrated, so the balancer skips it (pinned) and a node
-  drain flags it. QEMU-only. _Done (v0.4.1)._
+  stays the admin's job (API-only, documented). QEMU-only. _Done (v0.4.1)._
+  - **Auto-migration on approve** ✅ _(v0.6.0)_ — mappings are node-scoped, so approving now
+    migrates the VM to the device's node first (live, with cross-storage disk relocation +
+    cloud-init drop/regenerate), background apply with progress + a startup reconciler.
+  - **Live migration progress bar** ✅ _(v0.6.1)_ — the admin approval card shows real
+    transfer percent/bytes/ETA while the VM migrates.
+  - **Pre-flight host-readiness check (TODO, high value):** approving/starting passthrough on
+    an unprepared host can **crash the node** (confirmed live 2026-07-06: VM 108's GPU start
+    hung pve-4 — GPU not bound to `vfio-pci`, i440fx/SeaBIOS). Add a check that verifies the
+    mapped device is bound to `vfio-pci` + IOMMU is on **before** stop/migrate/start, turning a
+    host crash into an upfront "node not ready for this device" rejection. See
+    [[Operations & Cluster]] and [[Decisions Log]] in the vault.
 
 ## Candidate ideas — proposed 2026-06-29 (post-audit)
 
