@@ -9,6 +9,7 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   getNodesHealth: vi.fn(),
   getNodeArchMap: vi.fn(),
   getClient: vi.fn(),
+  migratableTargets: vi.fn(),
 }));
 
 import { prisma } from '../src/lib/prisma.js';
@@ -19,6 +20,7 @@ import { fakeClient, asClient, GB } from './helpers.js';
 const findMany = vi.mocked(prisma.virtualMachine.findMany);
 const getNodesHealth = vi.mocked(pve.getNodesHealth);
 const getNodeArchMap = vi.mocked(pve.getNodeArchMap);
+const migratableTargets = vi.mocked(pve.migratableTargets);
 const TOTAL = 100 * GB;
 
 function nodesHealth(aLoad: number, bLoad: number) {
@@ -36,6 +38,8 @@ function nodesHealth(aLoad: number, bLoad: number) {
 beforeEach(() => {
   vi.clearAllMocks();
   getNodeArchMap.mockResolvedValue(new Map([['pve-a', 'amd64'], ['pve-b', 'amd64']]) as never);
+  // Default: every candidate can migrate cluster-wide (the storage guard is a no-op).
+  migratableTargets.mockResolvedValue(['pve-a', 'pve-b']);
 });
 
 describe('computeClusterPlan (balancer) skips LXC containers', () => {

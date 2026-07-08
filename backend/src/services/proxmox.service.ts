@@ -1161,6 +1161,28 @@ export async function removeDisk(node: string, vmid: number, slot: string, clien
 }
 
 /**
+ * Nodes a running VM may be live-migrated to, per Proxmox's own migrate preflight
+ * (`GET .../migrate` → `allowed_nodes`). An empty array means nowhere — e.g. the
+ * guest's disks live on a node-local storage no other node has (a local ZFS pool
+ * like `tank`), which Proxmox refuses to migrate. Returns `null` when the preflight
+ * can't be read, so callers fail *open* (treat the VM as movable) rather than
+ * wrongly pinning it.
+ */
+export async function migratableTargets(
+  node: string,
+  vmid: number,
+  client?: AxiosInstance,
+): Promise<string[] | null> {
+  const c = client ?? (await getClient());
+  try {
+    const r = await c.get<{ data: { allowed_nodes?: string[] } }>(`/nodes/${node}/qemu/${vmid}/migrate`);
+    return r.data.data.allowed_nodes ?? [];
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Migrate a VM to another node; `online` for a live migration of a running
  * guest. `opts.targetstorage` (offline migration) relocates every local disk
  * onto that storage on the target node — required when the source disks live on
