@@ -60,6 +60,10 @@ export interface BalancerVm {
   running: boolean;
   antiAffinity: string[]; // group keys from `aa:<group>` tags
   excluded: boolean;
+  /** Nodes this VM may migrate to (Proxmox `allowed_nodes`); undefined = unknown/
+   *  unrestricted. Empty means it can't move at all (also reflected via `excluded`),
+   *  e.g. disks on node-local storage no other node has. */
+  allowedNodes?: string[];
 }
 
 export interface BalancerInput {
@@ -197,6 +201,9 @@ export function planBalance(input: BalancerInput): BalancePlan {
       const sa = arch.get(hot)!;
       const da = arch.get(cold)!;
       if (sa !== 'unknown' && da !== 'unknown' && sa !== da) continue; // arch guardrail
+      // Storage/migratability: never propose a move to a node the VM can't land on
+      // (Proxmox `allowed_nodes`) — e.g. its disk storage isn't defined there.
+      if (vm.allowedNodes && !vm.allowedNodes.includes(cold)) continue;
       if (conflicts(vm, cold)) continue; // anti-affinity
 
       const m = mem.get(vm.vmId)!;
@@ -373,6 +380,23 @@ export async function computeClusterPlan(
     cpu: n.cpu,
   }));
 
+  // Storage-pinning guard: a VM whose disks live on node-local storage no other
+  // node has (e.g. a local ZFS pool like `tank`) can't be migrated at all — Proxmox
+  // rejects it. Ask Proxmox which nodes each *running, otherwise-movable* VM may go
+  // to and record it, pinning the ones with nowhere to land, so the planner never
+  // proposes an impossible move. Fail-open: an unreadable preflight (null) leaves
+  // the VM unrestricted (the apply re-validates and now surfaces a clear reason).
+  const candidates = vms.filter((v) => v.running && !v.excluded);
+  const targetLists = await Promise.all(
+    candidates.map((v) => pve.migratableTargets(v.node, v.proxmoxVmId, c)),
+  );
+  candidates.forEach((v, i) => {
+    const allowed = targetLists[i];
+    if (allowed === null) return; // unknown → leave unrestricted
+    v.allowedNodes = allowed;
+    if (allowed.length === 0) v.excluded = true; // nowhere to migrate → pin it
+  });
+
   return planBalance({ nodes, vms, thresholdPct: s.thresholdPct, maxMoves: s.maxMoves });
 }
 
@@ -416,7 +440,10 @@ export async function runMigrations(
         detail: `${from} → ${mv.toNode}`,
       });
     } catch (err) {
-      const error = err instanceof Error ? err.message : 'Migration failed';
+      // Extract Proxmox's real reason (e.g. "storage 'tank' is not available on
+      // node 'pve-3'") — the raw axios message is just "Request failed with status
+      // code 500", which is what the audit log used to (unhelpfully) record.
+      const error = pve.pveMessage(err);
       results.push({ vmId: vm.id, name: vm.name, fromNode: from, toNode: mv.toNode, ok: false, error });
       await recordAudit({
         action: 'balancer.migrate_failed',
