@@ -31,6 +31,7 @@ function vm(node: string, gb: number, opts: Partial<BalancerVm> = {}): BalancerV
     running: opts.running ?? true,
     antiAffinity: opts.antiAffinity ?? [],
     excluded: opts.excluded ?? false,
+    ...(opts.allowedNodes !== undefined ? { allowedNodes: opts.allowedNodes } : {}),
   };
 }
 
@@ -83,6 +84,30 @@ describe('planBalance (cluster balancer)', () => {
     });
     expect(plan.moves).toHaveLength(0);
     expect(plan.reason).toMatch(/architecture/i);
+  });
+
+  it('never proposes a move to a node the guest cannot land on (storage pinning)', () => {
+    // The tank/snippet-test case: the only cold node isn't a valid migration
+    // target (its disks live on node-local storage no other node has), so even a
+    // badly imbalanced cluster must not propose the impossible move.
+    const plan = planBalance({
+      nodes: [node('pve-a', 0.85), node('pve-b', 0.15)],
+      vms: [vm('pve-a', 30, { vmId: 'tank-vm', allowedNodes: [] })],
+      thresholdPct: 15,
+      maxMoves: 5,
+    });
+    expect(plan.moves).toHaveLength(0);
+  });
+
+  it('still moves a guest when the target is among its allowed nodes', () => {
+    const plan = planBalance({
+      nodes: [node('pve-a', 0.8), node('pve-b', 0.2)],
+      vms: [vm('pve-a', 30, { vmId: 'ok-vm', allowedNodes: ['pve-b'] })],
+      thresholdPct: 15,
+      maxMoves: 5,
+    });
+    expect(plan.moves).toHaveLength(1);
+    expect(plan.moves[0]).toMatchObject({ vmId: 'ok-vm', toNode: 'pve-b' });
   });
 
   it('keeps anti-affinity group members apart', () => {
