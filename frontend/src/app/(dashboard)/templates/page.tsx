@@ -466,14 +466,24 @@ interface CloudInitBundle {
 interface CloudInitExtras {
   storage: string;
   snippetsEnabled: boolean;
+  onDemand: boolean;
   features: { id: string; label: string; hint: string }[];
+  base: { id: string; label: string }[];
+  catalog: { id: string; label: string; hint: string }[];
+  offered: string[];
+  baseSelected: string[];
+  recommendedBase: string[];
   bundles: CloudInitBundle[];
 }
 
 function CloudInitExtrasCard() {
   const [extras, setExtras] = useState<CloudInitExtras | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(false);
+  // Admin selection (editable copies of extras.offered / extras.baseSelected).
+  const [offeredSel, setOfferedSel] = useState<Set<string>>(new Set());
+  const [baseSel, setBaseSel] = useState<Set<string>>(new Set());
   // Searchable snippet picker state.
   const [query, setQuery] = useState("");
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -483,10 +493,36 @@ function CloudInitExtrasCard() {
   const load = useCallback(() => {
     api
       .get<CloudInitExtras>("/templates/cloud-init-extras")
-      .then((r) => setExtras(r.data))
+      .then((r) => {
+        setExtras(r.data);
+        setOfferedSel(new Set(r.data.offered));
+        setBaseSel(new Set(r.data.baseSelected));
+      })
       .catch(() => {});
   }, []);
   useEffect(load, [load]);
+
+  function toggle(setter: (fn: (s: Set<string>) => Set<string>) => void, id: string, on: boolean) {
+    setter((prev) => {
+      const n = new Set(prev);
+      if (on) n.add(id);
+      else n.delete(id);
+      return n;
+    });
+  }
+
+  async function saveSelection() {
+    setSaving(true);
+    try {
+      await api.put("/templates/cloud-init-config", { offered: [...offeredSel], base: [...baseSel] });
+      toast.success("Cloud-init options saved.");
+      load(); // re-fetch the FULL extras (config PUT returns only the selection)
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   // Close the picker dropdown when clicking outside it.
   useEffect(() => {
@@ -518,13 +554,14 @@ function CloudInitExtrasCard() {
 
   if (!extras) return null;
 
-  const selectedBundle = extras.bundles.find((b) => b.file === selectedFile) ?? null;
+  const allBundles = extras.bundles ?? [];
+  const selectedBundle = allBundles.find((b) => b.file === selectedFile) ?? null;
   const q = query.trim().toLowerCase();
   const filtered = q
-    ? extras.bundles.filter(
+    ? allBundles.filter(
         (b) => b.label.toLowerCase().includes(q) || b.features.some((f) => f.toLowerCase().includes(q)),
       )
-    : extras.bundles;
+    : allBundles;
 
   function selectBundle(b: CloudInitBundle) {
     setSelectedFile(b.file);
@@ -543,27 +580,98 @@ function CloudInitExtrasCard() {
               <Container className="size-4" /> Cloud-init extras (admin)
             </CardTitle>
             <CardDescription>
-              Enables the &ldquo;Install Docker / Tailscale&rdquo; checkboxes when tenants deploy a cloud image.
-              Proxmox&apos;s API can&apos;t create snippet files, so each is a one-time manual step per node.
+              {extras.onDemand
+                ? "ProxMate writes these cloud-init snippets automatically when a tenant deploys — there is nothing to place per node."
+                : "Enables the cloud-init install checkboxes when tenants deploy a cloud image. Proxmox's API can't create snippet files, so each is a one-time manual step per node."}
             </CardDescription>
           </div>
           <Button variant="outline" size="sm" onClick={() => setOpen((o) => !o)}>
-            {open ? "Hide" : "Set up"}
+            {open ? "Hide" : "Configure"}
           </Button>
         </div>
         <div className="mt-1">
-          <Badge variant={extras.snippetsEnabled ? "secondary" : "outline"}>
-            {extras.snippetsEnabled ? "✓" : "○"} snippets enabled
-          </Badge>
+          {extras.onDemand ? (
+            <Badge variant="secondary">✓ automatic ({extras.storage})</Badge>
+          ) : (
+            <Badge variant={extras.snippetsEnabled ? "secondary" : "outline"}>
+              {extras.snippetsEnabled ? "✓" : "○"} snippets enabled
+            </Badge>
+          )}
         </div>
       </CardHeader>
+      {extras.onDemand && extras.base.length > 0 && (
+        <CardContent className="text-sm text-muted-foreground">
+          Every cloud-init VM also automatically gets:{" "}
+          <span className="text-foreground">{extras.base.map((b) => b.label).join(", ")}</span>.
+        </CardContent>
+      )}
       {open && (
         <CardContent className="grid gap-4 text-sm">
-          {!extras.snippetsEnabled && (
+          {/* Admin picks which options tenants see + which install on every VM. */}
+          <div className="grid gap-3 rounded-md border p-3">
+            <p className="text-sm font-medium">Options offered to tenants</p>
+            <div className="grid gap-1.5 sm:grid-cols-2">
+              {extras.catalog.map((f) => (
+                <label key={"off-" + f.id} className="flex items-start gap-2 text-xs" title={f.hint}>
+                  <input
+                    type="checkbox"
+                    checked={offeredSel.has(f.id)}
+                    onChange={(e) => toggle(setOfferedSel, f.id, e.target.checked)}
+                    className="mt-0.5 size-3.5 accent-primary"
+                  />
+                  <span>{f.label}</span>
+                </label>
+              ))}
+            </div>
+            <p className="mt-1 text-sm font-medium">
+              Installed automatically on every VM{" "}
+              {!extras.onDemand && (
+                <span className="text-xs font-normal text-muted-foreground">(needs automatic mode)</span>
+              )}
+            </p>
+            <div className="grid gap-1.5 sm:grid-cols-2">
+              {extras.catalog.map((f) => (
+                <label
+                  key={"base-" + f.id}
+                  className={"flex items-start gap-2 text-xs " + (extras.onDemand ? "" : "opacity-50")}
+                  title={f.hint}
+                >
+                  <input
+                    type="checkbox"
+                    disabled={!extras.onDemand}
+                    checked={baseSel.has(f.id)}
+                    onChange={(e) => toggle(setBaseSel, f.id, e.target.checked)}
+                    className="mt-0.5 size-3.5 accent-primary"
+                  />
+                  <span>{f.label}</span>
+                </label>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" disabled={saving} onClick={saveSelection}>
+                {saving ? <Loader2 className="animate-spin" /> : <Check />} Save selection
+              </Button>
+              {extras.onDemand && extras.recommendedBase.length > 0 && (
+                <Button size="sm" variant="ghost" onClick={() => setBaseSel(new Set(extras.recommendedBase))}>
+                  Use recommended base
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {!extras.onDemand && (
+            <div className="rounded-md border border-dashed bg-muted/30 p-3 text-xs text-muted-foreground">
+              Prefer no manual steps? ProxMate can write these snippets itself. Mount a shared storage&apos;s{" "}
+              <code>snippets/</code> directory into the backend container as <code>SNIPPET_DIR</code> and set{" "}
+              <code>SNIPPET_STORAGE</code> to that storage id, then restart — this section switches to automatic. See the
+              deployment docs.
+            </div>
+          )}
+          {!extras.onDemand && !extras.snippetsEnabled && (
             <div>
               <p className="mb-2 text-muted-foreground">
-                Step 1 — enable the <code>snippets</code> content type on <code>{extras.storage}</code> (ProxMate does
-                this via the API):
+                Enable the <code>snippets</code> content type on <code>{extras.storage}</code> (ProxMate does this via
+                the API):
               </p>
               <Button size="sm" disabled={busy} onClick={enable}>
                 {busy ? <Loader2 className="animate-spin" /> : <Check />} Enable snippets
@@ -572,9 +680,9 @@ function CloudInitExtrasCard() {
           )}
           <div className="grid gap-3">
             <p className="text-muted-foreground">
-              {extras.snippetsEnabled ? "" : "Step 2 — "}Pick an option to see its one-time setup command, then run that
-              command on <strong>each Proxmox node</strong> you want to offer it on. (The combined snippet is only needed
-              if a tenant selects more than one option.)
+              {extras.onDemand
+                ? "Browse a snippet to see or copy the exact cloud-init code ProxMate writes (it places these automatically — this is reference/override)."
+                : "Pick an option to see its one-time setup command, then run it on each Proxmox node you want to offer it on."}
             </p>
 
             {/* Searchable snippet picker */}
@@ -622,9 +730,11 @@ function CloudInitExtrasCard() {
                             {active ? <Check className="size-3.5" /> : <span className="size-3.5" />}
                             {b.label}
                           </span>
-                          <Badge variant={ready ? "secondary" : "outline"} className="text-[10px]">
-                            {ready ? "✓ placed" : "○ not placed"}
-                          </Badge>
+                          {!extras.onDemand && (
+                            <Badge variant={ready ? "secondary" : "outline"} className="text-[10px]">
+                              {ready ? "✓ placed" : "○ not placed"}
+                            </Badge>
+                          )}
                         </button>
                       );
                     })
@@ -638,14 +748,16 @@ function CloudInitExtrasCard() {
               <div className="rounded-md border p-3">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <span className="font-medium">{selectedBundle.label}</span>
-                  <Badge
-                    variant={selectedBundle.nodesReady.length > 0 ? "secondary" : "outline"}
-                    className="text-[10px]"
-                  >
-                    {selectedBundle.nodesReady.length > 0
-                      ? `✓ ${selectedBundle.nodesReady.join(", ")}`
-                      : "○ not placed"}
-                  </Badge>
+                  {!extras.onDemand && (
+                    <Badge
+                      variant={selectedBundle.nodesReady.length > 0 ? "secondary" : "outline"}
+                      className="text-[10px]"
+                    >
+                      {selectedBundle.nodesReady.length > 0
+                        ? `✓ ${selectedBundle.nodesReady.join(", ")}`
+                        : "○ not placed"}
+                    </Badge>
+                  )}
                 </div>
                 <div className="relative">
                   <pre className="max-h-48 overflow-auto rounded-md border bg-muted/60 p-3 pr-16 text-xs">
@@ -663,9 +775,11 @@ function CloudInitExtrasCard() {
               </div>
             )}
 
-            <Button variant="ghost" size="sm" onClick={load}>
-              <RefreshCw /> Re-check nodes
-            </Button>
+            {!extras.onDemand && (
+              <Button variant="ghost" size="sm" onClick={load}>
+                <RefreshCw /> Re-check nodes
+              </Button>
+            )}
           </div>
         </CardContent>
       )}

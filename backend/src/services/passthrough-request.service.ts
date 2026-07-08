@@ -4,6 +4,7 @@ import * as pve from './proxmox.service.js';
 import { syncVmNode, migrateVmToNode, startVm } from './vm.service.js';
 import { getConfig } from './config.service.js';
 import { recordAudit } from './audit.service.js';
+import { notify } from './notify.service.js';
 
 /** A passthrough-request error carrying an HTTP status the route can surface. */
 export class PassthroughRequestError extends Error {
@@ -297,11 +298,22 @@ export async function beginPassthroughApproval(
   }
   const plan = await planPassthroughPlacement(vm, map, client, { running });
 
+  // Pre-flight the TARGET node before committing to a stop/migrate: refuse on
+  // certain failures (device missing/changed, IOMMU disabled) so an unprepared
+  // host is rejected up front instead of after a long migration + a start that
+  // can hang the node. Advisory warnings (unverifiable vfio-pci binding, q35/
+  // OVMF, IOMMU-group sharing) ride back to the admin in place of bootWarnings.
+  const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
+  const readiness = await pve.checkPassthroughHostReadiness(plan.targetNode, mapping, cfg, client);
+  if (readiness.blockers.length > 0) {
+    throw new PassthroughRequestError(readiness.blockers.join(' '), 409);
+  }
+
   await prisma.passthroughRequest.update({
     where: { id },
     data: { mapping, targetNode: plan.targetNode, applyState: 'queued', applyError: null },
   });
-  return { ...plan, vmName: vm.name, sourceNode: vm.proxmoxNode };
+  return { ...plan, bootWarnings: readiness.warnings, vmName: vm.name, sourceNode: vm.proxmoxNode };
 }
 
 /**
@@ -442,15 +454,41 @@ export async function applyPassthroughApproval(id: string, adminId: string): Pro
       }),
     ]);
 
-    // ── Restart if we took it down (best-effort: a start failure here is a
-    // host-side passthrough problem — device attached, admin investigates) ──
+    // ── Restart if we took it down — but NOT the crash-prone combo ──
+    // Auto-starting a GPU attached to a non-q35 (legacy BIOS) guest is exactly
+    // what took pve-4 offline: leave it attached-but-stopped and tell the admin
+    // to finish the host/VM prep, rather than risk hanging the node. A start
+    // failure for a "safe" combo is still just a host-side problem to surface.
     let startNote = '';
     if (wasRunning) {
+      // Fallback if the host check can't be read: a GPU needs q35 AND OVMF to be
+      // safe to auto-start (live-confirmed twice that this NVIDIA card hangs the
+      // host without OVMF, even on q35).
+      let safeToStart = readiness.q35 && readiness.ovmf;
       try {
-        await startVm(vm);
-      } catch (err) {
-        startNote = ` Start failed after attach: ${pve.pveMessage(err)} — check host IOMMU/VFIO and the device on ${vm.proxmoxNode}.`;
+        const host = await pve.checkPassthroughHostReadiness(vm.proxmoxNode, mapping, config, client);
+        safeToStart = host.safeToAutoStart;
+      } catch {
+        /* host state unreadable — fall back to boot readiness (no OVMF + GPU is the host-crash combo) */
+      }
+      if (safeToStart) {
+        try {
+          await startVm(vm);
+        } catch (err) {
+          startNote = ` Start failed after attach: ${pve.pveMessage(err)} — check host IOMMU/VFIO and the device on ${vm.proxmoxNode}.`;
+          await setState({ applyError: startNote.trim() });
+        }
+      } else {
+        startNote =
+          ` Device attached but auto-start was skipped — a GPU needs q35 + OVMF (UEFI) to boot safely; without OVMF ` +
+          `it can hang the host. Switch this VM to q35 + OVMF (add an EFI disk), confirm "lspci -nnks" shows vfio-pci ` +
+          `on ${vm.proxmoxNode}, then start it manually.`;
         await setState({ applyError: startNote.trim() });
+        await notify({
+          event: 'vm.error',
+          title: vm.name,
+          message: `GPU/PCI device attached to "${vm.name}" but ProxMate did not auto-start it (a GPU without OVMF can hang the host). Switch the VM to q35 + OVMF, then start it manually.`,
+        }).catch(() => undefined);
       }
     }
 

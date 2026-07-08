@@ -31,6 +31,13 @@ export default function SetupDefaultsPage() {
   const [isoStorage, setIsoStorage] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Cloud-init "always-on base" — features installed on every cloud-init VM.
+  // Pre-selected to the recommended set; the admin can change it (and later edit
+  // it, plus the tenant-offered options, in the Template Store).
+  const [ciCatalog, setCiCatalog] = useState<{ id: string; label: string; hint: string }[]>([]);
+  const [ciOffered, setCiOffered] = useState<string[]>([]);
+  const [ciBase, setCiBase] = useState<Set<string>>(new Set());
+
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
@@ -41,6 +48,19 @@ export default function SetupDefaultsPage() {
       setLoadError(apiError(err));
     } finally {
       setLoading(false);
+    }
+    // Best-effort — never block setup if this fails.
+    try {
+      const r = await api.get<{
+        catalog: { id: string; label: string; hint: string }[];
+        offered: string[];
+        recommendedBase: string[];
+      }>("/templates/cloud-init-config");
+      setCiCatalog(r.data.catalog ?? []);
+      setCiOffered(r.data.offered ?? []);
+      setCiBase(new Set(r.data.recommendedBase ?? []));
+    } catch {
+      /* ignore */
     }
   }, []);
 
@@ -56,6 +76,13 @@ export default function SetupDefaultsPage() {
     setSubmitting(true);
     try {
       await api.post("/setup/defaults", { storage, bridge, isoStorage });
+      // Save the cloud-init always-on base (best-effort — editable later in the
+      // Template Store, so a failure here never blocks finishing setup).
+      if (ciCatalog.length > 0) {
+        await api
+          .put("/templates/cloud-init-config", { offered: ciOffered, base: [...ciBase] })
+          .catch(() => {});
+      }
       setSetup({ defaultStorage: storage, defaultBridge: bridge, isoStorage });
       router.push("/setup/complete");
     } catch (err) {
@@ -134,6 +161,34 @@ export default function SetupDefaultsPage() {
                 </SelectContent>
               </Select>
             </FormField>
+
+            {ciCatalog.length > 0 && (
+              <FormField
+                label="Installed on every cloud-init VM"
+                hint="Auto-installed on each new VM. Change this (and which options tenants can pick) anytime in the Template Store."
+              >
+                <div className="grid gap-1.5 rounded-md border p-3 sm:grid-cols-2">
+                  {ciCatalog.map((f) => (
+                    <label key={f.id} className="flex items-start gap-2 text-xs" title={f.hint}>
+                      <input
+                        type="checkbox"
+                        checked={ciBase.has(f.id)}
+                        onChange={(e) =>
+                          setCiBase((prev) => {
+                            const n = new Set(prev);
+                            if (e.target.checked) n.add(f.id);
+                            else n.delete(f.id);
+                            return n;
+                          })
+                        }
+                        className="mt-0.5 size-3.5 accent-primary"
+                      />
+                      <span>{f.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </FormField>
+            )}
           </div>
         )}
 
