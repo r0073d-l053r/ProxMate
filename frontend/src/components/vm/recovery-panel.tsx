@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { Copy, KeyRound, LifeBuoy, Loader2 } from "lucide-react";
+import { Copy, KeyRound, KeySquare, LifeBuoy, Loader2 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
-import type { VmDetail } from "@/lib/types";
+import type { SshKey, VmDetail } from "@/lib/types";
 import { copyText } from "@/lib/clipboard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -55,10 +55,14 @@ export function RecoveryPanel({
   busy: boolean;
   onChanged: () => void;
 }) {
-  const [dialog, setDialog] = useState<"password" | "rescue" | null>(null);
+  const [dialog, setDialog] = useState<"password" | "rescue" | "sshkey" | null>(null);
   const [username, setUsername] = useState("");
   const [newPassword, setNewPassword] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
+  // Add-SSH-key dialog state; saved keys are fetched lazily when it opens.
+  const [keyUsername, setKeyUsername] = useState("");
+  const [publicKey, setPublicKey] = useState("");
+  const [savedKeys, setSavedKeys] = useState<SshKey[]>([]);
 
   const inRescue = !!vm.rescueBoot;
   const running = vm.status === "running";
@@ -74,6 +78,40 @@ export function RecoveryPanel({
       const res = await api.post<{ password: string }>(`/vms/${vm.id}/reset-password`, { username: name });
       setNewPassword(res.data.password);
       onChanged();
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  function openSshKeyDialog() {
+    setKeyUsername("");
+    setPublicKey("");
+    setDialog("sshkey");
+    // Saved keys are a convenience — never block the dialog on them.
+    api
+      .get<SshKey[]>("/ssh-keys")
+      .then((r) => setSavedKeys(r.data ?? []))
+      .catch(() => setSavedKeys([]));
+  }
+
+  async function addSshKey() {
+    const name = keyUsername.trim();
+    const key = publicKey.trim();
+    if (!name) {
+      toast.error("Enter the guest username (e.g. ubuntu, debian, root).");
+      return;
+    }
+    if (!/^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-|sk-)/.test(key)) {
+      toast.error("That doesn't look like an OpenSSH public key.");
+      return;
+    }
+    setWorking(true);
+    try {
+      await api.post(`/vms/${vm.id}/ssh-keys`, { username: name, publicKey: key });
+      toast.success(`Key added — you can SSH in as ${name} with it now.`);
+      setDialog(null);
     } catch (err) {
       toast.error(apiError(err));
     } finally {
@@ -142,6 +180,20 @@ export function RecoveryPanel({
             >
               <KeyRound />
               Reset password
+            </Button>
+          }
+        />
+        <Row
+          title="Add an SSH key"
+          description={
+            running
+              ? "Add one of your public keys to a user inside the machine — no rebuild needed (uses the guest agent)."
+              : "Start the machine first — keys are added through the running guest agent."
+          }
+          action={
+            <Button variant="outline" disabled={busy || working || !running} onClick={openSshKeyDialog}>
+              <KeySquare />
+              Add SSH key
             </Button>
           }
         />
@@ -225,6 +277,67 @@ export function RecoveryPanel({
                 Reset password
               </AlertDialogAction>
             )}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Add-SSH-key dialog — saved-key quick-pick + paste, same as the deploy wizard. */}
+      <AlertDialog open={dialog === "sshkey"} onOpenChange={(o: boolean) => setDialog(o ? "sshkey" : null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Add an SSH key to {vm.name}</AlertDialogTitle>
+            <AlertDialogDescription>
+              Appends your public key to a user&apos;s <code>authorized_keys</code> inside the machine via
+              the QEMU guest agent, so you can SSH in with it right away — no rebuild or reboot needed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <FormField label="SSH public key" htmlFor="addSshKey">
+            {savedKeys.length > 0 && (
+              <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                <span className="text-xs text-muted-foreground">Use a saved key:</span>
+                {savedKeys.map((k) => (
+                  <button
+                    key={k.id}
+                    type="button"
+                    onClick={() => setPublicKey(k.publicKey)}
+                    className={
+                      "rounded-full border px-2.5 py-0.5 text-xs transition-colors " +
+                      (publicKey === k.publicKey
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "hover:bg-muted")
+                    }
+                  >
+                    {k.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            <textarea
+              id="addSshKey"
+              value={publicKey}
+              onChange={(e) => setPublicKey(e.target.value)}
+              placeholder="ssh-ed25519 AAAA… you@laptop"
+              className="h-20 w-full resize-none rounded-md border bg-background p-2 font-mono text-xs outline-none focus:ring-2 focus:ring-ring"
+            />
+          </FormField>
+
+          <FormField label="Guest username" htmlFor="addSshKeyUser" hint="The user whose authorized_keys receives the key.">
+            <Input
+              id="addSshKeyUser"
+              value={keyUsername}
+              onChange={(e) => setKeyUsername(e.target.value)}
+              placeholder="e.g. ubuntu, debian, root"
+              autoComplete="off"
+            />
+          </FormField>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={working}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={addSshKey} disabled={working || !keyUsername.trim() || !publicKey.trim()}>
+              {working ? <Loader2 className="animate-spin" /> : <KeySquare />}
+              Add key
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

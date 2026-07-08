@@ -2470,6 +2470,78 @@ export async function setGuestUserPassword(
   );
 }
 
+/** Exec-status shape while polling a guest-agent exec pid. */
+interface AgentExecStatus {
+  exited: 0 | 1 | boolean;
+  exitcode?: number;
+  'err-data'?: string;
+}
+
+/**
+ * The fixed authorized_keys-append script run inside the guest. The username and
+ * key arrive as $1/$2 (argv positionals via `sh -c script sh u k`) — they are
+ * NEVER interpolated into the script text, so validated inputs cannot change
+ * what runs. Idempotent (exact-line match), guards a missing trailing newline,
+ * and sets the ownership/permissions sshd's StrictModes demands (700 / 600).
+ * Exit 3 = the user does not exist (mapped to a clear error below).
+ */
+const APPEND_KEY_SCRIPT = [
+  'u="$1"; k="$2"',
+  'h=$(getent passwd "$u" | cut -d: -f6)',
+  '[ -n "$h" ] || exit 3',
+  'f="$h/.ssh/authorized_keys"',
+  'mkdir -p "$h/.ssh"',
+  'touch "$f"',
+  // If the file exists without a trailing newline, a plain >> would glue the new
+  // key onto the last line — pad it first.
+  '[ -s "$f" ] && [ -n "$(tail -c1 "$f")" ] && echo >> "$f"',
+  `grep -qxF "$k" "$f" || printf '%s\\n' "$k" >> "$f"`,
+  'chown -R "$u:$(id -gn "$u")" "$h/.ssh"',
+  'chmod 700 "$h/.ssh"',
+  'chmod 600 "$f"',
+].join('\n');
+
+/**
+ * Append an SSH public key to a guest user's ~/.ssh/authorized_keys via the
+ * QEMU guest agent (`agent/exec` + `exec-status` polling). The post-create
+ * counterpart of the deploy wizard's key injection — cloud-init only applies
+ * `sshkeys` on first boot. Requires the agent, like set-user-password; Proxmox
+ * errors clearly when it isn't running.
+ */
+export async function injectGuestSshKey(
+  node: string,
+  vmid: number,
+  username: string,
+  publicKey: string,
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams();
+  // `command` is an array param — repeated keys; $0 is 'sh', then $1/$2.
+  for (const part of ['/bin/sh', '-c', APPEND_KEY_SCRIPT, 'sh', username, publicKey]) {
+    params.append('command', part);
+  }
+  const res = await c.post<{ data: { pid: number } }>(`/nodes/${node}/qemu/${vmid}/agent/exec`, params);
+  const pid = res.data.data.pid;
+
+  // The append is near-instant — poll briefly for completion.
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const st = await c.get<{ data: AgentExecStatus }>(`/nodes/${node}/qemu/${vmid}/agent/exec-status?pid=${pid}`);
+    const s = st.data.data;
+    if (s.exited) {
+      if (s.exitcode === 3) throw new Error(`User "${username}" does not exist in the guest`);
+      if (s.exitcode !== 0) {
+        const detail = (s['err-data'] ?? '').trim();
+        throw new Error(`Adding the key failed inside the guest${detail ? `: ${detail}` : ` (exit ${s.exitcode})`}`);
+      }
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error('Timed out waiting for the guest agent to finish adding the key');
+}
+
 // ─── Rescue mode ──────────────────────────────────────────────
 // Boot a VM from an admin-designated rescue ISO: the ISO goes on the ide3 slot
 // (ide2 belongs to the cloud-init drive / install ISO) and the boot order is

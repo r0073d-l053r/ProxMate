@@ -64,11 +64,13 @@ import {
   pauseVm,
   resumeVm,
   resetGuestPassword,
+  addGuestSshKey,
   enterRescue,
   exitRescue,
   duplicateVm,
   syncVmNode,
 } from '../services/vm.service.js';
+import { isValidPublicKey } from '../services/ssh-key.service.js';
 import { getLiveStats } from '../services/live-stats.service.js';
 import { getConfig } from '../services/config.service.js';
 import { ALERT_METRICS } from '../services/alert.service.js';
@@ -991,6 +993,47 @@ router.post('/:id/reset-password', async (req: Request, res: Response) => {
       detail: `${vm.name} · user ${parsed.data.username}`, req,
     });
     res.json({ password });
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── POST /api/vms/:id/ssh-keys ───────────────────────────────
+// Add an SSH public key to a guest user's authorized_keys after creation. The
+// wizard's key rides cloud-init (first boot only); this one rides the QEMU
+// guest agent, so it works on a running machine. Key + username are validated
+// here and passed argv-safe into a fixed script — never interpolated.
+
+const AddVmSshKeySchema = z.object({
+  username: z.string().min(1).max(64).regex(/^[a-zA-Z0-9._][a-zA-Z0-9._-]*$/, 'Invalid username'),
+  publicKey: z
+    .string()
+    .min(1)
+    .max(4096)
+    .refine((k) => isValidPublicKey(k.trim()), "That doesn't look like an OpenSSH public key"),
+});
+
+router.post('/:id/ssh-keys', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getWritableVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') {
+    res.status(409).json({ error: 'Adding SSH keys needs the QEMU guest agent — containers are not supported' });
+    return;
+  }
+  const parsed = AddVmSshKeySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    await addGuestSshKey(vm, parsed.data.username, parsed.data.publicKey);
+    await recordAudit({
+      action: 'vm.ssh_key_add', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `${vm.name} · user ${parsed.data.username}`, req,
+    });
+    res.json({ success: true });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }

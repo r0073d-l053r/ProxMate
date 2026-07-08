@@ -128,8 +128,12 @@ function VmTable({
   return (
     // Fixed layout + explicit column widths so every owner group's grid lines up
     // top-to-bottom (an auto table sizes columns to its own content, so the
-    // boundaries drift between sections).
-    <Table className="table-fixed">
+    // boundaries drift between sections). Cells are `whitespace-nowrap` (table.tsx),
+    // so the min-width has to be wide enough to hold each column's single line —
+    // below it the wrapper's overflow-x-auto scrolls horizontally instead of cells
+    // painting over each other. Long values additionally `truncate` per-cell so a
+    // wider-than-usual value clips with an ellipsis rather than bleeding sideways.
+    <Table className="min-w-[56rem] table-fixed">
       <TableHeader>
         <TableRow>
           {selection && <TableHead className="w-8" />}
@@ -183,19 +187,19 @@ function VmTable({
             <TableCell>
               <VmStatusBadge status={vm.status} />
             </TableCell>
-            <TableCell className="text-muted-foreground">
+            <TableCell className="truncate text-muted-foreground">
               {vm.cpu} vCPU · {formatRam(vm.ram)} · {vm.storage} GB
             </TableCell>
-            <TableCell className="text-muted-foreground">
-              <span className="flex max-w-52 items-center gap-1.5">
+            <TableCell className="overflow-hidden text-muted-foreground">
+              <span className="flex min-w-0 items-center gap-1.5">
                 <TemplateIcon os={vm.os} name={vm.os} className="size-4 shrink-0" />
                 <span className="truncate" title={vm.os}>
                   {vm.os}
                 </span>
               </span>
             </TableCell>
-            <TableCell className="text-muted-foreground">{vm.ipAddress ?? "—"}</TableCell>
-            <TableCell className="text-muted-foreground">{formatDate(vm.createdAt)}</TableCell>
+            <TableCell className="truncate text-muted-foreground">{vm.ipAddress ?? "—"}</TableCell>
+            <TableCell className="truncate text-muted-foreground">{formatDate(vm.createdAt)}</TableCell>
           </TableRow>
         ))}
       </TableBody>
