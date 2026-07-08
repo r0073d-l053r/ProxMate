@@ -498,7 +498,12 @@ router.get('/live-feed', (req: Request, res: Response) => {
   res.flushHeaders();
   res.write(': connected\n\n');
   const unsubscribe = addLiveFeedSubscriber(res);
-  req.on('close', unsubscribe);
+  // Attach to both req and res to ensure cleanup even if one side doesn't emit 'close'
+  // (e.g. abrupt socket destroy, proxy buffering, or client disconnect). Idempotent.
+  const cleanup = () => unsubscribe();
+  req.on('close', cleanup);
+  res.on('close', cleanup);
+  res.on('error', cleanup);
 });
 
 // ─── GET /api/admin/resource-history ──────────────────────────

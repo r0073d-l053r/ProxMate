@@ -67,35 +67,77 @@ export async function getLiveStats(): Promise<Record<number, LiveStat>> {
   return data;
 }
 
-// ─── SSE fan-out ──────────────────────────────────────────────
+// ─── SSE fan-out ───────────────────────────────────
 // One server-side poll loop pushes live stats to every subscribed admin client
 // (Server-Sent Events), so the monitor no longer polls once per tab. The loop
 // only runs while there's at least one subscriber.
+// IMPORTANT: responses are removed on close/error AND proactively pruned each tick
+// to prevent a memory leak from clients that disconnect without firing 'close'.
 const subscribers = new Set<Response>();
 let feedTimer: ReturnType<typeof setInterval> | null = null;
 const FEED_INTERVAL_MS = Math.max(250, Number(process.env['LIVE_FEED_INTERVAL_MS'] ?? 1000));
 
+function isDead(res: Response): boolean {
+  // writableEnded: response fully sent; destroyed: socket gone; writable false: can't write
+  return !!(res.writableEnded || res.destroyed || res.writable === false);
+}
+
+function pruneDeadSubscribers(): void {
+  for (const res of [...subscribers]) {
+    if (isDead(res)) subscribers.delete(res);
+  }
+}
+
 function tickFeed(): void {
-  if (subscribers.size === 0) return;
+  pruneDeadSubscribers();
+  if (subscribers.size === 0) {
+    if (feedTimer) {
+      clearInterval(feedTimer);
+      feedTimer = null;
+    }
+    return;
+  }
   getLiveStats()
     .then((stats) => {
       const payload = `data: ${JSON.stringify(stats)}\n\n`;
-      for (const res of subscribers) res.write(payload);
+      for (const res of [...subscribers]) {
+        if (isDead(res)) {
+          subscribers.delete(res);
+          continue;
+        }
+        try {
+          res.write(payload);
+        } catch {
+          subscribers.delete(res);
+        }
+      }
     })
     .catch(() => {
-      for (const res of subscribers) res.write('event: stale\ndata: {}\n\n');
+      for (const res of [...subscribers]) {
+        if (isDead(res)) {
+          subscribers.delete(res);
+          continue;
+        }
+        try {
+          res.write('event: stale\ndata: {}\n\n');
+        } catch {
+          subscribers.delete(res);
+        }
+      }
     });
 }
 
 /** Subscribe an SSE response to live-stats pushes; returns an unsubscribe fn. */
 export function addLiveFeedSubscriber(res: Response): () => void {
+  pruneDeadSubscribers();
   subscribers.add(res);
   if (!feedTimer) feedTimer = setInterval(tickFeed, FEED_INTERVAL_MS);
-  return () => {
+  const unsubscribe = () => {
     subscribers.delete(res);
     if (subscribers.size === 0 && feedTimer) {
       clearInterval(feedTimer);
       feedTimer = null;
     }
   };
+  return unsubscribe;
 }
