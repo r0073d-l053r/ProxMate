@@ -1,5 +1,7 @@
 import https from 'node:https';
+import path from 'node:path';
 import { readFileSync } from 'node:fs';
+import { access, mkdir, writeFile, rename } from 'node:fs/promises';
 import axios, { AxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios';
 import { getConfig } from './config.service.js';
 import { proxmoxApiErrors } from '../lib/metrics.js';
@@ -786,7 +788,110 @@ export const CLOUD_INIT_FEATURES: CloudInitFeature[] = [
     packages: ['qemu-guest-agent'],
     runcmd: ['systemctl enable --now qemu-guest-agent 2>/dev/null || true'],
   },
+  {
+    // superfile (spf) is a TUI file manager (github.com/yorukot/superfile) — it
+    // runs in the terminal, so it works on headless VMs (unlike a GUI app).
+    // Installed from a pinned GitHub release binary: there is no version-less
+    // "latest" asset URL, so the version is pinned here and bumped in code when
+    // updating. The command uses only double quotes → the generated YAML runcmd
+    // stays valid with standard escaping.
+    id: 'superfile',
+    label: 'Install Superfile',
+    hint: 'Installs superfile (spf), a terminal file manager (github.com/yorukot/superfile). Launch it by typing `spf`.',
+    packages: ['curl', 'ca-certificates', 'tar'],
+    runcmd: [
+      'ARCH=$(dpkg --print-architecture) && curl -fsSL "https://github.com/yorukot/superfile/releases/download/v1.6.0/superfile-linux-v1.6.0-$ARCH.tar.gz" -o /tmp/superfile.tar.gz && mkdir -p /tmp/superfile && tar -xzf /tmp/superfile.tar.gz -C /tmp/superfile && install -m 0755 "$(find /tmp/superfile -type f -name spf | head -1)" /usr/local/bin/spf && rm -rf /tmp/superfile /tmp/superfile.tar.gz',
+    ],
+  },
+  {
+    id: 'cockpit',
+    label: 'Install Cockpit',
+    hint: 'Web admin console (services, logs, terminal, updates) on port 9090. Reach it over Tailscale.',
+    packages: ['cockpit'],
+    runcmd: ['systemctl enable --now cockpit.socket 2>/dev/null || true'],
+  },
+  {
+    id: 'netdata',
+    label: 'Install Netdata',
+    hint: 'Real-time monitoring dashboard on port 19999. Reach it over Tailscale.',
+    packages: ['netdata'],
+    runcmd: ['systemctl enable --now netdata 2>/dev/null || true'],
+  },
+  {
+    // Official Caddy APT repo (cloudsmith) — sets up the caddy service + user +
+    // /etc/caddy/Caddyfile. The curls only fetch data (key + sources.list), no
+    // remote script execution.
+    id: 'caddy',
+    label: 'Install Caddy',
+    hint: 'Caddy web server with automatic HTTPS (caddyserver.com). Runs as a service; edit /etc/caddy/Caddyfile.',
+    packages: ['debian-keyring', 'debian-archive-keyring', 'apt-transport-https', 'curl', 'gnupg'],
+    runcmd: [
+      "curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg",
+      "curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list",
+      'apt-get update && apt-get install -y caddy',
+      'systemctl enable --now caddy 2>/dev/null || true',
+    ],
+  },
+  {
+    // VS Code in the browser, from the project's pinned GitHub .deb (bump the
+    // version to update). Enabled for the cloud-init tenant user (uid 1000).
+    id: 'code-server',
+    label: 'Install code-server',
+    hint: 'VS Code in the browser on port 8080 (github.com/coder/code-server). Binds localhost — reach it via an SSH tunnel, or set bind-addr and pair with Tailscale. Password is in ~/.config/code-server/config.yaml.',
+    packages: ['curl', 'ca-certificates'],
+    runcmd: [
+      'ARCH=$(dpkg --print-architecture) && curl -fsSL "https://github.com/coder/code-server/releases/download/v4.127.0/code-server_4.127.0_$ARCH.deb" -o /tmp/code-server.deb && apt-get install -y /tmp/code-server.deb && rm -f /tmp/code-server.deb',
+      'systemctl enable --now code-server@$(id -nu 1000) 2>/dev/null || true',
+    ],
+  },
 ];
+
+/**
+ * Always-on base: installed on EVERY cloud-init VM (not shown as checkboxes),
+ * folded into the generated vendor snippet. Only applied when on-demand snippet
+ * writing is configured (see `ensureCloudInitSnippet`) — that's what makes a
+ * mandatory base practical without exponential manual placement.
+ */
+export const CLOUD_INIT_BASE: CloudInitFeature[] = [
+  {
+    id: 'unattended-upgrades',
+    label: 'Automatic security updates',
+    hint: 'Installs + enables unattended-upgrades so security patches apply automatically.',
+    packages: ['unattended-upgrades'],
+    runcmd: [
+      "{ echo 'APT::Periodic::Update-Package-Lists \"1\";'; echo 'APT::Periodic::Unattended-Upgrade \"1\";'; } > /etc/apt/apt.conf.d/20auto-upgrades",
+      'systemctl enable --now unattended-upgrades 2>/dev/null || true',
+    ],
+  },
+  {
+    id: 'fail2ban',
+    label: 'SSH brute-force protection (fail2ban)',
+    hint: 'Installs fail2ban to ban IPs after repeated failed SSH logins.',
+    packages: ['fail2ban'],
+    runcmd: ['systemctl enable --now fail2ban 2>/dev/null || true'],
+  },
+  {
+    id: 'btop',
+    label: 'Resource monitor (btop)',
+    hint: 'Installs btop, a terminal resource monitor. Launch it by typing `btop`.',
+    packages: ['btop'],
+    runcmd: [],
+  },
+];
+
+// ── The catalog + defaults ──
+// The two lists above are just source data. Everything resolves against the
+// combined CATALOG; which features are OFFERED to tenants (checkboxes) and which
+// are ALWAYS-ON (installed on every VM) are ADMIN choices stored in config — see
+// template.service (getOfferedFeatureIds / getBaseFeatureIds). The constants
+// below are only the defaults for a fresh install.
+export const CLOUD_INIT_CATALOG: CloudInitFeature[] = [...CLOUD_INIT_FEATURES, ...CLOUD_INIT_BASE];
+
+/** Default tenant-offered options for a fresh install (admin overrides in the Template Store). */
+export const DEFAULT_OFFERED_IDS = CLOUD_INIT_FEATURES.map((f) => f.id);
+
+/** Suggested always-on base the setup wizard pre-selects (admin confirms or changes). */
+export const RECOMMENDED_BASE_IDS = CLOUD_INIT_BASE.map((f) => f.id);
 
 /** Snippet filename for a feature combo, e.g. ['tailscale','docker'] → proxmate-docker-tailscale.yaml */
 export function cloudInitSnippetFile(featureIds: string[]): string {
@@ -796,7 +901,8 @@ export function cloudInitSnippetFile(featureIds: string[]): string {
 /** The cloud-config vendor-data body for a feature combo (packages deduped, runcmd concatenated). */
 export function cloudInitSnippetContent(featureIds: string[]): string {
   const ids = [...featureIds].sort();
-  const feats = CLOUD_INIT_FEATURES.filter((f) => ids.includes(f.id));
+  // Resolve ids against the whole catalog (offered + base tools are one pool).
+  const feats = CLOUD_INIT_CATALOG.filter((f) => ids.includes(f.id));
   const packages = [...new Set(feats.flatMap((f) => f.packages))];
   const runcmd = feats.flatMap((f) => f.runcmd);
   return [
@@ -813,6 +919,47 @@ export function cloudInitSnippetContent(featureIds: string[]): string {
 
 // Kept so the original Docker snippet filename is unchanged (already placed by admins).
 export const DOCKER_SNIPPET_FILE = cloudInitSnippetFile(['docker']);
+
+/**
+ * On-demand snippet writing. The Proxmox API has no endpoint to create a snippet
+ * file, so the historical model is "admin hand-places one file per feature combo
+ * on every node" — which is 2ⁿ−1 files and doesn't scale. Instead, point ProxMate
+ * at a **shared** storage whose `snippets/` directory is bind-mounted (writable)
+ * into this container, and it writes the exact combo a deploy needs, when it needs
+ * it. Configured via env (deployment infra, like `BACKUP_DOWNLOAD_DIR`):
+ *   SNIPPET_DIR     — the writable container path (the storage's snippets/ dir)
+ *   SNIPPET_STORAGE — the Proxmox storage id, for the cicustom volid
+ * Unset ⇒ the feature is off and callers fall back to the pre-placed-file path.
+ */
+export function snippetWriteConfig(): { dir: string; storage: string } | null {
+  const dir = process.env['SNIPPET_DIR'];
+  const storage = process.env['SNIPPET_STORAGE'];
+  return dir && storage ? { dir, storage } : null;
+}
+
+/**
+ * Ensure the vendor-data snippet for a feature combo exists on the writable
+ * snippet storage, writing it on demand (atomic via temp+rename, idempotent since
+ * a combo's content is deterministic). Returns the cicustom volid
+ * (`<storage>:snippets/<file>`), or null when on-demand writing isn't configured.
+ * The content comes only from the fixed feature list — never tenant input — so
+ * there is no injection surface in what gets written.
+ */
+export async function ensureCloudInitSnippet(featureIds: string[]): Promise<string | null> {
+  const cfg = snippetWriteConfig();
+  if (!cfg) return null;
+  const file = cloudInitSnippetFile(featureIds);
+  const target = path.join(cfg.dir, file);
+  try {
+    await access(target); // already present → reuse
+  } catch {
+    await mkdir(cfg.dir, { recursive: true }).catch(() => undefined);
+    const tmp = path.join(cfg.dir, `.${file}.${process.pid}.${Date.now()}.tmp`);
+    await writeFile(tmp, cloudInitSnippetContent(featureIds), { mode: 0o644 });
+    await rename(tmp, target); // atomic — Proxmox never reads a half-written file
+  }
+  return `${cfg.storage}:snippets/${file}`;
+}
 
 /** Ensure a (directory/file) storage has the `snippets` content type enabled. */
 export async function ensureSnippetsEnabled(storage: string, client?: AxiosInstance): Promise<void> {
@@ -1445,6 +1592,242 @@ export function getPassthroughDevices(config: Record<string, string>): Passthrou
     out.push({ index: Number(m[1]), slot: k, mapping, raw });
   }
   return out.sort((a, b) => a.index - b.index);
+}
+
+// ─── PCI passthrough host-readiness (pre-flight) ──────────────
+//
+// Before an approval STOPS/MIGRATES/ATTACHES a device, verify what the API can
+// actually see about the target node: the device is present, its identity still
+// matches the mapping, and its IOMMU group is active (group -1 ⇒ IOMMU disabled
+// ⇒ passthrough is guaranteed to fail). The one thing the Proxmox API does NOT
+// expose is a device's current kernel driver, so vfio-pci binding — the classic
+// "the VM's start hangs and takes the node offline" cause (see the pve-4 GTX1650
+// incident) — can only be WARNED on, never confirmed. Consistent with
+// passthroughBootReadiness: hard-block only the certain failures; surface the
+// rest so the admin gives informed consent BEFORE a long migration.
+
+export interface PciMappingEntry {
+  node: string;
+  path: string; // e.g. "0000:01:00" (Proxmox stores the function-less slot)
+  id?: string; // vendor:device, e.g. "10de:1f82"
+  iommugroup?: number; // recorded when the mapping was created
+  subsystemId?: string;
+}
+
+/** Parse one `/cluster/mapping/pci` map entry (a "k=v,k=v" string or an object). */
+export function parsePciMappingEntry(raw: unknown): PciMappingEntry | null {
+  const kv = new Map<string, string>();
+  if (typeof raw === 'string') {
+    for (const part of raw.split(',')) {
+      const i = part.indexOf('=');
+      if (i > 0) kv.set(part.slice(0, i).trim(), part.slice(i + 1).trim());
+    }
+  } else if (raw && typeof raw === 'object') {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) kv.set(k, String(v));
+  } else {
+    return null;
+  }
+  const node = kv.get('node');
+  const path = kv.get('path');
+  if (!node || !path) return null;
+  const grp = kv.get('iommugroup');
+  return {
+    node,
+    path,
+    id: kv.get('id') || undefined,
+    iommugroup: grp !== undefined && grp !== '' ? Number(grp) : undefined,
+    subsystemId: kv.get('subsystem-id') || undefined,
+  };
+}
+
+/** All per-node entries (path/id/iommugroup) for a named PCI resource mapping. */
+export async function getPciMappingEntries(mappingId: string, client?: AxiosInstance): Promise<PciMappingEntry[]> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Array<{ id: string; map?: unknown }> }>('/cluster/mapping/pci');
+  const m = (res.data.data ?? []).find((x) => x.id === mappingId);
+  if (!m || !Array.isArray(m.map)) return [];
+  return m.map.map(parsePciMappingEntry).filter((e): e is PciMappingEntry => e !== null);
+}
+
+export interface NodePciDevice {
+  id: string; // "0000:01:00.0"
+  class?: string; // "0x030000"
+  className?: string;
+  vendor?: string; // "0x10de"
+  device?: string; // "0x1f82"
+  vendorName?: string;
+  deviceName?: string;
+  iommugroup: number | null; // null when the field is absent; -1 ⇒ no IOMMU group
+}
+
+/** Live PCI devices on a node (`/nodes/{node}/hardware/pci`). */
+export async function getNodePciDevices(node: string, client?: AxiosInstance): Promise<NodePciDevice[]> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Array<Record<string, unknown>> }>(`/nodes/${node}/hardware/pci`);
+  return (res.data.data ?? []).map((d) => ({
+    id: String(d['id']),
+    class: d['class'] != null ? String(d['class']) : undefined,
+    className: d['class_name'] != null ? String(d['class_name']) : undefined,
+    vendor: d['vendor'] != null ? String(d['vendor']) : undefined,
+    device: d['device'] != null ? String(d['device']) : undefined,
+    vendorName: d['vendor_name'] != null ? String(d['vendor_name']) : undefined,
+    deviceName: d['device_name'] != null ? String(d['device_name']) : undefined,
+    iommugroup: d['iommugroup'] != null ? Number(d['iommugroup']) : null,
+  }));
+}
+
+export interface PassthroughReadiness {
+  device: {
+    path: string;
+    expectedId?: string;
+    liveId?: string;
+    iommugroup: number | null;
+    className?: string;
+    deviceName?: string;
+  } | null;
+  isGpu: boolean;
+  /** No certain failure — the destructive apply may proceed. */
+  ok: boolean;
+  /** Certain failures — the apply MUST be refused before any stop/migrate. */
+  blockers: string[];
+  /** Advisory / API-unverifiable (vfio-pci binding, q35/OVMF, IOMMU-group sharing). */
+  warnings: string[];
+  /**
+   * False for the observed node-crash combo (a GPU attached to a guest that
+   * isn't BOTH q35 and OVMF): attach the device but do NOT auto-start — a GPU
+   * without OVMF frequently hangs the host. Live-confirmed twice on pve-4: an
+   * NVIDIA GTX 1650 wedged the node under i440fx/SeaBIOS AND under q35/SeaBIOS;
+   * OVMF (UEFI) is the missing piece. The admin starts it manually once the VM
+   * is q35 + OVMF and the device is confirmed bound to vfio-pci.
+   */
+  safeToAutoStart: boolean;
+}
+
+const isGpuClass = (cls?: string) => /^0x03/.test(cls ?? '');
+const normId = (s?: string) => (s ?? '').replace(/^0x/i, '').toLowerCase();
+
+/**
+ * Pure host-readiness evaluation (unit-tested). Given the mapping's entry for the
+ * target node, the node's live PCI devices, and the VM's boot readiness, decide
+ * what would CERTAINLY fail (blockers) versus what the admin must confirm
+ * (warnings). Deliberately side-effect-free so the security-critical decision is
+ * easy to test — the async wrapper below just feeds it live data.
+ */
+export function evaluatePassthroughReadiness(
+  targetNode: string,
+  entry: PciMappingEntry | undefined,
+  devices: NodePciDevice[],
+  boot: { q35: boolean; ovmf: boolean; efidisk: boolean; warnings: string[] },
+): PassthroughReadiness {
+  const blockers: string[] = [];
+  const warnings: string[] = [];
+
+  if (!entry) {
+    return {
+      device: null,
+      isGpu: false,
+      ok: false,
+      blockers: [`The PCI mapping has no device entry for node ${targetNode}.`],
+      warnings: [],
+      safeToAutoStart: false,
+    };
+  }
+
+  const own = (d: NodePciDevice) => d.id === entry.path || d.id.startsWith(`${entry.path}.`);
+  const matched = devices.filter(own);
+  const primary =
+    matched.find((d) => entry.id && `${normId(d.vendor)}:${normId(d.device)}` === normId(entry.id)) ?? matched[0];
+
+  if (!primary) {
+    blockers.push(
+      `PCI device ${entry.path} is not present on ${targetNode} (removed, disabled, or re-enumerated) — passthrough would fail to start.`,
+    );
+    return {
+      device: { path: entry.path, expectedId: entry.id, iommugroup: null },
+      isGpu: false,
+      ok: false,
+      blockers,
+      warnings,
+      safeToAutoStart: false,
+    };
+  }
+
+  const liveId = `${normId(primary.vendor)}:${normId(primary.device)}`;
+  if (entry.id && liveId !== normId(entry.id)) {
+    blockers.push(
+      `The device at ${entry.path} on ${targetNode} is now ${liveId} but the mapping expects ${normId(entry.id)}. Re-verify the resource mapping in Proxmox.`,
+    );
+  }
+
+  const group = primary.iommugroup;
+  if (group == null || group < 0) {
+    blockers.push(
+      `IOMMU is not active for ${entry.path} on ${targetNode} (no IOMMU group). Enable IOMMU on the node (intel_iommu=on / amd_iommu=on), reboot, then retry.`,
+    );
+  } else {
+    if (entry.iommugroup != null && entry.iommugroup !== group) {
+      warnings.push(
+        `IOMMU group for ${entry.path} changed since the mapping was created (was ${entry.iommugroup}, now ${group}) — verify the host hasn't been reconfigured.`,
+      );
+    }
+    const others = devices.filter((d) => d.iommugroup === group && !own(d));
+    if (others.length > 0) {
+      warnings.push(
+        `IOMMU group ${group} on ${targetNode} also contains ${others
+          .map((d) => d.id)
+          .join(', ')} — passing this device also removes those from the host. Confirm none are host-critical (or enable ACS override).`,
+      );
+    }
+  }
+
+  // The Proxmox API never exposes a device's current kernel driver, so vfio-pci
+  // binding — the usual "start hangs and takes the node down" cause — cannot be
+  // confirmed here. Always surface it so the admin verifies before proceeding.
+  warnings.push(
+    `ProxMate can't confirm over the API that ${entry.path} on ${targetNode} is bound to vfio-pci. ` +
+      `If a host driver still holds it, the VM's start can hang the node. On ${targetNode} run ` +
+      `"lspci -nnks ${entry.path}" and confirm it shows "Kernel driver in use: vfio-pci".`,
+  );
+
+  warnings.push(...boot.warnings);
+
+  const isGpu = isGpuClass(primary.class);
+  // A GPU is only safe to auto-start on q35 AND OVMF — live-confirmed twice that
+  // this NVIDIA card hangs the host without OVMF (even on q35). Non-GPU devices
+  // aren't gated on firmware.
+  const safeToAutoStart = blockers.length === 0 && !(isGpu && !(boot.q35 && boot.ovmf));
+
+  return {
+    device: {
+      path: entry.path,
+      expectedId: entry.id,
+      liveId,
+      iommugroup: group,
+      className: primary.className,
+      deviceName: primary.deviceName,
+    },
+    isGpu,
+    ok: blockers.length === 0,
+    blockers,
+    warnings,
+    safeToAutoStart,
+  };
+}
+
+/** Fetch live cluster state and evaluate host readiness for `mappingId` on `targetNode`. */
+export async function checkPassthroughHostReadiness(
+  targetNode: string,
+  mappingId: string,
+  vmConfig: Record<string, string>,
+  client?: AxiosInstance,
+): Promise<PassthroughReadiness> {
+  const c = client ?? (await getClient());
+  const [entries, devices] = await Promise.all([
+    getPciMappingEntries(mappingId, c),
+    getNodePciDevices(targetNode, c),
+  ]);
+  const entry = entries.find((e) => e.node === targetNode);
+  return evaluatePassthroughReadiness(targetNode, entry, devices, passthroughBootReadiness(vmConfig));
 }
 
 // ─── Backups (vzdump / restore / list / delete) ──────────────
