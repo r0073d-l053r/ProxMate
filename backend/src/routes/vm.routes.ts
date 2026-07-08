@@ -21,6 +21,8 @@ import {
   waitForTask,
   listLxcTemplates,
   getPassthroughDevices,
+  getNodesHealth,
+  migratableTargets,
 } from '../services/proxmox.service.js';
 import type { RrdTimeframe } from '../services/proxmox.service.js';
 import { requestVncProxy, requestTermProxy } from '../services/vnc-proxy.service.js';
@@ -750,6 +752,38 @@ const MigrateSchema = z.object({
   targetNode: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid node name'),
 });
 
+// ─── GET /api/vms/:id/migrate-targets (admin only) ────────────
+// The nodes this specific VM may actually be migrated to, per Proxmox's own
+// preflight (`allowed_nodes`) — so the picker never offers a node the guest can't
+// reach (e.g. its disks live on node-local storage no other node has). An empty
+// list means it can't be migrated at all. LXC / passthrough guests are pinned.
+router.get('/:id/migrate-targets', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  if (user.role !== 'admin') { res.status(403).json({ error: 'Only an admin can migrate VMs between nodes.' }); return; }
+  const vm = await getOwnedVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc' || vm.hasPassthrough) {
+    res.json({ current: vm.proxmoxNode, targets: [] });
+    return;
+  }
+  try {
+    const current = await syncVmNode(vm);
+    const [allowed, health] = await Promise.all([
+      migratableTargets(current.proxmoxNode, current.proxmoxVmId),
+      getNodesHealth(),
+    ]);
+    const onlineOthers = health.nodes.filter((n) => n.online && n.name !== current.proxmoxNode).map((n) => n.name);
+    // Fail open when the preflight can't be read (null): offer the online nodes and
+    // let the migrate route re-validate, rather than blocking migration entirely.
+    const base = allowed ?? onlineOthers;
+    const onlineSet = new Set(onlineOthers);
+    const targets = base.filter((n) => onlineSet.has(n));
+    res.json({ current: current.proxmoxNode, targets });
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
 router.post('/:id/migrate', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   if (user.role !== 'admin') {
@@ -768,7 +802,9 @@ router.post('/:id/migrate', async (req: Request, res: Response) => {
     });
     res.json({ success: true, proxmoxNode: updated.proxmoxNode });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : pveMessage(err);
+    // pveMessage extracts Proxmox's real reason from an axios error (an AxiosError
+    // is an Error, so `err.message` would just be "Request failed with status 500").
+    const msg = pveMessage(err);
     res.status(/already on|No such node|mismatch|containers|passthrough/i.test(msg) ? 400 : 502).json({ error: msg });
   }
 });
