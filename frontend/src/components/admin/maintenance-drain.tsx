@@ -56,7 +56,9 @@ export function MaintenanceDrain({
   const [planning, setPlanning] = useState(false);
   const [applying, setApplying] = useState(false);
 
-  const others = names.filter((n) => n !== node);
+  // Only online nodes are valid drain targets (you can't push guests onto an
+  // offline node). Per-guest storage eligibility is enforced by the drain planner.
+  const others = nodes.filter((n) => n.online && n.name !== node).map((n) => n.name);
 
   function onNodeChange(v: string) {
     setNode(v);
