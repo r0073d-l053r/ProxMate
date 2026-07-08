@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Loader2, MoveRight } from "lucide-react";
 import { api, apiError } from "@/lib/api";
-import type { ClusterHealth } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/form-field";
 import {
@@ -45,16 +44,21 @@ export function MigrateDialog({
 }) {
   const [nodes, setNodes] = useState<string[]>([]);
   const [target, setTarget] = useState("");
+  const [loadingNodes, setLoadingNodes] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setTarget("");
+    setLoadingNodes(true);
+    // Only the nodes THIS VM can actually migrate to (Proxmox `allowed_nodes`), so
+    // the picker never offers an impossible target (e.g. node-local storage).
     api
-      .get<ClusterHealth>("/admin/nodes")
-      .then((r) => setNodes(r.data.nodes.filter((n) => n.online && n.name !== currentNode).map((n) => n.name)))
-      .catch((e) => toast.error(apiError(e)));
-  }, [open, currentNode]);
+      .get<{ current: string; targets: string[] }>(`/vms/${vmId}/migrate-targets`)
+      .then((r) => setNodes(r.data.targets))
+      .catch((e) => toast.error(apiError(e)))
+      .finally(() => setLoadingNodes(false));
+  }, [open, vmId]);
 
   async function migrate() {
     setBusy(true);
@@ -84,9 +88,9 @@ export function MigrateDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <FormField label="Target node">
-          <Select value={target} onValueChange={(v) => setTarget(v as string)}>
+          <Select value={target} onValueChange={(v) => setTarget(v as string)} disabled={loadingNodes || nodes.length === 0}>
             <SelectTrigger className="w-full">
-              <SelectValue placeholder={nodes.length ? "Select a node" : "No other online nodes"} />
+              <SelectValue placeholder={loadingNodes ? "Checking eligible nodes…" : nodes.length ? "Select a node" : "No eligible nodes"} />
             </SelectTrigger>
             <SelectContent>
               {nodes.map((n) => (
@@ -96,6 +100,13 @@ export function MigrateDialog({
               ))}
             </SelectContent>
           </Select>
+          {!loadingNodes && nodes.length === 0 && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              This VM can&apos;t be migrated — its disks live on storage that only exists on{" "}
+              <span className="font-medium text-foreground">{currentNode}</span> (or it has a device
+              attached that pins it to this host). Move its disks to shared storage to enable migration.
+            </p>
+          )}
         </FormField>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>

@@ -4,6 +4,7 @@ vi.mock('../src/lib/prisma.js', () => ({ prisma: {} }));
 
 import {
   migrateVm,
+  migratableTargets,
   getNodeImagesStorages,
   getVolumeStorages,
   passthroughBootReadiness,
@@ -11,6 +12,29 @@ import {
   getMigrationProgress,
 } from '../src/services/proxmox.service.js';
 import { fakeClient, asClient, bodyOf, GB } from './helpers.js';
+
+describe('migratableTargets', () => {
+  it('returns the nodes Proxmox reports as allowed migration targets', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue({ data: { data: { allowed_nodes: ['pve-1', 'pve-2'] } } });
+    const targets = await migratableTargets('pve-0', 100, asClient(c));
+    expect(c.get).toHaveBeenCalledWith('/nodes/pve-0/qemu/100/migrate');
+    expect(targets).toEqual(['pve-1', 'pve-2']);
+  });
+
+  it('returns an empty list when the guest can migrate nowhere (node-local storage)', async () => {
+    const c = fakeClient();
+    // Proxmox omits allowed_nodes (or returns none) when every other node lacks the storage.
+    c.get.mockResolvedValue({ data: { data: { not_allowed_nodes: { 'pve-1': { unavailable_storages: ['tank'] } } } } });
+    expect(await migratableTargets('pve-0', 109, asClient(c))).toEqual([]);
+  });
+
+  it('returns null so callers fail open when the preflight cannot be read', async () => {
+    const c = fakeClient();
+    c.get.mockRejectedValue(new Error('Request failed with status code 500'));
+    expect(await migratableTargets('pve-0', 100, asClient(c))).toBeNull();
+  });
+});
 
 describe('migrateVm', () => {
   it('sets online + with-local-disks for a live migration (works on local storage too)', async () => {
