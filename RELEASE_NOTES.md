@@ -1,58 +1,62 @@
 ## Highlights
 
-**Fixes the tenant deploy wizard hiding admin-offered cloud-init extras.** After
-v0.6.2 made the cloud-init catalog admin-configurable, an admin could enable new
-options (Cockpit, Caddy, Netdata, code-server, …) under **Template Store →
-Cloud-init extras → Options offered to tenants**, but tenants creating a VM would
-still only see the three original checkboxes (Docker, Tailscale, Superfile). This
-release makes the wizard show every offered feature when on-demand snippet writing
-is configured.
+**Add an SSH key to a VM after it's created — no rebuild needed** — plus a mobile
+fix for the Virtual Machines list.
 
-## What was wrong
+Until now you could only inject an SSH public key at deploy time (it rides
+cloud-init, which only applies on first boot). This release adds a post-create
+path so you can drop one of your keys onto a running machine and SSH in right away.
 
-The tenant new-VM wizard reads a lightweight status endpoint to decide which
-extras to show. That endpoint was never made aware of **on-demand snippet
-writing** (`SNIPPET_DIR`/`SNIPPET_STORAGE`): it reported which
-`proxmate-<feature>.yaml` files were physically pre-placed on the template's node,
-and the wizard then hid any offered feature whose file wasn't already there.
+## Add an SSH key to an existing VM
 
-In on-demand mode ProxMate writes the exact snippet at deploy time, so nothing is
-pre-placed — only features that happened to have a leftover snippet file on the
-node (typically the three original options from earlier use) passed the filter.
-Newly offered features were silently filtered out, even though the deploy path
-itself fully supported them.
+On any running **QEMU** VM: **VM → Settings → Recovery → Add an SSH key**.
 
-## What changed
+- Pick one of your **saved SSH keys** (the same quick-pick chips as the deploy
+  wizard) or paste a public key, choose the guest username (e.g. `ubuntu`,
+  `debian`, `root`), and add it.
+- ProxMate appends the key to that user's `~/.ssh/authorized_keys` **inside the
+  guest via the QEMU guest agent** — the same mechanism as the existing password
+  reset, so it works on a live machine with no reboot.
+- **Idempotent:** re-adding the same key is a no-op (no duplicate lines). It
+  creates `~/.ssh` if missing and sets the ownership/permissions sshd requires
+  (`700` on `.ssh`, `600` on `authorized_keys`), and gives a clear error if the
+  username doesn't exist in the guest.
+- The key is also merged into the VM's cloud-init `sshkeys` config best-effort, so
+  it survives a later rebuild — **without disturbing a static IP configuration**.
 
-- **The status endpoint is now on-demand-aware.** When on-demand snippet writing
-  is configured it reports `onDemand: true` and returns every offered feature
-  (plus the always-on base), with no per-node file check — and it skips the
-  storage/node listing entirely, so it's a cheaper call too.
-- **The wizard respects it.** In on-demand mode it renders all offered features
-  and treats any combination as deploy-ready (ProxMate writes whatever combo the
-  tenant selects). The manual-placement fallback is unchanged: without on-demand
-  writing, features still gate on the snippet being present on the node.
+Security: the username and key are validated (single-line OpenSSH format — the
+authorized_keys-injection guard) and passed to the guest as positional arguments
+of a fixed script, never interpolated into a shell command, so there's no
+injection surface. Containers (LXC) are not supported — like password reset, this
+needs the QEMU guest agent. Requires operate/owner access on a shared VM.
 
-No change was needed to the deploy path — it already validated the tenant's
-selection against the admin-offered set, layered on the always-on base, and wrote
-the combined snippet on demand.
+## Fixes
+
+- **Mobile: the Virtual Machines list no longer clips.** On narrow screens the
+  fixed-width table columns crushed together and cells (OS icon, resources, IP)
+  painted over each other. The table now keeps a sensible minimum width and
+  scrolls horizontally on small screens, and each column truncates within its own
+  cell — so values never bleed into the neighbouring column. Desktop layout is
+  unchanged.
 
 ## Upgrade notes
 
 - **No database migrations, no breaking changes, no new environment variables.**
-- If you configure on-demand snippet writing (`SNIPPET_DIR` + `SNIPPET_STORAGE`),
-  tenants will now see the full set of features you enable under **Template Store →
-  Cloud-init extras**. No action required beyond updating.
+- The Add-SSH-key action needs the **QEMU guest agent** running in the VM (same as
+  the existing "Reset guest password"). Cloud images deployed through ProxMate
+  already include it; for others, install and start `qemu-guest-agent`.
 - Standard update: **Admin → Settings → Updates → Install update**, or pull + rebuild
   (`docker compose up -d --build`).
 
 ## Verification
 
-- Backend suite green: **483 tests** (+2) — a new `cloud-init-status` test asserts
-  that on-demand mode returns every admin-offered feature with no per-node gating
-  and without any Proxmox call (the exact regression), plus a manual-fallback
-  sanity check. Typecheck and lint clean on backend and frontend; frontend
-  production build green.
-- Live-verified on the production cluster: with `SNIPPET_STORAGE` configured, the
-  deploy wizard now lists all offered extras (Cockpit / Caddy / Netdata /
-  code-server alongside Docker / Tailscale / Superfile) for a tenant account.
+- Backend suite green: **493 tests** (+10) — a new `vm-ssh-key` suite covers the
+  argv-safe agent exec (username/key never interpolated into the script), the
+  exec-status polling and exit-code mapping (missing user → clear error; guest
+  stderr surfaced), the idempotent/permission-fixing append, the best-effort
+  cloud-init config sync **including preserving a static `ipconfig0`**, and the
+  LXC / multi-line-paste guards. Typecheck and lint clean on backend and frontend;
+  frontend production build green.
+- Live-verified on the production cluster (musebot): adding a saved key to a
+  running cloud-init VM and connecting over SSH with it, and the mobile VM-list
+  layout on a phone.

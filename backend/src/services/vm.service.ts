@@ -7,6 +7,7 @@ import { isMailConfigured, sendMail } from './mail.service.js';
 import { vmMaintenanceEmail } from '../lib/email-templates.js';
 import * as pve from './proxmox.service.js';
 import { getOfferedFeatureIds, getBaseFeatureIds } from './template.service.js';
+import { isValidPublicKey } from './ssh-key.service.js';
 
 /** The Proxmox guest kind for a VM row (defaults to QEMU for legacy/unset rows). */
 export const kindOf = (vm: { type?: string | null }): pve.GuestKind => (vm.type === 'lxc' ? 'lxc' : 'qemu');
@@ -1233,6 +1234,47 @@ export async function resetGuestPassword(vm: VirtualMachine, username: string): 
   const password = generateGuestPassword();
   await pve.setGuestUserPassword(currentVm.proxmoxNode, currentVm.proxmoxVmId, username, password, client);
   return password;
+}
+
+/**
+ * Append an SSH public key to a user's authorized_keys inside the guest via the
+ * QEMU guest agent — the post-create counterpart of the deploy wizard's key
+ * injection (cloud-init only applies `sshkeys` on first boot). Also merges the
+ * key into the VM's cloud-init `sshkeys` config best-effort, so the stored
+ * config stays truthful for later flows that reuse it (duplicate, rebuild).
+ * QEMU + running agent required, like {@link resetGuestPassword}.
+ */
+export async function addGuestSshKey(vm: VirtualMachine, username: string, publicKey: string): Promise<void> {
+  if (kindOf(vm) === 'lxc') throw new Error('Adding SSH keys needs the QEMU guest agent — containers are not supported');
+  const key = publicKey.trim();
+  // Same shape check as saved keys / cloud-init: single line, OpenSSH format —
+  // the authorized_keys-injection guard (a multi-line paste smuggles extra keys).
+  if (!isValidPublicKey(key)) throw new Error("That doesn't look like an OpenSSH public key");
+  const client = await pve.getClient();
+  const current = await syncVmNode(vm);
+  await pve.injectGuestSshKey(current.proxmoxNode, current.proxmoxVmId, username, key, client);
+
+  // Best-effort config sync: the live injection above already succeeded, so a
+  // failure here (e.g. VM locked mid-backup) must never fail the action.
+  try {
+    const cfg = await pve.getVmConfig(current.proxmoxNode, current.proxmoxVmId, client);
+    if (pve.isCloudInitTemplate(cfg)) {
+      const existing = cfg['sshkeys'] ? decodeURIComponent(cfg['sshkeys']) : '';
+      const lines = existing.split('\n').map((l) => l.trim()).filter(Boolean);
+      if (!lines.includes(key)) {
+        // setCloudInitConfig defaults ipconfig0 to DHCP — pass the VM's current
+        // value through so a static-IP config is never clobbered by a key add.
+        await pve.setCloudInitConfig(
+          current.proxmoxNode,
+          current.proxmoxVmId,
+          { sshKeys: [...lines, key].join('\n'), ipConfig: cfg['ipconfig0'] },
+          client,
+        );
+      }
+    }
+  } catch {
+    /* cosmetic — the key is already live in the guest */
+  }
 }
 
 // ─── Rescue mode ──────────────────────────────────────────────
