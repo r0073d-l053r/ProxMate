@@ -673,26 +673,38 @@ export async function getCloudInitExtras(): Promise<CloudInitExtras> {
 
 export interface CloudInitStatus {
   snippetsEnabled: boolean;
+  /** Automatic on-demand snippet writing is active — every offered feature is
+   *  available on every node (ProxMate writes the combo at deploy), so the wizard
+   *  must NOT gate on `nodes`. */
+  onDemand: boolean;
   features: Array<{ id: string; label: string; hint: string }>;
-  nodes: Record<string, string[]>; // node → present ProxMate snippet filenames
+  nodes: Record<string, string[]>; // node → present ProxMate snippet filenames (manual mode only)
   /** Always-on base installed on every cloud-init VM (empty unless on-demand writing is configured). */
   base: Array<{ id: string; label: string }>;
 }
 
 /** Lightweight (wizard): the features + which ProxMate snippet files are present on each node. */
 export async function cloudInitStatus(): Promise<CloudInitStatus> {
+  const onDemand = !!pve.snippetWriteConfig();
   const offeredIds = await getOfferedFeatureIds();
   const features = pve.CLOUD_INIT_CATALOG
     .filter((f) => offeredIds.includes(f.id))
     .map((f) => ({ id: f.id, label: f.label, hint: f.hint }));
   // The always-on base only applies when on-demand snippet writing is configured.
-  const baseIds = pve.snippetWriteConfig() ? await getBaseFeatureIds() : [];
+  const baseIds = onDemand ? await getBaseFeatureIds() : [];
   const base = pve.CLOUD_INIT_CATALOG.filter((f) => baseIds.includes(f.id)).map((f) => ({ id: f.id, label: f.label }));
+
+  // On-demand: ProxMate writes the exact combo snippet at deploy time, so every
+  // offered feature is deployable on every node — there is no per-node readiness to
+  // compute (and nothing is pre-placed to list). Short-circuit before any storage/
+  // node listing.
+  if (onDemand) return { snippetsEnabled: true, onDemand: true, features, nodes: {}, base };
+
   const client = await pve.getClient();
   const storage = await getSnippetStorage();
   const sres = await client.get<{ data: Array<{ storage: string; content?: string }> }>('/storage');
   const snippetsEnabled = (sres.data.data.find((x) => x.storage === storage)?.content ?? '').split(',').includes('snippets');
-  if (!snippetsEnabled) return { snippetsEnabled: false, features, nodes: {}, base };
+  if (!snippetsEnabled) return { snippetsEnabled: false, onDemand: false, features, nodes: {}, base };
 
   const cr = await client.get<{ data: Array<{ type: string; status?: string; node?: string }> }>('/cluster/resources');
   const nodeNames = cr.data.data.filter((i) => i.type === 'node' && i.status === 'online' && i.node).map((i) => i.node!);
@@ -712,7 +724,7 @@ export async function cloudInitStatus(): Promise<CloudInitStatus> {
       }
     }),
   );
-  return { snippetsEnabled, features, nodes, base };
+  return { snippetsEnabled, onDemand: false, features, nodes, base };
 }
 
 /** Admin: enable the `snippets` content type on the snippet storage (API-doable). */

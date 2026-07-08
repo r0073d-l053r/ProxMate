@@ -91,6 +91,10 @@ export default function NewVmWizard() {
   const [cloudFeatures, setCloudFeatures] = useState<{ id: string; label: string; hint: string }[]>([]);
   const [cloudNodes, setCloudNodes] = useState<Record<string, string[]>>({}); // node → present snippet files
   const [cloudBase, setCloudBase] = useState<{ id: string; label: string }[]>([]); // always-on base
+  // On-demand snippet writing: ProxMate writes the combo at deploy, so every offered
+  // feature is deployable on any node — the per-node "is the snippet placed?" gate
+  // only applies to the manual fallback.
+  const [cloudOnDemand, setCloudOnDemand] = useState(false);
   const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
   // Restore-from-upload only:
   const [restoreEnabled, setRestoreEnabled] = useState(false);
@@ -110,8 +114,9 @@ export default function NewVmWizard() {
           features: { id: string; label: string; hint: string }[];
           nodes: Record<string, string[]>;
           base?: { id: string; label: string }[];
+          onDemand?: boolean;
         }>("/templates/cloud-init-status")
-        .catch(() => ({ data: { features: [], nodes: {}, base: [] } })),
+        .catch(() => ({ data: { features: [], nodes: {}, base: [], onDemand: false } })),
       // Saved SSH keys — offered as quick-pick for cloud-init deploys. Never block.
       api.get<SshKey[]>("/ssh-keys").catch(() => ({ data: [] as SshKey[] })),
       // LXC OS templates (vztmpl) available on the cluster. Never block the wizard.
@@ -126,6 +131,7 @@ export default function NewVmWizard() {
         setCloudFeatures(extrasRes.data.features ?? []);
         setCloudNodes(extrasRes.data.nodes ?? {});
         setCloudBase(extrasRes.data.base ?? []);
+        setCloudOnDemand(extrasRes.data.onDemand === true);
         setSavedKeys(keysRes.data ?? []);
         setLxcTemplates(lxcRes.data ?? []);
         setRestoreEnabled(restoreRes.data.enabled === true);
@@ -150,9 +156,17 @@ export default function NewVmWizard() {
   const isCustom = source === CUSTOM;
   const isCloud = !!template?.cloudInit;
   const nodeSnippets = isCloud && template ? cloudNodes[template.proxmoxNode] ?? [] : [];
-  const availableFeatures = isCloud ? cloudFeatures.filter((f) => nodeSnippets.includes(cloudSnippetFile([f.id]))) : [];
-  // A combo deploy needs the combined snippet present too (admins place those).
-  const bundleReady = selectedFeatures.length === 0 || nodeSnippets.includes(cloudSnippetFile(selectedFeatures));
+  // On-demand: every offered feature is deployable (ProxMate writes the combo at
+  // deploy). Manual fallback: only features whose snippet is placed on this node.
+  const availableFeatures = !isCloud
+    ? []
+    : cloudOnDemand
+      ? cloudFeatures
+      : cloudFeatures.filter((f) => nodeSnippets.includes(cloudSnippetFile([f.id])));
+  // A combo deploy needs the combined snippet present too — but only in manual mode;
+  // on-demand writes whatever combo is selected.
+  const bundleReady =
+    cloudOnDemand || selectedFeatures.length === 0 || nodeSnippets.includes(cloudSnippetFile(selectedFeatures));
   const minDisk = template?.diskGb ?? 1;
 
   // Which preset (if any) the current cpu/ram/disk match, so its chip highlights.
