@@ -29,6 +29,7 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   waitForTask: vi.fn(),
   getVolumeStorages: vi.fn(),
   passthroughBootReadiness: vi.fn(),
+  checkPassthroughHostReadiness: vi.fn(),
   getMigrationProgress: vi.fn(),
   pveMessage: (e: unknown) => (e instanceof Error ? e.message : 'proxmox error'),
 }));
@@ -83,6 +84,7 @@ const addCiDrive = vi.mocked(pve.addCloudInitDrive);
 const pveStart = vi.mocked(pve.startVm);
 const getVolStorages = vi.mocked(pve.getVolumeStorages);
 const readiness = vi.mocked(pve.passthroughBootReadiness);
+const checkReadiness = vi.mocked(pve.checkPassthroughHostReadiness);
 const getMigrationProgress = vi.mocked(pve.getMigrationProgress);
 const syncNode = vi.mocked(syncVmNode);
 const migrate = vi.mocked(migrateVmToNode);
@@ -113,6 +115,20 @@ beforeEach(() => {
   getArchMap.mockResolvedValue(new Map([['pve-0', 'amd64'], ['pve-4', 'amd64']]) as never);
   getVmConfig.mockResolvedValue({} as never);
   readiness.mockReturnValue(READY);
+  // Default host pre-flight: ready. `warnings` mirror the boot-readiness mock so
+  // begin's returned bootWarnings still reflect per-test q35/OVMF overrides, and
+  // safeToAutoStart follows q35 (a non-q35 GPU is the "attach but don't start" case).
+  checkReadiness.mockImplementation(
+    async () =>
+      ({
+        ok: true,
+        blockers: [],
+        warnings: readiness().warnings,
+        safeToAutoStart: readiness().q35 !== false && readiness().ovmf !== false,
+        isGpu: false,
+        device: null,
+      }) as never,
+  );
   getMigrationProgress.mockResolvedValue(null);
   getVolStorages.mockReturnValue([]);
   getStorages.mockResolvedValue([{ storage: 'tank', type: 'zfspool' }] as never);
@@ -335,6 +351,22 @@ describe('beginPassthroughApproval (validate + plan)', () => {
     expect(plan.targetstorage).toBe('huge-nfs');
   });
 
+  it('REFUSES (409) before queuing when the host pre-flight returns a blocker (e.g. IOMMU off)', async () => {
+    prFindUnique.mockResolvedValue(pendingRow());
+    listMappings.mockResolvedValue([{ id: 'gpu0', nodes: ['pve-0'] }] as never);
+    checkReadiness.mockResolvedValue({
+      ok: false,
+      blockers: ['IOMMU is not active for 0000:01:00 on pve-0.'],
+      warnings: [],
+      safeToAutoStart: false,
+      isGpu: true,
+      device: null,
+    } as never);
+
+    await expect(beginPassthroughApproval('q1', 'gpu0')).rejects.toMatchObject({ status: 409 });
+    expect(prUpdate).not.toHaveBeenCalled(); // never queued — no stop/migrate committed
+  });
+
   it('uses pickBestNode when the mapping spans multiple online nodes', async () => {
     prFindUnique.mockResolvedValue(pendingRow());
     getNodes.mockResolvedValue([
@@ -461,6 +493,30 @@ describe('applyPassthroughApproval (background worker)', () => {
     expect(attachPci).toHaveBeenCalledWith('pve-4', 100, 0, 'gpu0', expect.anything(), { pcie: true });
     expect(tx).toHaveBeenCalled();
   }, 20_000);
+
+  it('attaches but does NOT auto-start a running GPU VM the host pre-flight deems unsafe (the pve-4 crash guard)', async () => {
+    prFindUnique.mockResolvedValue(queuedRow({ proxmoxNode: 'pve-4' })); // already on target → no migrate
+    getVmStatus.mockResolvedValueOnce({ status: 'running' } as never).mockResolvedValue({ status: 'stopped' } as never);
+    // GPU on a legacy-BIOS guest: attach it, but leave it stopped rather than risk hanging the node.
+    checkReadiness.mockResolvedValue({
+      ok: true,
+      blockers: [],
+      warnings: ['unverifiable vfio binding'],
+      safeToAutoStart: false,
+      isGpu: true,
+      device: null,
+    } as never);
+
+    await applyPassthroughApproval('q1', 'admin');
+
+    expect(attachPci).toHaveBeenCalledWith('pve-4', 100, 0, 'gpu0', expect.anything(), expect.anything());
+    expect(tx).toHaveBeenCalled(); // approval still succeeds (device attached)
+    expect(start).not.toHaveBeenCalled(); // but NOT auto-started
+    expect(prUpdate).toHaveBeenCalledWith({
+      where: { id: 'q1' },
+      data: expect.objectContaining({ applyError: expect.stringMatching(/auto-start was skipped/i) }),
+    });
+  }, 15_000);
 
   it('an attach failure AFTER migration restarts the VM on the target (bootable, no device, retryable)', async () => {
     prFindUnique.mockResolvedValue(queuedRow());

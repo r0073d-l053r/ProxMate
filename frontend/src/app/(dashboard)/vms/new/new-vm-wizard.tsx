@@ -90,6 +90,7 @@ export default function NewVmWizard() {
   const [password, setPassword] = useState("");
   const [cloudFeatures, setCloudFeatures] = useState<{ id: string; label: string; hint: string }[]>([]);
   const [cloudNodes, setCloudNodes] = useState<Record<string, string[]>>({}); // node → present snippet files
+  const [cloudBase, setCloudBase] = useState<{ id: string; label: string }[]>([]); // always-on base
   const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
   // Restore-from-upload only:
   const [restoreEnabled, setRestoreEnabled] = useState(false);
@@ -105,10 +106,12 @@ export default function NewVmWizard() {
       api.get<Template[]>("/templates"),
       // Cloud-init "extras" (Docker/Tailscale) availability — never block the wizard.
       api
-        .get<{ features: { id: string; label: string; hint: string }[]; nodes: Record<string, string[]> }>(
-          "/templates/cloud-init-status",
-        )
-        .catch(() => ({ data: { features: [], nodes: {} } })),
+        .get<{
+          features: { id: string; label: string; hint: string }[];
+          nodes: Record<string, string[]>;
+          base?: { id: string; label: string }[];
+        }>("/templates/cloud-init-status")
+        .catch(() => ({ data: { features: [], nodes: {}, base: [] } })),
       // Saved SSH keys — offered as quick-pick for cloud-init deploys. Never block.
       api.get<SshKey[]>("/ssh-keys").catch(() => ({ data: [] as SshKey[] })),
       // LXC OS templates (vztmpl) available on the cluster. Never block the wizard.
@@ -122,6 +125,7 @@ export default function NewVmWizard() {
         setTemplates(tplRes.data);
         setCloudFeatures(extrasRes.data.features ?? []);
         setCloudNodes(extrasRes.data.nodes ?? {});
+        setCloudBase(extrasRes.data.base ?? []);
         setSavedKeys(keysRes.data ?? []);
         setLxcTemplates(lxcRes.data ?? []);
         setRestoreEnabled(restoreRes.data.enabled === true);
@@ -284,9 +288,7 @@ export default function NewVmWizard() {
                 sshKey: sshKey.trim() || undefined,
                 username: username || undefined,
                 password: password || undefined,
-                installDocker: selectedFeatures.includes("docker") || undefined,
-                installTailscale: selectedFeatures.includes("tailscale") || undefined,
-                installGuestAgent: selectedFeatures.includes("guest-agent") || undefined,
+                features: selectedFeatures.length ? selectedFeatures : undefined,
               }
             : {}),
         });
@@ -626,6 +628,11 @@ export default function NewVmWizard() {
                         })}
                         {errors.features && <p className="text-xs text-destructive">{errors.features}</p>}
                       </div>
+                    )}
+                    {cloudBase.length > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        Also installed on every VM: {cloudBase.map((b) => b.label).join(", ")}.
+                      </p>
                     )}
                   </>
                 )}

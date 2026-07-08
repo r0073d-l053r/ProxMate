@@ -121,7 +121,7 @@ export default function UsersPage() {
             : `Approval started — the VM is already on ${d.targetNode}; attaching the device.`,
         );
         if (d.bootWarnings?.length) {
-          toast.warning(`Boot readiness: ${d.bootWarnings[0]}${d.bootWarnings.length > 1 ? ` (+${d.bootWarnings.length - 1} more)` : ""}`);
+          toast.warning(`Host readiness: ${d.bootWarnings[0]}${d.bootWarnings.length > 1 ? ` (+${d.bootWarnings.length - 1} more)` : ""}`);
         }
       } else {
         toast.success("Passthrough request denied.");

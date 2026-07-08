@@ -1140,6 +1140,8 @@ const RebuildSchema = z
     installDocker: z.boolean().optional(),
     installTailscale: z.boolean().optional(),
     installGuestAgent: z.boolean().optional(),
+    installSuperfile: z.boolean().optional(),
+    features: z.array(z.string().max(64)).max(20).optional(),
   })
   .refine((d) => !!d.os !== !!d.templateId, {
     message: 'Provide either an ISO (os) or a templateId, not both.',

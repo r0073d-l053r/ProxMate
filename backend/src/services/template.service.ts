@@ -1,6 +1,6 @@
 import type { Template, VirtualMachine } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { getConfig } from './config.service.js';
+import { getConfig, setConfig } from './config.service.js';
 import * as pve from './proxmox.service.js';
 
 /** Published templates shown in the user-facing Template Store. */
@@ -504,9 +504,65 @@ export async function getSnippetStorage(): Promise<string> {
   return (await getConfig('iso_storage')) ?? 'local';
 }
 
-/** All non-empty combinations of the available features. */
-function featureCombos(): string[][] {
-  const ids = pve.CLOUD_INIT_FEATURES.map((f) => f.id);
+// ── Admin-configurable cloud-init feature selection ──
+// Which catalog features are OFFERED to tenants (checkboxes) and which are
+// ALWAYS-ON (installed on every VM) are admin choices, not hardcoded — so any
+// deployment can shape its own defaults.
+
+const catalogIds = () => new Set(pve.CLOUD_INIT_CATALOG.map((f) => f.id));
+
+/** Feature ids offered to tenants as checkboxes (config; default = the app features). */
+export async function getOfferedFeatureIds(): Promise<string[]> {
+  const known = catalogIds();
+  const raw = await getConfig('cloudinit_offered');
+  if (raw) {
+    try {
+      return (JSON.parse(raw) as string[]).filter((id) => known.has(id));
+    } catch {
+      /* fall back to default */
+    }
+  }
+  return pve.DEFAULT_OFFERED_IDS.filter((id) => known.has(id));
+}
+
+/** Feature ids installed on EVERY cloud-init VM (config; default = none). */
+export async function getBaseFeatureIds(): Promise<string[]> {
+  const raw = await getConfig('cloudinit_base');
+  if (!raw) return [];
+  const known = catalogIds();
+  try {
+    return (JSON.parse(raw) as string[]).filter((id) => known.has(id));
+  } catch {
+    return [];
+  }
+}
+
+/** Save the admin's offered + always-on-base selections (validated to the catalog). */
+export async function setCloudInitConfig(offered: string[], base: string[]): Promise<void> {
+  const known = catalogIds();
+  const clean = (ids: string[]) => [...new Set(ids.filter((id) => known.has(id)))];
+  await setConfig('cloudinit_offered', JSON.stringify(clean(offered)));
+  await setConfig('cloudinit_base', JSON.stringify(clean(base)));
+}
+
+/** The full catalog (id/label/hint) + the admin's current offered/base selection + the recommended base. */
+export async function getCloudInitConfig(): Promise<{
+  catalog: Array<{ id: string; label: string; hint: string }>;
+  offered: string[];
+  base: string[];
+  recommendedBase: string[];
+}> {
+  return {
+    catalog: pve.CLOUD_INIT_CATALOG.map((f) => ({ id: f.id, label: f.label, hint: f.hint })),
+    offered: await getOfferedFeatureIds(),
+    base: await getBaseFeatureIds(),
+    recommendedBase: pve.RECOMMENDED_BASE_IDS,
+  };
+}
+
+/** Non-empty combinations of the given feature ids (all combos ≤8 ids, else singles). */
+function featureCombos(ids: string[]): string[][] {
+  if (ids.length > 8) return ids.map((id) => [id]); // 2ⁿ blows up past this — singles only
   const out: string[][] = [];
   for (let mask = 1; mask < 1 << ids.length; mask++) {
     out.push(ids.filter((_, i) => mask & (1 << i)));
@@ -527,41 +583,90 @@ export interface CloudInitBundle {
 export interface CloudInitExtras {
   storage: string;
   snippetsEnabled: boolean;
+  /** Automatic on-demand snippet writing is active — nothing to hand-place. */
+  onDemand: boolean;
+  /** The tenant-offered options (checkboxes), i.e. the catalog filtered to `offered`. */
   features: Array<{ id: string; label: string; hint: string }>;
-  bundles: CloudInitBundle[];
+  /** Always-on base installed on every VM (the catalog filtered to `baseSelected`). */
+  base: Array<{ id: string; label: string }>;
+  /** The full catalog + the admin's current selections, for the offered/base toggles. */
+  catalog: Array<{ id: string; label: string; hint: string }>;
+  offered: string[];
+  baseSelected: string[];
+  recommendedBase: string[];
+  bundles: CloudInitBundle[]; // combos of the OFFERED features (searchable picker)
 }
 
-/** Admin view: every snippet bundle to place, with content/commands + readiness. */
+/**
+ * Admin view of cloud-init snippets. The snippet picker (bundles) is available in
+ * BOTH modes — for manual placement in the fallback, and as reference/override in
+ * on-demand mode. Performance: bundle *content* is pure/cheap, and node readiness
+ * is computed with ONE snippet listing per node (matched in-memory), not a Proxmox
+ * call per combo — and only in manual mode.
+ */
 export async function getCloudInitExtras(): Promise<CloudInitExtras> {
+  const onDemandCfg = pve.snippetWriteConfig();
+  const onDemand = !!onDemandCfg;
+  const offeredIds = await getOfferedFeatureIds();
+  const baseIds = await getBaseFeatureIds();
+  const catalog = pve.CLOUD_INIT_CATALOG.map((f) => ({ id: f.id, label: f.label, hint: f.hint }));
+  const features = catalog.filter((f) => offeredIds.includes(f.id));
+  const base = pve.CLOUD_INIT_CATALOG.filter((f) => baseIds.includes(f.id)).map((f) => ({ id: f.id, label: f.label }));
+
   const client = await pve.getClient();
-  const storage = await getSnippetStorage();
+  const storage = onDemand ? onDemandCfg!.storage : await getSnippetStorage();
   const sres = await client.get<{ data: Array<{ storage: string; content?: string; path?: string }> }>('/storage');
   const s = sres.data.data.find((x) => x.storage === storage);
-  const snippetsEnabled = (s?.content ?? '').split(',').includes('snippets');
+  const snippetsEnabled = onDemand || (s?.content ?? '').split(',').includes('snippets');
   const dir = `${s?.path ?? '/var/lib/vz'}/snippets`;
 
-  const featLabel = (id: string) =>
-    (pve.CLOUD_INIT_FEATURES.find((f) => f.id === id)?.label ?? id).replace(/^Install /, '');
+  // Node readiness matters only for manual placement — compute it (one listing per
+  // node, matched in-memory) only in the fallback; on-demand writes on the fly.
+  const placed: Record<string, Set<string>> = {};
+  if (!onDemand && snippetsEnabled) {
+    const cr = await client.get<{ data: Array<{ type: string; status?: string; node?: string }> }>('/cluster/resources');
+    const nodeNames = cr.data.data.filter((i) => i.type === 'node' && i.status === 'online' && i.node).map((i) => i.node!);
+    await Promise.all(
+      nodeNames.map(async (node) => {
+        try {
+          const r = await client.get<{ data: Array<{ volid: string }> }>(
+            `/nodes/${node}/storage/${storage}/content?content=snippets`,
+          );
+          placed[node] = new Set(r.data.data.map((x) => x.volid.split('/').pop()!));
+        } catch {
+          placed[node] = new Set();
+        }
+      }),
+    );
+  }
 
-  const bundles: CloudInitBundle[] = [];
-  for (const combo of featureCombos()) {
+  const featLabel = (id: string) =>
+    (pve.CLOUD_INIT_CATALOG.find((f) => f.id === id)?.label ?? id).replace(/^Install /, '');
+
+  const bundles: CloudInitBundle[] = featureCombos(offeredIds).map((combo) => {
     const file = pve.cloudInitSnippetFile(combo);
     const content = pve.cloudInitSnippetContent(combo);
-    bundles.push({
+    return {
       features: [...combo].sort(),
       label: [...combo].sort().map(featLabel).join(' + '),
       file,
       volid: `${storage}:snippets/${file}`,
       content,
       command: `mkdir -p ${dir} && cat > ${dir}/${file} <<'EOF'\n${content}EOF`,
-      nodesReady: snippetsEnabled ? await pve.nodesWithSnippet(storage, file, client) : [],
-    });
-  }
+      nodesReady: onDemand ? [] : Object.keys(placed).filter((node) => placed[node]!.has(file)),
+    };
+  });
 
   return {
     storage,
     snippetsEnabled,
-    features: pve.CLOUD_INIT_FEATURES.map((f) => ({ id: f.id, label: f.label, hint: f.hint })),
+    onDemand,
+    features,
+    base,
+    catalog,
+    offered: offeredIds,
+    baseSelected: baseIds,
+    recommendedBase: pve.RECOMMENDED_BASE_IDS,
     bundles,
   };
 }
@@ -570,16 +675,24 @@ export interface CloudInitStatus {
   snippetsEnabled: boolean;
   features: Array<{ id: string; label: string; hint: string }>;
   nodes: Record<string, string[]>; // node → present ProxMate snippet filenames
+  /** Always-on base installed on every cloud-init VM (empty unless on-demand writing is configured). */
+  base: Array<{ id: string; label: string }>;
 }
 
 /** Lightweight (wizard): the features + which ProxMate snippet files are present on each node. */
 export async function cloudInitStatus(): Promise<CloudInitStatus> {
-  const features = pve.CLOUD_INIT_FEATURES.map((f) => ({ id: f.id, label: f.label, hint: f.hint }));
+  const offeredIds = await getOfferedFeatureIds();
+  const features = pve.CLOUD_INIT_CATALOG
+    .filter((f) => offeredIds.includes(f.id))
+    .map((f) => ({ id: f.id, label: f.label, hint: f.hint }));
+  // The always-on base only applies when on-demand snippet writing is configured.
+  const baseIds = pve.snippetWriteConfig() ? await getBaseFeatureIds() : [];
+  const base = pve.CLOUD_INIT_CATALOG.filter((f) => baseIds.includes(f.id)).map((f) => ({ id: f.id, label: f.label }));
   const client = await pve.getClient();
   const storage = await getSnippetStorage();
   const sres = await client.get<{ data: Array<{ storage: string; content?: string }> }>('/storage');
   const snippetsEnabled = (sres.data.data.find((x) => x.storage === storage)?.content ?? '').split(',').includes('snippets');
-  if (!snippetsEnabled) return { snippetsEnabled: false, features, nodes: {} };
+  if (!snippetsEnabled) return { snippetsEnabled: false, features, nodes: {}, base };
 
   const cr = await client.get<{ data: Array<{ type: string; status?: string; node?: string }> }>('/cluster/resources');
   const nodeNames = cr.data.data.filter((i) => i.type === 'node' && i.status === 'online' && i.node).map((i) => i.node!);
@@ -599,7 +712,7 @@ export async function cloudInitStatus(): Promise<CloudInitStatus> {
       }
     }),
   );
-  return { snippetsEnabled, features, nodes };
+  return { snippetsEnabled, features, nodes, base };
 }
 
 /** Admin: enable the `snippets` content type on the snippet storage (API-doable). */
