@@ -50,12 +50,13 @@ Proxmox admin panel.
 | **SMTP & Password Recovery** | Email-based secure password resets, with a database-backed "contact admin" request queue if SMTP is disabled |
 | **VM Lifecycle Management** | Create, start, stop, restart, **rename**, and delete VMs — each VM page has editable **notes**, an **activity timeline**, and **CPU/memory history charts**. The create wizard offers one-click **size presets** (Small → X-Large) |
 | **LXC Containers** | Spin up lightweight **LXC containers** alongside full VMs — create from an OS template, start/stop/restart, in-browser console, tenant isolation, quotas, cpu/RAM/rootfs resize, and MateStates backups. Shares the host kernel, boots in seconds |
-| **Cloud-Init Deploys** | One-click cloud images (16 curated distros + custom URLs), imported entirely through the Proxmox API — paste an SSH key for a ready-to-SSH box in ~60s, with optional first-boot **Docker** / **Tailscale** installs. **Save SSH keys** to your profile and pick them on deploy |
+| **Cloud-Init Deploys** | One-click cloud images (16 curated distros + custom URLs), imported entirely through the Proxmox API — paste an SSH key for a ready-to-SSH box in ~60s. Admin-curated first-boot **extras** (Docker, Tailscale, Superfile, Cockpit, Netdata, Caddy, code-server, …) plus an **always-on base** (fail2ban / unattended-upgrades / btop) installed on every VM. ProxMate can **write the cloud-init snippet on demand** to a shared storage at deploy time (no per-node file placement). **Save SSH keys** to your profile and pick them on deploy |
+| **Add an SSH key to a running VM** | Drop one of your saved (or pasted) public keys onto an existing VM's user — appended to `authorized_keys` **via the QEMU guest agent**, no rebuild or reboot. Idempotent, permission-safe, and validated (no shell-injection surface) |
 | **Template Store** | Publish Proxmox templates as one-click OS builds — cloned and autoscaled on deploy, with OS-matched (or custom-uploaded) icons and admin-authored login notes |
 | **Automatic VM Placement** | Tenants never pick a node — the scheduler auto-places each VM on a node that has the chosen image, with the most free capacity |
-| **Live VM Migration** | Admins move a VM to another cluster node with **no downtime** — live for running guests (incl. those on node-local storage), offline for stopped ones — and the VM's owner gets an emailed heads-up. Architecture-guardrailed (never x86↔ARM) |
-| **Cluster Balancer & Maintenance** | DRS-style **memory-load balancing** (recommend-only or auto) that live-migrates guests off the busiest node, plus one-click **maintenance node-drain** to evacuate a host before downtime — with anti-affinity (`aa:` tags) and pinning guardrails |
-| **GPU / PCI Passthrough** | Tenants request a GPU or other PCI device; admins review and attach an available device — with balancer/migration guardrails once attached |
+| **Live VM Migration** | Admins move a VM to another cluster node with **no downtime** — live for running guests (incl. those on node-local storage), offline for stopped ones — and the VM's owner gets an emailed heads-up. Architecture-guardrailed (never x86↔ARM), and the picker only offers nodes the guest can actually reach (storage-aware) |
+| **Cluster Balancer & Maintenance** | DRS-style **memory-load balancing** (recommend-only or auto) that live-migrates guests off the busiest node, plus one-click **maintenance node-drain** to evacuate a host before downtime — with anti-affinity (`aa:` tags), pinning, and **storage-migratability** guardrails (it never proposes a move a guest can't make) |
+| **GPU / PCI Passthrough** | Tenants request a GPU or other PCI device; admins review and attach an available device — with a **pre-flight host-readiness check** (device present, IOMMU on, boot mode) that refuses to attach/boot on an unprepared host, plus balancer/migration guardrails once attached |
 | **In-Browser Console** | A **graphical (noVNC)** console *and* an **xterm.js text console** with **Ctrl/Cmd-clickable links**, real copy/paste, and scrollback — both proxied securely through the backend, no SSH or open ports |
 | **MateStates Backups** | Scheduled weekly backups + one-click in-place restore, with rolling retention |
 | **Quick Snapshots** | Instant Proxmox snapshots — take / roll back / delete, with optional RAM-state capture — for "before I change something" restore points (distinct from durable MateStates backups) |
@@ -65,7 +66,8 @@ Proxmox admin panel.
 | **Kiosk Mode** | A full-screen, touch-friendly command center for a rack-mounted panel — cluster gauges, quorum tile, per-node strip, activity ticker |
 | **Tenant Network Isolation** | Per-VM Proxmox firewall — MAC filtering, RFC1918 drop rules, and a configurable DNS allow-list — keeps guests off your LAN, your other VMs, and the host |
 | **Audit Log** | Who created / deleted / restored / started which VM, plus sign-ins — an admin-viewable activity trail |
-| **Rate Limiting** | Built-in brute-force protection on the login / register / invite endpoints, plus per-account lockout with admin alerts |
+| **Rate Limiting** | Built-in brute-force protection on the login / register / invite endpoints, plus per-account lockout with admin alerts and dedicated throttling on public token lookups |
+| **Outbound & Secret Hardening** | Admin-configured webhooks and cloud-image URLs are **SSRF-guarded** (private/loopback/metadata blocked; opt-in for LAN targets); secrets are AES-256-GCM at rest with a **fail-closed** key requirement; `/metrics` is token-gated in production |
 | **Resource Quotas** | Users can only provision resources within their assigned limits — with a built-in quota-increase request workflow |
 | **First-Time Setup Wizard** | Guided OOBE to configure admin credentials and the Proxmox connection |
 | **Docker + CI** | Multi-stage production images, plus GitHub Actions CI (typecheck, tests, image builds) and an automated test suite |
@@ -186,9 +188,11 @@ tenant isolation, Keycloak SSO, SMTP, and the 2FA test matrix — is in
 
 ## Testing & CI
 
-The backend ships a Vitest suite (~300 tests) covering the security-critical logic —
+The backend ships a Vitest suite (~500 tests) covering the security-critical logic —
 quotas, the per-VM firewall builder, placement, retention, ownership, balancer/drain
-planning — against a mocked Proxmox API (no live cluster needed):
+planning, cloud-init snippet generation, guest-agent SSH-key injection, migration
+migratability, and the outbound-URL/SSRF guard — against a mocked Proxmox API (no live
+cluster needed):
 
 ```bash
 cd backend && npm test

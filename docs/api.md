@@ -49,13 +49,22 @@ curl -H "$AUTH" -X POST "$BASE/vms/<id>/stop?force=true"
 # Resize (grow disk / change cores/ram)
 curl -H "$AUTH" -H 'content-type: application/json' -X PATCH \
   -d '{"cpu":4,"ram":4096,"storage":40}' "$BASE/vms/<id>"
+
+# Add an SSH public key to a running VM (via the QEMU guest agent)
+curl -H "$AUTH" -H 'content-type: application/json' -X POST \
+  -d '{"username":"ubuntu","publicKey":"ssh-ed25519 AAAA… you@laptop"}' \
+  "$BASE/vms/<id>/ssh-keys"
+
+# Nodes this VM may migrate to (admin only) — Proxmox allowed_nodes ∩ online
+curl -H "$AUTH" "$BASE/vms/<id>/migrate-targets"
 ```
 
 ## Observability
 
 - `GET /api/health` — liveness; checks the DB. Add `?deep=1` to also probe Proxmox.
 - `GET /metrics` — Prometheus metrics (request latency, Proxmox API errors, `proxmate_vm_count`).
-  Set `METRICS_TOKEN` to require a Bearer token on this endpoint.
+  Set `METRICS_TOKEN` to require a Bearer token on this endpoint. **In production `/metrics`
+  returns 404 unless `METRICS_TOKEN` is set** — scrape over localhost, or set a token.
 
 ## Running on PostgreSQL (HA / larger deployments)
 

@@ -130,7 +130,7 @@ apply to containers if added; LXC additionally benefits from running **unprivile
 | Area | Posture |
 |------|---------|
 | Proxmox API token | Stored AES-256-GCM encrypted in the DB; never sent to the browser. **Scope it down** — see below. |
-| Secrets at rest | `proxmox_token_secret` and `jwt_secret` are encrypted with `ENCRYPTION_KEY` (AES-256-GCM, random IV + auth tag). |
+| Secrets at rest | `proxmox_token_secret`, `jwt_secret`, and the SMTP/SSO secrets are encrypted with `ENCRYPTION_KEY` (AES-256-GCM, random 12-byte IV + auth tag). The key must be a **64-hex (32-byte)** string, and secret operations **fail closed** if it is missing (no static fallback). |
 | Passwords | bcrypt (cost 12). Login runs bcrypt even for unknown emails to prevent timing-based account enumeration. |
 | Sessions / JWT | 24h JWTs with a random `jti`, **verified with a pinned `HS256` algorithm**; every token is backed by a `Session` row, so logout / revocation is server-side. |
 | Brute-force lockout | After `AUTH_LOCKOUT_MAX` (default 10) consecutive failed passwords an account is locked for `AUTH_LOCKOUT_MINUTES` (default 15), auto-unlocking. The locked response is identical to a normal failure (no enumeration), and admins are emailed when SMTP is configured. Complements the IP rate limiter (targeted vs. noisy-source protection). |
@@ -140,7 +140,10 @@ apply to containers if added; LXC additionally benefits from running **unprivile
 | Browser headers | The frontend sends `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`, HSTS, and a strict **nonce-based Content-Security-Policy** (`script-src 'self' 'nonce-…' 'strict-dynamic'`) so injected inline scripts can't execute. |
 | CORS | Restricted to `FRONTEND_URL`. |
 | Console tickets | One-time, short-lived Proxmox VNC tickets; the console WebSocket verifies JWT + VM ownership + Origin before relaying. |
-| Rate limiting | Built-in `express-rate-limit` on `/auth/login`, `/auth/register`, `/auth/invite/:token` (env-tunable). Honors `trust proxy`. |
+| Rate limiting | Built-in `express-rate-limit` on `/auth/login`, `/auth/register`, and public token lookups (invite lookup, backup downloads); the setup wizard's mutating steps are throttled too (env-tunable). Honors `trust proxy`. |
+| Outbound requests (SSRF) | Admin-configured **notification webhooks** and **cloud-image URLs** are validated against a private-address blocklist (loopback, link-local / cloud-metadata `169.254.169.254`, RFC1918, CGNAT, IPv6 ULA / link-local, IPv4-mapped IPv6): shape-checked on save, DNS-resolved and re-checked immediately before the request, and redirects refused. Homelab installs that point at a LAN service can opt in with `ALLOW_PRIVATE_OUTBOUND_URLS=true` (scheme + no-credentials checks always stay enforced). |
+| Metrics endpoint | `GET /metrics` is token-gated; in **production** it returns 404 unless `METRICS_TOKEN` is set (scrape over localhost, or send `Authorization: Bearer <token>`). |
+| MFA-setup enforcement | Where an invite required two-step auth, the protected routers (`/api/vms`, `/api/templates`, **`/api/admin`**) block access until the user has actually enrolled a TOTP or passkey method. |
 | Containers | Both images run with **all Linux capabilities dropped** and `no-new-privileges`; the frontend runs as a non-root user and the backend drops to the unprivileged `node` user after fixing data-volume ownership. |
 | Audit log | VM lifecycle (create/delete/start/stop/restart/restore), auth events, and **account lockouts** are recorded with actor + client IP; admin-viewable at `/admin/audit`. |
 
@@ -167,5 +170,7 @@ firewall) on the relevant nodes/pool, and use that token instead. ProxMate needs
 - [x] **Per-account brute-force lockout** is built in (env-tunable; admin email alerts when SMTP is set).
 - [x] **Browser security headers + nonce CSP** ship by default; pin `CSP_CONNECT_SRC` to your exact API origin to tighten `connect-src`.
 - [x] **Hardened containers** (cap-drop, no-new-privileges, non-root) ship by default. The backend auto-`chown`s its data volume on start, so existing deployments need no manual migration.
+- [x] **Outbound SSRF guards** on admin webhooks and cloud-image URLs ship by default (set `ALLOW_PRIVATE_OUTBOUND_URLS=true` only if you deliberately target a LAN service).
+- [ ] Set **`METRICS_TOKEN`** if you scrape `/metrics` in production (otherwise it returns 404); or keep the scrape on localhost only.
 - [ ] Prefer a private-CA `PROXMOX_CA_CERT_FILE` over `verifySsl=false` so the API token can't be MITM'd on an untrusted segment.
 - [ ] Keep Proxmox VE patched (guest→host isolation ultimately depends on the hypervisor).
