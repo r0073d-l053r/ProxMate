@@ -157,7 +157,11 @@ router.get('/', async (_req: Request, res: Response) => {
   res.json(
     invites.map((inv) => ({
       id: inv.id,
-      token: inv.token,
+      // Only return the raw token (and invite URL) for still-redeemable invites.
+      // Used/expired tokens are useless for registration and shouldn't linger in
+      // admin browser history / logs if the list is scraped.
+      token: inv.usedById || inv.expiresAt < new Date() ? undefined : inv.token,
+      inviteUrl: inv.usedById || inv.expiresAt < new Date() ? undefined : inviteUrlFor(inv.token),
       label: inv.label,
       email: inv.email,
       maxCpu: inv.maxCpu,

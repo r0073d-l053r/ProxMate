@@ -5,6 +5,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/admin.js';
 import { enforceMfaSetup } from '../middleware/mfa.js';
 import { pveMessage } from '../services/proxmox.service.js';
+import { assertPublicHttpUrlShape } from '../lib/url-safety.js';
 import { deployFromTemplate, QuotaError } from '../services/vm.service.js';
 import {
   listPublished,
@@ -187,10 +188,15 @@ router.post('/cloud-image', requireAdmin, async (req: Request, res: Response) =>
     return;
   }
   try {
+    // Block private/loopback/metadata targets before Proxmox is asked to fetch.
+    // Proxmox itself may still reach private hosts if the admin overrides later;
+    // this stops the common accidental/malicious SSRF via the admin UI.
+    assertPublicHttpUrlShape(parsed.data.imageUrl, 'Image URL');
     const template = await addCloudImage(parsed.data);
     res.status(201).json(template);
   } catch (err) {
-    res.status(502).json({ error: pveMessage(err) });
+    const msg = err instanceof Error ? err.message : pveMessage(err);
+    res.status(/must not target|must be a plain/i.test(msg) ? 400 : 502).json({ error: msg });
   }
 });
 

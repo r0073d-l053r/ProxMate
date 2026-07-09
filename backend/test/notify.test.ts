@@ -3,6 +3,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../src/services/config.service.js', () => ({ getConfig: vi.fn(), setConfig: vi.fn() }));
 vi.mock('../src/services/mail.service.js', () => ({ getMailConfig: vi.fn(), sendMail: vi.fn() }));
 vi.mock('../src/lib/prisma.js', () => ({ prisma: { user: { findMany: vi.fn() } } }));
+// The SSRF guard does a real DNS lookup before the webhook POST; stub it so unit
+// tests exercise the fan-out logic (webhook reachability is mocked via fetch).
+vi.mock('../src/lib/url-safety.js', () => ({
+  assertSafeOutboundUrl: vi.fn().mockResolvedValue(undefined),
+  assertPublicHttpUrlShape: vi.fn(),
+}));
 
 import { getConfig, setConfig } from '../src/services/config.service.js';
 import { getMailConfig, sendMail } from '../src/services/mail.service.js';
