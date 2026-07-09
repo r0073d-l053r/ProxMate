@@ -25,7 +25,7 @@ import {
 } from '../lib/cookies.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireAuthOrEnrollment } from '../middleware/enrollment.js';
-import { authLimiter } from '../middleware/rate-limit.js';
+import { authLimiter, publicTokenLimiter } from '../middleware/rate-limit.js';
 import { recordAudit } from '../services/audit.service.js';
 import { isAccountLocked, registerFailedLogin, clearFailedLogins } from '../services/account-lockout.service.js';
 import { requestReset, resetWithToken } from '../services/password-reset.service.js';
@@ -439,7 +439,7 @@ router.get('/sso/callback', async (req: Request, res: Response) => {
 
 // ─── GET /api/auth/invite/:token ──────────────────────────────
 
-router.get('/invite/:token', authLimiter, async (req: Request, res: Response) => {
+router.get('/invite/:token', publicTokenLimiter, async (req: Request, res: Response) => {
   const invite = await prisma.inviteToken.findUnique({
     where: { token: req.params['token'] as string },
   });

@@ -2,6 +2,8 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/admin.js';
+import { enforceMfaSetup } from '../middleware/mfa.js';
+import { assertPublicHttpUrlShape } from '../lib/url-safety.js';
 import { getConfig, setConfig } from '../services/config.service.js';
 import { testProxmoxConnection, saveDefaults } from '../services/setup.service.js';
 import {
@@ -60,7 +62,7 @@ import { prisma } from '../lib/prisma.js';
 
 const router = Router();
 
-router.use(requireAuth, requireAdmin);
+router.use(requireAuth, requireAdmin, enforceMfaSetup);
 
 // ─── GET /api/admin/audit ─────────────────────────────────────
 // Append-only activity trail (who did what, when). Newest first, paginated.
@@ -161,9 +163,14 @@ router.put('/settings/notifications', async (req: Request, res: Response) => {
     return;
   }
   const url = (parsed.data.webhookUrl ?? '').trim();
-  if (url && !/^https?:\/\//i.test(url)) {
-    res.status(400).json({ error: 'Webhook URL must start with http:// or https://' });
-    return;
+  if (url) {
+    try {
+      // Reject private/loopback/metadata hosts up front (DNS re-checked at send).
+      assertPublicHttpUrlShape(url, 'Webhook URL');
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid webhook URL' });
+      return;
+    }
   }
   await saveNotifyConfig({
     webhookUrl: url,

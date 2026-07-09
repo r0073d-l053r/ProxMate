@@ -35,8 +35,10 @@ export function setAuthCookies(res: Response, token: string, csrfToken: string, 
 }
 
 export function clearAuthCookies(res: Response): void {
-  res.clearCookie(SESSION_COOKIE, { path: '/' });
-  res.clearCookie(CSRF_COOKIE, { path: '/' });
+  // Match the flags used at set-time so browsers reliably drop the cookies.
+  const base = { path: '/', secure: secure(), sameSite: 'lax' as const };
+  res.clearCookie(SESSION_COOKIE, base);
+  res.clearCookie(CSRF_COOKIE, base);
 }
 
 /** Short-lived httpOnly cookie holding a WebAuthn challenge between options + verify. */
@@ -53,7 +55,7 @@ export function setChallengeCookie(res: Response, challenge: string): void {
 }
 
 export function clearChallengeCookie(res: Response): void {
-  res.clearCookie(WEBAUTHN_COOKIE, { path: '/' });
+  res.clearCookie(WEBAUTHN_COOKIE, { path: '/', secure: secure(), sameSite: 'lax' });
 }
 
 /**
@@ -74,5 +76,5 @@ export function setSsoCookie(res: Response, value: string): void {
 }
 
 export function clearSsoCookie(res: Response): void {
-  res.clearCookie(SSO_COOKIE, { path: '/' });
+  res.clearCookie(SSO_COOKIE, { path: '/', secure: secure(), sameSite: 'lax' });
 }
