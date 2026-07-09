@@ -13,7 +13,10 @@ const DISPLAY_PREFIX_LEN = 11; // `pm_` + 8 chars
  * passwords are hashed with bcrypt elsewhere.
  */
 function hashToken(raw: string): string {
-  const pepper = process.env['ENCRYPTION_KEY'] ?? 'proxmate-token-pepper';
+  // Never fall back to a static pepper — that would make token hashes portable
+  // across deployments and weaken a leaked DB dump. Fail closed instead.
+  const pepper = process.env['ENCRYPTION_KEY'];
+  if (!pepper) throw new Error('ENCRYPTION_KEY is not set');
   return createHmac('sha256', pepper).update(raw).digest('hex');
 }
 

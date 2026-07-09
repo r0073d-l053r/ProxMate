@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { getConfig, setConfig } from './config.service.js';
 import { getMailConfig, sendMail } from './mail.service.js';
 import { notificationEmail } from '../lib/email-templates.js';
+import { assertSafeOutboundUrl } from '../lib/url-safety.js';
 
 /**
  * Event notifications. A single admin-configured fan-out to two optional channels:
@@ -70,6 +71,8 @@ export async function saveNotifyConfig(cfg: {
 
 /** POST a payload to the configured webhook. `content` is read by Discord, `text` by Slack/Mattermost. */
 async function postWebhook(url: string, p: NotifyPayload): Promise<void> {
+  // SSRF guard: never let an admin-configured webhook hit loopback/LAN/metadata.
+  await assertSafeOutboundUrl(url, 'Webhook URL');
   const text = `**ProxMate — ${NOTIFY_EVENT_LABEL[p.event]}**\n${p.title}\n${p.message}`;
   const body = JSON.stringify({ content: text, text, title: p.title, message: p.message, event: p.event });
   let res: Response;
@@ -78,6 +81,7 @@ async function postWebhook(url: string, p: NotifyPayload): Promise<void> {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body,
+      redirect: 'error', // do not follow redirects to a private host
       signal: AbortSignal.timeout(10_000),
     });
   } catch (e) {

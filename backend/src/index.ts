@@ -26,16 +26,27 @@ import { startScheduler } from './services/scheduler.service.js';
 import { reconcileInterruptedPassthroughApplies } from './services/passthrough-request.service.js';
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
+// Default to 0.0.0.0 so the port is reachable by the reverse proxy and sibling
+// containers (Docker networking) — the container boundary is the isolation, and
+// *host* exposure is controlled at the reverse proxy / the compose `ports:`
+// host-bind. A bare-metal operator behind a same-host proxy can set
+// BIND_ADDR=127.0.0.1 to listen on loopback only.
+const BIND_ADDR = process.env.BIND_ADDR || '0.0.0.0';
 
 const server = http.createServer(app);
 // Node kills any request still streaming after 5 minutes by default
 // (requestTimeout=300s) — a multi-GB MateState backup upload takes longer.
-// Disable the whole-request timer; headersTimeout (60s) still guards slowloris.
+// Disable the whole-request timer; headersTimeout still guards slowloris.
 server.requestTimeout = 0;
+// keepAliveTimeout should stay *below* headersTimeout, otherwise a keep-alive
+// connection reused right at the boundary can race the header timer (a source
+// of intermittent 502s behind a proxy). Keep headers a touch higher.
+server.keepAliveTimeout = 65_000;
+server.headersTimeout = 66_000;
 setupConsoleWebSocket(server);
 
-server.listen(PORT, () => {
-  logger.info({ port: PORT, env: process.env.NODE_ENV || 'development' }, `ProxMate API running on http://localhost:${PORT}`);
+server.listen(PORT, BIND_ADDR, () => {
+  logger.info({ port: PORT, bind: BIND_ADDR, env: process.env.NODE_ENV || 'development' }, `ProxMate API running on http://${BIND_ADDR}:${PORT}`);
   startScheduler();
   // Recover any passthrough approval that was mid-flight when the process last
   // stopped (a long disk relocation can outlast a deploy). Best-effort.
