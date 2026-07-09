@@ -488,6 +488,10 @@ export interface DrainGuest {
   memBytes: number;
   running: boolean;
   antiAffinity: string[];
+  /** Nodes this guest may migrate to (Proxmox `allowed_nodes`); undefined = unknown/
+   *  unrestricted (fail open). An empty array means it can't be evacuated at all —
+   *  its disks are on node-local storage no other node has. */
+  allowedNodes?: string[];
 }
 
 export interface DrainMove {
@@ -553,6 +557,12 @@ export function planDrain(input: DrainInput): DrainPlan {
     return drainArch === 'unknown' || ta === 'unknown' || ta === drainArch;
   };
 
+  // Storage-locality guard: a present `allowedNodes` (from the migrate preflight)
+  // is the authoritative set of nodes a guest can actually land on. `undefined`
+  // means unknown → fail open (treat every node as reachable); an empty array
+  // means its disks are on node-local storage no other node has → nowhere to go.
+  const allowedOn = (g: DrainGuest, t: string): boolean => !g.allowedNodes || g.allowedNodes.includes(t);
+
   const moves: DrainMove[] = [];
   const blockers: DrainBlocker[] = [];
   const ordered = [...input.guests].sort((a, b) => b.memBytes - a.memBytes); // largest first
@@ -570,19 +580,29 @@ export function planDrain(input: DrainInput): DrainPlan {
         blockers.push({ proxmoxVmId: g.proxmoxVmId, name: g.name, reason: `Architecture mismatch with ${targetNode}.` });
         continue;
       }
-      pick = targetNode; // admin override — only the arch guardrail is enforced
+      if (!allowedOn(g, targetNode)) {
+        blockers.push({ proxmoxVmId: g.proxmoxVmId, name: g.name, reason: `Its disks are on node-local storage ${targetNode} doesn't have — it can't be migrated there.` });
+        continue;
+      }
+      pick = targetNode; // admin override — only the arch and storage-locality guardrails are enforced
     } else {
       const compatible = targets.filter((n) => archOk(n.name));
-      const safe = compatible.filter((n) => {
+      if (compatible.length === 0) {
+        blockers.push({ proxmoxVmId: g.proxmoxVmId, name: g.name, reason: 'No architecture-compatible node is available to receive it.' });
+        continue;
+      }
+      // Drop nodes the guest's disks can't follow it to (storage-locality guard).
+      const reachable = compatible.filter((n) => allowedOn(g, n.name));
+      if (reachable.length === 0) {
+        blockers.push({ proxmoxVmId: g.proxmoxVmId, name: g.name, reason: `Its disks are on node-local storage no other node has — there's nowhere to migrate ${g.name}.` });
+        continue;
+      }
+      const safe = reachable.filter((n) => {
         if (g.antiAffinity.length === 0) return true;
         const set = aaByNode.get(n.name)!;
         return !g.antiAffinity.some((grp) => set.has(grp));
       });
-      const pool = safe.length > 0 ? safe : compatible; // fall back if anti-affinity can't be met
-      if (pool.length === 0) {
-        blockers.push({ proxmoxVmId: g.proxmoxVmId, name: g.name, reason: 'No architecture-compatible node is available to receive it.' });
-        continue;
-      }
+      const pool = safe.length > 0 ? safe : reachable; // fall back if anti-affinity can't be met
       // Prefer nodes the guest actually fits on; among those, the most free memory.
       pick = pool
         .map((n) => {
@@ -692,6 +712,22 @@ export async function planNodeDrain(
       antiAffinity: antiAffinityGroups(parseTags(db.tags)),
     });
   }
+
+  // Ask Proxmox which nodes each running guest can actually migrate to (the
+  // migrate preflight's `allowed_nodes`) so the planner never proposes evacuating
+  // a guest whose disks live on node-local storage no other node has — that move
+  // would only fail at apply. Only running guests are queried: Proxmox computes
+  // `allowed_nodes` for running guests, and offline migration (stopped guests)
+  // has looser constraints, so we leave those unrestricted. Fail open: a null
+  // preflight (unreadable) leaves the guest unrestricted rather than blocked.
+  await Promise.all(
+    guests
+      .filter((g) => g.running)
+      .map(async (g) => {
+        const allowed = await pve.migratableTargets(node, g.proxmoxVmId, c);
+        if (allowed) g.allowedNodes = allowed; // null → leave unrestricted
+      }),
+  );
 
   const occupants: { node: string; antiAffinity: string[] }[] = [];
   for (const r of qemu) {

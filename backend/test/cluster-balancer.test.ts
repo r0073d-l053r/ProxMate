@@ -186,6 +186,7 @@ function guest(gb: number, opts: Partial<DrainGuest> = {}): DrainGuest {
     memBytes: gb * GB,
     running: opts.running ?? true,
     antiAffinity: opts.antiAffinity ?? [],
+    ...(opts.allowedNodes !== undefined ? { allowedNodes: opts.allowedNodes } : {}),
   };
 }
 
@@ -286,5 +287,62 @@ describe('planDrain (maintenance node evacuation)', () => {
     expect(run.reason).toMatch(/live/i);
     expect(stop.running).toBe(false);
     expect(stop.reason).toMatch(/offline/i);
+  });
+
+  it('blocks a guest whose disks are on node-local storage no other node has', () => {
+    const plan = planDrain({
+      drainNode: 'pve-a',
+      targetNode: null,
+      // Both other nodes are online and roomy, but the migrate preflight says the
+      // guest can go nowhere (empty allow-list) — its disks live on a local pool.
+      nodes: [node('pve-a', 0.5), node('pve-b', 0), node('pve-c', 0)],
+      guests: [guest(20, { vmId: 'tank', allowedNodes: [] })],
+      occupants: [],
+    });
+    expect(plan.ok).toBe(false);
+    expect(plan.moves).toHaveLength(0);
+    expect(plan.blockers).toHaveLength(1);
+    expect(plan.blockers[0]!.reason).toMatch(/node-local storage/i);
+  });
+
+  it('still evacuates a guest that has a valid allowed target', () => {
+    const plan = planDrain({
+      drainNode: 'pve-a',
+      targetNode: null,
+      nodes: [node('pve-a', 0.5), node('pve-b', 0), node('pve-c', 0)],
+      // Preflight allows only pve-b (e.g. the only other node with the same pool).
+      guests: [guest(20, { vmId: 'pinned-b', allowedNodes: ['pve-b'] })],
+      occupants: [],
+    });
+    expect(plan.ok).toBe(true);
+    expect(plan.moves).toHaveLength(1);
+    expect(plan.moves[0]).toMatchObject({ vmId: 'pinned-b', toNode: 'pve-b' });
+  });
+
+  it('treats an undefined allowedNodes as unconstrained (fail open)', () => {
+    const plan = planDrain({
+      drainNode: 'pve-a',
+      targetNode: null,
+      nodes: [node('pve-a', 0.5), node('pve-b', 0)],
+      guests: [guest(20, { vmId: 'shared' })], // no allowedNodes → not restricted
+      occupants: [],
+    });
+    expect(plan.ok).toBe(true);
+    expect(plan.moves).toHaveLength(1);
+    expect(plan.moves[0]!.toNode).toBe('pve-b');
+  });
+
+  it('blocks an explicit target the guest is not allowed to migrate to', () => {
+    const plan = planDrain({
+      drainNode: 'pve-a',
+      targetNode: 'pve-c',
+      nodes: [node('pve-a', 0.5), node('pve-b', 0), node('pve-c', 0)],
+      // Admin forces pve-c, but the guest's disks can only follow it to pve-b.
+      guests: [guest(20, { vmId: 'local-b', allowedNodes: ['pve-b'] })],
+      occupants: [],
+    });
+    expect(plan.ok).toBe(false);
+    expect(plan.moves).toHaveLength(0);
+    expect(plan.blockers[0]!.reason).toMatch(/node-local storage/i);
   });
 });
