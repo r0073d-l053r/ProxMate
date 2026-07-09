@@ -11,8 +11,19 @@ import {
   hasAdmin,
 } from '../services/setup.service.js';
 import { setAuthCookies } from '../lib/cookies.js';
+import { authLimiter } from '../middleware/rate-limit.js';
 
 const router = Router();
+
+// Setup is open only until setup_complete is set, but while it is open it is a
+// high-value unauthenticated surface. Throttle the *mutating* steps — but never
+// GET /status, which the frontend auth-guard polls (and behind a shared egress
+// IP, e.g. a tunnel, every client would otherwise share one 429 bucket).
+router.use((req, res, next) =>
+  req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS'
+    ? next()
+    : authLimiter(req, res, next),
+);
 
 // ─── Always-accessible: setup status ─────────────────────────
 

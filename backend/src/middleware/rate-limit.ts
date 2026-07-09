@@ -43,3 +43,14 @@ export const apiWriteLimiter = rateLimit({
   skip: (req) => req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS',
   message: { error: 'Too many requests — please slow down and try again later.' },
 });
+
+/**
+ * Dedicated throttle for public token-bearing GETs that are cheap to probe
+ * (invite lookup, download tokens). Complements authLimiter (which only covers
+ * credential POSTs) so a scanner can't hammer these as a free oracle.
+ */
+export const publicTokenLimiter = createRateLimiter({
+  windowMs: Number(process.env.PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS ?? 15 * 60 * 1000),
+  max: Number(process.env.PUBLIC_TOKEN_RATE_LIMIT_MAX ?? 60),
+  message: 'Too many requests — please slow down and try again later.',
+});

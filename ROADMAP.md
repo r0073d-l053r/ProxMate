@@ -63,6 +63,16 @@ rough priority bands, not commitments. Have an idea? Open a
     (disk copied during the move) instead of being refused; a no-op on shared storage. Every
     admin-initiated move (manual or drain) emails the VM's **owner** a branded heads-up ("maintenance
     — brief momentary blip"); routine auto-balancing stays silent. _Done._
+  - **Migratability-aware planning** ✅ _(v0.6.6)_ — a VM whose disks live on node-local storage no
+    other node has (e.g. a local ZFS pool) can't migrate at all; the balancer used to keep proposing
+    the impossible move (surfaced only as "Request failed with status code 500"). It now reads
+    Proxmox's own migrate preflight (`allowed_nodes`), pins guests with nowhere to land, never targets
+    a node a VM can't reach, and records Proxmox's **real** failure reason. _Follow-up:_ apply the same
+    guard to the **node-drain** planner (it can still propose an impossible evacuation; its apply error
+    is already legible).
+  - **Migrate picker only offers reachable nodes** ✅ _(v0.6.7)_ — the manual "Migrate to another node"
+    dialog (admin-only) populates from `GET /vms/:id/migrate-targets` (allowed_nodes ∩ online); a VM
+    pinned to node-local storage shows "No eligible nodes" instead of doomed targets.
 
 ## Tier 4 — Reliability & observability
 
@@ -104,12 +114,12 @@ rough priority bands, not commitments. Have an idea? Open a
     cloud-init drop/regenerate), background apply with progress + a startup reconciler.
   - **Live migration progress bar** ✅ _(v0.6.1)_ — the admin approval card shows real
     transfer percent/bytes/ETA while the VM migrates.
-  - **Pre-flight host-readiness check (TODO, high value):** approving/starting passthrough on
-    an unprepared host can **crash the node** (confirmed live 2026-07-06: VM 108's GPU start
-    hung pve-4 — GPU not bound to `vfio-pci`, i440fx/SeaBIOS). Add a check that verifies the
-    mapped device is bound to `vfio-pci` + IOMMU is on **before** stop/migrate/start, turning a
-    host crash into an upfront "node not ready for this device" rejection. See
-    [[Operations & Cluster]] and [[Decisions Log]] in the vault.
+  - **Pre-flight host-readiness check** ✅ _(v0.6.2)_ — approving/starting passthrough on an
+    unprepared host can **crash the node** (confirmed live 2026-07-06: VM 108's GPU start hung
+    pve-4). `checkPassthroughHostReadiness` now hard-blocks device-missing / identity-mismatch /
+    IOMMU-off before any stop/migrate, warns on the API-invisible `vfio-pci` binding + q35/OVMF +
+    IOMMU-group sharing, and **won't auto-start a GPU unless the guest is q35 AND OVMF** (tightened
+    after a second live pve-4 wedge). See [[Operations & Cluster]] and [[Decisions Log]] in the vault.
 
 ## Candidate ideas — proposed 2026-06-29 (post-audit)
 

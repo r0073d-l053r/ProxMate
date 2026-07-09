@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { randomBytes } from 'node:crypto';
+
+// hashToken peppers with ENCRYPTION_KEY and now fails closed if it's unset (no
+// static fallback). Provide one for the suite, like crypto.test.ts does.
+process.env['ENCRYPTION_KEY'] = randomBytes(32).toString('hex');
 
 vi.mock('../src/lib/prisma.js', () => ({
   prisma: {

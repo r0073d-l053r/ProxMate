@@ -74,9 +74,17 @@ app.get('/api/health', async (req: Request, res: Response) => {
     .json({ status: ok ? 'ok' : 'degraded', service: 'proxmate-api', checks, timestamp: new Date().toISOString() });
 });
 
-// Prometheus scrape endpoint. Guard with METRICS_TOKEN (Bearer) when exposed.
+// Prometheus scrape endpoint.
+// Production default: require METRICS_TOKEN (Bearer). In non-production, leave
+// METRICS_TOKEN unset to scrape freely (local/dev). Set METRICS_TOKEN always when
+// /metrics is reachable beyond localhost.
 app.get('/metrics', async (req: Request, res: Response) => {
   const token = process.env['METRICS_TOKEN'];
+  const isProd = (process.env.NODE_ENV || 'development') === 'production';
+  if (isProd && !token) {
+    res.status(404).end();
+    return;
+  }
   if (token && req.headers.authorization !== `Bearer ${token}`) {
     res.status(401).end();
     return;
