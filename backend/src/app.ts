@@ -17,6 +17,7 @@ import passthroughRequestRoutes from './routes/passthrough-request.routes.js';
 import downloadRoutes from './routes/download.routes.js';
 import broadcastRoutes from './routes/broadcast.routes.js';
 import ideRoutes from './routes/ide.routes.js';
+import ideGatewayRoutes from './routes/ide-gateway.routes.js';
 import { openApiSpec } from './lib/openapi.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { observability } from './middleware/observability.js';
@@ -115,6 +116,10 @@ app.use('/api/vms', vmRoutes);
 app.use('/api/proxmox', proxmoxRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/admin', adminRoutes);
+// The LLM gateway (Bearer-token, OpenAI-compatible `/:id/llm/v1/*`) is mounted
+// BEFORE the session-authed IDE routes: it only claims the `/llm/` paths and lets
+// everything else (`/config`, `/:id/gateway-token`) fall through to ideRoutes.
+app.use('/api/ide', ideGatewayRoutes);
 app.use('/api/ide', ideRoutes);
 app.use('/api/templates', templateRoutes);
 app.use('/api/ssh-keys', sshKeyRoutes);

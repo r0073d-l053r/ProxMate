@@ -36,7 +36,16 @@ COPY brand/icon-192.png          /usr/lib/code-server/src/browser/media/pwa-icon
 COPY brand/icon-512.png          /usr/lib/code-server/src/browser/media/pwa-icon-512.png
 COPY brand/icon-maskable-512.png /usr/lib/code-server/src/browser/media/pwa-icon-maskable-512.png
 
+# ProxMate IDE startup hook: renders OpenCode's config from the env ProxMate sets
+# at provision time, so the in-guest AI agent talks only to the ProxMate LLM
+# gateway. code-server runs every executable under $ENTRYPOINTD at container start
+# (as `coder`, before the editor boots) — the supported extension point, so we
+# don't override the base ENTRYPOINT.
+COPY write-opencode-config.sh /usr/lib/proxmate/entrypointd/10-opencode.sh
+RUN chmod 0755 /usr/lib/proxmate/entrypointd/10-opencode.sh
+
 USER coder
 ENV PROXMATE_IDE=1
+ENV ENTRYPOINTD=/usr/lib/proxmate/entrypointd
 # Branding (product name in the title/UI) is applied at run time:
 #   code-server --app-name "ProxMate IDE" --disable-telemetry --auth none ...
