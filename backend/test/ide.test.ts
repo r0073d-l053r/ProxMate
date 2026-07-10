@@ -71,6 +71,31 @@ describe('ide.service policy + gating', () => {
     expect((await getIdeConfig()).sharedModels).toEqual([]);
   });
 
+  it('applies per-model visibility to local models by role', async () => {
+    await saveIdeConfig({
+      enabled: 'tenants',
+      allowByoKeys: false,
+      localModels: [
+        { model: 'gemma4:26b', sourceKeyId: 'k1', visibility: 'shared' },
+        { nickname: 'Big', model: 'gpt-oss:120b', sourceKeyId: 'k1', visibility: 'admin' },
+        { model: 'staged', sourceKeyId: 'k1', visibility: 'none' },
+      ],
+    });
+    const labels = (c: { models: { label: string }[] }) => c.models.map((m) => m.label).sort();
+    // tenant sees only the shared one
+    expect(labels(await getIdeCapability({ role: 'user' }))).toEqual(['gemma4:26b']);
+    // admin sees shared + admin-only (by nickname), never the 'none' one
+    expect(labels(await getIdeCapability({ role: 'admin' }))).toEqual(['Big', 'gemma4:26b']);
+  });
+
+  it('round-trips local models with server-assigned ids', async () => {
+    await saveIdeConfig({ enabled: 'tenants', allowByoKeys: false, localModels: [{ model: 'm', sourceKeyId: 's', visibility: 'shared' }] });
+    const cfg = await getIdeConfig();
+    expect(cfg.localModels).toHaveLength(1);
+    expect(cfg.localModels[0]!.id).toBeTruthy(); // an id was assigned
+    expect(cfg.localModels[0]).toMatchObject({ model: 'm', sourceKeyId: 's', visibility: 'shared' });
+  });
+
   it('an unknown enabled tier falls back to off', async () => {
     store.set('ide_enabled', 'bogus');
     expect((await getIdeConfig()).enabled).toBe('off');

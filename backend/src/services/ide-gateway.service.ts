@@ -3,7 +3,8 @@ import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { getConfig } from './config.service.js';
 import { getOwnedVm } from './vm.service.js';
-import { getIdeCapability } from './ide.service.js';
+import { getIdeCapability, getIdeConfig } from './ide.service.js';
+import { getLlmKeyEndpointById } from './tenant-llm-key.service.js';
 
 /**
  * ProxMate LLM gateway (Phase 4) — the policy + routing brain behind the
@@ -136,12 +137,7 @@ export async function listGatewayModels(user: { id: string; role: string }): Pro
   const cap = await getIdeCapability({ role: user.role });
   if (!cap.available) return [];
   const created = Math.floor(Date.now() / 1000);
-  const models: OpenAiModel[] = cap.sharedModels.map((m) => ({
-    id: `shared:${m.id}`,
-    object: 'model',
-    created,
-    owned_by: 'proxmate',
-  }));
+  const models: OpenAiModel[] = cap.models.map((m) => ({ id: m.id, object: 'model', created, owned_by: 'proxmate' }));
   if (cap.allowByoKeys) {
     const keys = await prisma.tenantLlmKey.findMany({ where: { userId: user.id }, select: { id: true } });
     for (const k of keys) models.push({ id: `byo:${k.id}`, object: 'model', created, owned_by: 'byo' });
@@ -163,7 +159,7 @@ export interface ModelPickerEntry {
 export async function listModelPickerEntries(user: { id: string; role: string }): Promise<ModelPickerEntry[]> {
   const cap = await getIdeCapability({ role: user.role });
   if (!cap.available) return [];
-  const entries: ModelPickerEntry[] = cap.sharedModels.map((m) => ({ id: `shared:${m.id}`, name: m.label }));
+  const entries: ModelPickerEntry[] = cap.models.map((m) => ({ id: m.id, name: m.label }));
   if (cap.allowByoKeys) {
     const keys = await prisma.tenantLlmKey.findMany({ where: { userId: user.id }, select: { id: true, label: true } });
     for (const k of keys) entries.push({ id: `byo:${k.id}`, name: k.label });
@@ -232,7 +228,26 @@ export async function resolveModelRoute(
   const cap = await getIdeCapability({ role: user.role });
   if (!cap.available) return null;
 
-  // Shared local models via the admin gateway.
+  // Local models sourced from an admin's saved endpoint, gated by visibility.
+  if (modelId.startsWith('local:')) {
+    const id = modelId.slice('local:'.length);
+    const cfg = await getIdeConfig();
+    const lm = cfg.localModels.find((m) => m.id === id);
+    if (!lm) return null;
+    const visible = lm.visibility === 'shared' || (lm.visibility === 'admin' && user.role === 'admin');
+    if (!visible) return null;
+    const ep = await getLlmKeyEndpointById(lm.sourceKeyId);
+    if (!ep) return null;
+    return {
+      url: normalizeBase(ep.baseUrl),
+      apiKey: ep.apiKey || undefined,
+      model: lm.model,
+      label: lm.nickname || lm.model,
+      kind: 'shared',
+    };
+  }
+
+  // Shared local models via the admin gateway (legacy).
   const sharedId = modelId.startsWith('shared:') ? modelId.slice('shared:'.length) : modelId;
   const shared = cap.sharedModels.find((m) => m.id === sharedId);
   if (shared && (modelId.startsWith('shared:') || !modelId.includes(':'))) {

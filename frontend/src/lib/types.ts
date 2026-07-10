@@ -434,9 +434,22 @@ export interface IdeSharedModel {
   model: string;
 }
 
+/** Who may pick a local model: admins only, all tenants, or nobody (staged/off). */
+export type ModelVisibility = "admin" | "shared" | "none";
+
+/** A local model the admin exposes, sourced from one of their saved AI keys. */
+export interface IdeLocalModel {
+  id?: string;
+  nickname?: string;
+  model: string;
+  sourceKeyId: string;
+  visibility: ModelVisibility;
+}
+
 export interface IdeSettings {
   enabled: IdeTier;
   allowByoKeys: boolean;
+  localModels: IdeLocalModel[];
   sharedModels: IdeSharedModel[];
   gatewayUrl: string;
   hasGatewayKey: boolean;
@@ -446,6 +459,7 @@ export interface IdeSettings {
 export interface IdeCapability {
   available: boolean;
   allowByoKeys: boolean;
+  models: { id: string; label: string }[];
   sharedModels: IdeSharedModel[];
 }
 

@@ -26,6 +26,7 @@ vi.mock('../src/lib/prisma.js', () => ({
     },
     tenantLlmKey: {
       findFirst: vi.fn(),
+      findUnique: vi.fn(),
       findMany: vi.fn().mockResolvedValue([]),
       update: vi.fn().mockResolvedValue({}),
     },
@@ -107,6 +108,42 @@ describe('resolveModelRoute — allow-list enforcement (shared)', () => {
   it('rejects a shared model when no gateway endpoint is configured', async () => {
     await saveIdeConfig({ enabled: 'tenants', allowByoKeys: false, sharedModels: [SHARED], gatewayUrl: '' });
     expect(await resolveModelRoute(USER, 'shared:llama')).toBeNull();
+  });
+});
+
+describe('resolveModelRoute — local models (admin-sourced, visibility-gated)', () => {
+  const keyUnique = () => vi.mocked(prisma.tenantLlmKey.findUnique);
+
+  beforeEach(() => {
+    store.set('ide_enabled', 'tenants');
+    keyUnique().mockResolvedValue({
+      id: 'srck',
+      provider: 'openai-compatible',
+      baseUrl: 'http://ollama:11434/v1',
+      keyEnc: 'admin-key',
+    } as never);
+  });
+
+  it('routes a shared local model to its admin source key', async () => {
+    store.set('ide_local_models', JSON.stringify([{ id: 'lm1', model: 'gemma4:26b', sourceKeyId: 'srck', visibility: 'shared' }]));
+    const route = await resolveModelRoute(USER, 'local:lm1');
+    expect(route).toMatchObject({ url: 'http://ollama:11434/v1', apiKey: 'admin-key', model: 'gemma4:26b', kind: 'shared' });
+  });
+
+  it('hides an admin-only local model from tenants but serves admins', async () => {
+    store.set('ide_local_models', JSON.stringify([{ id: 'lm2', model: 'gpt-oss:120b', sourceKeyId: 'srck', visibility: 'admin' }]));
+    expect(await resolveModelRoute(USER, 'local:lm2')).toBeNull();
+    expect(await resolveModelRoute({ id: 'a', role: 'admin' }, 'local:lm2')).not.toBeNull();
+  });
+
+  it("never serves a 'none' local model", async () => {
+    store.set('ide_local_models', JSON.stringify([{ id: 'lm3', model: 'x', sourceKeyId: 'srck', visibility: 'none' }]));
+    expect(await resolveModelRoute({ id: 'a', role: 'admin' }, 'local:lm3')).toBeNull();
+  });
+
+  it('returns null for an unknown local id', async () => {
+    store.set('ide_local_models', JSON.stringify([]));
+    expect(await resolveModelRoute(USER, 'local:nope')).toBeNull();
   });
 });
 

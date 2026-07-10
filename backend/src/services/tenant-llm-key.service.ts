@@ -108,6 +108,21 @@ export async function getLlmKeyEndpoint(
   return { baseUrl, apiKey: decrypt(row.keyEnc), model: row.model, label: row.label };
 }
 
+/**
+ * Resolve a key to its endpoint WITHOUT owner scoping — used only by the gateway
+ * to serve an admin-configured local model to a tenant (the caller has already
+ * checked the model's visibility). The secret is decrypted in-memory to forward.
+ */
+export async function getLlmKeyEndpointById(
+  id: string,
+): Promise<{ baseUrl: string; apiKey: string } | null> {
+  const row = await prisma.tenantLlmKey.findUnique({ where: { id } });
+  if (!row) return null;
+  const baseUrl = row.provider === 'openai' ? 'https://api.openai.com/v1' : (row.baseUrl ?? '');
+  if (!baseUrl) return null;
+  return { baseUrl, apiKey: decrypt(row.keyEnc) };
+}
+
 /** Delete a key, but only if it belongs to the requesting user (else false → 404). */
 export async function deleteLlmKey(userId: string, id: string): Promise<boolean> {
   const row = await prisma.tenantLlmKey.findUnique({ where: { id } });
