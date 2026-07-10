@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import { SiTailscale } from "react-icons/si";
 import { TemplateIcon } from "@/components/template-icon";
-import { api, apiError } from "@/lib/api";
+import { api, apiBaseUrl, apiError } from "@/lib/api";
 import type { IdeCapability, VmDetail } from "@/lib/types";
 import { copyText } from "@/lib/clipboard";
 import { formatRam, formatBytes, formatUptime, formatDate } from "@/lib/format";
@@ -436,8 +436,13 @@ export default function VmDetailPage() {
                 </DropdownMenuItem>
                 {ideCap?.available && vm.type !== "lxc" && (
                   <DropdownMenuItem
+                    disabled={!running}
                     onClick={() =>
-                      toast.info("ProxMate IDE is coming to this VM — provisioning lands in the next update.")
+                      window.open(
+                        `${apiBaseUrl}/ide/${vm.id}/proxy/`,
+                        `proxmate-ide-${vm.id}`,
+                        "popup,width=1500,height=940",
+                      )
                     }
                   >
                     <Code2 />
