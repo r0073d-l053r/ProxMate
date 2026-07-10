@@ -55,6 +55,7 @@ import { announcementEmail } from '../lib/email-templates.js';
 import { unsubscribeToken } from '../services/broadcast-optout.service.js';
 import { getNotifyConfig, saveNotifyConfig, sendTestNotification, NOTIFY_EVENTS } from '../services/notify.service.js';
 import * as sso from '../services/sso.service.js';
+import { getIdeConfig, saveIdeConfig } from '../services/ide.service.js';
 import { listResetRequests, adminResetPassword } from '../services/password-reset.service.js';
 import { refreshVmIps } from '../services/vm.service.js';
 import type { AuthRequest } from '../types/index.js';
@@ -115,6 +116,7 @@ router.get('/settings', async (_req: Request, res: Response) => {
           callbackUrl: sso.callbackUrl(),
         }
       : { configured: false, callbackUrl: sso.callbackUrl() },
+    ide: await getIdeConfig(),
   });
 });
 
@@ -192,6 +194,36 @@ router.post('/settings/notifications/test', async (_req: Request, res: Response)
   } catch (err) {
     res.status(400).json({ ok: false, error: err instanceof Error ? err.message : 'Test failed' });
   }
+});
+
+// ─── ProxMate IDE settings ────────────────────────────────────
+
+const IdeSharedModelSchema = z.object({
+  id: z.string().min(1).max(64),
+  label: z.string().min(1).max(120),
+  provider: z.string().min(1).max(40),
+  model: z.string().min(1).max(120),
+});
+
+const IdeSchema = z.object({
+  enabled: z.enum(['off', 'admin', 'tenants']).default('off'),
+  allowByoKeys: z.boolean().default(false),
+  sharedModels: z.array(IdeSharedModelSchema).max(50).default([]),
+  // The admin's own local-model endpoint — may be a LAN/loopback address (Ollama,
+  // vLLM), so it is deliberately NOT run through the public-URL SSRF shape check.
+  gatewayUrl: z.string().max(2000).optional(),
+  gatewayKey: z.string().max(500).optional(), // kept if blank
+});
+
+router.put('/settings/ide', async (req: Request, res: Response) => {
+  const parsed = IdeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  await saveIdeConfig(parsed.data);
+  await recordAudit({ action: 'admin.ide_config', actor: (req as AuthRequest).user, req });
+  res.json({ success: true });
 });
 
 // ─── SSO (OIDC) settings ──────────────────────────────────────

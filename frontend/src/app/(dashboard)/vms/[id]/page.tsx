@@ -9,6 +9,7 @@ import {
   ArrowLeftRight,
   Archive,
   ChevronDown,
+  Code2,
   Copy,
   Cpu,
   Disc,
@@ -34,7 +35,7 @@ import {
 import { SiTailscale } from "react-icons/si";
 import { TemplateIcon } from "@/components/template-icon";
 import { api, apiError } from "@/lib/api";
-import type { VmDetail } from "@/lib/types";
+import type { IdeCapability, VmDetail } from "@/lib/types";
 import { copyText } from "@/lib/clipboard";
 import { formatRam, formatBytes, formatUptime, formatDate } from "@/lib/format";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
@@ -151,6 +152,16 @@ export default function VmDetailPage() {
   // Typed-name confirmation for the destructive delete — must match vm.name exactly.
   const [deleteText, setDeleteText] = useState("");
   const [dialog, setDialog] = useState<ActiveDialog>(null);
+
+  // ProxMate IDE availability for this user (admin policy) — gates the Console
+  // menu entry. Fetched once; failure just hides the entry.
+  const [ideCap, setIdeCap] = useState<IdeCapability | null>(null);
+  useEffect(() => {
+    api
+      .get<IdeCapability>("/ide/config")
+      .then((r) => setIdeCap(r.data))
+      .catch(() => setIdeCap(null));
+  }, []);
 
   // Active tab, deep-linkable via ?tab= (e.g. /vms/abc?tab=backups). Kept in the
   // URL with replaceState so switching tabs never adds history entries.
@@ -423,6 +434,16 @@ export default function VmDetailPage() {
                   <SquareTerminal />
                   Text — links, copy/paste
                 </DropdownMenuItem>
+                {ideCap?.available && vm.type !== "lxc" && (
+                  <DropdownMenuItem
+                    onClick={() =>
+                      toast.info("ProxMate IDE is coming to this VM — provisioning lands in the next update.")
+                    }
+                  >
+                    <Code2 />
+                    ProxMate IDE — code + AI
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={() =>
