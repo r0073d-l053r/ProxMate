@@ -13,6 +13,26 @@ rough priority bands, not commitments. Have an idea? Open a
 
 ---
 
+## In progress — ProxMate IDE (branch `feat/proxmate-ide`, not yet merged)
+
+An in-browser IDE for tenants: **code-server** (VS Code in the browser) with the **OpenCode** AI agent
+baked in, opened **inside the tenant's own VM** and reverse-proxied by ProxMate — so tenants build their
+machine with an AI copilot, using their own LLM keys or admin-shared local models. Admin-gated end to end;
+a session can only ever reach the VM it was opened from.
+
+- **Phase 1 — admin policy + gating.** _Done._ Availability tiers (off / admin-only / tenants), a
+  bring-your-own-key toggle, admin-shared models, and an encrypted local-model gateway config — all in
+  Admin → Settings. Tenants see only what they're allowed.
+- **Phase 2 — reverse-proxy transport.** _Done._ HTTP + WebSocket proxy at `/api/ide/:id/proxy/`,
+  authenticated by the session cookie + VM ownership. Proven end to end against real code-server (the full
+  VS Code workbench connects through ProxMate).
+- **Phase 3 — branded image + Open IDE.** _Done (core)._ A "ProxMate IDE" image (code-server + OpenCode,
+  VS Code dark default) and an Open IDE action on the VM page.
+- **Remaining:** provision the image into the guest plus a host-only firewall pinhole (the deploy step);
+  the LLM gateway and bring-your-own-key injection; and an optional ProxMate-branded editor theme.
+
+---
+
 ## Tier 1 — High-value, low-risk (cloud parity)
 
 - **Live VM resize / reconfigure** — change CPU/RAM/disk after creation
