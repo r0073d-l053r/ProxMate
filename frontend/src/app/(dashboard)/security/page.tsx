@@ -9,6 +9,7 @@ import { copyText } from "@/lib/clipboard";
 import { useAuthStore } from "@/lib/auth-store";
 import type { MeResponse, SshKey, ApiTokenInfo, CreatedApiToken } from "@/lib/types";
 import { PageHeader } from "@/components/dashboard/page-header";
+import { AiKeysCard } from "@/components/ide/ai-keys-card";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -549,7 +550,10 @@ export default function SecurityPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      {/* Bring-your-own AI keys for the ProxMate IDE (only shown when the admin enables BYO). */}
+      <AiKeysCard />
+
+      <Card className="mt-6">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Mail className="size-5" /> Email preferences
