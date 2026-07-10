@@ -421,6 +421,32 @@ export interface AdminSettings {
         callbackUrl: string;
       };
   notify: NotifyConfig;
+  ide: IdeSettings;
+}
+
+/** Admin policy for ProxMate IDE (in-guest code-server + OpenCode). */
+export type IdeTier = "off" | "admin" | "tenants";
+
+export interface IdeSharedModel {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+}
+
+export interface IdeSettings {
+  enabled: IdeTier;
+  allowByoKeys: boolean;
+  sharedModels: IdeSharedModel[];
+  gatewayUrl: string;
+  hasGatewayKey: boolean;
+}
+
+/** What the current user may do with ProxMate IDE (from GET /api/ide/config). */
+export interface IdeCapability {
+  available: boolean;
+  allowByoKeys: boolean;
+  sharedModels: IdeSharedModel[];
 }
 
 export type NotifyEvent = "backup.failed" | "vm.error" | "auth.lockout";
