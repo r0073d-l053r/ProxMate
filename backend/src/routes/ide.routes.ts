@@ -1,7 +1,16 @@
 import { Router, type Request, type Response } from 'express';
+import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.js';
 import { getIdeCapability } from '../services/ide.service.js';
 import { issueGatewayToken, listModelPickerEntries } from '../services/ide-gateway.service.js';
+import {
+  listLlmKeys,
+  addLlmKey,
+  deleteLlmKey,
+  KNOWN_PROVIDERS,
+  TooManyLlmKeysError,
+  InvalidLlmKeyError,
+} from '../services/tenant-llm-key.service.js';
 import { recordAudit } from '../services/audit.service.js';
 import type { AuthRequest } from '../types/index.js';
 
@@ -43,6 +52,79 @@ router.post('/:id/gateway-token', async (req: Request, res: Response) => {
     req,
   });
   res.json({ token: issued.token, baseUrl: issued.baseUrl, models });
+});
+
+// ─── Bring-your-own AI keys (used only through the gateway) ────
+// Per-user LLM provider keys. Gated by the admin's allowByoKeys switch; the secret
+// is encrypted at rest and never returned. Session-authed (CSRF via requireAuth).
+
+const KeySchema = z.object({
+  label: z.string().min(1).max(60),
+  provider: z.enum(KNOWN_PROVIDERS),
+  model: z.string().min(1).max(120),
+  baseUrl: z.string().url().max(300).optional().or(z.literal('')),
+  key: z.string().min(1).max(400),
+});
+
+async function byoAllowed(user: { role: string }): Promise<boolean> {
+  const cap = await getIdeCapability({ role: user.role });
+  return cap.available && cap.allowByoKeys;
+}
+
+// GET /api/ide/keys — the caller's saved BYO keys (no secrets).
+router.get('/keys', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  if (!(await byoAllowed(user))) {
+    res.status(403).json({ error: 'Bring-your-own AI keys are not enabled.' });
+    return;
+  }
+  res.json(await listLlmKeys(user.id));
+});
+
+// POST /api/ide/keys — save a new BYO key.
+router.post('/keys', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  if (!(await byoAllowed(user))) {
+    res.status(403).json({ error: 'Bring-your-own AI keys are not enabled.' });
+    return;
+  }
+  const parsed = KeySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  try {
+    const key = await addLlmKey(user.id, parsed.data);
+    void recordAudit({
+      actor: user,
+      action: 'ide.llm_key_add',
+      targetType: 'llm_key',
+      targetId: key.id,
+      detail: `added AI key "${key.label}" (${key.provider})`,
+      req,
+    });
+    res.status(201).json(key);
+  } catch (err) {
+    if (err instanceof TooManyLlmKeysError || err instanceof InvalidLlmKeyError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+// DELETE /api/ide/keys/:keyId — remove a BYO key (allowed even if BYO was since
+// disabled, so users can always clean up). Ownership-checked.
+router.delete('/keys/:keyId', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const keyId = req.params['keyId'] as string;
+  const ok = await deleteLlmKey(user.id, keyId);
+  if (!ok) {
+    res.status(404).json({ error: 'Key not found' });
+    return;
+  }
+  void recordAudit({ actor: user, action: 'ide.llm_key_delete', targetType: 'llm_key', targetId: keyId, req });
+  res.status(204).end();
 });
 
 export default router;

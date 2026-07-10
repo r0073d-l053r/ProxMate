@@ -449,6 +449,17 @@ export interface IdeCapability {
   sharedModels: IdeSharedModel[];
 }
 
+/** A tenant's own (bring-your-own) LLM key — the safe view; the secret never leaves the server. */
+export interface IdeLlmKey {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+  baseUrl: string | null;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
 export type NotifyEvent = "backup.failed" | "vm.error" | "auth.lockout";
 
 export interface NotifyConfig {
