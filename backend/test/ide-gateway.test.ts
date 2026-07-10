@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // In-memory SystemConfig so the REAL ide.service policy (allow-list, BYO gate)
 // runs unmodified while we exercise the gateway logic layered on top of it.
@@ -42,6 +42,7 @@ import {
   listGatewayModels,
   listModelPickerEntries,
   resolveModelRoute,
+  probeModels,
 } from '../src/services/ide-gateway.service.js';
 
 const ownedVm = vi.mocked(getOwnedVm);
@@ -202,6 +203,29 @@ describe('issueGatewayToken', () => {
   it('refuses when the IDE is off', async () => {
     await saveIdeConfig({ enabled: 'off', allowByoKeys: false, sharedModels: [] });
     expect(await issueGatewayToken(USER, 'vm1', 'https://x')).toBeNull();
+  });
+});
+
+describe('probeModels (connection test)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('lists the endpoint models (sorted) on success', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [{ id: 'm2' }, { id: 'm1' }] }) }));
+    const r = await probeModels('http://ollama:11434/v1/', 'k');
+    expect(r).toEqual({ ok: true, models: ['m1', 'm2'] });
+  });
+
+  it('reports a non-2xx status', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401 }));
+    const r = await probeModels('http://x/v1');
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('401');
+  });
+
+  it('reports an unreachable endpoint without throwing', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+    const r = await probeModels('http://x/v1');
+    expect(r).toMatchObject({ ok: false, models: [] });
   });
 });
 

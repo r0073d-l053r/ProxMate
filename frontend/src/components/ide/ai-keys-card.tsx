@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Sparkles, Loader2, Plus, Trash2 } from "lucide-react";
+import { Sparkles, Loader2, Plus, Trash2, PlugZap } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import type { IdeCapability, IdeLlmKey } from "@/lib/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,6 +50,7 @@ export function AiKeysCard() {
   const [baseUrl, setBaseUrl] = useState("");
   const [secret, setSecret] = useState("");
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState<string | null>(null);
 
   const preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0];
 
@@ -91,6 +92,22 @@ export function AiKeysCard() {
       toast.error(apiError(err));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function testKey(id: string, label: string) {
+    setTesting(id);
+    try {
+      const r = await api.post<{ ok: boolean; modelCount: number; error?: string }>(`/ide/keys/${id}/test`, {});
+      if (r.data.ok) {
+        toast.success(`"${label}" connected — ${r.data.modelCount} model${r.data.modelCount === 1 ? "" : "s"} available.`);
+      } else {
+        toast.error(`"${label}" failed: ${r.data.error ?? "unreachable"}`);
+      }
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setTesting(null);
     }
   }
 
@@ -139,9 +156,21 @@ export function AiKeysCard() {
                     {k.lastUsedAt ? ` · last used ${new Date(k.lastUsedAt).toLocaleDateString()}` : ""}
                   </p>
                 </div>
-                <Button variant="ghost" size="sm" onClick={() => removeKey(k.id)} aria-label={`Remove ${k.label}`}>
-                  <Trash2 className="text-destructive" />
-                </Button>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => testKey(k.id, k.label)}
+                    disabled={testing === k.id}
+                    aria-label={`Test ${k.label}`}
+                    title="Test connection"
+                  >
+                    {testing === k.id ? <Loader2 className="animate-spin" /> : <PlugZap />}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => removeKey(k.id)} aria-label={`Remove ${k.label}`}>
+                    <Trash2 className="text-destructive" />
+                  </Button>
+                </div>
               </li>
             ))}
           </ul>

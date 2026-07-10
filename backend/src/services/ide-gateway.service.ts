@@ -171,6 +171,39 @@ export async function listModelPickerEntries(user: { id: string; role: string })
   return entries;
 }
 
+// ─── Connection test (list an endpoint's models) ─────────────
+
+export interface ProbeResult {
+  ok: boolean;
+  models: string[];
+  error?: string;
+}
+
+/**
+ * Probe an OpenAI-compatible endpoint's `/models` — the shared "Test connection"
+ * primitive behind both the tenant BYO-key test and the admin source test. Returns
+ * the available model ids, or a short error. Never throws.
+ */
+export async function probeModels(baseUrl: string, apiKey?: string): Promise<ProbeResult> {
+  const base = normalizeBase(baseUrl);
+  if (!base) return { ok: false, models: [], error: 'No base URL' };
+  try {
+    const r = await fetch(`${base}/models`, {
+      headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) return { ok: false, models: [], error: `HTTP ${r.status}` };
+    const j = (await r.json()) as { data?: Array<{ id?: unknown }> };
+    const models = Array.isArray(j.data)
+      ? j.data.map((m) => String(m.id ?? '')).filter(Boolean).sort()
+      : [];
+    return { ok: true, models };
+  } catch (e) {
+    const msg = (e as Error)?.name === 'TimeoutError' ? 'Timed out' : (e as Error)?.message || 'Unreachable';
+    return { ok: false, models: [], error: msg };
+  }
+}
+
 // ─── Upstream routing (allow-list enforcement) ────────────────
 
 export interface UpstreamRoute {

@@ -1,5 +1,5 @@
 import { prisma } from '../lib/prisma.js';
-import { encrypt } from '../lib/crypto.js';
+import { encrypt, decrypt } from '../lib/crypto.js';
 
 /**
  * Tenant bring-your-own LLM keys. Used ONLY through the ProxMate gateway (single
@@ -89,6 +89,23 @@ export async function addLlmKey(userId: string, input: AddLlmKeyInput): Promise<
     data: { userId, label, provider, model, baseUrl: provider === 'openai' ? null : baseUrl, keyEnc: encrypt(key) },
     select: SAFE_SELECT,
   });
+}
+
+/**
+ * Resolve a user-owned key to its concrete upstream endpoint + decrypted secret,
+ * for a connection test or (admin) sourcing shared models. Returns null if the key
+ * isn't the user's or has no usable base URL. The plaintext key never leaves the
+ * server — callers use it only to probe/forward.
+ */
+export async function getLlmKeyEndpoint(
+  userId: string,
+  id: string,
+): Promise<{ baseUrl: string; apiKey: string; model: string; label: string } | null> {
+  const row = await prisma.tenantLlmKey.findFirst({ where: { id, userId } });
+  if (!row) return null;
+  const baseUrl = row.provider === 'openai' ? 'https://api.openai.com/v1' : (row.baseUrl ?? '');
+  if (!baseUrl) return null;
+  return { baseUrl, apiKey: decrypt(row.keyEnc), model: row.model, label: row.label };
 }
 
 /** Delete a key, but only if it belongs to the requesting user (else false → 404). */

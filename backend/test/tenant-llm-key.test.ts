@@ -10,6 +10,7 @@ vi.mock('../src/lib/prisma.js', () => ({
       count: vi.fn(),
       create: vi.fn(),
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       delete: vi.fn().mockResolvedValue({}),
     },
   },
@@ -20,6 +21,7 @@ import {
   listLlmKeys,
   addLlmKey,
   deleteLlmKey,
+  getLlmKeyEndpoint,
   MAX_LLM_KEYS_PER_USER,
   TooManyLlmKeysError,
   InvalidLlmKeyError,
@@ -28,6 +30,7 @@ import {
 const count = vi.mocked(prisma.tenantLlmKey.count);
 const create = vi.mocked(prisma.tenantLlmKey.create);
 const findUnique = vi.mocked(prisma.tenantLlmKey.findUnique);
+const findFirst = vi.mocked(prisma.tenantLlmKey.findFirst);
 const del = vi.mocked(prisma.tenantLlmKey.delete);
 
 beforeEach(() => {
@@ -109,6 +112,25 @@ describe('deleteLlmKey', () => {
   it('returns false for a missing key', async () => {
     findUnique.mockResolvedValue(null as never);
     expect(await deleteLlmKey('u1', 'nope')).toBe(false);
+  });
+});
+
+describe('getLlmKeyEndpoint', () => {
+  it('resolves an owned openai-compatible key to its endpoint + decrypted secret', async () => {
+    findFirst.mockResolvedValue({
+      id: 'k1', userId: 'u1', provider: 'openai-compatible', baseUrl: 'https://h/v1', model: 'm', label: 'L', keyEnc: 'sk-x',
+    } as never);
+    expect(await getLlmKeyEndpoint('u1', 'k1')).toMatchObject({ baseUrl: 'https://h/v1', apiKey: 'sk-x', model: 'm', label: 'L' });
+  });
+
+  it('uses the fixed OpenAI base for an openai-preset key', async () => {
+    findFirst.mockResolvedValue({ id: 'k1', userId: 'u1', provider: 'openai', baseUrl: null, model: 'gpt', label: 'L', keyEnc: 'sk' } as never);
+    expect((await getLlmKeyEndpoint('u1', 'k1'))?.baseUrl).toBe('https://api.openai.com/v1');
+  });
+
+  it("returns null when the key isn't the caller's", async () => {
+    findFirst.mockResolvedValue(null as never);
+    expect(await getLlmKeyEndpoint('u1', 'nope')).toBeNull();
   });
 });
 
