@@ -56,6 +56,7 @@ import { PassthroughPanel } from "@/components/vm/passthrough-panel";
 import { RecoveryPanel } from "@/components/vm/recovery-panel";
 import { AlertsPanel } from "@/components/vm/alerts-panel";
 import { useAuthStore } from "@/lib/auth-store";
+import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -152,6 +153,10 @@ export default function VmDetailPage() {
   // Typed-name confirmation for the destructive delete — must match vm.name exactly.
   const [deleteText, setDeleteText] = useState("");
   const [dialog, setDialog] = useState<ActiveDialog>(null);
+
+  // The ProxMate IDE is a desktop-only feature (a pop-out editor) — hidden in
+  // mobile mode (below the `md` breakpoint), tracked live so a resize updates it.
+  const isDesktop = useIsDesktop();
 
   // ProxMate IDE availability for this user (admin policy) — gates the Console
   // menu entry. Fetched once; failure just hides the entry.
@@ -434,16 +439,17 @@ export default function VmDetailPage() {
                   <SquareTerminal />
                   Text — links, copy/paste
                 </DropdownMenuItem>
-                {ideCap?.available && vm.type !== "lxc" && (
+                {ideCap?.available && vm.type !== "lxc" && isDesktop && (
                   <DropdownMenuItem
                     disabled={!running}
-                    onClick={() =>
+                    onClick={() => {
+                      if (!isDesktop) return; // desktop-only feature (defense-in-depth)
                       window.open(
                         `${apiBaseUrl}/ide/${vm.id}/proxy/`,
                         `proxmate-ide-${vm.id}`,
                         "popup,width=1500,height=940",
-                      )
-                    }
+                      );
+                    }}
                   >
                     <Code2 />
                     ProxMate IDE — code + AI
