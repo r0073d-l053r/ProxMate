@@ -32,7 +32,13 @@ import { logger } from '../lib/logger.js';
 const IDE_HTTP_PATH = /^\/api\/ide\/([^/]+)\/proxy(\/[^?]*)?(\?.*)?$/;
 const IDE_WS_PATH = /^\/api\/ide\/([^/]+)\/proxy(\/.*)?$/;
 
-const proxy = httpProxy.createProxyServer({ ws: true, changeOrigin: true, xfwd: true });
+// changeOrigin MUST stay false: code-server validates the WebSocket `Origin`
+// against the request `Host`, so we forward the browser's original Host (which
+// matches its Origin) instead of rewriting it to the guest. Rewriting it makes
+// code-server reject the management WS with 403 → the workbench never connects
+// (verified against real code-server 4.127 on musebot). http-proxy still dials
+// the real target regardless of the Host header.
+const proxy = httpProxy.createProxyServer({ ws: true, changeOrigin: false, xfwd: true });
 
 proxy.on('error', (err, _req, target) => {
   logger.warn({ err: (err as Error)?.message }, 'ide proxy upstream error');
