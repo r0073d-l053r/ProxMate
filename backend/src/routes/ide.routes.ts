@@ -67,15 +67,17 @@ const KeySchema = z.object({
   key: z.string().min(1).max(400),
 });
 
-async function byoAllowed(user: { role: string }): Promise<boolean> {
+// Tenants may manage AI keys only when the admin allows BYO; admins may always
+// manage their own (they use saved endpoints as shared-model sources).
+async function canManageKeys(user: { role: string }): Promise<boolean> {
   const cap = await getIdeCapability({ role: user.role });
-  return cap.available && cap.allowByoKeys;
+  return cap.available && (cap.allowByoKeys || user.role === 'admin');
 }
 
 // GET /api/ide/keys — the caller's saved BYO keys (no secrets).
 router.get('/keys', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  if (!(await byoAllowed(user))) {
+  if (!(await canManageKeys(user))) {
     res.status(403).json({ error: 'Bring-your-own AI keys are not enabled.' });
     return;
   }
@@ -85,7 +87,7 @@ router.get('/keys', async (req: Request, res: Response) => {
 // POST /api/ide/keys — save a new BYO key.
 router.post('/keys', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  if (!(await byoAllowed(user))) {
+  if (!(await canManageKeys(user))) {
     res.status(403).json({ error: 'Bring-your-own AI keys are not enabled.' });
     return;
   }
@@ -118,7 +120,7 @@ router.post('/keys', async (req: Request, res: Response) => {
 // (lists the endpoint's models). Decrypts the key server-side only to probe.
 router.post('/keys/:keyId/test', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  if (!(await byoAllowed(user))) {
+  if (!(await canManageKeys(user))) {
     res.status(403).json({ error: 'Bring-your-own AI keys are not enabled.' });
     return;
   }

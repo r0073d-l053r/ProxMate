@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Sparkles, Loader2, Plus, Trash2, PlugZap } from "lucide-react";
 import { api, apiError } from "@/lib/api";
+import { useAuthStore } from "@/lib/auth-store";
 import type { IdeCapability, IdeLlmKey } from "@/lib/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -51,6 +52,7 @@ export function AiKeysCard() {
   const [secret, setSecret] = useState("");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
+  const isAdmin = useAuthStore((s) => s.user?.role === "admin");
 
   const preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0];
 
@@ -65,12 +67,14 @@ export function AiKeysCard() {
     api
       .get<IdeCapability>("/ide/config")
       .then((r) => {
-        const on = r.data.available && r.data.allowByoKeys;
+        // Tenants: only when the admin allows BYO. Admins: always, since they use
+        // saved endpoints as local-model sources for the IDE settings panel.
+        const on = r.data.available && (r.data.allowByoKeys || isAdmin);
         setAllowed(on);
         if (on) loadKeys();
       })
       .catch(() => setAllowed(false));
-  }, []);
+  }, [isAdmin]);
 
   async function addKey() {
     setSaving(true);
