@@ -17,11 +17,24 @@ RUN set -eux; \
     rm -rf /root/.opencode; \
     opencode --version
 
-# VS Code-style default machine settings (dark modern theme, telemetry off, no
-# workspace-trust nag, quiet startup) so the editor looks like stock VS Code.
+# Default machine settings: dark by default, telemetry off, no workspace-trust
+# nag, quiet startup, and a full ProxMate-brand repaint of the VS Code shell via
+# workbench.colorCustomizations (layered on Default Dark Modern for syntax).
 COPY settings.json /home/coder/.local/share/code-server/User/settings.json
 RUN mkdir -p /home/coder/.local/share/code-server/User \
     && chown -R coder:coder /home/coder/.local 2>/dev/null || true
+
+# Brand the browser tab + PWA icons with the ProxMate mark (the same assets the
+# app ships) so the IDE tab is visually identical to ProxMate. code-server's
+# pages use favicon-dark-support.svg as the primary icon and favicon.ico as the
+# legacy fallback; the pwa-icon-* PNGs feed the web-app manifest / apple-touch.
+COPY brand/icon.svg              /usr/lib/code-server/src/browser/media/favicon.svg
+COPY brand/icon.svg              /usr/lib/code-server/src/browser/media/favicon-dark-support.svg
+COPY brand/favicon.ico           /usr/lib/code-server/src/browser/media/favicon.ico
+COPY brand/icon-192.png          /usr/lib/code-server/src/browser/media/pwa-icon-192.png
+COPY brand/icon-192.png          /usr/lib/code-server/src/browser/media/pwa-icon-maskable-192.png
+COPY brand/icon-512.png          /usr/lib/code-server/src/browser/media/pwa-icon-512.png
+COPY brand/icon-maskable-512.png /usr/lib/code-server/src/browser/media/pwa-icon-maskable-512.png
 
 USER coder
 ENV PROXMATE_IDE=1
