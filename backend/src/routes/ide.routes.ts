@@ -2,11 +2,12 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.js';
 import { getIdeCapability } from '../services/ide.service.js';
-import { issueGatewayToken, listModelPickerEntries } from '../services/ide-gateway.service.js';
+import { issueGatewayToken, listModelPickerEntries, probeModels } from '../services/ide-gateway.service.js';
 import {
   listLlmKeys,
   addLlmKey,
   deleteLlmKey,
+  getLlmKeyEndpoint,
   KNOWN_PROVIDERS,
   TooManyLlmKeysError,
   InvalidLlmKeyError,
@@ -111,6 +112,23 @@ router.post('/keys', async (req: Request, res: Response) => {
     }
     throw err;
   }
+});
+
+// POST /api/ide/keys/:keyId/test — check that the saved key can reach its endpoint
+// (lists the endpoint's models). Decrypts the key server-side only to probe.
+router.post('/keys/:keyId/test', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  if (!(await byoAllowed(user))) {
+    res.status(403).json({ error: 'Bring-your-own AI keys are not enabled.' });
+    return;
+  }
+  const ep = await getLlmKeyEndpoint(user.id, req.params['keyId'] as string);
+  if (!ep) {
+    res.status(404).json({ error: 'Key not found' });
+    return;
+  }
+  const probe = await probeModels(ep.baseUrl, ep.apiKey);
+  res.json({ ok: probe.ok, modelCount: probe.models.length, models: probe.models.slice(0, 100), error: probe.error });
 });
 
 // DELETE /api/ide/keys/:keyId — remove a BYO key (allowed even if BYO was since
