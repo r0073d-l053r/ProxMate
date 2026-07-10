@@ -1,0 +1,11 @@
+{
+  "name": "proxmate-ide-autostart",
+  "displayName": "ProxMate IDE Autostart",
+  "description": "Opens the OpenCode AI agent in a terminal when the IDE starts.",
+  "publisher": "proxmate",
+  "version": "1.0.0",
+  "engines": { "vscode": "^1.80.0" },
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {}
+}

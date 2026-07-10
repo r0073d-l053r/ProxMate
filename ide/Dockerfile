@@ -44,8 +44,24 @@ COPY brand/icon-maskable-512.png /usr/lib/code-server/src/browser/media/pwa-icon
 COPY write-opencode-config.sh /usr/lib/proxmate/entrypointd/10-opencode.sh
 RUN chmod 0755 /usr/lib/proxmate/entrypointd/10-opencode.sh
 
+# Auto-launch: a tiny baked extension opens the OpenCode agent in an editor-area
+# terminal on startup, so the IDE comes up with the agent already running.
+COPY autostart /home/coder/.local/share/code-server/extensions/proxmate-ide-autostart
+RUN chown -R coder:coder /home/coder/.local/share/code-server/extensions 2>/dev/null || true
+
 USER coder
 ENV PROXMATE_IDE=1
 ENV ENTRYPOINTD=/usr/lib/proxmate/entrypointd
-# Branding (product name in the title/UI) is applied at run time:
-#   code-server --app-name "ProxMate IDE" --disable-telemetry --auth none ...
+
+# The popular OpenCode VS Code extension (sst-dev.opencode, from Open VSX) for
+# editor integration + the Ctrl+Esc keybinding, alongside the autostart above.
+RUN code-server --install-extension sst-dev.opencode
+
+# Run time (provisioning) mounts the VM's root into the container and opens it so
+# the user edits their REAL VM files, running as root for full access:
+#   docker run -u 0 -v /:/vmroot --entrypoint /bin/sh proxmate-ide:dev -c \
+#     '/usr/lib/proxmate/entrypointd/10-opencode.sh; \
+#      exec /usr/bin/code-server --app-name "ProxMate IDE" --auth none \
+#        --bind-addr 0.0.0.0:8080 \
+#        --user-data-dir /home/coder/.local/share/code-server \
+#        --extensions-dir /home/coder/.local/share/code-server/extensions /vmroot'
