@@ -24,6 +24,7 @@ import { apiWriteLimiter } from './middleware/rate-limit.js';
 import { prisma } from './lib/prisma.js';
 import { registry } from './lib/metrics.js';
 import { getVersion } from './services/proxmox.service.js';
+import { mountIdeProxy } from './services/ide-proxy.service.js';
 
 const app = express();
 
@@ -31,6 +32,13 @@ const app = express();
 // TRUST_PROXY to the number of trusted hops so rate limiting & req.ip use the
 // real client IP. Default 0 = trust none (direct connections / dev).
 app.set('trust proxy', Number(process.env.TRUST_PROXY ?? 0));
+
+// ProxMate IDE reverse proxy (in-guest code-server). Mounted FIRST so it streams
+// the raw request body to code-server and passes code-server's own response
+// headers through untouched — ahead of helmet/CORS/json-parsing/rate-limiting,
+// which would otherwise mangle an editor session. It only claims
+// /api/ide/:id/proxy/* (own cookie + ownership auth); everything else falls through.
+mountIdeProxy(app);
 
 // ─── Global Middleware ────────────────────────────────────────
 // Request id + structured access log + latency metric, first so everything is covered.
