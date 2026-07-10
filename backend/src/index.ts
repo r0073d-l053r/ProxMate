@@ -21,7 +21,8 @@ if (!process.env.ENCRYPTION_KEY) {
 import http from 'node:http';
 import { app } from './app.js';
 import { logger } from './lib/logger.js';
-import { setupConsoleWebSocket } from './routes/console.routes.js';
+import { handleConsoleUpgrade } from './routes/console.routes.js';
+import { handleIdeUpgrade } from './services/ide-proxy.service.js';
 import { startScheduler } from './services/scheduler.service.js';
 import { reconcileInterruptedPassthroughApplies } from './services/passthrough-request.service.js';
 
@@ -43,7 +44,15 @@ server.requestTimeout = 0;
 // of intermittent 502s behind a proxy). Keep headers a touch higher.
 server.keepAliveTimeout = 65_000;
 server.headersTimeout = 66_000;
-setupConsoleWebSocket(server);
+
+// One upgrade dispatcher for every WebSocket transport: the console relay claims
+// /console + /serial, the IDE proxy claims /api/ide/:id/proxy, and anything else
+// is rejected. Each handler returns true once it takes ownership of the socket.
+server.on('upgrade', (req, socket, head) => {
+  if (handleConsoleUpgrade(req, socket, head)) return;
+  if (handleIdeUpgrade(req, socket, head)) return;
+  socket.destroy();
+});
 
 server.listen(PORT, BIND_ADDR, () => {
   logger.info({ port: PORT, bind: BIND_ADDR, env: process.env.NODE_ENV || 'development' }, `ProxMate API running on http://${BIND_ADDR}:${PORT}`);
