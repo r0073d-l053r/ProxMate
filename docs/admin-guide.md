@@ -189,6 +189,35 @@ Or in the Proxmox UI: **node → your template storage (e.g. `local`) → CT Tem
 
 Click **Generate** and share the invite link. The tenant signs up, picks a template (or builds from an ISO), and is bounded by their quota.
 
+### 4.1 Deploy a VM for a tenant (admin)
+
+As an admin, the New-VM wizard shows an **Admin options** block:
+
+- **Deploy for** — pick a tenant and the VM lands in *their* account (they own it; their quota
+  applies, not yours).
+- **Count against their quota** — uncheck to make the VM a **grant on top of their quota**: it's
+  excluded from every usage calculation and stays exempt even when resized. Use it for loaners,
+  classroom machines, or comped capacity.
+- **Node** — pin the target node, or leave **Auto-select** (best capacity, same placement tenants
+  get). Template deploys always stay on the template's node (linked clone), so the picker only
+  applies to ISO and container builds.
+
+A VM you deploy for a tenant is **admin-managed**: the tenant can operate it (start/stop, console,
+IDE, backups) but **cannot resize it** — only an admin can change its CPU/RAM/disk. This is also a
+quota-safety rule: a tenant who could grow a quota-exempt grant would sidestep quota entirely.
+Resize it yourself from the VM's Actions ▸ Resize.
+
+Admin actions on a tenant's VM (including this deploy) are recorded in the **admin audit log**
+only — the tenant's per-VM Activity feed shows just their own and their shared users' actions.
+
+### 4.2 VM sharing levels (what tenants can grant each other)
+
+A VM's owner can share it from **VM ▸ Settings ▸ Shared access** at three levels: **Viewer**
+(details, metrics, activity), **Operator** (adds power actions + console), **Manager** (adds
+settings, disks, backups including downloads, and the IDE). No share can ever delete, rebuild,
+migrate, or re-share the VM — those stay with the owner (and you, the admin). The API enforces
+every level server-side.
+
 ## 5. Security & Authentication Controls (SMTP, MFA, SSO)
 
 ProxMate provides robust security features to protect accounts and control how users authenticate, including Multi-Factor Authentication (MFA), passwordless Passkeys, OpenID Connect (OIDC) Single Sign-On (SSO), and secure email-based password recovery.

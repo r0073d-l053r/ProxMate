@@ -19,6 +19,23 @@ export const MAX_LLM_KEYS_PER_USER = 20;
 export const KNOWN_PROVIDERS = ['openai', 'openai-compatible'] as const;
 export type LlmProvider = (typeof KNOWN_PROVIDERS)[number];
 
+// The openai-compatible bases TENANTS may use — the fixed, well-known preset
+// services the UI offers (OpenRouter, Groq). A free-form "custom" base URL is
+// admin-only (owner decision 2026-07-11): tenants must not point the gateway at
+// arbitrary endpoints. Keep in sync with the PRESETS list in
+// frontend/src/components/ide/ai-keys-card.tsx.
+export const TENANT_ALLOWED_COMPAT_BASES = [
+  'https://openrouter.ai/api/v1',
+  'https://api.groq.com/openai/v1',
+] as const;
+
+/** Normalize a base URL for allow-list comparison: lowercase, no trailing slashes. */
+function normalizeBase(url: string): string {
+  return url.trim().toLowerCase().replace(/\/+$/, '');
+}
+
+const TENANT_ALLOWED_NORMALIZED = new Set(TENANT_ALLOWED_COMPAT_BASES.map(normalizeBase));
+
 export interface LlmKeyView {
   id: string;
   label: string;
@@ -70,11 +87,13 @@ export interface AddLlmKeyInput {
  * Save a new BYO key for a user (secret encrypted at rest). Returns the safe view.
  * `allowPrivate` exempts the SSRF host-shape check — set it for ADMINS, who
  * legitimately point shared-model sources at a LAN endpoint (e.g. a local Ollama).
+ * `allowCustomBase` (also admin-only) permits openai-compatible base URLs beyond
+ * the fixed tenant presets in {@link TENANT_ALLOWED_COMPAT_BASES}.
  */
 export async function addLlmKey(
   userId: string,
   input: AddLlmKeyInput,
-  opts: { allowPrivate?: boolean } = {},
+  opts: { allowPrivate?: boolean; allowCustomBase?: boolean } = {},
 ): Promise<LlmKeyView> {
   const label = input.label?.trim();
   const provider = input.provider?.trim();
@@ -89,6 +108,14 @@ export async function addLlmKey(
   // 'openai' uses its fixed endpoint; everything else must supply an http(s) base URL.
   if (provider !== 'openai' && (!baseUrl || !/^https?:\/\//i.test(baseUrl))) {
     throw new InvalidLlmKeyError('a valid http(s) base URL is required for an openai-compatible provider');
+  }
+  // Tenants may only use the fixed preset services; a free-form base URL is
+  // admin-only (arbitrary endpoints are the risky surface — the gateway would
+  // forward chats and the key wherever this points).
+  if (provider !== 'openai' && baseUrl && !opts.allowCustomBase && !TENANT_ALLOWED_NORMALIZED.has(normalizeBase(baseUrl))) {
+    throw new InvalidLlmKeyError(
+      'Custom AI endpoints are admin-only — pick one of the offered providers, or ask your admin to share the model instead.',
+    );
   }
   // SSRF guard: a tenant's own key must reach only the public internet, never the
   // ProxMate host's internal network / metadata endpoint. Admins are exempt (they

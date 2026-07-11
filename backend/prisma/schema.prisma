@@ -243,6 +243,19 @@ model VirtualMachine {
   deployState   String?
   deployStateAt DateTime?
 
+  // True when an ADMIN deployed this VM into the owner's account as a grant that
+  // does NOT count toward their quota (unchecked "count against their quota" at
+  // deploy). Exempt VMs are excluded from every usage aggregation and stay
+  // exempt across resizes. Admin-set only.
+  quotaExempt   Boolean   @default(false)
+
+  // True when an ADMIN provisioned this VM into a tenant's account (deploy-for-
+  // tenant). The owning tenant may operate it but NOT resize it (cpu/ram/disk) —
+  // the admin sized it and manages that. Also a hard quota-safety requirement for
+  // quotaExempt grants: a tenant who could resize a free grant would bypass quota
+  // entirely. Only an admin can resize an admin-managed VM.
+  adminManaged  Boolean   @default(false)
+
   // Optional user labels for grouping/filtering (lowercase, comma-separated).
   tags          String?
 
@@ -303,14 +316,17 @@ model PassthroughRequest {
   @@index([status])
 }
 
-// Grants another tenant access to a VM they don't own. `co-owner` = full lifecycle
-// (start/stop/resize/backup…) except delete + managing shares; `read-only` = view
-// only (details, live stats, activity). The owner/admins always retain full control.
+// Grants another tenant access to a VM they don't own, at a PRESET LEVEL:
+// "viewer" = see details/stats/activity; "operator" = + power actions & console;
+// "manager" = + settings/disks/backups/IDE. Capabilities derive from the preset in
+// code (vm-share.service.ts CAPS_BY_ROLE). No share ever deletes, migrates,
+// rebuilds, manages shares, or touches passthrough — owner/admin only. Legacy
+// values ("co-owner"→manager, "read-only"→viewer) are migrated + normalized on read.
 model VmShare {
   id        String   @id @default(cuid())
   vmId      String
   userId    String                  // the user the VM is shared WITH
-  role      String   @default("read-only") // "co-owner" | "read-only"
+  role      String   @default("viewer") // "viewer" | "operator" | "manager"
   createdAt DateTime @default(now())
 
   vm        VirtualMachine @relation(fields: [vmId], references: [id], onDelete: Cascade)

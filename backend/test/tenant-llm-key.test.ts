@@ -96,6 +96,29 @@ describe('addLlmKey', () => {
   });
 });
 
+describe('tenant custom-base restriction (owner decision 2026-07-11)', () => {
+  const custom = { label: 'x', provider: 'openai-compatible', model: 'm', key: 'k' };
+
+  it('rejects a tenant free-form base URL (custom endpoints are admin-only)', async () => {
+    await expect(
+      addLlmKey('u1', { ...custom, baseUrl: 'https://my-vllm.example.com/v1' }),
+    ).rejects.toThrow(/admin-only/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('accepts the fixed tenant presets, tolerant of case and trailing slashes', async () => {
+    await addLlmKey('u1', { ...custom, baseUrl: 'https://OpenRouter.ai/api/v1/' });
+    await addLlmKey('u1', { ...custom, baseUrl: 'https://api.groq.com/openai/v1' });
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows an admin (allowCustomBase) to save a free-form base URL', async () => {
+    await addLlmKey('admin1', { ...custom, baseUrl: 'https://my-vllm.example.com/v1' }, { allowCustomBase: true, allowPrivate: true });
+    const arg = create.mock.calls[0]![0] as { data: Record<string, unknown> };
+    expect(arg.data['baseUrl']).toBe('https://my-vllm.example.com/v1');
+  });
+});
+
 describe('deleteLlmKey', () => {
   it('deletes only the caller-owned key', async () => {
     findUnique.mockResolvedValue({ id: 'k1', userId: 'u1' } as never);

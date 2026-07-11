@@ -99,3 +99,45 @@ describe('ensureHostCpu — expose AVX for OpenCode', () => {
     expect(c.put).not.toHaveBeenCalled();
   });
 });
+
+// ─── Node AVX capability (the IDE relocate prerequisite) ──────────────────────
+import { nodeHasAvx, getNodeAvxMap } from '../src/services/proxmox.service.js';
+
+describe('nodeHasAvx', () => {
+  it('finds avx as a whole word in the flags string', () => {
+    expect(nodeHasAvx('fpu vme sse2 avx avx2 aes')).toBe(true);
+    expect(nodeHasAvx('avx')).toBe(true);
+  });
+  it("does NOT match 'avx2' alone (the base instruction set is what Bun needs)", () => {
+    expect(nodeHasAvx('fpu sse2 avx2 aes')).toBe(false);
+  });
+  it('returns unknown when the API omits the flags', () => {
+    expect(nodeHasAvx(undefined)).toBe('unknown');
+    expect(nodeHasAvx('')).toBe('unknown');
+  });
+});
+
+describe('getNodeAvxMap', () => {
+  it('maps each online node from cpuinfo.flags, failing open to unknown', async () => {
+    const c = fakeClient();
+    c.get.mockImplementation(async (url: string) => {
+      if (url === '/cluster/resources') {
+        return { data: { data: [
+          { type: 'node', status: 'online', node: 'n-avx' },
+          { type: 'node', status: 'online', node: 'n-old' },
+          { type: 'node', status: 'online', node: 'n-mystery' },
+          { type: 'node', status: 'offline', node: 'n-down' },
+        ] } };
+      }
+      if (url === '/nodes/n-avx/status') return { data: { data: { cpuinfo: { flags: 'sse2 avx avx2' } } } };
+      if (url === '/nodes/n-old/status') return { data: { data: { cpuinfo: { flags: 'fpu sse2' } } } };
+      if (url === '/nodes/n-mystery/status') throw new Error('boom');
+      throw new Error(`unexpected ${url}`);
+    });
+    const map = await getNodeAvxMap(asClient(c));
+    expect(map.get('n-avx')).toBe(true);
+    expect(map.get('n-old')).toBe(false);
+    expect(map.get('n-mystery')).toBe('unknown');
+    expect(map.has('n-down')).toBe(false); // offline nodes aren't probed
+  });
+});

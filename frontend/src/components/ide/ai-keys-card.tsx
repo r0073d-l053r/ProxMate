@@ -187,7 +187,8 @@ export function AiKeysCard() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {PRESETS.map((p) => (
+                {/* The free-form custom endpoint is admin-only (server-enforced too). */}
+                {PRESETS.filter((p) => isAdmin || !p.custom).map((p) => (
                   <SelectItem key={p.id} value={p.id}>
                     {p.label}
                   </SelectItem>
