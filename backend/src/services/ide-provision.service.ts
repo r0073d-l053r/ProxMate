@@ -138,12 +138,19 @@ export async function startIdeProvision(
   const opencodeJson = renderOpencodeJson(issued.baseUrl, models, models[0]?.id);
   const script = buildBootstrap(issued.token, opencodeJson);
 
-  await guestFileWrite(vm.proxmoxNode, vm.proxmoxVmId, '/tmp/pmide-bootstrap.sh', script, client);
+  // Ship the bootstrap as base64 (pure ASCII — the raw script has non-ASCII/newlines
+  // that break Proxmox's agent/file-write content param) and decode it in the guest.
+  const b64 = Buffer.from(script, 'utf8').toString('base64');
+  await guestFileWrite(vm.proxmoxNode, vm.proxmoxVmId, '/tmp/pmide-bootstrap.b64', b64, client);
   // Detach fully so the install survives past this request/agent session.
   await guestExec(
     vm.proxmoxNode,
     vm.proxmoxVmId,
-    ['/bin/sh', '-c', 'setsid sh /tmp/pmide-bootstrap.sh >/var/log/pmide-provision.log 2>&1 </dev/null & echo started'],
+    [
+      '/bin/sh',
+      '-c',
+      'base64 -d /tmp/pmide-bootstrap.b64 > /tmp/pmide-bootstrap.sh && setsid sh /tmp/pmide-bootstrap.sh >/var/log/pmide-provision.log 2>&1 </dev/null & echo started',
+    ],
     client,
   );
 
