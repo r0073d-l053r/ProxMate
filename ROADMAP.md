@@ -13,31 +13,20 @@ rough priority bands, not commitments. Have an idea? Open a
 
 ---
 
-## In progress — ProxMate IDE (branch `feat/proxmate-ide`, not yet merged)
+## Shipped in v0.7.0 — ProxMate IDE (beta)
 
-An in-browser IDE for tenants: **code-server** (VS Code in the browser) with the **OpenCode** AI agent
-baked in, opened **inside the tenant's own VM** and reverse-proxied by ProxMate — so tenants build their
-machine with an AI copilot, using their own LLM keys or admin-shared local models. Admin-gated end to end;
-a session can only ever reach the VM it was opened from.
+An in-browser IDE for tenants: **code-server** (VS Code in the browser) with the **OpenCode** AI agent,
+installed **natively inside the tenant's own VM** on first "Open IDE" and reverse-proxied by ProxMate — so
+tenants build their machine with an AI copilot, using admin-shared local models or their own LLM keys.
+Admin-gated end to end (off by default); a session can only ever reach the VM it was opened from. Includes
+the per-VM **LLM gateway** (allow-list choke point, per-VM tokens, streaming, two-layer rate limiting), a
+**managed isolation-consistent firewall pinhole** for reaching guests, **min-spec guardrails** (RAM floor,
+`cpu: host`/AVX), install + **cloud-init deploy locks**, and `DEPLOY_WITH_CLAUDE.md` — an agent-guided
+production deploy method. See `docs/proxmate-ide.md`.
 
-- **Phase 1 — admin policy + gating.** _Done._ Availability tiers (off / admin-only / tenants), a
-  bring-your-own-key toggle, admin-shared models, and an encrypted local-model gateway config — all in
-  Admin → Settings. Tenants see only what they're allowed.
-- **Phase 2 — reverse-proxy transport.** _Done._ HTTP + WebSocket proxy at `/api/ide/:id/proxy/`,
-  authenticated by the session cookie + VM ownership. Proven end to end against real code-server (the full
-  VS Code workbench connects through ProxMate).
-- **Phase 3 — branded image + Open IDE.** _Done._ ProxMate-brand theme (full VS Code repaint + favicon),
-  OpenCode auto-launches on open, desktop-only entry.
-- **Phase 4 — ProxMate LLM gateway.** _Done._ An OpenAI-compatible gateway (`/api/ide/:id/llm/v1/*`) with a
-  per-VM token, streaming, and an allow-list: tenants use only admin-shared local models or their own
-  bring-your-own keys — enforced server-side. Admin panel: local models sourced from saved endpoints, each
-  with a **Test** button and Admin-only / Shared / None visibility. Test buttons on Security "AI keys" too.
-- **Native in-guest install + lazy auto-provisioning.** _Done._ The IDE installs code-server + OpenCode
-  **natively inside each VM** (no container — real users/hostname/services, opened at `/`) on first
-  "Open IDE", via the guest agent; a per-VM `proxmate-ide` systemd service. While a VM installs, its
-  console/power/delete are **locked** behind a loading state so nothing corrupts. Proven live on musebot.
-- **Remaining:** extend the install-lock to initial cloud-init VM creation; per-VM routing on non-flat
-  networks (a Tailscale subnet route on the test host); then merge to `main`.
+- **IDE follow-ups (open):** admin Settings field for `ide_ingress_cidr` + a one-click reachability test;
+  pin code-server/OpenCode installer versions in the provisioning bootstrap; wire the gateway as a provider
+  for code-server's built-in Chat view.
 
 ---
 
