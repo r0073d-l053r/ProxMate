@@ -9,7 +9,14 @@ import {
   guestExecOutput,
   ensureIdePinhole,
   ensureHostCpu,
+  getNodeAvxMap,
+  migratableTargets,
+  getNodesHealth,
+  pickBestNode,
+  shutdownVm,
+  waitForTask,
 } from './proxmox.service.js';
+import { migrateVmToNode, startVm as startVmService, getVmWithLiveStatus } from './vm.service.js';
 import { issueGatewayToken, listModelPickerEntries } from './ide-gateway.service.js';
 import { getConfig } from './config.service.js';
 import {
@@ -128,8 +135,19 @@ echo "[proxmate-ide] done"
 `;
 }
 
+/**
+ * Machine-readable reason for a provision refusal, so the UI can offer the right
+ * next step: 'reboot_required' → a cpu-model change needs one reboot to land;
+ * 'node_no_avx' → the NODE's physical CPU lacks AVX, so no reboot will ever help —
+ * offer the one-click relocate to a capable node instead.
+ */
+export type IdeProvisionErrorCode = 'reboot_required' | 'node_no_avx';
+
 export class IdeProvisionError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    public code?: IdeProvisionErrorCode,
+  ) {
     super(message);
     this.name = 'IdeProvisionError';
   }
@@ -166,9 +184,11 @@ export async function startIdeProvision(
     );
   }
   // (b) AVX: the OpenCode agent's Bun runtime needs it. Set the host CPU model
-  // (idempotent), then require the guest to actually expose AVX — a cpu-model
-  // change only lands on reboot, so if it's still missing, stop and have the
-  // tenant reboot (their next attempt passes).
+  // (idempotent), then require the guest to actually expose AVX. If it's missing,
+  // the NODE's own capability decides the remedy: a node whose silicon has AVX
+  // (or unknown — fail toward the cheap fix) just needs the guest rebooted so the
+  // cpu-model change lands; a node that demonstrably LACKS AVX can never provide
+  // it, so the answer is relocating the VM to a capable node.
   await ensureHostCpu(vm.proxmoxNode, vm.proxmoxVmId, client);
   const avx = await guestExecOutput(
     vm.proxmoxNode,
@@ -178,8 +198,16 @@ export async function startIdeProvision(
     8000,
   );
   if (avx.stdout.trim() !== 'yes') {
+    const nodeAvx = (await getNodeAvxMap(client)).get(vm.proxmoxNode);
+    if (nodeAvx === false) {
+      throw new IdeProvisionError(
+        "This node's CPU hardware doesn't support AVX, which the OpenCode AI agent needs — no reboot will add it. The VM can be moved to a capable node instead.",
+        'node_no_avx',
+      );
+    }
     throw new IdeProvisionError(
       "This VM's CPU doesn't expose AVX, which the OpenCode AI agent needs. I set its CPU type to 'host' — reboot the VM, then open the IDE again.",
+      'reboot_required',
     );
   }
 
@@ -259,4 +287,110 @@ export async function refreshIdeState(vm: VirtualMachine): Promise<IdeState> {
     return 'ready';
   }
   return 'installing';
+}
+
+// ─── Relocate to an AVX-capable node (the 'node_no_avx' escape hatch) ─────────
+//
+// When the guardrail above hits 'node_no_avx', no reboot can ever fix the VM in
+// place — the node's silicon lacks the instructions. This moves the guest to a
+// node whose CPU is CONFIRMED AVX-capable, picked by the server (tenants never
+// choose nodes — a recorded design decision). The move is deliberately OFFLINE:
+// the guest runs `cpu: host`, and live-migrating a host-CPU guest between
+// heterogeneous CPUs is exactly the unsafe case (recorded caveat), so we shut
+// down → migrate → start. Long disk copies outlast any HTTP request (and the
+// tunnel), so the route returns 202 and the UI polls the in-memory tracker
+// below (single-process backend — same pattern as the gateway rate window).
+
+export interface IdeRelocateStatus {
+  state: 'running' | 'done' | 'failed';
+  startedAt: number;
+  target?: string;
+  error?: string;
+}
+
+const relocations = new Map<string, IdeRelocateStatus>();
+const RELOCATE_RESULT_TTL_MS = 10 * 60 * 1000;
+
+export function getIdeRelocateStatus(vmId: string): IdeRelocateStatus | null {
+  const r = relocations.get(vmId);
+  if (!r) return null;
+  // Expire finished entries so the map can't grow unbounded.
+  if (r.state !== 'running' && Date.now() - r.startedAt > RELOCATE_RESULT_TTL_MS) {
+    relocations.delete(vmId);
+    return null;
+  }
+  return r;
+}
+
+/**
+ * Validate that a relocate makes sense for this VM and pick the target node.
+ * Throws {@link IdeProvisionError} with a human-readable reason otherwise.
+ */
+export async function planIdeRelocate(vm: VirtualMachine): Promise<string> {
+  if (vm.type === 'lxc') throw new IdeProvisionError('The IDE needs a QEMU VM — containers are not supported.');
+  if (vm.hasPassthrough) {
+    throw new IdeProvisionError('This VM has a PCI/GPU device attached and is pinned to its node — it can’t be moved.');
+  }
+  if (vm.ideState === 'installing' || vm.deployState === 'deploying') {
+    throw new IdeProvisionError('This VM is busy finishing another operation — try again in a minute.');
+  }
+  if (relocations.get(vm.id)?.state === 'running') {
+    throw new IdeProvisionError('A move is already in progress for this VM.');
+  }
+
+  const client = await getClient();
+  const avxMap = await getNodeAvxMap(client);
+  if (avxMap.get(vm.proxmoxNode) !== false) {
+    throw new IdeProvisionError('This VM’s node supports the IDE — no move is needed. Reboot the VM and open the IDE again.');
+  }
+
+  // Where CAN it go (Proxmox preflight, fail-open to online nodes) ∩ online ∩
+  // CONFIRMED AVX-capable. Requiring confirmed AVX is deliberately fail-CLOSED:
+  // moving a guest to another incapable (or unknowable) node helps nobody.
+  const [allowed, health] = await Promise.all([
+    migratableTargets(vm.proxmoxNode, vm.proxmoxVmId, client),
+    getNodesHealth(client),
+  ]);
+  const onlineOthers = health.nodes.filter((n) => n.online && n.name !== vm.proxmoxNode).map((n) => n.name);
+  const base = allowed ?? onlineOthers;
+  const onlineSet = new Set(onlineOthers);
+  const eligible = base.filter((n) => onlineSet.has(n) && avxMap.get(n) === true);
+  if (eligible.length === 0) {
+    throw new IdeProvisionError(
+      'No reachable node with an AVX-capable CPU can take this VM right now — ask your admin about moving it.',
+    );
+  }
+  return pickBestNode({ cpu: vm.cpu, ramMb: vm.ram, storageGb: 0 }, undefined, client, eligible, 'amd64');
+}
+
+/**
+ * Kick off the background stop → offline-migrate → start. Returns the chosen
+ * target immediately; progress is polled via {@link getIdeRelocateStatus}.
+ */
+export async function startIdeRelocate(vm: VirtualMachine, actorId: string): Promise<string> {
+  const target = await planIdeRelocate(vm);
+  relocations.set(vm.id, { state: 'running', startedAt: Date.now(), target });
+
+  void (async () => {
+    try {
+      const client = await getClient();
+      // Graceful shutdown first (skip if already off). cpu:host forbids a live move.
+      const { live } = await getVmWithLiveStatus(vm);
+      if (live?.status === 'running') {
+        const upid = await shutdownVm(vm.proxmoxNode, vm.proxmoxVmId, client);
+        await waitForTask(vm.proxmoxNode, upid, client, 5 * 60_000);
+        await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
+      }
+      const moved = await migrateVmToNode(vm, target, { offline: true, actorId });
+      await startVmService(moved);
+      relocations.set(vm.id, { state: 'done', startedAt: Date.now(), target });
+      logger.info({ vmId: vm.id, target }, 'ide relocate done');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'move failed';
+      relocations.set(vm.id, { state: 'failed', startedAt: Date.now(), target, error: msg });
+      logger.error({ vmId: vm.id, target, err: msg }, 'ide relocate failed');
+    }
+  })();
+
+  return target;
 }
