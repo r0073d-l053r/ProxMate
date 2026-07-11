@@ -2,7 +2,7 @@ import https from 'node:https';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { access, mkdir, writeFile, rename } from 'node:fs/promises';
-import axios, { AxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios';
+import axios, { AxiosError, type AxiosInstance, type AxiosRequestConfig, type InternalAxiosRequestConfig } from 'axios';
 import { getConfig } from './config.service.js';
 import { proxmoxApiErrors } from '../lib/metrics.js';
 
@@ -14,7 +14,7 @@ const TIMEOUT_MS = Number(process.env['PROXMOX_TIMEOUT_MS'] ?? 15_000);
 const MAX_RETRIES = Math.max(0, Number(process.env['PROXMOX_RETRIES'] ?? 2));
 const IDEMPOTENT = new Set(['get', 'head', 'options']);
 
-type RetryConfig = InternalAxiosRequestConfig & { _retryCount?: number };
+type RetryConfig = InternalAxiosRequestConfig & { _retryCount?: number; _noRetry?: boolean };
 
 function classifyError(err: AxiosError): 'timeout' | 'network' | 'http' | 'other' {
   if (err.code === 'ECONNABORTED' || /timeout/i.test(err.message)) return 'timeout';
@@ -38,7 +38,7 @@ function attachRetry(client: AxiosInstance): void {
     const transient = kind === 'timeout' || kind === 'network' || (status !== undefined && (status >= 500 || status === 429));
     if (transient) proxmoxApiErrors.inc({ kind });
 
-    if (!cfg || !transient || !IDEMPOTENT.has((cfg.method ?? 'get').toLowerCase())) throw error;
+    if (!cfg || cfg._noRetry || !transient || !IDEMPOTENT.has((cfg.method ?? 'get').toLowerCase())) throw error;
     const attempt = (cfg._retryCount ?? 0) + 1;
     if (attempt > MAX_RETRIES) throw error;
     cfg._retryCount = attempt;
@@ -2681,9 +2681,13 @@ export async function getVmIps(
 ): Promise<GuestIps> {
   const c = client ?? (await getClient());
   try {
+    // Best-effort + fail-fast: a short timeout AND no retries. For a VM whose
+    // guest agent is enabled-in-config but not actually running (installing, mid
+    // boot, or never installed), this call hangs until timeout — retrying it just
+    // multiplies the wait and drags every VM-list / detail load. One quick attempt.
     const res = await c.get<{ data: { result?: AgentNetworkInterface[] } }>(
       `/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`,
-      { timeout: 2000 },
+      { timeout: 1500, _noRetry: true } as AxiosRequestConfig & { _noRetry: boolean },
     );
     let v4: string | null = null;
     let v6: string | null = null;
