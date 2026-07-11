@@ -54,3 +54,22 @@ export const publicTokenLimiter = createRateLimiter({
   max: Number(process.env.PUBLIC_TOKEN_RATE_LIMIT_MAX ?? 60),
   message: 'Too many requests — please slow down and try again later.',
 });
+
+/**
+ * Pre-auth throttle for the IDE LLM gateway. The gateway is exempt from
+ * apiWriteLimiter (chat streaming must not be throttled mid-conversation), so
+ * without this the Bearer-token verification — a hash + DB lookup on every
+ * request — would be an unthrottled surface for token brute-forcing / DoS.
+ * Keyed by IP and deliberately generous: several IDE VMs behind one NAT egress
+ * share this budget, and the finer per-VM fixed window inside the gateway
+ * routes handles per-tenant fairness after the token verifies.
+ */
+export const gatewayAuthLimiter = rateLimit({
+  windowMs: Number(process.env.IDE_GATEWAY_RATE_LIMIT_WINDOW_MS ?? 60 * 1000),
+  limit: Number(process.env.IDE_GATEWAY_RATE_LIMIT_MAX ?? 600),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: {
+    error: { message: 'ProxMate IDE gateway: rate limit exceeded, slow down', type: 'rate_limit_error' },
+  },
+});

@@ -50,6 +50,8 @@ model User {
   vmShares       VmShare[]
   quotaRequests  QuotaRequest[]
   passthroughRequests PassthroughRequest[]
+  ideGatewayTokens IdeGatewayToken[]
+  llmKeys        TenantLlmKey[]
 }
 
 // A tenant's request to raise their resource quota; an admin approves (applies the
@@ -85,6 +87,51 @@ model ApiToken {
   lastUsedAt DateTime?
   expiresAt  DateTime?                  // null = never expires
   createdAt  DateTime  @default(now())
+
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// Per-VM token that authenticates the in-guest IDE's AI agent (OpenCode) to the
+// ProxMate LLM gateway. OpenCode has no ProxMate session cookie, so it bears this
+// token instead; the gateway resolves it to (user, vm), re-checks ownership + the
+// IDE policy, and enforces the shared-model allow-list. Only the SHA-256 hash is
+// stored (raw `pmide_…` shown once at mint / rotation). One active token per
+// (user, vm) — re-provisioning rotates it. Revocable + optional expiry.
+model IdeGatewayToken {
+  id         String    @id @default(cuid())
+  userId     String
+  vmId       String
+  tokenHash  String    @unique          // SHA-256 of the raw token
+  prefix     String                     // first chars, for display
+  lastUsedAt DateTime?
+  expiresAt  DateTime?                  // null = valid until revoked / rotated
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, vmId])
+  @@index([vmId])
+}
+
+// A tenant's own LLM provider API key (bring-your-own), used ONLY through the
+// ProxMate gateway (single controlled egress + audit + rate-limit). The key is
+// AES-256-GCM encrypted at rest (keyEnc) under ENCRYPTION_KEY and only decrypted
+// in-memory to forward one upstream request — it is never returned to any client.
+// `provider` selects the upstream shape; `baseUrl` overrides it for the
+// openai-compatible kind. Each row exposes exactly one `model` to the tenant.
+model TenantLlmKey {
+  id         String    @id @default(cuid())
+  userId     String
+  label      String                     // user-friendly, e.g. "my OpenAI"
+  provider   String                     // "openai" | "anthropic" | "openai-compatible"
+  model      String                     // upstream model name to expose
+  baseUrl    String?                    // custom base URL (openai-compatible)
+  keyEnc     String                     // AES-encrypted API key (never returned)
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
 
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -176,6 +223,25 @@ model VirtualMachine {
   // Non-null while the VM is booted into rescue mode: a JSON snapshot of the
   // pre-rescue { boot, ide3 } config lines, restored on "exit rescue".
   rescueBoot    String?
+
+  // ProxMate IDE install lifecycle for THIS guest (lazy, on first "Open IDE"):
+  //   null / 'none' = not installed; 'installing' = provisioning in progress
+  //   (guest is LOCKED — no console/stop/delete until done); 'ready' = the
+  //   native code-server service is up; 'failed' = install errored (retryable).
+  ideState      String?
+  ideStateAt    DateTime?
+
+  // Cloud-init deploy lock for THIS guest. When a VM is created (or rebuilt) from
+  // a cloud-init template, cloud-init keeps provisioning inside the guest after
+  // Proxmox already reports it 'running' — installing packages, the guest agent,
+  // the tenant's extras. Interrupting that mid-flight leaves a half-built box, so:
+  //   'deploying' = cloud-init still running (guest LOCKED — no stop/restart/
+  //   pause/delete/migrate); 'ready' = cloud-init reported done, or we gave up
+  //   waiting (timeout) and unlocked. null = not a tracked deploy (ISO, LXC, or a
+  //   plain non-cloud-init template). Cleared via a guest-agent `cloud-init status`
+  //   probe (see deploy-lock.service.ts).
+  deployState   String?
+  deployStateAt DateTime?
 
   // Optional user labels for grouping/filtering (lowercase, comma-separated).
   tags          String?

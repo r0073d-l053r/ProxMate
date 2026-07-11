@@ -1,0 +1,2 @@
+# Shell hooks baked into the image MUST stay LF — CRLF breaks POSIX `sh`.
+*.sh text eol=lf

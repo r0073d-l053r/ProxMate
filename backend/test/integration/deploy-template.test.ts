@@ -73,6 +73,11 @@ describe('deployFromTemplate — cloud-init', () => {
     });
 
     expect(vm.status).toBe('running');
+    // Cloud-init keeps provisioning after boot — the VM is deploy-locked.
+    expect(vm.deployState).toBe('deploying');
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ deployState: 'deploying' }) }),
+    );
 
     // Cloud images full-clone (linked clones aren't supported on imported disks).
     const cloneCall = client.post.mock.calls.find((c) => /\/qemu\/100\/clone$/.test(c[0] as string));
@@ -98,7 +103,13 @@ describe('deployFromTemplate — cloud-init', () => {
 
     const plain = { ...TEMPLATE, cloudInit: false } as Template;
     const admin = { id: 'a1', role: 'admin' } as never;
-    await deployFromTemplate(admin, plain, { name: 'box', cpu: 1, ram: 1024, storage: 4 });
+    const vm = await deployFromTemplate(admin, plain, { name: 'box', cpu: 1, ram: 1024, storage: 4 });
+
+    // No cloud-init means no deploy lock — nothing provisions after boot.
+    expect(vm.deployState).toBeUndefined();
+    expect(
+      update.mock.calls.some((c) => (c[0] as { data: Record<string, unknown> }).data.deployState !== undefined),
+    ).toBe(false);
 
     expect(client.put.mock.calls.some((c) => bodyOf(c).ciuser !== undefined)).toBe(false);
     // Plain templates linked-clone.

@@ -16,6 +16,8 @@ import quotaRequestRoutes from './routes/quota-request.routes.js';
 import passthroughRequestRoutes from './routes/passthrough-request.routes.js';
 import downloadRoutes from './routes/download.routes.js';
 import broadcastRoutes from './routes/broadcast.routes.js';
+import ideRoutes from './routes/ide.routes.js';
+import ideGatewayRoutes from './routes/ide-gateway.routes.js';
 import { openApiSpec } from './lib/openapi.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { observability } from './middleware/observability.js';
@@ -23,6 +25,7 @@ import { apiWriteLimiter } from './middleware/rate-limit.js';
 import { prisma } from './lib/prisma.js';
 import { registry } from './lib/metrics.js';
 import { getVersion } from './services/proxmox.service.js';
+import { mountIdeProxy } from './services/ide-proxy.service.js';
 
 const app = express();
 
@@ -31,9 +34,25 @@ const app = express();
 // real client IP. Default 0 = trust none (direct connections / dev).
 app.set('trust proxy', Number(process.env.TRUST_PROXY ?? 0));
 
+// ProxMate IDE reverse proxy (in-guest code-server). Mounted FIRST so it streams
+// the raw request body to code-server and passes code-server's own response
+// headers through untouched — ahead of helmet/CORS/json-parsing/rate-limiting,
+// which would otherwise mangle an editor session. It only claims
+// /api/ide/:id/proxy/* (own cookie + ownership auth); everything else falls through.
+mountIdeProxy(app);
+
 // ─── Global Middleware ────────────────────────────────────────
 // Request id + structured access log + latency metric, first so everything is covered.
 app.use(observability);
+
+// ProxMate LLM gateway (Bearer-token; called server-to-server by the in-guest AI
+// agent — no browser session). Mounted BEFORE helmet/cors/the shared json parser +
+// write limiter: chat payloads routinely exceed the 1 MB API cap, and streaming
+// chat must never be throttled as a "write". It claims only /api/ide/:id/llm/v1/*;
+// any other /api/ide path finds no route here and falls through to ideRoutes below.
+app.use('/api/ide/:id/llm', express.json({ limit: '15mb' }));
+app.use('/api/ide', ideGatewayRoutes);
+
 app.use(helmet());
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
@@ -106,6 +125,11 @@ app.use('/api/vms', vmRoutes);
 app.use('/api/proxmox', proxmoxRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/admin', adminRoutes);
+// The LLM gateway is mounted EARLY (above, before the shared middleware) so it
+// escapes the 1 MB body cap + write limiter. Here we mount only the session-authed
+// IDE routes; any `/:id/llm/v1/*` was already handled, and everything else
+// (`/config`, `/:id/gateway-token`, `/keys`) lands here.
+app.use('/api/ide', ideRoutes);
 app.use('/api/templates', templateRoutes);
 app.use('/api/ssh-keys', sshKeyRoutes);
 app.use('/api/api-tokens', apiTokenRoutes);

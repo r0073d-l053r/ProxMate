@@ -39,6 +39,12 @@ services:
       # Number of reverse-proxy hops in front of the API, so the real client IP
       # is used for rate-limiting + audit. 1 when behind a single proxy (Caddy/nginx).
       TRUST_PROXY: ${TRUST_PROXY:-0}
+      # Header carrying the real client IP for the audit log. Unset defaults to
+      # "cf-connecting-ip" (Cloudflare); behind a plain Caddy/nginx proxy set
+      # REAL_IP_HEADER=x-forwarded-for in .env. Deliberately `-` not `:-`: an
+      # explicitly-EMPTY value must pass through (it means "disable, use the raw
+      # socket IP"); only a fully unset var takes the Cloudflare default.
+      REAL_IP_HEADER: ${REAL_IP_HEADER-cf-connecting-ip}
       # Public base URL of the API — used to build the SSO (OIDC) callback URL
       # (${BACKEND_PUBLIC_URL}/api/auth/sso/callback). Set to your public origin.
       BACKEND_PUBLIC_URL: ${BACKEND_PUBLIC_URL:-http://localhost:4000}
@@ -64,6 +70,12 @@ services:
       # host updater (deploy/update.sh + the systemd path unit) is installed.
       # When enabled, also mount the control dir below. See DEPLOYMENT.md.
       SELF_UPDATE_ENABLED: ${SELF_UPDATE_ENABLED:-false}
+      # /metrics auth: in production the endpoint returns 404 unless this is set;
+      # scrapers must send `Authorization: Bearer <token>`.
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      # Opt-in: allow admin-configured webhooks / cloud-image mirrors on private
+      # LAN addresses (SSRF guard escape hatch). Off by default.
+      ALLOW_PRIVATE_OUTBOUND_URLS: ${ALLOW_PRIVATE_OUTBOUND_URLS:-false}
     # Report healthy only once /api/health passes (DB reachable + migrations run),
     # so the frontend can wait for a genuinely-ready backend (see depends_on below).
     healthcheck:
