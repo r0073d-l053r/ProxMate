@@ -147,6 +147,21 @@ apply to containers if added; LXC additionally benefits from running **unprivile
 | Containers | Both images run with **all Linux capabilities dropped** and `no-new-privileges`; the frontend runs as a non-root user and the backend drops to the unprivileged `node` user after fixing data-volume ownership. |
 | Audit log | VM lifecycle (create/delete/start/stop/restart/restore), auth events, and **account lockouts** are recorded with actor + client IP; admin-viewable at `/admin/audit`. |
 
+### ProxMate IDE (in-guest editor + AI agent)
+
+The IDE is the one feature that reaches a guest **over the network** (`guest-ip:8080`) rather
+than out-of-band through the Proxmox API, so it has its own guarantees (full model in
+[`docs/proxmate-ide.md`](docs/proxmate-ide.md)):
+
+| Area | Posture |
+|------|---------|
+| Editor transport | Reverse-proxied through the backend; every HTTP **and** WebSocket request is resolved through `getOwnedVm` (owner-gated, same as the console). The proxy refuses loopback/link-local/metadata targets, so a spoofed guest-reported IP can't point it at the host. |
+| Firewall pinhole | Reaching `code-server` needs one inbound hole in the guest's isolation firewall — added as a **managed, infra-scoped** ACCEPT via the Proxmox firewall API (like the isolation rules), scoped to `ide_ingress_cidr` (a wildcard `0.0.0.0/0` is rejected). The guest keeps `policy_in=DROP`, so **tenant-to-tenant isolation is unchanged** — only ProxMate's address can reach the port. |
+| LLM gateway | The in-guest AI agent authenticates with a **per-VM bearer token** (sha-256 hashed at rest) that re-checks ownership + policy live on every call. `resolveModelRoute` is the single allow-list choke point: a tenant can reach only admin-shared models, or their own BYO keys when enabled — never an un-shared model, even by editing the in-guest config. Admin upstream endpoints/keys never leave the server. |
+| BYO-key SSRF | Tenant-supplied key endpoints go through the same outbound guard as webhooks (shape-check on save, DNS re-check at forward). Admins are exempt so they can source models from a **LAN** endpoint (e.g. a local Ollama). |
+| Gateway limits | Body-capped (large chat contexts allowed but bounded) and rate-limited **per VM**, so a stolen or runaway token can't flood the upstream. |
+| Base URL | The gateway URL handed to the guest is built from the forwarded scheme and **must be https** in production (`TRUST_PROXY=1`), or the edge's http→https redirect silently downgrades the agent's POST to a GET. |
+
 ### Recommended: scope the Proxmox API token
 
 ProxMate works with a `root@pam` token, but for least privilege create a dedicated user

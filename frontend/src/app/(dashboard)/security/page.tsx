@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ShieldCheck, ShieldOff, Loader2, KeyRound, Copy, Fingerprint, Plus, Trash2, KeySquare, Terminal, Mail } from "lucide-react";
+import { ShieldCheck, ShieldOff, Loader2, KeyRound, Copy, Fingerprint, Plus, Trash2, KeySquare, Terminal, Mail, Eye, EyeOff } from "lucide-react";
 import { startRegistration } from "@simplewebauthn/browser";
 import { api, apiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 import { useAuthStore } from "@/lib/auth-store";
 import type { MeResponse, SshKey, ApiTokenInfo, CreatedApiToken } from "@/lib/types";
 import { PageHeader } from "@/components/dashboard/page-header";
+import { AiKeysCard } from "@/components/ide/ai-keys-card";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -29,6 +30,7 @@ export default function SecurityPage() {
   const [addingPasskey, setAddingPasskey] = useState(false);
   const [mfaRequired, setMfaRequired] = useState(false);
   const [sshKeys, setSshKeys] = useState<SshKey[] | null>(null);
+  const [revealedKeys, setRevealedKeys] = useState<Set<string>>(new Set());
   const [keyName, setKeyName] = useState("");
   const [keyValue, setKeyValue] = useState("");
   const [savingKey, setSavingKey] = useState(false);
@@ -424,24 +426,40 @@ export default function SecurityPage() {
             <p className="text-sm text-muted-foreground">No saved keys yet.</p>
           ) : (
             <ul className="divide-y rounded-md border">
-              {sshKeys.map((k) => (
-                <li key={k.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
-                  <div className="min-w-0">
-                    <p className="font-medium">{k.name}</p>
-                    <p className="truncate font-mono text-xs text-muted-foreground" title={k.publicKey}>
-                      {k.publicKey}
-                    </p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => removeSshKey(k.id)}
-                    aria-label={`Remove ${k.name}`}
-                  >
-                    <Trash2 className="text-destructive" />
-                  </Button>
-                </li>
-              ))}
+              {sshKeys.map((k) => {
+                const shown = revealedKeys.has(k.id);
+                return (
+                  <li key={k.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium">{k.name}</p>
+                      {shown && (
+                        <p className="mt-0.5 break-all font-mono text-xs text-muted-foreground">{k.publicKey}</p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          setRevealedKeys((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(k.id)) next.delete(k.id);
+                            else next.add(k.id);
+                            return next;
+                          })
+                        }
+                        aria-label={shown ? `Hide ${k.name}` : `Show ${k.name}`}
+                        title={shown ? "Hide key" : "Show key"}
+                      >
+                        {shown ? <Eye /> : <EyeOff />}
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => removeSshKey(k.id)} aria-label={`Remove ${k.name}`}>
+                        <Trash2 className="text-destructive" />
+                      </Button>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
           <div className="grid gap-2 border-t pt-3">
@@ -477,7 +495,7 @@ export default function SecurityPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="mt-6">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Terminal className="size-5" /> API tokens
@@ -549,7 +567,10 @@ export default function SecurityPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      {/* Bring-your-own AI keys for the ProxMate IDE (only shown when the admin enables BYO). */}
+      <AiKeysCard />
+
+      <Card className="mt-6">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Mail className="size-5" /> Email preferences

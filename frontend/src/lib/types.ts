@@ -107,6 +107,15 @@ export interface VmDetail extends VirtualMachine {
   live: VmLiveStatus | null;
   /** Whether the admin has designated a rescue ISO (QEMU only). */
   rescueAvailable?: boolean;
+  /** ProxMate IDE install state: null/'none' | 'installing' | 'ready' | 'failed'. */
+  ideState?: "none" | "installing" | "ready" | "failed" | null;
+  /** Cloud-init deploy lock: 'deploying' = still provisioning (locked); else ready. */
+  deployState?: "none" | "deploying" | "ready" | null;
+}
+
+/** GET /api/ide/:id/status */
+export interface IdeStatus {
+  state: "none" | "installing" | "ready" | "failed";
 }
 
 /** One 1 s sample from GET /vms/:id/live-stats (cached cluster/resources). */
@@ -421,6 +430,57 @@ export interface AdminSettings {
         callbackUrl: string;
       };
   notify: NotifyConfig;
+  ide: IdeSettings;
+}
+
+/** Admin policy for ProxMate IDE (in-guest code-server + OpenCode). */
+export type IdeTier = "off" | "admin" | "tenants";
+
+export interface IdeSharedModel {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+}
+
+/** Who may pick a local model: admins only, all tenants, or nobody (staged/off). */
+export type ModelVisibility = "admin" | "shared" | "none";
+
+/** A local model the admin exposes, sourced from one of their saved AI keys. */
+export interface IdeLocalModel {
+  id?: string;
+  nickname?: string;
+  model: string;
+  sourceKeyId: string;
+  visibility: ModelVisibility;
+}
+
+export interface IdeSettings {
+  enabled: IdeTier;
+  allowByoKeys: boolean;
+  localModels: IdeLocalModel[];
+  sharedModels: IdeSharedModel[];
+  gatewayUrl: string;
+  hasGatewayKey: boolean;
+}
+
+/** What the current user may do with ProxMate IDE (from GET /api/ide/config). */
+export interface IdeCapability {
+  available: boolean;
+  allowByoKeys: boolean;
+  models: { id: string; label: string }[];
+  sharedModels: IdeSharedModel[];
+}
+
+/** A tenant's own (bring-your-own) LLM key — the safe view; the secret never leaves the server. */
+export interface IdeLlmKey {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+  baseUrl: string | null;
+  createdAt: string;
+  lastUsedAt: string | null;
 }
 
 export type NotifyEvent = "backup.failed" | "vm.error" | "auth.lockout";

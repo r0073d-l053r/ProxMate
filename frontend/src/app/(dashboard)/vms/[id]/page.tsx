@@ -9,6 +9,7 @@ import {
   ArrowLeftRight,
   Archive,
   ChevronDown,
+  Code2,
   Copy,
   Cpu,
   Disc,
@@ -33,8 +34,8 @@ import {
 } from "lucide-react";
 import { SiTailscale } from "react-icons/si";
 import { TemplateIcon } from "@/components/template-icon";
-import { api, apiError } from "@/lib/api";
-import type { VmDetail } from "@/lib/types";
+import { api, apiBaseUrl, apiError } from "@/lib/api";
+import type { IdeCapability, IdeStatus, VmDetail } from "@/lib/types";
 import { copyText } from "@/lib/clipboard";
 import { formatRam, formatBytes, formatUptime, formatDate } from "@/lib/format";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
@@ -55,6 +56,7 @@ import { PassthroughPanel } from "@/components/vm/passthrough-panel";
 import { RecoveryPanel } from "@/components/vm/recovery-panel";
 import { AlertsPanel } from "@/components/vm/alerts-panel";
 import { useAuthStore } from "@/lib/auth-store";
+import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -151,6 +153,67 @@ export default function VmDetailPage() {
   // Typed-name confirmation for the destructive delete — must match vm.name exactly.
   const [deleteText, setDeleteText] = useState("");
   const [dialog, setDialog] = useState<ActiveDialog>(null);
+
+  // The ProxMate IDE is a desktop-only feature (a pop-out editor) — hidden in
+  // mobile mode (below the `md` breakpoint), tracked live so a resize updates it.
+  const isDesktop = useIsDesktop();
+
+  // ProxMate IDE availability for this user (admin policy) — gates the Console
+  // menu entry. Fetched once; failure just hides the entry.
+  const [ideCap, setIdeCap] = useState<IdeCapability | null>(null);
+  useEffect(() => {
+    api
+      .get<IdeCapability>("/ide/config")
+      .then((r) => setIdeCap(r.data))
+      .catch(() => setIdeCap(null));
+  }, []);
+
+  // ProxMate IDE — lazy install on first "Open IDE". While installing, the VM is
+  // locked (the backend rejects console/stop/delete) and we show a loading state,
+  // then open the editor once the guest is serving.
+  const [ideInstalling, setIdeInstalling] = useState(false);
+
+  async function openIde() {
+    if (!vm) return;
+    const popup = () =>
+      window.open(`${apiBaseUrl}/ide/${vm.id}/proxy/`, `proxmate-ide-${vm.id}`, "popup,width=1500,height=940");
+    if (vm.ideState === "ready") {
+      popup();
+      return;
+    }
+    setIdeInstalling(true);
+    try {
+      await api.post(`/ide/${vm.id}/provision`, {});
+      toast.info("Installing the ProxMate IDE — this takes about a minute…");
+      const deadline = Date.now() + 12 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const state = await api
+          .get<IdeStatus>(`/ide/${vm.id}/status`)
+          .then((r) => r.data.state)
+          .catch(() => "installing" as const);
+        if (state === "ready") {
+          toast.success("ProxMate IDE is ready.");
+          popup();
+          break;
+        }
+        if (state === "failed") {
+          toast.error("The IDE install didn't finish. Check the VM and try again.");
+          break;
+        }
+      }
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setIdeInstalling(false);
+      load();
+    }
+  }
+
+  const ideBusy = ideInstalling || vm?.ideState === "installing";
+  // Cloud-init is still provisioning a freshly-deployed VM — the backend locks
+  // destructive actions (409) until it settles; we mirror that in the UI.
+  const deploying = vm?.deployState === "deploying";
 
   // Active tab, deep-linkable via ?tab= (e.g. /vms/abc?tab=backups). Kept in the
   // URL with replaceState so switching tabs never adds history entries.
@@ -344,7 +407,10 @@ export default function VmDetailPage() {
   }
 
   const acting = transition !== null;
-  const busy = acting || (pending !== null && pending !== "delete-failed");
+  // While the VM is locked (IDE installing or cloud-init still deploying) the
+  // backend rejects power/delete/migrate — disable those controls so the lock is
+  // visible, not just a surprise 409 after a click.
+  const busy = acting || ideBusy || deploying || (pending !== null && pending !== "delete-failed");
   const running = vm.status === "running";
   const stopped = vm.status === "stopped" || vm.status === "error";
   // Access: owners/admins manage shares; co-owners can operate; read-only can only
@@ -364,6 +430,37 @@ export default function VmDetailPage() {
       <Button variant="ghost" render={<Link href="/vms" />} className="mb-4">
         <ArrowLeft /> Back to VMs
       </Button>
+
+      {/* IDE install lock: while the IDE is provisioning, the VM's console / power /
+          delete are blocked (backend-enforced) so nothing corrupts mid-install. */}
+      {ideBusy && (
+        <div className="mb-4 flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-4 text-sm">
+          <Loader2 className="size-5 shrink-0 animate-spin text-primary" />
+          <div>
+            <p className="font-medium">Installing the ProxMate IDE on this VM…</p>
+            <p className="text-muted-foreground">
+              This takes about a minute. The console, power, and delete actions are locked until it
+              finishes — you can safely navigate away and come back.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Cloud-init deploy lock: a freshly-deployed VM keeps provisioning after it
+          boots. Power / delete / migrate are backend-locked until it settles. */}
+      {deploying && !ideBusy && (
+        <div className="mb-4 flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-4 text-sm">
+          <Loader2 className="size-5 shrink-0 animate-spin text-primary" />
+          <div>
+            <p className="font-medium">Finishing setup on this VM…</p>
+            <p className="text-muted-foreground">
+              Cloud-init is installing packages and configuring the guest. Power, delete, and migrate
+              are locked until it&rsquo;s ready — this usually takes a minute or two. You can safely
+              navigate away and come back.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* DigitalOcean-style header: identity + status on the left, the two things
           you reach for most — Console and Actions — pinned on the right. */}
@@ -407,7 +504,7 @@ export default function VmDetailPage() {
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
-                  <Button variant="outline" disabled={!running || acting}>
+                  <Button variant="outline" disabled={!running || acting || ideBusy}>
                     <Terminal />
                     Console
                     <ChevronDown className="size-3.5 text-muted-foreground" />
@@ -415,14 +512,30 @@ export default function VmDetailPage() {
                 }
               />
               <DropdownMenuContent align="end" className="min-w-56">
-                <DropdownMenuItem onClick={() => router.push(`/vms/${vm.id}/console`)}>
+                <DropdownMenuItem disabled={ideBusy} onClick={() => router.push(`/vms/${vm.id}/console`)}>
                   <Terminal />
                   Graphical (noVNC)
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => router.push(`/vms/${vm.id}/console?mode=text`)}>
+                <DropdownMenuItem disabled={ideBusy} onClick={() => router.push(`/vms/${vm.id}/console?mode=text`)}>
                   <SquareTerminal />
                   Text — links, copy/paste
                 </DropdownMenuItem>
+                {ideCap?.available && vm.type !== "lxc" && isDesktop && (
+                  <DropdownMenuItem
+                    disabled={!running || ideBusy}
+                    onClick={() => {
+                      if (!isDesktop) return; // desktop-only feature (defense-in-depth)
+                      openIde();
+                    }}
+                  >
+                    {ideBusy ? <Loader2 className="animate-spin" /> : <Code2 />}
+                    {vm.ideState === "ready"
+                      ? "ProxMate IDE — code + AI"
+                      : ideBusy
+                        ? "Installing IDE…"
+                        : "ProxMate IDE — install & open"}
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={() =>
@@ -442,7 +555,7 @@ export default function VmDetailPage() {
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
-                  <Button>
+                  <Button disabled={ideBusy}>
                     Actions
                     <ChevronDown className="size-3.5" />
                   </Button>

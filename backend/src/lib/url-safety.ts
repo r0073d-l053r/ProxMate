@@ -56,6 +56,23 @@ export function isBlockedIp(ip: string): boolean {
 }
 
 /**
+ * Loopback / link-local / metadata / unspecified only — NARROWER than
+ * {@link isBlockedIp} because it deliberately ALLOWS RFC1918 private ranges.
+ * Used to sanity-check the IDE reverse-proxy target: tenant guests legitimately
+ * live on a private LAN, but a spoofed guest-reported IP must never point the
+ * proxy at the host's own loopback (127.0.0.1) or cloud metadata (169.254.169.254).
+ * Sync (no DNS).
+ */
+export function isLoopbackOrLinkLocal(ip: string): boolean {
+  const s = ip.trim().toLowerCase();
+  if (s.startsWith('127.') || s === '::1') return true;
+  if (s.startsWith('169.254.')) return true;
+  if (s.startsWith('0.')) return true;
+  if (s === '::' || s.startsWith('fe80')) return true;
+  return false;
+}
+
+/**
  * Escape hatch for homelab / self-hosted deployments: a Mattermost, ntfy, or
  * image mirror on the LAN is a legitimate target there. Off by default (SSRF-safe);
  * set `ALLOW_PRIVATE_OUTBOUND_URLS=true` to permit private/loopback destinations.

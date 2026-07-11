@@ -55,6 +55,9 @@ import { announcementEmail } from '../lib/email-templates.js';
 import { unsubscribeToken } from '../services/broadcast-optout.service.js';
 import { getNotifyConfig, saveNotifyConfig, sendTestNotification, NOTIFY_EVENTS } from '../services/notify.service.js';
 import * as sso from '../services/sso.service.js';
+import { getIdeConfig, saveIdeConfig } from '../services/ide.service.js';
+import { listLlmKeys, getLlmKeyEndpoint } from '../services/tenant-llm-key.service.js';
+import { probeModels } from '../services/ide-gateway.service.js';
 import { listResetRequests, adminResetPassword } from '../services/password-reset.service.js';
 import { refreshVmIps } from '../services/vm.service.js';
 import type { AuthRequest } from '../types/index.js';
@@ -115,6 +118,7 @@ router.get('/settings', async (_req: Request, res: Response) => {
           callbackUrl: sso.callbackUrl(),
         }
       : { configured: false, callbackUrl: sso.callbackUrl() },
+    ide: await getIdeConfig(),
   });
 });
 
@@ -192,6 +196,66 @@ router.post('/settings/notifications/test', async (_req: Request, res: Response)
   } catch (err) {
     res.status(400).json({ ok: false, error: err instanceof Error ? err.message : 'Test failed' });
   }
+});
+
+// ─── ProxMate IDE settings ────────────────────────────────────
+
+const IdeSharedModelSchema = z.object({
+  id: z.string().min(1).max(64),
+  label: z.string().min(1).max(120),
+  provider: z.string().min(1).max(40),
+  model: z.string().min(1).max(120),
+});
+
+// A local model sourced from one of the admin's saved endpoints (a TenantLlmKey).
+const IdeLocalModelSchema = z.object({
+  id: z.string().max(64).optional(), // server-assigned when absent
+  nickname: z.string().max(80).optional(),
+  model: z.string().min(1).max(160),
+  sourceKeyId: z.string().min(1).max(64),
+  visibility: z.enum(['admin', 'shared', 'none']).default('none'),
+});
+
+const IdeSchema = z.object({
+  enabled: z.enum(['off', 'admin', 'tenants']).default('off'),
+  allowByoKeys: z.boolean().default(false),
+  localModels: z.array(IdeLocalModelSchema).max(100).optional(),
+  sharedModels: z.array(IdeSharedModelSchema).max(50).optional(),
+  // The admin's own local-model endpoint — may be a LAN/loopback address (Ollama,
+  // vLLM), so it is deliberately NOT run through the public-URL SSRF shape check.
+  gatewayUrl: z.string().max(2000).optional(),
+  gatewayKey: z.string().max(500).optional(), // kept if blank
+});
+
+router.put('/settings/ide', async (req: Request, res: Response) => {
+  const parsed = IdeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  await saveIdeConfig(parsed.data);
+  await recordAudit({ action: 'admin.ide_config', actor: (req as AuthRequest).user, req });
+  res.json({ success: true });
+});
+
+// ─── IDE local-model sources (the admin's own saved endpoints) ─
+// GET the admin's saved AI keys (labels only) to populate the "source" dropdown;
+// POST tests one — listing the models reachable at that endpoint for the picker.
+router.get('/ide/sources', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  res.json(await listLlmKeys(user.id));
+});
+
+router.post('/ide/test-source', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const keyId = typeof req.body?.keyId === 'string' ? req.body.keyId : '';
+  const ep = await getLlmKeyEndpoint(user.id, keyId);
+  if (!ep) {
+    res.status(404).json({ ok: false, error: 'That saved key was not found.' });
+    return;
+  }
+  const probe = await probeModels(ep.baseUrl, ep.apiKey);
+  res.json({ ok: probe.ok, models: probe.models, error: probe.error });
 });
 
 // ─── SSO (OIDC) settings ──────────────────────────────────────

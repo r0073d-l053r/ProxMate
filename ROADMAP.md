@@ -13,6 +13,23 @@ rough priority bands, not commitments. Have an idea? Open a
 
 ---
 
+## Shipped in v0.7.0 — ProxMate IDE (beta)
+
+An in-browser IDE for tenants: **code-server** (VS Code in the browser) with the **OpenCode** AI agent,
+installed **natively inside the tenant's own VM** on first "Open IDE" and reverse-proxied by ProxMate — so
+tenants build their machine with an AI copilot, using admin-shared local models or their own LLM keys.
+Admin-gated end to end (off by default); a session can only ever reach the VM it was opened from. Includes
+the per-VM **LLM gateway** (allow-list choke point, per-VM tokens, streaming, two-layer rate limiting), a
+**managed isolation-consistent firewall pinhole** for reaching guests, **min-spec guardrails** (RAM floor,
+`cpu: host`/AVX), install + **cloud-init deploy locks**, and `DEPLOY_WITH_CLAUDE.md` — an agent-guided
+production deploy method. See `docs/proxmate-ide.md`.
+
+- **IDE follow-ups (open):** admin Settings field for `ide_ingress_cidr` + a one-click reachability test;
+  pin code-server/OpenCode installer versions in the provisioning bootstrap; wire the gateway as a provider
+  for code-server's built-in Chat view.
+
+---
+
 ## Tier 1 — High-value, low-risk (cloud parity)
 
 - **Live VM resize / reconfigure** — change CPU/RAM/disk after creation

@@ -2,7 +2,7 @@ import https from 'node:https';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { access, mkdir, writeFile, rename } from 'node:fs/promises';
-import axios, { AxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios';
+import axios, { AxiosError, type AxiosInstance, type AxiosRequestConfig, type InternalAxiosRequestConfig } from 'axios';
 import { getConfig } from './config.service.js';
 import { proxmoxApiErrors } from '../lib/metrics.js';
 
@@ -14,7 +14,7 @@ const TIMEOUT_MS = Number(process.env['PROXMOX_TIMEOUT_MS'] ?? 15_000);
 const MAX_RETRIES = Math.max(0, Number(process.env['PROXMOX_RETRIES'] ?? 2));
 const IDEMPOTENT = new Set(['get', 'head', 'options']);
 
-type RetryConfig = InternalAxiosRequestConfig & { _retryCount?: number };
+type RetryConfig = InternalAxiosRequestConfig & { _retryCount?: number; _noRetry?: boolean };
 
 function classifyError(err: AxiosError): 'timeout' | 'network' | 'http' | 'other' {
   if (err.code === 'ECONNABORTED' || /timeout/i.test(err.message)) return 'timeout';
@@ -38,7 +38,7 @@ function attachRetry(client: AxiosInstance): void {
     const transient = kind === 'timeout' || kind === 'network' || (status !== undefined && (status >= 500 || status === 429));
     if (transient) proxmoxApiErrors.inc({ kind });
 
-    if (!cfg || !transient || !IDEMPOTENT.has((cfg.method ?? 'get').toLowerCase())) throw error;
+    if (!cfg || cfg._noRetry || !transient || !IDEMPOTENT.has((cfg.method ?? 'get').toLowerCase())) throw error;
     const attempt = (cfg._retryCount ?? 0) + 1;
     if (attempt > MAX_RETRIES) throw error;
     cfg._retryCount = attempt;
@@ -2423,6 +2423,89 @@ export async function configureVmIsolation(
   }
 }
 
+/** Marker comment identifying the managed ProxMate IDE firewall pinhole. */
+const IDE_PINHOLE_COMMENT = 'ProxMate IDE: reverse-proxy pinhole';
+
+/**
+ * Punch ONE inbound hole in a guest's tenant-isolation firewall so the ProxMate
+ * reverse proxy can reach the in-guest code-server on `port`. This is the IDE's
+ * managed counterpart to {@link configureVmIsolation}: the guest keeps
+ * `policy_in: DROP` (isolated from every other tenant), and we add a single
+ * `IN ACCEPT` scoped to `source` — the ProxMate INFRASTRUCTURE only (the node /
+ * subnet-router / backend host that fronts the proxy), NEVER another tenant — so
+ * tenant-to-tenant isolation is untouched. Conntrack lets the replies back out,
+ * so no outbound rule is needed. Idempotent: keyed on the rule comment.
+ */
+export async function ensureIdePinhole(
+  node: string,
+  vmid: number,
+  opts: { port: number; source: string },
+  client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
+): Promise<void> {
+  const c = client ?? (await getClient());
+  // Never open the guest's :8080 to the world — the source MUST be the specific
+  // ProxMate infrastructure address, or tenant isolation is meaningless.
+  const src = opts.source.trim();
+  if (!src || src === '0.0.0.0/0' || src === '0.0.0.0' || src === '::/0' || src === '*') {
+    throw new Error('IDE ingress source must be a specific ProxMate address, not a wildcard (0.0.0.0/0).');
+  }
+  const base = `/nodes/${node}/${kind}/${vmid}/firewall`;
+  const existing = await c.get<{ data: Array<{ comment?: string }> }>(`${base}/rules`);
+  if (existing.data.data.some((r) => r.comment === IDE_PINHOLE_COMMENT)) return;
+  await c.post(
+    `${base}/rules`,
+    new URLSearchParams({
+      enable: '1',
+      type: 'in',
+      action: 'ACCEPT',
+      proto: 'tcp',
+      dport: String(opts.port),
+      source: opts.source,
+      comment: IDE_PINHOLE_COMMENT,
+    }),
+  );
+}
+
+/** Remove the managed IDE pinhole(s) from a guest (best-effort; highest pos first). */
+export async function removeIdePinhole(
+  node: string,
+  vmid: number,
+  client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
+): Promise<void> {
+  const c = client ?? (await getClient());
+  const base = `/nodes/${node}/${kind}/${vmid}/firewall`;
+  const existing = await c.get<{ data: Array<{ pos: number; comment?: string }> }>(`${base}/rules`);
+  const positions = existing.data.data
+    .filter((r) => r.comment === IDE_PINHOLE_COMMENT)
+    .map((r) => r.pos)
+    .sort((a, b) => b - a); // delete from the bottom up so positions don't shift
+  for (const pos of positions) await c.delete(`${base}/rules/${pos}`);
+}
+
+/**
+ * Ensure a QEMU VM uses the host CPU model (`cpu: host`) so guest software that
+ * needs modern instruction sets — notably AVX, which the OpenCode agent's Bun
+ * runtime requires — actually sees them. The default `kvm64` masks AVX and makes
+ * OpenCode crash with an illegal instruction. Idempotent; returns true if it
+ * changed the config. NOTE: a CPU-model change only takes effect on the next VM
+ * boot, so callers must have the guest rebooted before relying on it.
+ */
+export async function ensureHostCpu(
+  node: string,
+  vmid: number,
+  client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
+): Promise<boolean> {
+  const c = client ?? (await getClient());
+  const cfg = await getVmConfig(node, vmid, c);
+  const current = String((cfg as Record<string, unknown>)['cpu'] ?? '');
+  if (current.split(',')[0] === 'host') return false;
+  await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams({ cpu: 'host' }));
+  return true;
+}
+
 export async function deleteVm(node: string, vmid: number, client?: AxiosInstance, kind: GuestKind = 'qemu'): Promise<string> {
   const c = client ?? (await getClient());
   const res = await c.delete<{ data: string }>(`/nodes/${node}/${kind}/${vmid}`);
@@ -2496,6 +2579,7 @@ export async function setGuestUserPassword(
 interface AgentExecStatus {
   exited: 0 | 1 | boolean;
   exitcode?: number;
+  'out-data'?: string;
   'err-data'?: string;
 }
 
@@ -2562,6 +2646,97 @@ export async function injectGuestSshKey(
     await new Promise((r) => setTimeout(r, 500));
   }
   throw new Error('Timed out waiting for the guest agent to finish adding the key');
+}
+
+/** True if the QEMU guest agent answers a ping (fail-fast, no retry). */
+export async function guestAgentPing(node: string, vmid: number, client?: AxiosInstance): Promise<boolean> {
+  const c = client ?? (await getClient());
+  try {
+    await c.post(`/nodes/${node}/qemu/${vmid}/agent/ping`, undefined, {
+      timeout: 3000,
+      _noRetry: true,
+    } as AxiosRequestConfig & { _noRetry: boolean });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Write a file inside the guest via the agent. `encode=1` tells PROXMATE-side to
+ * base64 the content for the QEMU agent channel (the guest decodes it), so we pass
+ * the RAW content here — do NOT pre-encode it (double-encoding writes the base64
+ * text verbatim). Content up to ~60 KiB.
+ */
+export async function guestFileWrite(
+  node: string,
+  vmid: number,
+  file: string,
+  content: string,
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams();
+  params.append('file', file);
+  params.append('content', content);
+  params.append('encode', '1');
+  await c.post(`/nodes/${node}/qemu/${vmid}/agent/file-write`, params);
+}
+
+/** Fire a command in the guest and return its pid — does NOT wait for it to finish. */
+export async function guestExec(
+  node: string,
+  vmid: number,
+  argv: string[],
+  client?: AxiosInstance,
+): Promise<number> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams();
+  for (const part of argv) params.append('command', part);
+  const res = await c.post<{ data: { pid: number } }>(`/nodes/${node}/qemu/${vmid}/agent/exec`, params);
+  return res.data.data.pid;
+}
+
+/** Result of a short-lived guest-agent exec that we wait on. */
+export interface GuestExecResult {
+  exitcode: number;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Run a short command in the guest via the agent and WAIT for its output
+ * (`agent/exec` then poll `exec-status`). For quick, near-instant probes only —
+ * e.g. reading `cloud-init status`. Times out (default 10s) rather than hanging
+ * the caller; a timeout throws so callers can treat it as "couldn't determine".
+ */
+export async function guestExecOutput(
+  node: string,
+  vmid: number,
+  argv: string[],
+  client?: AxiosInstance,
+  timeoutMs = 10_000,
+): Promise<GuestExecResult> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams();
+  for (const part of argv) params.append('command', part);
+  const res = await c.post<{ data: { pid: number } }>(`/nodes/${node}/qemu/${vmid}/agent/exec`, params);
+  const pid = res.data.data.pid;
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const st = await c.get<{ data: AgentExecStatus }>(`/nodes/${node}/qemu/${vmid}/agent/exec-status?pid=${pid}`);
+    const s = st.data.data;
+    if (s.exited) {
+      return {
+        exitcode: s.exitcode ?? 0,
+        stdout: (s['out-data'] ?? '').trim(),
+        stderr: (s['err-data'] ?? '').trim(),
+      };
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  throw new Error('Timed out waiting for the guest agent to finish the command');
 }
 
 // ─── Rescue mode ──────────────────────────────────────────────
@@ -2681,9 +2856,13 @@ export async function getVmIps(
 ): Promise<GuestIps> {
   const c = client ?? (await getClient());
   try {
+    // Best-effort + fail-fast: a short timeout AND no retries. For a VM whose
+    // guest agent is enabled-in-config but not actually running (installing, mid
+    // boot, or never installed), this call hangs until timeout — retrying it just
+    // multiplies the wait and drags every VM-list / detail load. One quick attempt.
     const res = await c.get<{ data: { result?: AgentNetworkInterface[] } }>(
       `/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`,
-      { timeout: 2000 },
+      { timeout: 1500, _noRetry: true } as AxiosRequestConfig & { _noRetry: boolean },
     );
     let v4: string | null = null;
     let v6: string | null = null;
