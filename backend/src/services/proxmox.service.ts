@@ -168,6 +168,7 @@ export function normalizeArch(machine?: string): Arch | 'unknown' {
 
 interface NodeStatus {
   'current-kernel'?: { machine?: string };
+  cpuinfo?: { flags?: string; model?: string };
 }
 
 const archCache = new Map<string, Arch | 'unknown'>();
@@ -207,6 +208,53 @@ export async function getNodeArchMap(client?: AxiosInstance): Promise<Map<string
     archCache.clear();
     for (const [k, v] of map) archCache.set(k, v);
     archCacheAt = Date.now();
+  }
+  return map;
+}
+
+/** Does this node-status `cpuinfo.flags` string include AVX? Undefined flags → unknown. */
+export function nodeHasAvx(flags?: string): boolean | 'unknown' {
+  if (!flags) return 'unknown';
+  return /(?:^|\s)avx(?:\s|$)/.test(flags.toLowerCase());
+}
+
+const avxCache = new Map<string, boolean | 'unknown'>();
+let avxCacheAt = 0;
+
+/**
+ * Map of node → whether its PHYSICAL CPU exposes AVX (true / false / 'unknown'),
+ * read from each online node's `/status` `cpuinfo.flags`. The ProxMate IDE's
+ * agent runtime needs AVX, and a guest with `cpu: host` inherits the node's
+ * flags — so this answers "which nodes can host an IDE VM". Mirrors
+ * {@link getNodeArchMap}: static hardware fact, cached a few minutes, and a
+ * detection failure yields 'unknown' rather than disqualifying the node.
+ */
+export async function getNodeAvxMap(client?: AxiosInstance): Promise<Map<string, boolean | 'unknown'>> {
+  const useCache = !client;
+  if (useCache && avxCache.size > 0 && Date.now() - avxCacheAt < ARCH_TTL_MS) return new Map(avxCache);
+
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources');
+  const nodes = res.data.data
+    .filter((i) => i.type === 'node' && i.status === 'online' && i.node)
+    .map((i) => i.node!);
+
+  const map = new Map<string, boolean | 'unknown'>();
+  await Promise.all(
+    nodes.map(async (node) => {
+      try {
+        const st = await c.get<{ data: NodeStatus }>(`/nodes/${node}/status`);
+        map.set(node, nodeHasAvx(st.data.data.cpuinfo?.flags));
+      } catch {
+        map.set(node, 'unknown');
+      }
+    }),
+  );
+
+  if (useCache) {
+    avxCache.clear();
+    for (const [k, v] of map) avxCache.set(k, v);
+    avxCacheAt = Date.now();
   }
   return map;
 }

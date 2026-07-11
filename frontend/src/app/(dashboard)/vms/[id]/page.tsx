@@ -203,14 +203,68 @@ export default function VmDetailPage() {
         }
       }
     } catch (err) {
-      toast.error(apiError(err));
+      // The backend tags CPU-guardrail refusals so we can offer the right remedy
+      // instead of a dead-end toast.
+      const code = (err as { response?: { data?: { code?: string } } })?.response?.data?.code;
+      if (code === "node_no_avx") {
+        setIdeRelocatePrompt(true);
+      } else if (code === "reboot_required") {
+        toast.error(apiError(err), {
+          action: { label: "Restart now", onClick: () => void action("restart", "restart") },
+          duration: 12000,
+        });
+      } else {
+        toast.error(apiError(err));
+      }
     } finally {
       setIdeInstalling(false);
       load();
     }
   }
 
-  const ideBusy = ideInstalling || vm?.ideState === "installing";
+  // 'node_no_avx' escape hatch: the node's silicon can't run the IDE, so offer a
+  // one-click server-picked move (stop → migrate → start), then retry the IDE.
+  const [ideRelocatePrompt, setIdeRelocatePrompt] = useState(false);
+  const [ideRelocating, setIdeRelocating] = useState(false);
+
+  async function runIdeRelocate() {
+    if (!vm) return;
+    setIdeRelocating(true);
+    try {
+      const r = await api.post<{ target: string }>(`/ide/${vm.id}/relocate`, {});
+      toast.info(`Moving ${vm.name} to a capable node (${r.data.target}) — it will shut down, move, and start again…`);
+      const deadline = Date.now() + 45 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((res) => setTimeout(res, 5000));
+        const st = await api
+          .get<{ state: "none" | "running" | "done" | "failed"; error?: string }>(`/ide/${vm.id}/relocate-status`)
+          .then((x) => x.data)
+          .catch(() => ({ state: "running" as const }));
+        if (st.state === "done") {
+          toast.success("Move complete — opening the IDE…");
+          await load();
+          await openIde();
+          return;
+        }
+        if (st.state === "failed") {
+          toast.error(st.error || "The move didn't finish. Check the VM and try again.");
+          return;
+        }
+        if (st.state === "none") {
+          toast.info("The move finished — open the IDE again.");
+          return;
+        }
+      }
+      toast.error("The move is taking unusually long — check the VM's status.");
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setIdeRelocating(false);
+      load();
+    }
+  }
+
+  const ideBusy = ideInstalling || ideRelocating || vm?.ideState === "installing";
   // Cloud-init is still provisioning a freshly-deployed VM — the backend locks
   // destructive actions (409) until it settles; we mirror that in the UI.
   const deploying = vm?.deployState === "deploying";
@@ -1066,6 +1120,32 @@ export default function VmDetailPage() {
           onDone={load}
         />
       )}
+
+      {/* IDE relocate offer — this node's CPU can't run the IDE (no AVX). */}
+      <AlertDialog open={ideRelocatePrompt} onOpenChange={setIdeRelocatePrompt}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Move {vm.name} to a capable node?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This node&apos;s CPU doesn&apos;t support AVX, which the ProxMate IDE&apos;s AI agent
+              needs — no reboot can add it. ProxMate can move this VM to a node that supports it:
+              the VM will <span className="font-medium text-foreground">shut down, move, and start
+              again</span> (usually a few minutes), then the IDE will open automatically.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Not now</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setIdeRelocatePrompt(false);
+                void runIdeRelocate();
+              }}
+            >
+              Move &amp; open the IDE
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={dialog === "duplicate"} onOpenChange={(o: boolean) => setDialog(o ? "duplicate" : null)}>
         <AlertDialogContent>
