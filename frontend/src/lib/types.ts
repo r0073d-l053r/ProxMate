@@ -82,6 +82,9 @@ export interface VirtualMachine {
   access?: VmAccess;
   // The capabilities the current user holds on this VM (owner/admin = all).
   caps?: VmCap[];
+  // Admin-provisioned into a tenant's account: the owning tenant may operate it
+  // but NOT resize it — only an admin can (also true of quota-exempt grants).
+  adminManaged?: boolean;
 }
 
 export interface VmDisk {

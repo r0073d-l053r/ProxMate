@@ -101,7 +101,7 @@ router.post('/deploy', async (req: Request, res: Response) => {
     // The guest's OWNER (the acting user, or the admin's chosen tenant) — quota
     // applies to them; forUserId/quotaExempt are admin-only options.
     const owner = await resolveCreateTarget(actor, parsed.data);
-    const vm = await deployFromTemplate(owner, template, parsed.data);
+    const vm = await deployFromTemplate(owner, template, { ...parsed.data, adminManaged: owner.id !== actor.id });
     res.status(201).json({ vm, status: vm.status });
   } catch (err) {
     if (err instanceof CreateOptionError) {

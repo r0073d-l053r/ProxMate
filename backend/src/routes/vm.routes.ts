@@ -117,6 +117,25 @@ function rejectIfLocked(vm: { ideState: string | null; deployState: string | nul
   return false;
 }
 
+/**
+ * Resize lock: an admin-managed VM (deploy-for-tenant) may be RESIZED only by an
+ * admin — the owning tenant operates it as-is. This also closes a quota bypass:
+ * a tenant who could grow a quota-exempt grant would sidestep quota entirely
+ * (quotaExempt implies adminManaged, but we check both defensively). Returns true
+ * (and sends 403) when the non-admin caller may not change this VM's size.
+ */
+export function rejectIfSizeLocked(
+  vm: { adminManaged: boolean; quotaExempt: boolean },
+  user: { role: string },
+  res: Response,
+): boolean {
+  if ((vm.adminManaged || vm.quotaExempt) && user.role !== 'admin') {
+    res.status(403).json({ error: 'This VM was set up by an admin — only an admin can resize it.' });
+    return true;
+  }
+  return false;
+}
+
 // ─── GET /api/vms ─────────────────────────────────────────────
 
 router.get('/', async (req: Request, res: Response) => {
@@ -177,7 +196,7 @@ router.post('/', async (req: Request, res: Response) => {
     // The guest's OWNER (the acting user, or the admin's chosen tenant) — quota
     // applies to them; node/forUserId/quotaExempt are admin-only options.
     const owner = await resolveCreateTarget(actor, parsed.data);
-    const vm = await createVm(owner, parsed.data);
+    const vm = await createVm(owner, { ...parsed.data, adminManaged: owner.id !== actor.id });
     const forNote = owner.id !== actor.id ? ` for ${owner.email}` : '';
     const exemptNote = vm.quotaExempt ? ', quota-exempt' : '';
     await recordAudit({
@@ -379,7 +398,7 @@ router.post('/containers', async (req: Request, res: Response) => {
   const actor = (req as AuthRequest).user;
   try {
     const owner = await resolveCreateTarget(actor, parsed.data);
-    const vm = await createContainer(owner, parsed.data);
+    const vm = await createContainer(owner, { ...parsed.data, adminManaged: owner.id !== actor.id });
     const forNote = owner.id !== actor.id ? ` for ${owner.email}` : '';
     const exemptNote = vm.quotaExempt ? ', quota-exempt' : '';
     await recordAudit({
@@ -593,6 +612,8 @@ router.patch('/:id', async (req: Request, res: Response) => {
   const resizing = Object.keys(resizeInput).length > 0;
 
   if (!metaChanged && !resizing) { res.json(vm); return; }
+  // Resizing an admin-managed VM is admin-only (rename/tags stay open to the owner).
+  if (resizing && rejectIfSizeLocked(vm, user, res)) return;
 
   try {
     // Notes / rename first. A rename hits Proxmox first (so a PVE failure
@@ -750,6 +771,7 @@ router.post('/:id/disks', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (rejectIfSizeLocked(vm, user, res)) return;
   if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Data disks aren’t supported for containers.' }); return; }
   const parsed = DiskSizeSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Enter a disk size in GB.' }); return; }
@@ -767,6 +789,7 @@ router.patch('/:id/disks/:slot', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (rejectIfSizeLocked(vm, user, res)) return;
   if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Data disks aren’t supported for containers.' }); return; }
   const slot = req.params['slot'] as string;
   if (!DISK_SLOT_RE.test(slot)) { res.status(400).json({ error: 'Invalid disk.' }); return; }
@@ -787,6 +810,7 @@ router.delete('/:id/disks/:slot', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (rejectIfSizeLocked(vm, user, res)) return;
   if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Data disks aren’t supported for containers.' }); return; }
   const slot = req.params['slot'] as string;
   if (!DISK_SLOT_RE.test(slot)) { res.status(400).json({ error: 'Invalid disk.' }); return; }

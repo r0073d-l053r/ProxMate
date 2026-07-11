@@ -473,6 +473,9 @@ export default function VmDetailPage() {
   const canPower = caps.has("power");
   const canConsole = caps.has("console");
   const canConfigure = caps.has("configure");
+  // An admin-provisioned VM (deploy-for-tenant) is sized by the admin — the owning
+  // tenant may operate it but not resize it (backend 403s too). Admins always can.
+  const canResize = canConfigure && (isAdmin || !vm.adminManaged);
   const canBackups = caps.has("backups");
   const canIde = caps.has("ide");
   // Owner-exclusive surface (delete, rebuild, shares, migrate): never for shares.
@@ -657,10 +660,12 @@ export default function VmDetailPage() {
                     <Pencil />
                     Rename
                   </DropdownMenuItem>
-                  <DropdownMenuItem disabled={busy} onClick={() => setDialog("resize")}>
-                    <Scaling />
-                    Resize
-                  </DropdownMenuItem>
+                  {canResize && (
+                    <DropdownMenuItem disabled={busy} onClick={() => setDialog("resize")}>
+                      <Scaling />
+                      Resize
+                    </DropdownMenuItem>
+                  )}
                   {/* Rebuild re-images the disk — owner/admin only, like Delete. */}
                   {!isLxc && isManager && (
                     <DropdownMenuItem disabled={busy} onClick={() => setDialog("rebuild")}>
@@ -1010,7 +1015,7 @@ export default function VmDetailPage() {
 
             <PowerSchedulePanel vmId={vm.id} />
 
-            {!isLxc && <DisksPanel vmId={vm.id} onChanged={load} />}
+            {!isLxc && <DisksPanel vmId={vm.id} onChanged={load} readOnly={!canResize} />}
 
             {!isLxc && (
               <PassthroughPanel

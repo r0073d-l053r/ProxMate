@@ -249,6 +249,13 @@ model VirtualMachine {
   // exempt across resizes. Admin-set only.
   quotaExempt   Boolean   @default(false)
 
+  // True when an ADMIN provisioned this VM into a tenant's account (deploy-for-
+  // tenant). The owning tenant may operate it but NOT resize it (cpu/ram/disk) —
+  // the admin sized it and manages that. Also a hard quota-safety requirement for
+  // quotaExempt grants: a tenant who could resize a free grant would bypass quota
+  // entirely. Only an admin can resize an admin-managed VM.
+  adminManaged  Boolean   @default(false)
+
   // Optional user labels for grouping/filtering (lowercase, comma-separated).
   tags          String?
 

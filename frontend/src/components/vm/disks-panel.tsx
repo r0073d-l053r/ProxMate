@@ -83,7 +83,16 @@ function GrowDiskDialog({ vmId, disk, onDone }: { vmId: string; disk: VmDisk; on
 }
 
 /** Extra-data-disk management for a VM (attach / grow / remove). */
-export function DisksPanel({ vmId, onChanged }: { vmId: string; onChanged?: () => void }) {
+export function DisksPanel({
+  vmId,
+  onChanged,
+  readOnly = false,
+}: {
+  vmId: string;
+  onChanged?: () => void;
+  /** Admin-managed VM viewed by a non-admin: disks are view-only (backend 403s edits). */
+  readOnly?: boolean;
+}) {
   const [disks, setDisks] = useState<VmDisk[] | null>(null);
   const [newSize, setNewSize] = useState(20);
   const [busy, setBusy] = useState(false);
@@ -129,8 +138,9 @@ export function DisksPanel({ vmId, onChanged }: { vmId: string; onChanged?: () =
           <HardDrive className="size-4 text-muted-foreground" /> Disks
         </CardTitle>
         <CardDescription>
-          The root disk is managed from the VM resize controls. Add extra data disks here — they count
-          toward the owner&apos;s storage quota.
+          {readOnly
+            ? "This VM was set up by an admin — its disks are managed by them and can't be changed here."
+            : "The root disk is managed from the VM resize controls. Add extra data disks here — they count toward the owner's storage quota."}
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3">
@@ -152,7 +162,7 @@ export function DisksPanel({ vmId, onChanged }: { vmId: string; onChanged?: () =
                     </Badge>
                   )}
                 </div>
-                {!d.isRoot && (
+                {!d.isRoot && !readOnly && (
                   <div className="flex items-center gap-1">
                     <GrowDiskDialog vmId={vmId} disk={d} onDone={() => { load(); onChanged?.(); }} />
                     <AlertDialog>
@@ -186,25 +196,27 @@ export function DisksPanel({ vmId, onChanged }: { vmId: string; onChanged?: () =
           </ul>
         )}
 
-        <div className="flex items-end gap-2">
-          <div className="grid gap-1.5">
-            <label className="text-xs text-muted-foreground" htmlFor="disk-size">
-              New data disk (GB)
-            </label>
-            <Input
-              id="disk-size"
-              type="number"
-              min={1}
-              value={newSize}
-              onChange={(e) => setNewSize(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
-              className="w-32"
-            />
+        {!readOnly && (
+          <div className="flex items-end gap-2">
+            <div className="grid gap-1.5">
+              <label className="text-xs text-muted-foreground" htmlFor="disk-size">
+                New data disk (GB)
+              </label>
+              <Input
+                id="disk-size"
+                type="number"
+                min={1}
+                value={newSize}
+                onChange={(e) => setNewSize(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                className="w-32"
+              />
+            </div>
+            <Button size="sm" onClick={add} disabled={busy}>
+              {busy ? <Loader2 className="animate-spin" /> : <Plus />}
+              Add disk
+            </Button>
           </div>
-          <Button size="sm" onClick={add} disabled={busy}>
-            {busy ? <Loader2 className="animate-spin" /> : <Plus />}
-            Add disk
-          </Button>
-        </div>
+        )}
       </CardContent>
     </Card>
   );

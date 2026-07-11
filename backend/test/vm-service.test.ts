@@ -158,6 +158,13 @@ describe('resolveCreateTarget (admin-only create options)', () => {
     expect(userFindUnique).toHaveBeenCalledWith({ where: { id: 'tenant9' } });
   });
 
+  it('the resolved owner differing from the actor is what the route uses to set adminManaged', async () => {
+    // The route computes adminManaged = owner.id !== actor.id. Self-deploy → same id.
+    userFindUnique.mockResolvedValue({ id: 'admin1', role: 'admin' } as never);
+    const self = await resolveCreateTarget({ id: 'admin1', role: 'admin' }, {});
+    expect(self.id).toBe('admin1'); // owner === actor → adminManaged false
+  });
+
   it('404s (status) on a missing deploy-for target', async () => {
     userFindUnique.mockResolvedValue(null as never);
     let err: unknown;
