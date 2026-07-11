@@ -6,6 +6,10 @@ const vscode = require("vscode");
 
 function activate() {
   try {
+    // Make sure VS Code's built-in "Build with Agent" chat (secondary sidebar)
+    // isn't showing — OpenCode is the focus agent, not the native chat.
+    vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar").then(undefined, () => {});
+
     const term = vscode.window.createTerminal({
       name: "OpenCode",
       location: vscode.TerminalLocation.Editor,
