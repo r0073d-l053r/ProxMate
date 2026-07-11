@@ -496,9 +496,17 @@ router.get('/:id/activity', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getViewableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
-  const entries = await listAuditForTarget('vm', vm.id, 20);
+  // Tenants (owner + shared users) see their own trail; admin interventions are
+  // logged admin-side only (/admin/audit). Admin callers keep the unfiltered
+  // view — it's their log to begin with.
+  const entries = await listAuditForTarget(
+    'vm',
+    vm.id,
+    20,
+    user.role === 'admin' ? {} : { hideActionsByAdminsExcept: vm.userId },
+  );
   // Project to a safe subset for the owner-facing feed — never expose the actor's
-  // IP or internal user id (an admin could have acted on this tenant's VM).
+  // IP or internal user id.
   res.json(
     entries.map((e) => ({
       id: e.id,
