@@ -7,15 +7,27 @@ vi.mock('../src/lib/prisma.js', () => ({
       findUnique: vi.fn(),
       update: vi.fn(),
     },
+    user: {
+      findUnique: vi.fn(),
+    },
   },
 }));
 
 import { prisma } from '../src/lib/prisma.js';
-import { assertWithinQuota, getOwnedVm, updateVm, QuotaError } from '../src/services/vm.service.js';
+import {
+  assertWithinQuota,
+  assertResizeWithinQuota,
+  resolveCreateTarget,
+  CreateOptionError,
+  getOwnedVm,
+  updateVm,
+  QuotaError,
+} from '../src/services/vm.service.js';
 
 const findMany = vi.mocked(prisma.virtualMachine.findMany);
 const findUnique = vi.mocked(prisma.virtualMachine.findUnique);
 const update = vi.mocked(prisma.virtualMachine.update);
+const userFindUnique = vi.mocked(prisma.user.findUnique);
 
 // Minimal stand-ins; assertWithinQuota only reads these fields.
 const user = (over: Record<string, unknown> = {}) =>
@@ -83,6 +95,79 @@ describe('assertWithinQuota', () => {
     await expect(
       assertWithinQuota(user(), input({ cpu: 2, ram: 1024, storage: 10 })),
     ).rejects.toBeInstanceOf(QuotaError);
+  });
+});
+
+describe('quota-exempt VMs (admin grants, owner decision 2026-07-11)', () => {
+  it('an exempt create skips the quota check entirely', async () => {
+    await expect(
+      assertWithinQuota(user(), input({ cpu: 9999, ram: 9_999_999, storage: 99999, quotaExempt: true })),
+    ).resolves.toBeUndefined();
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('usage sums exclude exempt VMs (the where clause filters them out)', async () => {
+    findMany.mockResolvedValue([] as never);
+    await assertWithinQuota(user(), input());
+    expect(findMany).toHaveBeenCalledWith({ where: { userId: 'u1', quotaExempt: false } });
+  });
+
+  it('resizing an exempt VM skips the check — exempt stays exempt', async () => {
+    await expect(
+      assertResizeWithinQuota(
+        user(),
+        { id: 'v1', userId: 'u1', quotaExempt: true } as never,
+        { cpu: 9999, ram: 9_999_999, storage: 99999 },
+      ),
+    ).resolves.toBeUndefined();
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it('a resize of a normal VM ignores exempt siblings in the usage sum', async () => {
+    findMany.mockResolvedValue([] as never);
+    await assertResizeWithinQuota(
+      user(),
+      { id: 'v1', userId: 'u1', quotaExempt: false } as never,
+      { cpu: 1, ram: 1024, storage: 10 },
+    );
+    expect(findMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', id: { not: 'v1' }, quotaExempt: false },
+    });
+  });
+});
+
+describe('resolveCreateTarget (admin-only create options)', () => {
+  it('rejects a tenant using node / forUserId / quotaExempt (closes the ungated node param)', async () => {
+    for (const opts of [{ node: 'pve' }, { forUserId: 'u2' }, { quotaExempt: true }, { quotaExempt: false }]) {
+      await expect(resolveCreateTarget({ id: 'u1', role: 'user' }, opts)).rejects.toBeInstanceOf(CreateOptionError);
+    }
+    expect(userFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('a plain tenant create resolves to the tenant themself', async () => {
+    userFindUnique.mockResolvedValue({ id: 'u1', role: 'user' } as never);
+    const owner = await resolveCreateTarget({ id: 'u1', role: 'user' }, {});
+    expect(owner.id).toBe('u1');
+    expect(userFindUnique).toHaveBeenCalledWith({ where: { id: 'u1' } });
+  });
+
+  it('an admin deploy-for resolves the TARGET user (quota applies to them)', async () => {
+    userFindUnique.mockResolvedValue({ id: 'tenant9', role: 'user', maxCpu: 2 } as never);
+    const owner = await resolveCreateTarget({ id: 'admin1', role: 'admin' }, { forUserId: 'tenant9', quotaExempt: true, node: 'pve-2' });
+    expect(owner.id).toBe('tenant9');
+    expect(userFindUnique).toHaveBeenCalledWith({ where: { id: 'tenant9' } });
+  });
+
+  it('404s (status) on a missing deploy-for target', async () => {
+    userFindUnique.mockResolvedValue(null as never);
+    let err: unknown;
+    try {
+      await resolveCreateTarget({ id: 'admin1', role: 'admin' }, { forUserId: 'ghost' });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(CreateOptionError);
+    expect((err as CreateOptionError).status).toBe(404);
   });
 });
 

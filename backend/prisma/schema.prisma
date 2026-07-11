@@ -243,6 +243,12 @@ model VirtualMachine {
   deployState   String?
   deployStateAt DateTime?
 
+  // True when an ADMIN deployed this VM into the owner's account as a grant that
+  // does NOT count toward their quota (unchecked "count against their quota" at
+  // deploy). Exempt VMs are excluded from every usage aggregation and stay
+  // exempt across resizes. Admin-set only.
+  quotaExempt   Boolean   @default(false)
+
   // Optional user labels for grouping/filtering (lowercase, comma-separated).
   tags          String?
 
