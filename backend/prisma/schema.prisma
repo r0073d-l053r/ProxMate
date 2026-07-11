@@ -309,14 +309,17 @@ model PassthroughRequest {
   @@index([status])
 }
 
-// Grants another tenant access to a VM they don't own. `co-owner` = full lifecycle
-// (start/stop/resize/backup…) except delete + managing shares; `read-only` = view
-// only (details, live stats, activity). The owner/admins always retain full control.
+// Grants another tenant access to a VM they don't own, at a PRESET LEVEL:
+// "viewer" = see details/stats/activity; "operator" = + power actions & console;
+// "manager" = + settings/disks/backups/IDE. Capabilities derive from the preset in
+// code (vm-share.service.ts CAPS_BY_ROLE). No share ever deletes, migrates,
+// rebuilds, manages shares, or touches passthrough — owner/admin only. Legacy
+// values ("co-owner"→manager, "read-only"→viewer) are migrated + normalized on read.
 model VmShare {
   id        String   @id @default(cuid())
   vmId      String
   userId    String                  // the user the VM is shared WITH
-  role      String   @default("read-only") // "co-owner" | "read-only"
+  role      String   @default("viewer") // "viewer" | "operator" | "manager"
   createdAt DateTime @default(now())
 
   vm        VirtualMachine @relation(fields: [vmId], references: [id], onDelete: Cascade)

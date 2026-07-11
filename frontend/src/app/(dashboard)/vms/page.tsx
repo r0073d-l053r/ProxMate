@@ -177,7 +177,7 @@ function VmTable({
                   <Cpu className="size-2.5" /> GPU/PCI
                 </span>
               )}
-              {(vm.access === "co-owner" || vm.access === "read-only") && (
+              {vm.access && vm.access !== "owner" && vm.access !== "admin" && (
                 <span className="ml-2 align-middle rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">
                   Shared · {vm.access}
                 </span>

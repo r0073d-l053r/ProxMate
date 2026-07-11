@@ -19,14 +19,18 @@ import {
 
 const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
 
+type ShareRole = VmShare["role"];
+
 /**
- * Owner/admin panel to share a VM with another tenant. Co-owner can operate the
- * VM (start/stop/resize/back up); read-only can only view it. The API enforces it.
+ * Owner/admin panel to share a VM with another tenant at a preset level:
+ * Viewer (see it) → Operator (+ power & console) → Manager (+ settings, backups,
+ * IDE). No share can ever delete, rebuild, migrate, or re-share the VM — the API
+ * enforces every level server-side.
  */
 export function SharePanel({ vmId }: { vmId: string }) {
   const [shares, setShares] = useState<VmShare[] | null>(null);
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"co-owner" | "read-only">("read-only");
+  const [role, setRole] = useState<ShareRole>("viewer");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
@@ -74,10 +78,12 @@ export function SharePanel({ vmId }: { vmId: string }) {
           <Share2 className="size-4 text-muted-foreground" /> Shared access
         </CardTitle>
         <CardDescription>
-          Give another ProxMate user access to this VM.{" "}
-          <span className="font-medium text-foreground">Co-owner</span> can operate it
-          (start/stop/resize/back up); <span className="font-medium text-foreground">read-only</span> can
-          only view it.
+          Give another ProxMate user access at a level you choose:{" "}
+          <span className="font-medium text-foreground">Viewer</span> sees details, metrics and
+          activity; <span className="font-medium text-foreground">Operator</span> adds power actions
+          and the console; <span className="font-medium text-foreground">Manager</span> adds settings,
+          disks, backups (including downloads) and the IDE. Nobody you share with can delete,
+          rebuild, or re-share this VM.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
@@ -98,13 +104,14 @@ export function SharePanel({ vmId }: { vmId: string }) {
             <label className="text-xs text-muted-foreground" htmlFor="share-role">
               Access
             </label>
-            <Select value={role} onValueChange={(v) => setRole(v as "co-owner" | "read-only")}>
+            <Select value={role} onValueChange={(v) => setRole(v as ShareRole)}>
               <SelectTrigger id="share-role" className="w-[140px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="read-only">Read-only</SelectItem>
-                <SelectItem value="co-owner">Co-owner</SelectItem>
+                <SelectItem value="viewer">Viewer</SelectItem>
+                <SelectItem value="operator">Operator</SelectItem>
+                <SelectItem value="manager">Manager</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -127,7 +134,9 @@ export function SharePanel({ vmId }: { vmId: string }) {
                   <div className="truncate text-xs text-muted-foreground">{s.user.email}</div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Badge variant={s.role === "co-owner" ? "default" : "secondary"}>{s.role}</Badge>
+                  <Badge variant={s.role === "manager" ? "default" : s.role === "operator" ? "outline" : "secondary"}>
+                    {s.role}
+                  </Badge>
                   <Button size="sm" variant="ghost" title="Revoke access" onClick={() => remove(s.id)}>
                     <Trash2 />
                   </Button>

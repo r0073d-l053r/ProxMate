@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { Socket } from 'node:net';
 import { verifyToken } from './auth.service.js';
-import { getOwnedVm } from './vm.service.js';
+import { getVmWithCap } from './vm.service.js';
 import { getIdeCapability } from './ide.service.js';
 import { SESSION_COOKIE } from '../lib/cookies.js';
 import { logger } from '../lib/logger.js';
@@ -100,7 +100,7 @@ export function resolveIdeTargetUrl(
 
 /** Resolve the code-server target for a VM, enforcing ownership + the IDE policy. */
 async function resolveTarget(vmId: string, user: { id: string; role: string }): Promise<string | null> {
-  const vm = await getOwnedVm(vmId, user);
+  const vm = await getVmWithCap(vmId, user, 'ide');
   if (!vm) return null;
   const cap = await getIdeCapability({ role: user.role });
   if (!cap.available) return null;

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.js';
 import { getIdeCapability } from '../services/ide.service.js';
 import { issueGatewayToken, listModelPickerEntries, probeModels } from '../services/ide-gateway.service.js';
-import { getWritableVm, getViewableVm } from '../services/vm.service.js';
+import { getVmWithCap, getViewableVm } from '../services/vm.service.js';
 import {
   startIdeProvision,
   refreshIdeState,
@@ -85,7 +85,7 @@ router.post('/:id/gateway-token', async (req: Request, res: Response) => {
 // the UI can show a loading screen and only open the IDE once it's ready.
 router.post('/:id/provision', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'ide');
   if (!vm) {
     res.status(404).json({ error: 'VM not found' });
     return;
@@ -127,7 +127,7 @@ router.get('/:id/status', async (req: Request, res: Response) => {
 // node — tenants never choose nodes (recorded design decision).
 router.post('/:id/relocate', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'ide');
   if (!vm) {
     res.status(404).json({ error: 'VM not found' });
     return;

@@ -3,7 +3,7 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import { verifyToken } from '../services/auth.service.js';
 import { SESSION_COOKIE } from '../lib/cookies.js';
-import { getWritableVm, syncVmNode, kindOf } from '../services/vm.service.js';
+import { getVmWithCap, syncVmNode, kindOf } from '../services/vm.service.js';
 import { connectVncTarget, connectSerialTarget, relay } from '../services/vnc-proxy.service.js';
 
 const CONSOLE_PATH = /^\/api\/vms\/([^/]+)\/console$/;
@@ -71,10 +71,10 @@ export function handleConsoleUpgrade(req: IncomingMessage, socket: Duplex, head:
       return;
     }
 
-    // Console operates the VM, so it requires write access: owner / admin /
-    // co-owner may connect; a read-only share is rejected here (the POST that
-    // mints the ticket uses the same gate, so the two paths stay consistent).
-    const vm = await getWritableVm(vmId, user);
+    // Console requires the 'console' capability (owner/admin/operator/manager;
+    // a viewer share is rejected). The POST that mints the ticket uses the SAME
+    // gate — a past bug was these two paths diverging, so keep them in lockstep.
+    const vm = await getVmWithCap(vmId, user, 'console');
     if (!vm || !vncticket || !port) {
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       socket.destroy();
