@@ -73,6 +73,7 @@ import {
   syncVmNode,
 } from '../services/vm.service.js';
 import { isValidPublicKey } from '../services/ssh-key.service.js';
+import { isIdeInstalling } from '../services/ide-provision.service.js';
 import { getLiveStats } from '../services/live-stats.service.js';
 import { getConfig } from '../services/config.service.js';
 import { ALERT_METRICS } from '../services/alert.service.js';
@@ -860,6 +861,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getOwnedVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (isIdeInstalling(vm)) { res.status(409).json({ error: 'The ProxMate IDE is installing on this VM — wait until it finishes.' }); return; }
 
   try {
     await destroyVm(vm);
@@ -894,6 +896,7 @@ router.post('/:id/stop', async (req: Request, res: Response) => {
   const vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
+  if (isIdeInstalling(vm)) { res.status(409).json({ error: 'The ProxMate IDE is installing on this VM — wait until it finishes.' }); return; }
   const force = req.query['force'] === 'true';
   try {
     await stopVm(vm, force);
@@ -911,6 +914,7 @@ router.post('/:id/restart', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (isIdeInstalling(vm)) { res.status(409).json({ error: 'The ProxMate IDE is installing on this VM — wait until it finishes.' }); return; }
 
   try {
     await restartVm(vm);
@@ -935,6 +939,7 @@ router.post('/:id/pause', async (req: Request, res: Response) => {
     return;
   }
 
+  if (isIdeInstalling(vm)) { res.status(409).json({ error: 'The ProxMate IDE is installing on this VM — wait until it finishes.' }); return; }
   try {
     await pauseVm(vm);
     await recordAudit({ action: 'vm.pause', actor: user, targetType: 'vm', targetId: vm.id, detail: vm.name, req });
@@ -1519,6 +1524,7 @@ router.post('/:id/console', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   let vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (isIdeInstalling(vm)) { res.status(409).json({ error: 'The ProxMate IDE is installing on this VM — wait until it finishes.' }); return; }
 
   try {
     vm = await syncVmNode(vm);

@@ -2564,6 +2564,50 @@ export async function injectGuestSshKey(
   throw new Error('Timed out waiting for the guest agent to finish adding the key');
 }
 
+/** True if the QEMU guest agent answers a ping (fail-fast, no retry). */
+export async function guestAgentPing(node: string, vmid: number, client?: AxiosInstance): Promise<boolean> {
+  const c = client ?? (await getClient());
+  try {
+    await c.post(`/nodes/${node}/qemu/${vmid}/agent/ping`, undefined, {
+      timeout: 3000,
+      _noRetry: true,
+    } as AxiosRequestConfig & { _noRetry: boolean });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Write a file inside the guest via the agent (base64, for larger blobs like a script). */
+export async function guestFileWrite(
+  node: string,
+  vmid: number,
+  file: string,
+  content: string,
+  client?: AxiosInstance,
+): Promise<void> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams();
+  params.append('file', file);
+  params.append('content', Buffer.from(content, 'utf8').toString('base64'));
+  params.append('encode', '1'); // content is base64 → agent decodes before writing
+  await c.post(`/nodes/${node}/qemu/${vmid}/agent/file-write`, params);
+}
+
+/** Fire a command in the guest and return its pid — does NOT wait for it to finish. */
+export async function guestExec(
+  node: string,
+  vmid: number,
+  argv: string[],
+  client?: AxiosInstance,
+): Promise<number> {
+  const c = client ?? (await getClient());
+  const params = new URLSearchParams();
+  for (const part of argv) params.append('command', part);
+  const res = await c.post<{ data: { pid: number } }>(`/nodes/${node}/qemu/${vmid}/agent/exec`, params);
+  return res.data.data.pid;
+}
+
 // ─── Rescue mode ──────────────────────────────────────────────
 // Boot a VM from an admin-designated rescue ISO: the ISO goes on the ide3 slot
 // (ide2 belongs to the cloud-init drive / install ISO) and the boot order is
