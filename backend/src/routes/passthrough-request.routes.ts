@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.js';
 import { enforceMfaSetup } from '../middleware/mfa.js';
 import { recordAudit } from '../services/audit.service.js';
-import { getWritableVm } from '../services/vm.service.js';
+import { getOwnedVm } from '../services/vm.service.js';
 import {
   createPassthroughRequest,
   listMyPassthroughRequests,
@@ -29,7 +29,7 @@ router.post('/', async (req: Request, res: Response) => {
   }
   const user = (req as AuthRequest).user;
   // Authorize: the caller must be able to operate this VM (owner / admin / co-owner).
-  const vm = await getWritableVm(parsed.data.vmId, user);
+  const vm = await getOwnedVm(parsed.data.vmId, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   try {

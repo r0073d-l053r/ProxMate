@@ -8,6 +8,7 @@ import { vmMaintenanceEmail } from '../lib/email-templates.js';
 import * as pve from './proxmox.service.js';
 import { getOfferedFeatureIds, getBaseFeatureIds } from './template.service.js';
 import { isValidPublicKey } from './ssh-key.service.js';
+import { ALL_CAPS, CAPS_BY_ROLE, normalizeShareRole, type ShareRole, type VmCap } from './vm-share.service.js';
 
 /** The Proxmox guest kind for a VM row (defaults to QEMU for legacy/unset rows). */
 export const kindOf = (vm: { type?: string | null }): pve.GuestKind => (vm.type === 'lxc' ? 'lxc' : 'qemu');
@@ -625,31 +626,52 @@ export async function getOwnedVm(
   return vm;
 }
 
-export type VmAccess = 'owner' | 'admin' | 'co-owner' | 'read-only';
+/**
+ * The caller's relationship to a VM. Owners/admins hold every capability plus
+ * the owner-exclusive surface (delete, migrate, shares, passthrough, rebuild);
+ * shares hold the capability set of their preset (see CAPS_BY_ROLE).
+ */
+export type VmAccess = 'owner' | 'admin' | ShareRole;
 
-/** Resolve the caller's access level to a VM, or null if they can't see it. */
+export interface ResolvedVmAccess {
+  vm: VirtualMachine;
+  access: VmAccess;
+  caps: ReadonlySet<VmCap>;
+}
+
+/** Resolve the caller's access + capabilities for a VM, or null if invisible. */
 export async function resolveVmAccess(
   vmId: string,
   user: { id: string; role: string },
-): Promise<{ vm: VirtualMachine; access: VmAccess } | null> {
+): Promise<ResolvedVmAccess | null> {
   const vm = await prisma.virtualMachine.findUnique({ where: { id: vmId } });
   if (!vm) return null;
-  if (vm.userId === user.id) return { vm, access: 'owner' };
-  if (user.role === 'admin') return { vm, access: 'admin' };
+  if (vm.userId === user.id) return { vm, access: 'owner', caps: ALL_CAPS };
+  if (user.role === 'admin') return { vm, access: 'admin', caps: ALL_CAPS };
   const share = await prisma.vmShare.findUnique({ where: { vmId_userId: { vmId, userId: user.id } } });
   if (!share) return null;
-  return { vm, access: share.role === 'co-owner' ? 'co-owner' : 'read-only' };
+  const role = normalizeShareRole(share.role);
+  return { vm, access: role, caps: CAPS_BY_ROLE[role] };
 }
 
-/** A VM the caller may VIEW (owner / admin / co-owner / read-only), else null. */
-export async function getViewableVm(vmId: string, user: { id: string; role: string }): Promise<VirtualMachine | null> {
-  return (await resolveVmAccess(vmId, user))?.vm ?? null;
-}
-
-/** A VM the caller may OPERATE (owner / admin / co-owner). A read-only share → null. */
-export async function getWritableVm(vmId: string, user: { id: string; role: string }): Promise<VirtualMachine | null> {
+/**
+ * THE per-VM route gate: the VM if the caller holds `cap` on it, else null
+ * (indistinguishable from "no such VM" — no existence oracle). Owner-exclusive
+ * actions (delete/migrate/shares/passthrough/rebuild/convert) use getOwnedVm,
+ * never a capability.
+ */
+export async function getVmWithCap(
+  vmId: string,
+  user: { id: string; role: string },
+  cap: VmCap,
+): Promise<VirtualMachine | null> {
   const r = await resolveVmAccess(vmId, user);
-  return r && r.access !== 'read-only' ? r.vm : null;
+  return r && r.caps.has(cap) ? r.vm : null;
+}
+
+/** A VM the caller may VIEW (any access level), else null. */
+export async function getViewableVm(vmId: string, user: { id: string; role: string }): Promise<VirtualMachine | null> {
+  return getVmWithCap(vmId, user, 'view');
 }
 
 /** List VMs the user owns OR has been shared (all VMs for admins). */
@@ -662,11 +684,11 @@ export async function listVms(user: { id: string; role: string }): Promise<Virtu
   });
 }
 
-/** Tag each VM with the caller's access level (for list/detail responses). */
+/** Tag each VM with the caller's access level + capabilities (list/detail responses). */
 export async function annotateAccess<T extends { id: string; userId: string }>(
   vms: T[],
   user: { id: string; role: string },
-): Promise<(T & { access: VmAccess })[]> {
+): Promise<(T & { access: VmAccess; caps: VmCap[] })[]> {
   const sharedRoles = new Map<string, string>();
   if (user.role !== 'admin' && vms.some((v) => v.userId !== user.id)) {
     const shares = await prisma.vmShare.findMany({
@@ -678,8 +700,9 @@ export async function annotateAccess<T extends { id: string; userId: string }>(
     const access: VmAccess =
       v.userId === user.id ? 'owner'
         : user.role === 'admin' ? 'admin'
-          : sharedRoles.get(v.id) === 'co-owner' ? 'co-owner' : 'read-only';
-    return { ...v, access };
+          : normalizeShareRole(sharedRoles.get(v.id) ?? '');
+    const caps = access === 'owner' || access === 'admin' ? ALL_CAPS : CAPS_BY_ROLE[access];
+    return { ...v, access, caps: [...caps] };
   });
 }
 

@@ -11,7 +11,7 @@ vi.mock('../src/services/config.service.js', () => ({
 }));
 
 // Ownership is resolved elsewhere; here we drive it directly per-test.
-vi.mock('../src/services/vm.service.js', () => ({ getOwnedVm: vi.fn() }));
+vi.mock('../src/services/vm.service.js', () => ({ getVmWithCap: vi.fn() }));
 
 // Decrypt is identity in tests so a stored BYO key round-trips to itself.
 vi.mock('../src/lib/crypto.js', () => ({ decrypt: (s: string) => s, encrypt: (s: string) => s }));
@@ -35,7 +35,7 @@ vi.mock('../src/lib/prisma.js', () => ({
 }));
 
 import { prisma } from '../src/lib/prisma.js';
-import { getOwnedVm } from '../src/services/vm.service.js';
+import { getVmWithCap } from '../src/services/vm.service.js';
 import { saveIdeConfig } from '../src/services/ide.service.js';
 import {
   issueGatewayToken,
@@ -46,7 +46,7 @@ import {
   probeModels,
 } from '../src/services/ide-gateway.service.js';
 
-const ownedVm = vi.mocked(getOwnedVm);
+const ownedVm = vi.mocked(getVmWithCap);
 const tokenFindUnique = vi.mocked(prisma.ideGatewayToken.findUnique);
 const tokenUpsert = vi.mocked(prisma.ideGatewayToken.upsert);
 const keyFindFirst = vi.mocked(prisma.tenantLlmKey.findFirst);

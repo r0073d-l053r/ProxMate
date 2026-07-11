@@ -467,17 +467,25 @@ export default function VmDetailPage() {
   const busy = acting || ideBusy || deploying || (pending !== null && pending !== "delete-failed");
   const running = vm.status === "running";
   const stopped = vm.status === "stopped" || vm.status === "error";
-  // Access: owners/admins manage shares; co-owners can operate; read-only can only
-  // view (the API enforces all of this — the UI just hides what won't work).
-  const canWrite = vm.access !== "read-only";
+  // Access: the API grants per-capability (share presets Viewer/Operator/Manager;
+  // owner/admin hold everything) — the UI just hides what won't work.
+  const caps = new Set(vm.caps ?? []);
+  const canPower = caps.has("power");
+  const canConsole = caps.has("console");
+  const canConfigure = caps.has("configure");
+  const canBackups = caps.has("backups");
+  const canIde = caps.has("ide");
+  // Owner-exclusive surface (delete, rebuild, shares, migrate): never for shares.
   const isManager = vm.access === "owner" || vm.access === "admin" || isAdmin;
+  const isViewer = vm.access === "viewer";
   // Containers (LXC) don't support the QEMU-only features: rebuild, convert to
   // template, live migration, extra data disks, and snapshots.
   const isLxc = vm.type === "lxc";
 
-  // Read-only shares don't get the Backups / Settings tabs — if a deep link asks
-  // for one anyway, land on Overview instead of an empty panel.
-  const activeTab: TabValue = !canWrite && (tab === "backups" || tab === "settings") ? "overview" : tab;
+  // Shares without the matching capability don't get the Backups / Settings tabs —
+  // if a deep link asks for one anyway, land on Overview instead of an empty panel.
+  const activeTab: TabValue =
+    (tab === "backups" && !canBackups) || (tab === "settings" && !canConfigure) ? "overview" : tab;
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -553,8 +561,9 @@ export default function VmDetailPage() {
           </div>
         </div>
 
-        {canWrite && (
+        {(canConsole || canPower || canConfigure) && (
           <div className="flex items-center gap-2">
+            {canConsole && (
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
@@ -574,7 +583,7 @@ export default function VmDetailPage() {
                   <SquareTerminal />
                   Text — links, copy/paste
                 </DropdownMenuItem>
-                {ideCap?.available && vm.type !== "lxc" && isDesktop && (
+                {ideCap?.available && canIde && vm.type !== "lxc" && isDesktop && (
                   <DropdownMenuItem
                     disabled={!running || ideBusy}
                     onClick={() => {
@@ -605,7 +614,9 @@ export default function VmDetailPage() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            )}
 
+            {(canPower || canConfigure) && (
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
@@ -616,6 +627,7 @@ export default function VmDetailPage() {
                 }
               />
               <DropdownMenuContent align="end" className="min-w-52">
+                {canPower && (
                 <DropdownMenuGroup>
                   <DropdownMenuItem disabled={busy || running} onClick={() => action("start", "start")}>
                     <Play />
@@ -630,6 +642,9 @@ export default function VmDetailPage() {
                     Restart
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
+                )}
+                {canConfigure && (
+                <>
                 <DropdownMenuSeparator />
                 <DropdownMenuGroup>
                   <DropdownMenuItem
@@ -646,7 +661,8 @@ export default function VmDetailPage() {
                     <Scaling />
                     Resize
                   </DropdownMenuItem>
-                  {!isLxc && (
+                  {/* Rebuild re-images the disk — owner/admin only, like Delete. */}
+                  {!isLxc && isManager && (
                     <DropdownMenuItem disabled={busy} onClick={() => setDialog("rebuild")}>
                       <RotateCcw />
                       Rebuild
@@ -665,6 +681,8 @@ export default function VmDetailPage() {
                     </DropdownMenuItem>
                   )}
                 </DropdownMenuGroup>
+                </>
+                )}
                 {isAdmin && !isLxc && (
                   <>
                     <DropdownMenuSeparator />
@@ -686,22 +704,37 @@ export default function VmDetailPage() {
                     </DropdownMenuGroup>
                   </>
                 )}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" disabled={busy} onClick={() => setDialog("delete")}>
-                  <Trash2 />
-                  Delete…
-                </DropdownMenuItem>
+                {/* Delete is owner/admin-only — shares never see it (API enforces too). */}
+                {isManager && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem variant="destructive" disabled={busy} onClick={() => setDialog("delete")}>
+                      <Trash2 />
+                      Delete…
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
+            )}
           </div>
         )}
       </div>
 
-      {!canWrite && (
+      {isViewer && (
         <Card className="mb-6 border-amber-500/40 bg-amber-500/5">
           <CardContent className="py-3 text-sm text-muted-foreground">
-            You have <span className="font-medium text-foreground">read-only</span> access to this VM,
+            You have <span className="font-medium text-foreground">viewer</span> access to this VM,
             shared by its owner. You can view its details and activity, but not operate or change it.
+          </CardContent>
+        </Card>
+      )}
+
+      {!isViewer && vm.access !== "owner" && vm.access !== "admin" && (
+        <Card className="mb-6">
+          <CardContent className="py-3 text-sm text-muted-foreground">
+            Shared with you as <span className="font-medium text-foreground">{vm.access}</span> — some
+            actions are reserved for the owner.
           </CardContent>
         </Card>
       )}
@@ -713,7 +746,7 @@ export default function VmDetailPage() {
               <span className="font-medium text-foreground">Rescue mode</span> — this machine is booted
               from the rescue ISO. Repair it via the console, then exit rescue to boot from disk again.
             </span>
-            {canWrite && (
+            {canConfigure && (
               <Button variant="outline" size="sm" onClick={() => setTab("settings")}>
                 Manage in Settings
               </Button>
@@ -726,9 +759,9 @@ export default function VmDetailPage() {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="insights">Insights</TabsTrigger>
-          {canWrite && <TabsTrigger value="backups">Backups &amp; Snapshots</TabsTrigger>}
+          {canBackups && <TabsTrigger value="backups">Backups &amp; Snapshots</TabsTrigger>}
           <TabsTrigger value="activity">Activity</TabsTrigger>
-          {canWrite && <TabsTrigger value="settings">Settings</TabsTrigger>}
+          {canConfigure && <TabsTrigger value="settings">Settings</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="overview" className="pt-4">
@@ -790,7 +823,7 @@ export default function VmDetailPage() {
                 </CardContent>
               </Card>
 
-              {canWrite && <NotesCard vmId={vm.id} initial={vm.description} onSaved={load} />}
+              {canConfigure && <NotesCard vmId={vm.id} initial={vm.description} onSaved={load} />}
             </div>
 
             <div className="grid gap-4 lg:col-span-2">
@@ -847,7 +880,7 @@ export default function VmDetailPage() {
                 </CardContent>
               </Card>
 
-              {canWrite && (
+              {canBackups && (
                 <Card>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2 text-sm">
@@ -867,7 +900,7 @@ export default function VmDetailPage() {
                 </Card>
               )}
 
-              {canWrite && <TagsCard vmId={vm.id} initial={vm.tags} onSaved={load} />}
+              {canConfigure && <TagsCard vmId={vm.id} initial={vm.tags} onSaved={load} />}
 
               <Card>
                 <CardHeader>
@@ -921,7 +954,7 @@ export default function VmDetailPage() {
           </p>
         </TabsContent>
 
-        {canWrite && (
+        {canBackups && (
           <TabsContent value="backups">
             <MateStatesPanel vmId={vm.id} vmName={vm.name} />
             <BackupPolicyPanel vmId={vm.id} />
@@ -933,7 +966,7 @@ export default function VmDetailPage() {
           <ActivityCard vmId={vm.id} />
         </TabsContent>
 
-        {canWrite && (
+        {canConfigure && (
           <TabsContent value="settings">
             <Card className="mt-4">
               <CardHeader>
@@ -984,12 +1017,12 @@ export default function VmDetailPage() {
                 vmId={vm.id}
                 vmName={vm.name}
                 isAdmin={isAdmin}
-                canWrite={canWrite}
+                canWrite={isManager}
                 onChanged={load}
               />
             )}
 
-            <AlertsPanel vmId={vm.id} canWrite={canWrite} />
+            <AlertsPanel vmId={vm.id} canWrite={canConfigure} />
 
             {!isLxc && <RecoveryPanel vm={vm} busy={busy} onChanged={load} />}
 

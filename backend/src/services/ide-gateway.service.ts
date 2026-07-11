@@ -2,7 +2,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { getConfig } from './config.service.js';
-import { getOwnedVm } from './vm.service.js';
+import { getVmWithCap } from './vm.service.js';
 import { getIdeCapability, getIdeConfig } from './ide.service.js';
 import { getLlmKeyEndpointById } from './tenant-llm-key.service.js';
 import { assertSafeOutboundUrl } from '../lib/url-safety.js';
@@ -57,7 +57,7 @@ export async function issueGatewayToken(
   vmId: string,
   publicApiBaseUrl: string,
 ): Promise<IssuedGatewayToken | null> {
-  const vm = await getOwnedVm(vmId, user);
+  const vm = await getVmWithCap(vmId, user, 'ide');
   if (!vm) return null;
   const cap = await getIdeCapability({ role: user.role });
   if (!cap.available) return null;
@@ -109,7 +109,7 @@ export async function verifyGatewayToken(raw: string | undefined, pathVmId: stri
   if (!user) return null;
 
   // Live re-authorization: the mint-time checks are not enough on their own.
-  const vm = await getOwnedVm(row.vmId, user);
+  const vm = await getVmWithCap(row.vmId, user, 'ide');
   if (!vm) return null;
   const cap = await getIdeCapability({ role: user.role });
   if (!cap.available) return null;

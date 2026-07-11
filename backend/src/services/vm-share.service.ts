@@ -10,12 +10,48 @@ export class ShareError extends Error {
   }
 }
 
-export const SHARE_ROLES = ['co-owner', 'read-only'] as const;
+// ─── Capability model (owner decision 2026-07-11) ─────────────────────────────
+// Shares grant a PRESET LEVEL, stored as its name in VmShare.role; code derives
+// the capability set from CAPS_BY_ROLE (single source of truth), so presets can
+// evolve — and a future granular "custom" role can be added — without a data
+// migration. No share ever deletes/destroys the VM, migrates it, manages shares,
+// requests passthrough, or rebuilds (re-images) it: that whole surface stays
+// owner/admin-only via getOwnedVm.
+
+export const VM_CAPS = ['view', 'power', 'console', 'configure', 'backups', 'ide'] as const;
+export type VmCap = (typeof VM_CAPS)[number];
+
+export const SHARE_ROLES = ['viewer', 'operator', 'manager'] as const;
 export type ShareRole = (typeof SHARE_ROLES)[number];
+
+export const CAPS_BY_ROLE: Record<ShareRole, ReadonlySet<VmCap>> = {
+  viewer: new Set<VmCap>(['view']),
+  operator: new Set<VmCap>(['view', 'power', 'console']),
+  manager: new Set<VmCap>(['view', 'power', 'console', 'configure', 'backups', 'ide']),
+};
+
+/** Every capability — what owners/admins hold. */
+export const ALL_CAPS: ReadonlySet<VmCap> = CAPS_BY_ROLE.manager;
+
+/**
+ * Map any stored role string to a current preset. Legacy rows ('co-owner' →
+ * manager, 'read-only' → viewer) are normalized here as defense-in-depth beside
+ * the data migration (a restored old backup must not grant surprise access —
+ * unknown strings fall to viewer, the least-privileged preset).
+ */
+export function normalizeShareRole(role: string): ShareRole {
+  if ((SHARE_ROLES as readonly string[]).includes(role)) return role as ShareRole;
+  if (role === 'co-owner') return 'manager';
+  return 'viewer';
+}
+
+export function capsForShareRole(role: string): ReadonlySet<VmCap> {
+  return CAPS_BY_ROLE[normalizeShareRole(role)];
+}
 
 export interface ShareView {
   id: string;
-  role: string;
+  role: ShareRole;
   createdAt: string;
   user: { id: string; email: string; displayName: string };
 }
@@ -27,7 +63,7 @@ const toView = (s: {
   role: string;
   createdAt: Date;
   user: { id: string; email: string; displayName: string };
-}): ShareView => ({ id: s.id, role: s.role, createdAt: s.createdAt.toISOString(), user: s.user });
+}): ShareView => ({ id: s.id, role: normalizeShareRole(s.role), createdAt: s.createdAt.toISOString(), user: s.user });
 
 /** Everyone a VM is shared with, oldest first. */
 export async function listShares(vmId: string): Promise<ShareView[]> {
@@ -41,7 +77,7 @@ export async function listShares(vmId: string): Promise<ShareView[]> {
 
 /**
  * Share a VM with an existing user (by email). Re-sharing the same user just
- * updates their role. Throws {@link ShareError} for the known failure cases.
+ * updates their preset. Throws {@link ShareError} for the known failure cases.
  */
 export async function addShare(vm: { id: string; userId: string }, email: string, role: ShareRole): Promise<ShareView> {
   const target = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } });
