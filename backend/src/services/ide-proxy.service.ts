@@ -8,7 +8,7 @@ import { getOwnedVm } from './vm.service.js';
 import { getIdeCapability } from './ide.service.js';
 import { SESSION_COOKIE } from '../lib/cookies.js';
 import { logger } from '../lib/logger.js';
-import { isLoopbackOrLinkLocal } from '../lib/ssrf.js';
+import { isLoopbackOrLinkLocal } from '../lib/url-safety.js';
 
 /**
  * ProxMate IDE transport (Phase 2): reverse-proxy an in-guest code-server (HTTP +

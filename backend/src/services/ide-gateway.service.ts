@@ -5,7 +5,7 @@ import { getConfig } from './config.service.js';
 import { getOwnedVm } from './vm.service.js';
 import { getIdeCapability, getIdeConfig } from './ide.service.js';
 import { getLlmKeyEndpointById } from './tenant-llm-key.service.js';
-import { assertPublicHttpUrl } from '../lib/ssrf.js';
+import { assertSafeOutboundUrl } from '../lib/url-safety.js';
 
 /**
  * ProxMate LLM gateway (Phase 4) — the policy + routing brain behind the
@@ -276,10 +276,11 @@ export async function resolveModelRoute(
         : (key.baseUrl && key.baseUrl.trim() ? key.baseUrl : '');
     if (!base) return null;
     // SSRF re-check at forward time (blocks a key whose host now resolves private,
-    // e.g. DNS rebinding, or a key saved before the save-time guard existed).
-    if (key.provider !== 'openai') {
+    // e.g. DNS rebinding, or one saved before the save-time guard). Admins are
+    // exempt — they legitimately point at LAN model endpoints.
+    if (key.provider !== 'openai' && user.role !== 'admin') {
       try {
-        await assertPublicHttpUrl(base);
+        await assertSafeOutboundUrl(base, 'AI key endpoint');
       } catch {
         return null;
       }
