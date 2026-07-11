@@ -10,6 +10,13 @@ function activate() {
     // isn't showing — OpenCode is the focus agent, not the native chat.
     vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar").then(undefined, () => {});
 
+    // Reuse a restored OpenCode terminal from a previous session instead of
+    // stacking a second tab (persistent sessions restore editor terminals).
+    const existing = vscode.window.terminals.find((t) => t.name === "OpenCode");
+    if (existing) {
+      existing.show(false);
+      return;
+    }
     const term = vscode.window.createTerminal({
       name: "OpenCode",
       location: vscode.TerminalLocation.Editor,
