@@ -82,14 +82,30 @@ export async function listAudit(opts: { limit?: number; offset?: number } = {}):
  * The recent audit entries for one target (e.g. a single VM), newest first.
  * Powers the per-VM activity feed — scoped to `targetType`/`targetId` so a tenant
  * only ever sees events for a VM they own (the caller checks ownership first).
+ *
+ * `hideActionsByAdminsExcept` (owner decision 2026-07-11): a tenant's feed shows
+ * what THEY and their shared users did — admin interventions stay off it and live
+ * only in the admin-side log. Pass the VM owner's id: rows are kept when the
+ * actor is null (system/scheduled), a non-admin, or an admin who IS that owner.
+ * Read-time filtering — retroactive by construction, and the append-only,
+ * best-effort recording path is untouched.
  */
 export async function listAuditForTarget(
   targetType: string,
   targetId: string,
   limit = 20,
+  opts: { hideActionsByAdminsExcept?: string } = {},
 ): Promise<AuditLog[]> {
+  let where: Record<string, unknown> = { targetType, targetId };
+  if (opts.hideActionsByAdminsExcept !== undefined) {
+    const admins = await prisma.user.findMany({ where: { role: 'admin' }, select: { id: true } });
+    const hiddenIds = admins.map((a) => a.id).filter((id) => id !== opts.hideActionsByAdminsExcept);
+    if (hiddenIds.length > 0) {
+      where = { ...where, OR: [{ userId: null }, { userId: { notIn: hiddenIds } }] };
+    }
+  }
   return prisma.auditLog.findMany({
-    where: { targetType, targetId },
+    where,
     orderBy: { createdAt: 'desc' },
     take: Math.min(Math.max(limit, 1), 100),
   });

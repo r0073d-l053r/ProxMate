@@ -6,7 +6,7 @@ import { requireAdmin } from '../middleware/admin.js';
 import { enforceMfaSetup } from '../middleware/mfa.js';
 import { pveMessage } from '../services/proxmox.service.js';
 import { assertPublicHttpUrlShape } from '../lib/url-safety.js';
-import { deployFromTemplate, QuotaError } from '../services/vm.service.js';
+import { deployFromTemplate, QuotaError, CreateOptionError, resolveCreateTarget } from '../services/vm.service.js';
 import {
   listPublished,
   listAll,
@@ -71,6 +71,10 @@ const DeploySchema = z.object({
   installGuestAgent: z.boolean().optional(),
   installSuperfile: z.boolean().optional(),
   features: z.array(z.string().max(64)).max(20).optional(),
+  // Admin-only: deploy INTO this user's account, optionally quota-exempt. NOTE:
+  // template deploys cannot choose a node — the clone stays on the template's.
+  forUserId: z.string().min(1).max(64).optional(),
+  quotaExempt: z.boolean().optional(),
 });
 
 router.post('/deploy', async (req: Request, res: Response) => {
@@ -79,9 +83,7 @@ router.post('/deploy', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
     return;
   }
-  const { id } = (req as AuthRequest).user;
-  const user = await prisma.user.findUnique({ where: { id } });
-  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+  const actor = (req as AuthRequest).user;
 
   const template = await prisma.template.findUnique({ where: { id: parsed.data.templateId } });
   if (!template || !template.published) {
@@ -96,9 +98,16 @@ router.post('/deploy', async (req: Request, res: Response) => {
   }
 
   try {
-    const vm = await deployFromTemplate(user, template, parsed.data);
+    // The guest's OWNER (the acting user, or the admin's chosen tenant) — quota
+    // applies to them; forUserId/quotaExempt are admin-only options.
+    const owner = await resolveCreateTarget(actor, parsed.data);
+    const vm = await deployFromTemplate(owner, template, { ...parsed.data, adminManaged: owner.id !== actor.id });
     res.status(201).json({ vm, status: vm.status });
   } catch (err) {
+    if (err instanceof CreateOptionError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
     if (err instanceof QuotaError) {
       res.status(403).json({ error: 'Quota exceeded', details: err.details });
       return;

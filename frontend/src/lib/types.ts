@@ -50,8 +50,11 @@ export interface EnrollmentResponse {
   enrollmentToken: string;
 }
 
-/** The caller's access to a VM: their own, admin, or a share grant. */
-export type VmAccess = "owner" | "admin" | "co-owner" | "read-only";
+/** The caller's access to a VM: their own, admin, or a share preset level. */
+export type VmAccess = "owner" | "admin" | "viewer" | "operator" | "manager";
+
+/** A per-VM capability the API grants; the UI gates buttons/tabs on these. */
+export type VmCap = "view" | "power" | "console" | "configure" | "backups" | "ide";
 
 export interface VirtualMachine {
   id: string;
@@ -77,6 +80,11 @@ export interface VirtualMachine {
   updatedAt: string;
   // Present on list/detail responses: how the current user may use this VM.
   access?: VmAccess;
+  // The capabilities the current user holds on this VM (owner/admin = all).
+  caps?: VmCap[];
+  // Admin-provisioned into a tenant's account: the owning tenant may operate it
+  // but NOT resize it — only an admin can (also true of quota-exempt grants).
+  adminManaged?: boolean;
 }
 
 export interface VmDisk {
@@ -88,7 +96,7 @@ export interface VmDisk {
 
 export interface VmShare {
   id: string;
-  role: "co-owner" | "read-only";
+  role: "viewer" | "operator" | "manager";
   createdAt: string;
   user: { id: string; email: string; displayName: string };
 }

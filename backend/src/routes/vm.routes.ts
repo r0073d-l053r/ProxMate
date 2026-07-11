@@ -36,11 +36,13 @@ import {
   deleteMateState,
   setBackupPolicy,
 } from '../services/matestate.service.js';
-import { listShares, addShare, removeShare, SHARE_ROLES, ShareError } from '../services/vm-share.service.js';
+import { listShares, addShare, removeShare, SHARE_ROLES, normalizeShareRole, ShareError } from '../services/vm-share.service.js';
 import { listDisks, addDataDisk, resizeDataDisk, removeDataDisk } from '../services/disk.service.js';
 import {
   QuotaError,
   ResizeError,
+  CreateOptionError,
+  resolveCreateTarget,
   createVm,
   createContainer,
   kindOf,
@@ -52,7 +54,7 @@ import {
   getLiveUsage,
   getOwnedVm,
   getViewableVm,
-  getWritableVm,
+  getVmWithCap,
   resolveVmAccess,
   annotateAccess,
   migrateVmToNode,
@@ -115,6 +117,25 @@ function rejectIfLocked(vm: { ideState: string | null; deployState: string | nul
   return false;
 }
 
+/**
+ * Resize lock: an admin-managed VM (deploy-for-tenant) may be RESIZED only by an
+ * admin — the owning tenant operates it as-is. This also closes a quota bypass:
+ * a tenant who could grow a quota-exempt grant would sidestep quota entirely
+ * (quotaExempt implies adminManaged, but we check both defensively). Returns true
+ * (and sends 403) when the non-admin caller may not change this VM's size.
+ */
+export function rejectIfSizeLocked(
+  vm: { adminManaged: boolean; quotaExempt: boolean },
+  user: { role: string },
+  res: Response,
+): boolean {
+  if ((vm.adminManaged || vm.quotaExempt) && user.role !== 'admin') {
+    res.status(403).json({ error: 'This VM was set up by an admin — only an admin can resize it.' });
+    return true;
+  }
+  return false;
+}
+
 // ─── GET /api/vms ─────────────────────────────────────────────
 
 router.get('/', async (req: Request, res: Response) => {
@@ -152,10 +173,15 @@ const CreateVmSchema = z.object({
     .max(255)
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*\.(iso|img)$/i, 'Must be an ISO/IMG filename'),
   // Node name goes into the Proxmox API path — keep it to a safe charset.
+  // ADMIN-ONLY (enforced in the route): tenants never pin nodes.
   node: z
     .string()
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid node name')
     .optional(),
+  // Admin-only: deploy INTO this user's account…
+  forUserId: z.string().min(1).max(64).optional(),
+  // …optionally as a grant that doesn't count toward their quota.
+  quotaExempt: z.boolean().optional(),
 });
 
 router.post('/', async (req: Request, res: Response) => {
@@ -165,22 +191,28 @@ router.post('/', async (req: Request, res: Response) => {
     return;
   }
 
-  const { id } = (req as AuthRequest).user;
-  const user = await prisma.user.findUnique({ where: { id } });
-  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
-
+  const actor = (req as AuthRequest).user;
   try {
-    const vm = await createVm(user, parsed.data);
+    // The guest's OWNER (the acting user, or the admin's chosen tenant) — quota
+    // applies to them; node/forUserId/quotaExempt are admin-only options.
+    const owner = await resolveCreateTarget(actor, parsed.data);
+    const vm = await createVm(owner, { ...parsed.data, adminManaged: owner.id !== actor.id });
+    const forNote = owner.id !== actor.id ? ` for ${owner.email}` : '';
+    const exemptNote = vm.quotaExempt ? ', quota-exempt' : '';
     await recordAudit({
       action: 'vm.create',
-      actor: user,
+      actor,
       targetType: 'vm',
       targetId: vm.id,
-      detail: `${vm.name} (vmid ${vm.proxmoxVmId} on ${vm.proxmoxNode}, ${vm.cpu}c/${vm.ram}MB/${vm.storage}GB)`,
+      detail: `${vm.name}${forNote} (vmid ${vm.proxmoxVmId} on ${vm.proxmoxNode}, ${vm.cpu}c/${vm.ram}MB/${vm.storage}GB${exemptNote})`,
       req,
     });
     res.status(201).json({ vm, status: vm.status });
   } catch (err) {
+    if (err instanceof CreateOptionError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
     if (err instanceof QuotaError) {
       res.status(403).json({ error: 'Quota exceeded', details: err.details });
       return;
@@ -347,6 +379,9 @@ const CreateContainerSchema = z.object({
     .string()
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid node name')
     .optional(),
+  // Admin-only options — see CreateVmSchema.
+  forUserId: z.string().min(1).max(64).optional(),
+  quotaExempt: z.boolean().optional(),
 });
 
 router.post('/containers', async (req: Request, res: Response) => {
@@ -360,22 +395,26 @@ router.post('/containers', async (req: Request, res: Response) => {
     return;
   }
 
-  const { id } = (req as AuthRequest).user;
-  const user = await prisma.user.findUnique({ where: { id } });
-  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
-
+  const actor = (req as AuthRequest).user;
   try {
-    const vm = await createContainer(user, parsed.data);
+    const owner = await resolveCreateTarget(actor, parsed.data);
+    const vm = await createContainer(owner, { ...parsed.data, adminManaged: owner.id !== actor.id });
+    const forNote = owner.id !== actor.id ? ` for ${owner.email}` : '';
+    const exemptNote = vm.quotaExempt ? ', quota-exempt' : '';
     await recordAudit({
       action: 'vm.create',
-      actor: user,
+      actor,
       targetType: 'vm',
       targetId: vm.id,
-      detail: `${vm.name} (LXC, vmid ${vm.proxmoxVmId} on ${vm.proxmoxNode}, ${vm.cpu}c/${vm.ram}MB/${vm.storage}GB)`,
+      detail: `${vm.name}${forNote} (LXC, vmid ${vm.proxmoxVmId} on ${vm.proxmoxNode}, ${vm.cpu}c/${vm.ram}MB/${vm.storage}GB${exemptNote})`,
       req,
     });
     res.status(201).json({ vm, status: vm.status });
   } catch (err) {
+    if (err instanceof CreateOptionError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
     if (err instanceof QuotaError) {
       res.status(403).json({ error: 'Quota exceeded', details: err.details });
       return;
@@ -442,7 +481,9 @@ router.get('/:id', async (req: Request, res: Response) => {
   // Whether the admin has designated a rescue ISO — lets the UI explain the
   // Rescue card's disabled state instead of failing on click.
   const rescueAvailable = kindOf(resolved.vm) !== 'lxc' && !!(await getConfig('rescue_iso'));
-  res.json({ ...withStatus, deployState, access: resolved.access, rescueAvailable });
+  // `caps` is what the UI gates on (per-capability buttons/tabs); `access` is the
+  // display badge. Owner/admin get every capability.
+  res.json({ ...withStatus, deployState, access: resolved.access, caps: [...resolved.caps], rescueAvailable });
 });
 
 // ─── GET /api/vms/:id/metrics ─────────────────────────────────
@@ -496,9 +537,17 @@ router.get('/:id/activity', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getViewableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
-  const entries = await listAuditForTarget('vm', vm.id, 20);
+  // Tenants (owner + shared users) see their own trail; admin interventions are
+  // logged admin-side only (/admin/audit). Admin callers keep the unfiltered
+  // view — it's their log to begin with.
+  const entries = await listAuditForTarget(
+    'vm',
+    vm.id,
+    20,
+    user.role === 'admin' ? {} : { hideActionsByAdminsExcept: vm.userId },
+  );
   // Project to a safe subset for the owner-facing feed — never expose the actor's
-  // IP or internal user id (an admin could have acted on this tenant's VM).
+  // IP or internal user id.
   res.json(
     entries.map((e) => ({
       id: e.id,
@@ -535,7 +584,7 @@ const UpdateVmSchema = z.object({
 
 router.patch('/:id', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  let vm = await getWritableVm(req.params['id'] as string, user);
+  let vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   const parsed = UpdateVmSchema.safeParse(req.body);
@@ -563,6 +612,8 @@ router.patch('/:id', async (req: Request, res: Response) => {
   const resizing = Object.keys(resizeInput).length > 0;
 
   if (!metaChanged && !resizing) { res.json(vm); return; }
+  // Resizing an admin-managed VM is admin-only (rename/tags stay open to the owner).
+  if (resizing && rejectIfSizeLocked(vm, user, res)) return;
 
   try {
     // Notes / rename first. A rename hits Proxmox first (so a PVE failure
@@ -625,7 +676,7 @@ const ScheduleSchema = z.object({
 
 router.put('/:id/schedule', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   const parsed = ScheduleSchema.safeParse(req.body);
@@ -669,7 +720,7 @@ const BackupPolicySchema = z.object({
 
 router.put('/:id/backup-policy', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'backups');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   const parsed = BackupPolicySchema.safeParse(req.body);
@@ -718,8 +769,9 @@ const DISK_SLOT_RE = /^(scsi|virtio|sata|ide)\d+$/;
 
 router.post('/:id/disks', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (rejectIfSizeLocked(vm, user, res)) return;
   if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Data disks aren’t supported for containers.' }); return; }
   const parsed = DiskSizeSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Enter a disk size in GB.' }); return; }
@@ -735,8 +787,9 @@ router.post('/:id/disks', async (req: Request, res: Response) => {
 
 router.patch('/:id/disks/:slot', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (rejectIfSizeLocked(vm, user, res)) return;
   if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Data disks aren’t supported for containers.' }); return; }
   const slot = req.params['slot'] as string;
   if (!DISK_SLOT_RE.test(slot)) { res.status(400).json({ error: 'Invalid disk.' }); return; }
@@ -755,8 +808,9 @@ router.patch('/:id/disks/:slot', async (req: Request, res: Response) => {
 
 router.delete('/:id/disks/:slot', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (rejectIfSizeLocked(vm, user, res)) return;
   if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Data disks aren’t supported for containers.' }); return; }
   const slot = req.params['slot'] as string;
   if (!DISK_SLOT_RE.test(slot)) { res.status(400).json({ error: 'Invalid disk.' }); return; }
@@ -846,7 +900,9 @@ router.get('/:id/shares', async (req: Request, res: Response) => {
 
 const AddShareSchema = z.object({
   email: z.string().trim().email().max(254),
-  role: z.enum(SHARE_ROLES),
+  // Accept the legacy names for one release (a stale browser bundle mid-deploy
+  // must not 400) — normalized to the current presets.
+  role: z.enum([...SHARE_ROLES, 'co-owner', 'read-only']).transform(normalizeShareRole),
 });
 
 router.post('/:id/shares', async (req: Request, res: Response) => {
@@ -903,7 +959,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
 
 router.post('/:id/start', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'power');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   try {
@@ -917,7 +973,7 @@ router.post('/:id/start', async (req: Request, res: Response) => {
 
 router.post('/:id/stop', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'power');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   if (rejectIfLocked(vm, res)) return;
@@ -936,7 +992,7 @@ router.post('/:id/stop', async (req: Request, res: Response) => {
 
 router.post('/:id/restart', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'power');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (rejectIfLocked(vm, res)) return;
 
@@ -956,7 +1012,7 @@ router.post('/:id/restart', async (req: Request, res: Response) => {
 
 router.post('/:id/pause', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'power');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (kindOf(vm) === 'lxc') {
     res.status(409).json({ error: 'Containers (LXC) cannot be paused' });
@@ -975,7 +1031,7 @@ router.post('/:id/pause', async (req: Request, res: Response) => {
 
 router.post('/:id/resume', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'power');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (kindOf(vm) === 'lxc') {
     res.status(409).json({ error: 'Containers (LXC) cannot be paused' });
@@ -1002,7 +1058,7 @@ const DuplicateSchema = z.object({
 
 router.post('/:id/duplicate', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (kindOf(vm) === 'lxc') {
     res.status(409).json({ error: 'Containers (LXC) can\'t be duplicated' });
@@ -1039,7 +1095,7 @@ const ResetPasswordSchema = z.object({
 
 router.post('/:id/reset-password', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (kindOf(vm) === 'lxc') {
     res.status(409).json({ error: 'Password reset needs the QEMU guest agent — containers are not supported' });
@@ -1080,7 +1136,7 @@ const AddVmSshKeySchema = z.object({
 
 router.post('/:id/ssh-keys', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (kindOf(vm) === 'lxc') {
     res.status(409).json({ error: 'Adding SSH keys needs the QEMU guest agent — containers are not supported' });
@@ -1110,7 +1166,7 @@ router.post('/:id/ssh-keys', async (req: Request, res: Response) => {
 
 router.post('/:id/rescue', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (kindOf(vm) === 'lxc') {
     res.status(409).json({ error: 'Rescue mode is for VMs — containers share the host kernel' });
@@ -1129,7 +1185,7 @@ router.post('/:id/rescue', async (req: Request, res: Response) => {
 
 router.post('/:id/rescue/exit', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   try {
@@ -1167,7 +1223,7 @@ router.get('/:id/alerts', async (req: Request, res: Response) => {
 
 router.post('/:id/alerts', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   const parsed = AlertSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -1191,7 +1247,7 @@ router.post('/:id/alerts', async (req: Request, res: Response) => {
 
 router.delete('/:id/alerts/:alertId', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   // Scope the delete to this VM so a rule id from another VM can't be removed.
   const { count } = await prisma.alertRule.deleteMany({ where: { id: req.params['alertId'] as string, vmId: vm.id } });
@@ -1257,7 +1313,7 @@ const RebuildSchema = z
 
 router.post('/:id/rebuild', async (req: Request, res: Response) => {
   const authUser = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, authUser);
+  const vm = await getOwnedVm(req.params['id'] as string, authUser);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (kindOf(vm) === 'lxc') {
     res.status(400).json({ error: 'Rebuild isn’t available for containers. Delete and recreate it instead.' });
@@ -1359,7 +1415,7 @@ router.get('/:id/matestates', async (req: Request, res: Response) => {
 // requesting user's own email.
 router.post('/:id/matestates/:msid/download', async (req: Request, res: Response) => {
   const authUser = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, authUser);
+  const vm = await getVmWithCap(req.params['id'] as string, authUser, 'backups');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   const user = await prisma.user.findUnique({ where: { id: authUser.id }, select: { id: true, email: true } });
   if (!user) { res.status(404).json({ error: 'User not found' }); return; }
@@ -1380,7 +1436,7 @@ router.post('/:id/matestates/:msid/download', async (req: Request, res: Response
 
 router.post('/:id/matestates', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'backups');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   try {
     const ms = await createMateState(vm, 'manual');
@@ -1396,7 +1452,7 @@ router.post('/:id/matestates', async (req: Request, res: Response) => {
 
 router.post('/:id/matestates/:msid/restore', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'backups');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   const ms = await prisma.mateState.findUnique({ where: { id: req.params['msid'] as string } });
   if (!ms || ms.vmId !== vm.id) { res.status(404).json({ error: 'MateState not found' }); return; }
@@ -1414,7 +1470,7 @@ router.post('/:id/matestates/:msid/restore', async (req: Request, res: Response)
 
 router.delete('/:id/matestates/:msid', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'backups');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   const ms = await prisma.mateState.findUnique({ where: { id: req.params['msid'] as string } });
   if (!ms || ms.vmId !== vm.id) { res.status(404).json({ error: 'MateState not found' }); return; }
@@ -1464,7 +1520,7 @@ router.get('/:id/snapshots', async (req: Request, res: Response) => {
 
 router.post('/:id/snapshots', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  let vm = await getWritableVm(req.params['id'] as string, user);
+  let vm = await getVmWithCap(req.params['id'] as string, user, 'backups');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Snapshots aren’t available for containers yet.' }); return; }
@@ -1503,7 +1559,7 @@ router.post('/:id/snapshots/:name/rollback', async (req: Request, res: Response)
   const user = (req as AuthRequest).user;
   const name = req.params['name'] as string;
   if (!SNAP_NAME_RE.test(name)) { res.status(400).json({ error: 'Invalid snapshot name' }); return; }
-  let vm = await getWritableVm(req.params['id'] as string, user);
+  let vm = await getVmWithCap(req.params['id'] as string, user, 'backups');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Snapshots aren’t available for containers yet.' }); return; }
   try {
@@ -1524,7 +1580,7 @@ router.delete('/:id/snapshots/:name', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const name = req.params['name'] as string;
   if (!SNAP_NAME_RE.test(name)) { res.status(400).json({ error: 'Invalid snapshot name' }); return; }
-  let vm = await getWritableVm(req.params['id'] as string, user);
+  let vm = await getVmWithCap(req.params['id'] as string, user, 'backups');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Snapshots aren’t available for containers yet.' }); return; }
   try {
@@ -1546,7 +1602,7 @@ router.delete('/:id/snapshots/:name', async (req: Request, res: Response) => {
 
 router.post('/:id/console', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  let vm = await getWritableVm(req.params['id'] as string, user);
+  let vm = await getVmWithCap(req.params['id'] as string, user, 'console');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (rejectIfLocked(vm, res)) return;
 
@@ -1565,7 +1621,7 @@ router.post('/:id/console', async (req: Request, res: Response) => {
 
 router.post('/:id/serial', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  let vm = await getWritableVm(req.params['id'] as string, user);
+  let vm = await getVmWithCap(req.params['id'] as string, user, 'console');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   try {

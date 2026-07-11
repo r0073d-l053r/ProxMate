@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../src/lib/prisma.js', () => ({
-  prisma: { auditLog: { create: vi.fn(), findMany: vi.fn(), count: vi.fn() } },
+  prisma: {
+    auditLog: { create: vi.fn(), findMany: vi.fn(), count: vi.fn() },
+    user: { findMany: vi.fn() },
+  },
 }));
 
 import { prisma } from '../src/lib/prisma.js';
@@ -10,10 +13,12 @@ import { recordAudit, listAudit, listAuditForTarget } from '../src/services/audi
 const create = vi.mocked(prisma.auditLog.create);
 const findMany = vi.mocked(prisma.auditLog.findMany);
 const count = vi.mocked(prisma.auditLog.count);
+const userFindMany = vi.mocked(prisma.user.findMany);
 
 beforeEach(() => {
   vi.clearAllMocks();
   create.mockResolvedValue({} as never);
+  userFindMany.mockResolvedValue([] as never);
 });
 
 describe('recordAudit', () => {
@@ -119,5 +124,43 @@ describe('listAuditForTarget (per-VM activity feed)', () => {
     findMany.mockResolvedValue([] as never);
     await listAuditForTarget('vm', 'vm1', 9999);
     expect(findMany.mock.calls[0]![0].take).toBe(100);
+  });
+});
+
+describe('listAuditForTarget — admin actions hidden from tenant feeds (owner decision 2026-07-11)', () => {
+  it('excludes rows by admins OTHER than the VM owner, keeping system (null-actor) rows', async () => {
+    userFindMany.mockResolvedValue([{ id: 'admin1' }, { id: 'admin2' }] as never);
+    findMany.mockResolvedValue([] as never);
+    await listAuditForTarget('vm', 'vm1', 20, { hideActionsByAdminsExcept: 'owner1' });
+    expect(userFindMany).toHaveBeenCalledWith({ where: { role: 'admin' }, select: { id: true } });
+    expect(findMany.mock.calls[0]![0].where).toEqual({
+      targetType: 'vm',
+      targetId: 'vm1',
+      OR: [{ userId: null }, { userId: { notIn: ['admin1', 'admin2'] } }],
+    });
+  });
+
+  it("an admin who IS the VM's owner keeps their own actions visible", async () => {
+    userFindMany.mockResolvedValue([{ id: 'admin1' }, { id: 'admin2' }] as never);
+    findMany.mockResolvedValue([] as never);
+    await listAuditForTarget('vm', 'vm1', 20, { hideActionsByAdminsExcept: 'admin1' });
+    expect(findMany.mock.calls[0]![0].where).toEqual({
+      targetType: 'vm',
+      targetId: 'vm1',
+      OR: [{ userId: null }, { userId: { notIn: ['admin2'] } }],
+    });
+  });
+
+  it('adds no clause when there is nothing to hide (sole admin owns the VM)', async () => {
+    userFindMany.mockResolvedValue([{ id: 'admin1' }] as never);
+    findMany.mockResolvedValue([] as never);
+    await listAuditForTarget('vm', 'vm1', 20, { hideActionsByAdminsExcept: 'admin1' });
+    expect(findMany.mock.calls[0]![0].where).toEqual({ targetType: 'vm', targetId: 'vm1' });
+  });
+
+  it('without the option, no user lookup happens (admin/unfiltered path)', async () => {
+    findMany.mockResolvedValue([] as never);
+    await listAuditForTarget('vm', 'vm1', 20);
+    expect(userFindMany).not.toHaveBeenCalled();
   });
 });

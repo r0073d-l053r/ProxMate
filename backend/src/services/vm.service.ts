@@ -8,6 +8,7 @@ import { vmMaintenanceEmail } from '../lib/email-templates.js';
 import * as pve from './proxmox.service.js';
 import { getOfferedFeatureIds, getBaseFeatureIds } from './template.service.js';
 import { isValidPublicKey } from './ssh-key.service.js';
+import { ALL_CAPS, CAPS_BY_ROLE, normalizeShareRole, type ShareRole, type VmCap } from './vm-share.service.js';
 
 /** The Proxmox guest kind for a VM row (defaults to QEMU for legacy/unset rows). */
 export const kindOf = (vm: { type?: string | null }): pve.GuestKind => (vm.type === 'lxc' ? 'lxc' : 'qemu');
@@ -39,14 +40,20 @@ export interface CreateVmInput {
   storage: number; // GB
   os: string; // ISO filename
   node?: string;
+  /** Admin-only: this VM is a grant that doesn't count toward the owner's quota. */
+  quotaExempt?: boolean;
+  /** Admin-only: the owning tenant may operate but not RESIZE this VM. */
+  adminManaged?: boolean;
 }
 
 /** Check the requested resources against the user's remaining quota. */
 export async function assertWithinQuota(user: User, input: CreateVmInput): Promise<void> {
-  // Admins (cluster owners) are not quota-limited.
-  if (user.role === 'admin') return;
+  // Admins (cluster owners) are not quota-limited; neither is an admin-granted
+  // exempt VM (the flag is settable only through admin-gated routes).
+  if (user.role === 'admin' || input.quotaExempt) return;
 
-  const existing = await prisma.virtualMachine.findMany({ where: { userId: user.id } });
+  // Exempt VMs never count toward usage — they're admin grants on top of quota.
+  const existing = await prisma.virtualMachine.findMany({ where: { userId: user.id, quotaExempt: false } });
   const usedCpu = existing.reduce((s, v) => s + v.cpu, 0);
   const usedRam = existing.reduce((s, v) => s + v.ram, 0);
   const usedStorage = existing.reduce((s, v) => s + v.storage, 0);
@@ -60,6 +67,39 @@ export async function assertWithinQuota(user: User, input: CreateVmInput): Promi
     violations['storage'] = { used: usedStorage, requested: input.storage, max: user.maxStorage };
 
   if (Object.keys(violations).length > 0) throw new QuotaError(violations);
+}
+
+/** A create-option violation the routes surface directly (status included). */
+export class CreateOptionError extends Error {
+  constructor(
+    message: string,
+    public status = 403,
+  ) {
+    super(message);
+    this.name = 'CreateOptionError';
+  }
+}
+
+/**
+ * Resolve who a new guest belongs to and police the admin-only create options.
+ * Tenants create for themselves with auto-placement; only admins may pin a node,
+ * deploy INTO another user's account (`forUserId`), or grant quota exemption.
+ * Returns the full User row the guest will belong to (quota is checked against
+ * THEM, not the acting admin).
+ */
+export async function resolveCreateTarget(
+  reqUser: { id: string; role: string },
+  opts: { forUserId?: string; quotaExempt?: boolean; node?: string },
+): Promise<User> {
+  const usesAdminOption = opts.forUserId !== undefined || opts.quotaExempt !== undefined || opts.node !== undefined;
+  if (usesAdminOption && reqUser.role !== 'admin') {
+    throw new CreateOptionError('Choosing a node, deploying for another user, or quota exemption is admin-only.');
+  }
+  const owner = await prisma.user.findUnique({ where: { id: opts.forUserId ?? reqUser.id } });
+  if (!owner) {
+    throw new CreateOptionError(opts.forUserId ? 'No such user to deploy for.' : 'User not found', 404);
+  }
+  return owner;
 }
 
 /**
@@ -127,6 +167,8 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
       storage: input.storage,
       os: input.os,
       status: 'creating',
+      quotaExempt: input.quotaExempt ?? false,
+      adminManaged: input.adminManaged ?? false,
     },
   });
 
@@ -177,6 +219,10 @@ export interface CreateContainerInput {
   password?: string;
   sshKey?: string;
   node?: string;
+  /** Admin-only: this container is a grant that doesn't count toward the owner's quota. */
+  quotaExempt?: boolean;
+  /** Admin-only: the owning tenant may operate but not RESIZE this container. */
+  adminManaged?: boolean;
 }
 
 /** Guess a container's CPU architecture from its OS-template filename. */
@@ -199,6 +245,8 @@ export async function createContainer(user: User, input: CreateContainerInput): 
     ram: input.ram,
     storage: input.storage,
     os: input.template,
+    quotaExempt: input.quotaExempt,
+    adminManaged: input.adminManaged,
   });
 
   const client = await pve.getClient();
@@ -255,6 +303,8 @@ export async function createContainer(user: User, input: CreateContainerInput): 
       storage: input.storage,
       os: templateName,
       status: 'creating',
+      quotaExempt: input.quotaExempt ?? false,
+      adminManaged: input.adminManaged ?? false,
     },
   });
 
@@ -309,6 +359,10 @@ export interface DeployTemplateInput {
   installSuperfile?: boolean; // installs superfile (spf), a headless terminal file manager
   /** Selected cloud-init extra ids (data-driven; supersedes the install* booleans). */
   features?: string[];
+  /** Admin-only: this VM is a grant that doesn't count toward the owner's quota. */
+  quotaExempt?: boolean;
+  /** Admin-only: the owning tenant may operate but not RESIZE this VM. */
+  adminManaged?: boolean;
 }
 
 /** Cloud-init knobs shared by template deploys and rebuilds. */
@@ -433,7 +487,15 @@ export async function deployFromTemplate(
 ): Promise<VirtualMachine> {
   // Can't deploy a disk smaller than the template's base image.
   const diskGb = Math.max(input.storage, template.diskGb || input.storage);
-  await assertWithinQuota(user, { name: input.name, cpu: input.cpu, ram: input.ram, storage: diskGb, os: template.name });
+  await assertWithinQuota(user, {
+    name: input.name,
+    cpu: input.cpu,
+    ram: input.ram,
+    storage: diskGb,
+    os: template.name,
+    quotaExempt: input.quotaExempt,
+    adminManaged: input.adminManaged,
+  });
 
   const client = await pve.getClient();
   const isolate = (await getConfig('isolation_enabled')) !== 'false';
@@ -453,6 +515,8 @@ export async function deployFromTemplate(
       storage: diskGb,
       os: template.os ?? template.name,
       status: 'creating',
+      quotaExempt: input.quotaExempt ?? false,
+      adminManaged: input.adminManaged ?? false,
     },
   });
 
@@ -573,31 +637,52 @@ export async function getOwnedVm(
   return vm;
 }
 
-export type VmAccess = 'owner' | 'admin' | 'co-owner' | 'read-only';
+/**
+ * The caller's relationship to a VM. Owners/admins hold every capability plus
+ * the owner-exclusive surface (delete, migrate, shares, passthrough, rebuild);
+ * shares hold the capability set of their preset (see CAPS_BY_ROLE).
+ */
+export type VmAccess = 'owner' | 'admin' | ShareRole;
 
-/** Resolve the caller's access level to a VM, or null if they can't see it. */
+export interface ResolvedVmAccess {
+  vm: VirtualMachine;
+  access: VmAccess;
+  caps: ReadonlySet<VmCap>;
+}
+
+/** Resolve the caller's access + capabilities for a VM, or null if invisible. */
 export async function resolveVmAccess(
   vmId: string,
   user: { id: string; role: string },
-): Promise<{ vm: VirtualMachine; access: VmAccess } | null> {
+): Promise<ResolvedVmAccess | null> {
   const vm = await prisma.virtualMachine.findUnique({ where: { id: vmId } });
   if (!vm) return null;
-  if (vm.userId === user.id) return { vm, access: 'owner' };
-  if (user.role === 'admin') return { vm, access: 'admin' };
+  if (vm.userId === user.id) return { vm, access: 'owner', caps: ALL_CAPS };
+  if (user.role === 'admin') return { vm, access: 'admin', caps: ALL_CAPS };
   const share = await prisma.vmShare.findUnique({ where: { vmId_userId: { vmId, userId: user.id } } });
   if (!share) return null;
-  return { vm, access: share.role === 'co-owner' ? 'co-owner' : 'read-only' };
+  const role = normalizeShareRole(share.role);
+  return { vm, access: role, caps: CAPS_BY_ROLE[role] };
 }
 
-/** A VM the caller may VIEW (owner / admin / co-owner / read-only), else null. */
-export async function getViewableVm(vmId: string, user: { id: string; role: string }): Promise<VirtualMachine | null> {
-  return (await resolveVmAccess(vmId, user))?.vm ?? null;
-}
-
-/** A VM the caller may OPERATE (owner / admin / co-owner). A read-only share → null. */
-export async function getWritableVm(vmId: string, user: { id: string; role: string }): Promise<VirtualMachine | null> {
+/**
+ * THE per-VM route gate: the VM if the caller holds `cap` on it, else null
+ * (indistinguishable from "no such VM" — no existence oracle). Owner-exclusive
+ * actions (delete/migrate/shares/passthrough/rebuild/convert) use getOwnedVm,
+ * never a capability.
+ */
+export async function getVmWithCap(
+  vmId: string,
+  user: { id: string; role: string },
+  cap: VmCap,
+): Promise<VirtualMachine | null> {
   const r = await resolveVmAccess(vmId, user);
-  return r && r.access !== 'read-only' ? r.vm : null;
+  return r && r.caps.has(cap) ? r.vm : null;
+}
+
+/** A VM the caller may VIEW (any access level), else null. */
+export async function getViewableVm(vmId: string, user: { id: string; role: string }): Promise<VirtualMachine | null> {
+  return getVmWithCap(vmId, user, 'view');
 }
 
 /** List VMs the user owns OR has been shared (all VMs for admins). */
@@ -610,11 +695,11 @@ export async function listVms(user: { id: string; role: string }): Promise<Virtu
   });
 }
 
-/** Tag each VM with the caller's access level (for list/detail responses). */
+/** Tag each VM with the caller's access level + capabilities (list/detail responses). */
 export async function annotateAccess<T extends { id: string; userId: string }>(
   vms: T[],
   user: { id: string; role: string },
-): Promise<(T & { access: VmAccess })[]> {
+): Promise<(T & { access: VmAccess; caps: VmCap[] })[]> {
   const sharedRoles = new Map<string, string>();
   if (user.role !== 'admin' && vms.some((v) => v.userId !== user.id)) {
     const shares = await prisma.vmShare.findMany({
@@ -626,8 +711,9 @@ export async function annotateAccess<T extends { id: string; userId: string }>(
     const access: VmAccess =
       v.userId === user.id ? 'owner'
         : user.role === 'admin' ? 'admin'
-          : sharedRoles.get(v.id) === 'co-owner' ? 'co-owner' : 'read-only';
-    return { ...v, access };
+          : normalizeShareRole(sharedRoles.get(v.id) ?? '');
+    const caps = access === 'owner' || access === 'admin' ? ALL_CAPS : CAPS_BY_ROLE[access];
+    return { ...v, access, caps: [...caps] };
   });
 }
 
@@ -747,11 +833,12 @@ export async function assertResizeWithinQuota(
   vm: VirtualMachine,
   target: { cpu: number; ram: number; storage: number },
 ): Promise<void> {
-  // Admins (cluster owners) are not quota-limited.
-  if (user.role === 'admin') return;
+  // Admins (cluster owners) are not quota-limited. An admin-granted exempt VM
+  // stays exempt across resizes — it never enters quota accounting at all.
+  if (user.role === 'admin' || vm.quotaExempt) return;
 
   const others = await prisma.virtualMachine.findMany({
-    where: { userId: user.id, id: { not: vm.id } },
+    where: { userId: user.id, id: { not: vm.id }, quotaExempt: false },
   });
   const usedCpu = others.reduce((s, v) => s + v.cpu, 0);
   const usedRam = others.reduce((s, v) => s + v.ram, 0);

@@ -3,8 +3,14 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.js';
 import { getIdeCapability } from '../services/ide.service.js';
 import { issueGatewayToken, listModelPickerEntries, probeModels } from '../services/ide-gateway.service.js';
-import { getWritableVm, getViewableVm } from '../services/vm.service.js';
-import { startIdeProvision, refreshIdeState, IdeProvisionError } from '../services/ide-provision.service.js';
+import { getVmWithCap, getViewableVm } from '../services/vm.service.js';
+import {
+  startIdeProvision,
+  refreshIdeState,
+  IdeProvisionError,
+  startIdeRelocate,
+  getIdeRelocateStatus,
+} from '../services/ide-provision.service.js';
 import {
   listLlmKeys,
   addLlmKey,
@@ -79,7 +85,7 @@ router.post('/:id/gateway-token', async (req: Request, res: Response) => {
 // the UI can show a loading screen and only open the IDE once it's ready.
 router.post('/:id/provision', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const vm = await getWritableVm(req.params['id'] as string, user);
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'ide');
   if (!vm) {
     res.status(404).json({ error: 'VM not found' });
     return;
@@ -96,7 +102,9 @@ router.post('/:id/provision', async (req: Request, res: Response) => {
     res.json({ state });
   } catch (err) {
     if (err instanceof IdeProvisionError) {
-      res.status(400).json({ error: err.message });
+      // `code` lets the UI offer the right remedy (reboot vs relocate) instead
+      // of parsing message text.
+      res.status(400).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
       return;
     }
     throw err;
@@ -111,6 +119,52 @@ router.get('/:id/status', async (req: Request, res: Response) => {
     return;
   }
   res.json({ state: await refreshIdeState(vm) });
+});
+
+// ─── Relocate to an AVX-capable node ('node_no_avx' escape hatch) ─────────────
+// POST kicks off the background stop → offline-migrate → start (202; long disk
+// copies outlast any HTTP request) and GET polls it. The SERVER picks the target
+// node — tenants never choose nodes (recorded design decision).
+router.post('/:id/relocate', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'ide');
+  if (!vm) {
+    res.status(404).json({ error: 'VM not found' });
+    return;
+  }
+  const cap = await getIdeCapability({ role: user.role });
+  if (!cap.available) {
+    res.status(403).json({ error: 'ProxMate IDE is not available.' });
+    return;
+  }
+  try {
+    const target = await startIdeRelocate(vm, user.id);
+    void recordAudit({
+      actor: user,
+      action: 'vm.ide_relocate',
+      targetType: 'vm',
+      targetId: vm.id,
+      detail: `moving to AVX-capable node ${target} for the IDE`,
+      req,
+    });
+    res.status(202).json({ started: true, target });
+  } catch (err) {
+    if (err instanceof IdeProvisionError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+router.get('/:id/relocate-status', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getViewableVm(req.params['id'] as string, user);
+  if (!vm) {
+    res.status(404).json({ error: 'VM not found' });
+    return;
+  }
+  res.json(getIdeRelocateStatus(vm.id) ?? { state: 'none' });
 });
 
 // ─── Bring-your-own AI keys (used only through the gateway) ────
@@ -155,8 +209,10 @@ router.post('/keys', async (req: Request, res: Response) => {
     return;
   }
   try {
-    // Admins configure LAN model sources; tenants are held to public endpoints.
-    const key = await addLlmKey(user.id, parsed.data, { allowPrivate: user.role === 'admin' });
+    // Admins configure LAN model sources and free-form endpoints; tenants are held
+    // to public endpoints AND the fixed preset services (no custom base URLs).
+    const isAdmin = user.role === 'admin';
+    const key = await addLlmKey(user.id, parsed.data, { allowPrivate: isAdmin, allowCustomBase: isAdmin });
     void recordAudit({
       actor: user,
       action: 'ide.llm_key_add',
