@@ -211,6 +211,9 @@ export default function VmDetailPage() {
   }
 
   const ideBusy = ideInstalling || vm?.ideState === "installing";
+  // Cloud-init is still provisioning a freshly-deployed VM — the backend locks
+  // destructive actions (409) until it settles; we mirror that in the UI.
+  const deploying = vm?.deployState === "deploying";
 
   // Active tab, deep-linkable via ?tab= (e.g. /vms/abc?tab=backups). Kept in the
   // URL with replaceState so switching tabs never adds history entries.
@@ -404,7 +407,10 @@ export default function VmDetailPage() {
   }
 
   const acting = transition !== null;
-  const busy = acting || (pending !== null && pending !== "delete-failed");
+  // While the VM is locked (IDE installing or cloud-init still deploying) the
+  // backend rejects power/delete/migrate — disable those controls so the lock is
+  // visible, not just a surprise 409 after a click.
+  const busy = acting || ideBusy || deploying || (pending !== null && pending !== "delete-failed");
   const running = vm.status === "running";
   const stopped = vm.status === "stopped" || vm.status === "error";
   // Access: owners/admins manage shares; co-owners can operate; read-only can only
@@ -435,6 +441,22 @@ export default function VmDetailPage() {
             <p className="text-muted-foreground">
               This takes about a minute. The console, power, and delete actions are locked until it
               finishes — you can safely navigate away and come back.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Cloud-init deploy lock: a freshly-deployed VM keeps provisioning after it
+          boots. Power / delete / migrate are backend-locked until it settles. */}
+      {deploying && !ideBusy && (
+        <div className="mb-4 flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-4 text-sm">
+          <Loader2 className="size-5 shrink-0 animate-spin text-primary" />
+          <div>
+            <p className="font-medium">Finishing setup on this VM…</p>
+            <p className="text-muted-foreground">
+              Cloud-init is installing packages and configuring the guest. Power, delete, and migrate
+              are locked until it&rsquo;s ready — this usually takes a minute or two. You can safely
+              navigate away and come back.
             </p>
           </div>
         </div>

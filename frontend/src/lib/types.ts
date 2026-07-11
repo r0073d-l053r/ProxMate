@@ -109,6 +109,8 @@ export interface VmDetail extends VirtualMachine {
   rescueAvailable?: boolean;
   /** ProxMate IDE install state: null/'none' | 'installing' | 'ready' | 'failed'. */
   ideState?: "none" | "installing" | "ready" | "failed" | null;
+  /** Cloud-init deploy lock: 'deploying' = still provisioning (locked); else ready. */
+  deployState?: "none" | "deploying" | "ready" | null;
 }
 
 /** GET /api/ide/:id/status */

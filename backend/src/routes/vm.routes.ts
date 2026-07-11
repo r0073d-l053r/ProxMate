@@ -74,6 +74,7 @@ import {
 } from '../services/vm.service.js';
 import { isValidPublicKey } from '../services/ssh-key.service.js';
 import { isIdeInstalling } from '../services/ide-provision.service.js';
+import { isDeploying, refreshDeployState } from '../services/deploy-lock.service.js';
 import { getLiveStats } from '../services/live-stats.service.js';
 import { getConfig } from '../services/config.service.js';
 import { ALERT_METRICS } from '../services/alert.service.js';
@@ -95,6 +96,24 @@ const router = Router();
 router.use(requireAuth);
 // Users whose admin required 2FA can't touch VMs until they've enrolled a method.
 router.use(enforceMfaSetup);
+
+/**
+ * Destructive per-VM actions (stop/restart/pause/delete/migrate) are refused with
+ * a 409 while the guest is locked — either the ProxMate IDE is installing or
+ * cloud-init is still provisioning a freshly-deployed VM. Returns true (and sends
+ * the response) when locked, so callers just `if (rejectIfLocked(vm, res)) return;`.
+ */
+function rejectIfLocked(vm: { ideState: string | null; deployState: string | null }, res: Response): boolean {
+  if (isIdeInstalling(vm)) {
+    res.status(409).json({ error: 'The ProxMate IDE is installing on this VM — wait until it finishes.' });
+    return true;
+  }
+  if (isDeploying(vm)) {
+    res.status(409).json({ error: "This VM is still finishing its cloud-init setup — wait until it's ready." });
+    return true;
+  }
+  return false;
+}
 
 // ─── GET /api/vms ─────────────────────────────────────────────
 
@@ -415,10 +434,15 @@ router.get('/:id', async (req: Request, res: Response) => {
   if (!resolved) { res.status(404).json({ error: 'VM not found' }); return; }
 
   const withStatus = await getVmWithLiveStatus(resolved.vm);
+  // Advance the cloud-init deploy lock: probes `cloud-init status` via the guest
+  // agent and flips 'deploying' → 'ready' once it settles (or the timeout lapses),
+  // so the lock clears on its own as the tenant watches the VM come up. No-op
+  // unless the VM is mid-deploy. Reflect the fresh value in this response.
+  const deployState = await refreshDeployState(resolved.vm);
   // Whether the admin has designated a rescue ISO — lets the UI explain the
   // Rescue card's disabled state instead of failing on click.
   const rescueAvailable = kindOf(resolved.vm) !== 'lxc' && !!(await getConfig('rescue_iso'));
-  res.json({ ...withStatus, access: resolved.access, rescueAvailable });
+  res.json({ ...withStatus, deployState, access: resolved.access, rescueAvailable });
 });
 
 // ─── GET /api/vms/:id/metrics ─────────────────────────────────
@@ -861,7 +885,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getOwnedVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
-  if (isIdeInstalling(vm)) { res.status(409).json({ error: 'The ProxMate IDE is installing on this VM — wait until it finishes.' }); return; }
+  if (rejectIfLocked(vm, res)) return;
 
   try {
     await destroyVm(vm);
@@ -896,7 +920,7 @@ router.post('/:id/stop', async (req: Request, res: Response) => {
   const vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
-  if (isIdeInstalling(vm)) { res.status(409).json({ error: 'The ProxMate IDE is installing on this VM — wait until it finishes.' }); return; }
+  if (rejectIfLocked(vm, res)) return;
   const force = req.query['force'] === 'true';
   try {
     await stopVm(vm, force);
@@ -914,7 +938,7 @@ router.post('/:id/restart', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
-  if (isIdeInstalling(vm)) { res.status(409).json({ error: 'The ProxMate IDE is installing on this VM — wait until it finishes.' }); return; }
+  if (rejectIfLocked(vm, res)) return;
 
   try {
     await restartVm(vm);
@@ -939,7 +963,7 @@ router.post('/:id/pause', async (req: Request, res: Response) => {
     return;
   }
 
-  if (isIdeInstalling(vm)) { res.status(409).json({ error: 'The ProxMate IDE is installing on this VM — wait until it finishes.' }); return; }
+  if (rejectIfLocked(vm, res)) return;
   try {
     await pauseVm(vm);
     await recordAudit({ action: 'vm.pause', actor: user, targetType: 'vm', targetId: vm.id, detail: vm.name, req });
@@ -1524,7 +1548,7 @@ router.post('/:id/console', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   let vm = await getWritableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
-  if (isIdeInstalling(vm)) { res.status(409).json({ error: 'The ProxMate IDE is installing on this VM — wait until it finishes.' }); return; }
+  if (rejectIfLocked(vm, res)) return;
 
   try {
     vm = await syncVmNode(vm);
