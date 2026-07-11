@@ -447,6 +447,27 @@ Notes:
 
 ---
 
+## 14b. ProxMate IDE (optional, in-guest editor + AI agent)
+
+If you want the per-VM browser IDE, the full setup + security model is in
+[`docs/proxmate-ide.md`](docs/proxmate-ide.md). The production essentials:
+
+- **Reachability:** the ProxMate host must reach tenant VM IPs on **TCP :8080**. On a flat
+  network this is automatic; on a non-flat one you provide the routing (Tailscale subnet route,
+  VPN, static route). ProxMate can't create it.
+- **`TRUST_PROXY=1` + an https origin** (`BACKEND_PUBLIC_URL`) are required — the in-guest AI
+  agent's gateway URL is https-derived, and an http URL is 301'd (which breaks the agent's POST).
+- **Firewall:** with isolation on, ProxMate opens a managed, infra-scoped `:8080` pinhole on each
+  IDE VM, scoped to **`ide_ingress_cidr`** — set it to the address ProxMate's traffic arrives from
+  (the backend host on a flat LAN; the subnet-router node's LAN IP when routed).
+- **Guest specs:** IDE VMs need the **qemu-guest-agent** running, **>= 8 GB RAM** (`ide_min_ram_mb`),
+  and AVX (ProxMate sets `cpu: host` automatically; reboot to apply).
+- Enable + configure models in **admin Settings ▸ ProxMate IDE**.
+
+Prefer an agent to do it? [`DEPLOY_WITH_CLAUDE.md`](DEPLOY_WITH_CLAUDE.md) covers the IDE in §7.
+
+---
+
 ## 15. Troubleshooting
 
 | Symptom | Likely cause / fix |

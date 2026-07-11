@@ -228,6 +228,18 @@ You can delegate authentication to an external OpenID Connect (OIDC) provider (e
 
 ---
 
+### 5.4 ProxMate IDE (optional — per-VM browser editor + AI agent)
+
+Give tenants a browser VS Code (code-server) inside their own VM, with an in-guest OpenCode AI
+agent wired to models you control. Enable and configure it in **admin Settings ▸ ProxMate IDE**:
+pick the availability tier, add an OpenAI-compatible **model source** (a LAN Ollama is fine for
+admins), choose which models tenants see, and set **`ide_ingress_cidr`**.
+
+Two things must be true for a deployment: the ProxMate host can reach tenant VM IPs on **:8080**
+(provide routing on a non-flat network), and IDE VMs run the **qemu-guest-agent** with **>= 8 GB
+RAM** and AVX (auto-handled via `cpu: host` + reboot). Full setup + security model:
+[`proxmate-ide.md`](proxmate-ide.md).
+
 ## 6. Hand them the user docs
 
 Once they have a VM running, point them at:
