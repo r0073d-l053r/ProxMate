@@ -26,10 +26,18 @@ a session can only ever reach the VM it was opened from.
 - **Phase 2 — reverse-proxy transport.** _Done._ HTTP + WebSocket proxy at `/api/ide/:id/proxy/`,
   authenticated by the session cookie + VM ownership. Proven end to end against real code-server (the full
   VS Code workbench connects through ProxMate).
-- **Phase 3 — branded image + Open IDE.** _Done (core)._ A "ProxMate IDE" image (code-server + OpenCode,
-  VS Code dark default) and an Open IDE action on the VM page.
-- **Remaining:** provision the image into the guest plus a host-only firewall pinhole (the deploy step);
-  the LLM gateway and bring-your-own-key injection; and an optional ProxMate-branded editor theme.
+- **Phase 3 — branded image + Open IDE.** _Done._ ProxMate-brand theme (full VS Code repaint + favicon),
+  OpenCode auto-launches on open, desktop-only entry.
+- **Phase 4 — ProxMate LLM gateway.** _Done._ An OpenAI-compatible gateway (`/api/ide/:id/llm/v1/*`) with a
+  per-VM token, streaming, and an allow-list: tenants use only admin-shared local models or their own
+  bring-your-own keys — enforced server-side. Admin panel: local models sourced from saved endpoints, each
+  with a **Test** button and Admin-only / Shared / None visibility. Test buttons on Security "AI keys" too.
+- **Native in-guest install + lazy auto-provisioning.** _Done._ The IDE installs code-server + OpenCode
+  **natively inside each VM** (no container — real users/hostname/services, opened at `/`) on first
+  "Open IDE", via the guest agent; a per-VM `proxmate-ide` systemd service. While a VM installs, its
+  console/power/delete are **locked** behind a loading state so nothing corrupts. Proven live on musebot.
+- **Remaining:** extend the install-lock to initial cloud-init VM creation; per-VM routing on non-flat
+  networks (a Tailscale subnet route on the test host); then merge to `main`.
 
 ---
 
