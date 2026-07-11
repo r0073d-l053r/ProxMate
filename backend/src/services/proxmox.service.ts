@@ -2578,7 +2578,12 @@ export async function guestAgentPing(node: string, vmid: number, client?: AxiosI
   }
 }
 
-/** Write a file inside the guest via the agent (base64, for larger blobs like a script). */
+/**
+ * Write a file inside the guest via the agent. `encode=1` tells PROXMATE-side to
+ * base64 the content for the QEMU agent channel (the guest decodes it), so we pass
+ * the RAW content here — do NOT pre-encode it (double-encoding writes the base64
+ * text verbatim). Content up to ~60 KiB.
+ */
 export async function guestFileWrite(
   node: string,
   vmid: number,
@@ -2589,8 +2594,8 @@ export async function guestFileWrite(
   const c = client ?? (await getClient());
   const params = new URLSearchParams();
   params.append('file', file);
-  params.append('content', Buffer.from(content, 'utf8').toString('base64'));
-  params.append('encode', '1'); // content is base64 → agent decodes before writing
+  params.append('content', content);
+  params.append('encode', '1');
   await c.post(`/nodes/${node}/qemu/${vmid}/agent/file-write`, params);
 }
 
