@@ -67,6 +67,9 @@ Run these read-only checks and report results:
 
 ```bash
 docker --version && docker compose version   # Compose v2 required
+docker ps -q >/dev/null && echo daemon-ok    # versions alone don't prove daemon ACCESS —
+                                             # "permission denied" here means the deploy user
+                                             # needs the docker group (usermod -aG docker <user>, re-login)
 # DNS: does the domain resolve to this host's public IP?
 getent hosts <domain> || true
 # Can the host reach the Proxmox API?
@@ -108,7 +111,8 @@ production block, per `DEPLOYMENT.md` §4:
 | `COOKIE_SECURE` | `true` | Secure cookies (HTTPS) |
 | `TRUST_PROXY` | `1` | One proxy hop → real client IP for rate-limit/audit **and correct https detection for the IDE gateway URL** |
 | `BIND_ADDR` | `127.0.0.1` | Only the local reverse proxy reaches the app ports |
-| `METRICS_TOKEN` | a random string | `/metrics` returns 404 in prod without it |
+| `REAL_IP_HEADER` | `x-forwarded-for` with Caddy/nginx; leave unset behind Cloudflare | Which header carries the real client IP for the audit log (unset = `cf-connecting-ip`) |
+| `METRICS_TOKEN` | a random string | `/metrics` returns 404 in prod without it; scrape with `Authorization: Bearer <token>` |
 
 Confirm `TRUST_PROXY=1` and `COOKIE_SECURE=true` are set — several features (passkeys, and the IDE's
 https gateway URL) silently break without them.
