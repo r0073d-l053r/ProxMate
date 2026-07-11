@@ -231,6 +231,18 @@ model VirtualMachine {
   ideState      String?
   ideStateAt    DateTime?
 
+  // Cloud-init deploy lock for THIS guest. When a VM is created (or rebuilt) from
+  // a cloud-init template, cloud-init keeps provisioning inside the guest after
+  // Proxmox already reports it 'running' — installing packages, the guest agent,
+  // the tenant's extras. Interrupting that mid-flight leaves a half-built box, so:
+  //   'deploying' = cloud-init still running (guest LOCKED — no stop/restart/
+  //   pause/delete/migrate); 'ready' = cloud-init reported done, or we gave up
+  //   waiting (timeout) and unlocked. null = not a tracked deploy (ISO, LXC, or a
+  //   plain non-cloud-init template). Cleared via a guest-agent `cloud-init status`
+  //   probe (see deploy-lock.service.ts).
+  deployState   String?
+  deployStateAt DateTime?
+
   // Optional user labels for grouping/filtering (lowercase, comma-separated).
   tags          String?
 

@@ -475,7 +475,15 @@ export async function deployFromTemplate(
     // Wait for the start task so "running" reflects reality (matches createVm).
     const startUpid = await pve.startVm(node, vmid, client);
     await pve.waitForTask(node, startUpid, client);
-    return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
+    return prisma.virtualMachine.update({
+      where: { id: vm.id },
+      data: {
+        status: 'running',
+        // Cloud-init keeps provisioning inside the guest after boot — lock the VM
+        // (no stop/restart/delete) until a `cloud-init status` probe says it's done.
+        ...(template.cloudInit ? { deployState: 'deploying', deployStateAt: new Date() } : {}),
+      },
+    });
   } catch (err) {
     await markVmError(vm.id, input.name, err);
     throw err;
@@ -1158,7 +1166,20 @@ export async function rebuildVm(
     await prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'stopped' } });
     const startUpid = await pve.startVm(targetNode, vmid, client);
     await pve.waitForTask(targetNode, startUpid, client);
-    return prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'running' } });
+    // A template rebuild re-runs cloud-init on the fresh clone, so lock it until
+    // that settles. Either way the disk is wiped, so drop any prior IDE-install
+    // marker — a stale 'ready' would point the IDE button at a guest with no code-server.
+    const deploying = source.kind !== 'iso' && source.template.cloudInit;
+    return prisma.virtualMachine.update({
+      where: { id: current.id },
+      data: {
+        status: 'running',
+        ideState: null,
+        ideStateAt: null,
+        deployState: deploying ? 'deploying' : null,
+        deployStateAt: deploying ? new Date() : null,
+      },
+    });
   } catch (err) {
     await markVmError(current.id, current.name, err);
     throw err;
