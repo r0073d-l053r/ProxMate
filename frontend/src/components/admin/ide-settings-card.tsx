@@ -184,80 +184,82 @@ export function IdeSettingsCard() {
           ) : (
             <>
               {models.length > 0 && (
-                <div className="mb-2 grid gap-2">
+                <div className="mb-3 grid gap-3">
                   {models.map((m, i) => (
-                    <div
-                      key={m.id ?? i}
-                      className="grid items-end gap-2 rounded-md border p-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]"
-                    >
-                      <FormField label="Source">
-                        <Select value={m.sourceKeyId} onValueChange={(v) => updateModel(i, { sourceKeyId: v as string })}>
-                          <SelectTrigger className="w-full" aria-label="Source endpoint">
-                            <SelectValue placeholder="Pick a source">{sourceLabel(m.sourceKeyId)}</SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            {sources.map((s) => (
-                              <SelectItem key={s.id} value={s.id}>
-                                {s.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </FormField>
-                      <div className="pb-0.5">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          title="Test this source & load its models"
-                          disabled={!m.sourceKeyId || testing === m.sourceKeyId}
-                          onClick={() => testSource(m.sourceKeyId)}
-                        >
-                          {testing === m.sourceKeyId ? <Loader2 className="animate-spin" /> : <PlugZap />}
-                          Test
-                        </Button>
-                      </div>
-                      <FormField label="Model" hint={modelsByKey[m.sourceKeyId] ? undefined : "Test to load the list"}>
-                        <>
+                    <div key={m.id ?? i} className="grid gap-3 rounded-md border p-3">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <FormField label="Source">
+                          <div className="flex items-center gap-2">
+                            <div className="min-w-0 flex-1">
+                              <Select value={m.sourceKeyId} onValueChange={(v) => updateModel(i, { sourceKeyId: v as string })}>
+                                <SelectTrigger className="w-full" aria-label="Source endpoint">
+                                  <SelectValue placeholder="Pick a source">{sourceLabel(m.sourceKeyId)}</SelectValue>
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {sources.map((s) => (
+                                    <SelectItem key={s.id} value={s.id}>
+                                      {s.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="shrink-0"
+                              title="Test this source & load its models"
+                              disabled={!m.sourceKeyId || testing === m.sourceKeyId}
+                              onClick={() => testSource(m.sourceKeyId)}
+                            >
+                              {testing === m.sourceKeyId ? <Loader2 className="animate-spin" /> : <PlugZap />}
+                              Test
+                            </Button>
+                          </div>
+                        </FormField>
+                        <FormField label="Model" hint={modelsByKey[m.sourceKeyId] ? undefined : "Test the source to load its models"}>
+                          <>
+                            <Input
+                              value={m.model}
+                              list={`models-${i}`}
+                              placeholder="model name"
+                              aria-label="Model"
+                              onChange={(e) => updateModel(i, { model: e.target.value })}
+                            />
+                            <datalist id={`models-${i}`}>
+                              {(modelsByKey[m.sourceKeyId] ?? []).map((name) => (
+                                <option key={name} value={name} />
+                              ))}
+                            </datalist>
+                          </>
+                        </FormField>
+                        <FormField label="Nickname (optional)">
                           <Input
-                            value={m.model}
-                            list={`models-${i}`}
-                            placeholder="model name"
-                            aria-label="Model"
-                            onChange={(e) => updateModel(i, { model: e.target.value })}
+                            value={m.nickname ?? ""}
+                            placeholder={m.model || "display name"}
+                            aria-label="Nickname"
+                            onChange={(e) => updateModel(i, { nickname: e.target.value })}
                           />
-                          <datalist id={`models-${i}`}>
-                            {(modelsByKey[m.sourceKeyId] ?? []).map((name) => (
-                              <option key={name} value={name} />
-                            ))}
-                          </datalist>
-                        </>
-                      </FormField>
-                      <FormField label="Nickname (optional)">
-                        <Input
-                          value={m.nickname ?? ""}
-                          placeholder={m.model || "display name"}
-                          aria-label="Nickname"
-                          onChange={(e) => updateModel(i, { nickname: e.target.value })}
-                        />
-                      </FormField>
-                      <FormField label="Who can use it">
-                        <Select value={m.visibility} onValueChange={(v) => updateModel(i, { visibility: v as ModelVisibility })}>
-                          <SelectTrigger className="w-full" aria-label="Visibility">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {VISIBILITY_OPTIONS.map((o) => (
-                              <SelectItem key={o.value} value={o.value}>
-                                {o.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </FormField>
-                      <div className="pb-0.5">
+                        </FormField>
+                        <FormField label="Who can use it">
+                          <Select value={m.visibility} onValueChange={(v) => updateModel(i, { visibility: v as ModelVisibility })}>
+                            <SelectTrigger className="w-full" aria-label="Visibility">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {VISIBILITY_OPTIONS.map((o) => (
+                                <SelectItem key={o.value} value={o.value}>
+                                  {o.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </FormField>
+                      </div>
+                      <div className="flex justify-end border-t pt-2">
                         <Button size="sm" variant="ghost" title="Remove model" onClick={() => removeModel(i)}>
-                          <Trash2 className="text-destructive" />
+                          <Trash2 className="text-destructive" /> Remove
                         </Button>
                       </div>
                     </div>
