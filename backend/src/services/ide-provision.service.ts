@@ -61,6 +61,10 @@ function renderOpencodeJson(gatewayUrl: string, models: Array<{ id: string; name
 function buildBootstrap(token: string, opencodeJson: string): string {
   return `#!/bin/sh
 set -e
+# Detached via the guest agent — the environment is minimal, so set HOME (the
+# code-server installer runs 'set -u' and references \$HOME) and a sane PATH.
+export HOME=/root
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export DEBIAN_FRONTEND=noninteractive
 echo "[proxmate-ide] installing code-server..."
 curl -fsSL https://code-server.dev/install.sh | sh
