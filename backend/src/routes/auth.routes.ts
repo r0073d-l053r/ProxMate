@@ -233,7 +233,9 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
   const user = await prisma.user.findUnique({ where: { id } });
   if (!user) { res.status(404).json({ error: 'User not found' }); return; }
 
-  const vms = await prisma.virtualMachine.findMany({ where: { userId: id } });
+  // Admin-granted exempt VMs never count toward the quota bar (matches
+  // assertWithinQuota / assertResizeWithinQuota).
+  const vms = await prisma.virtualMachine.findMany({ where: { userId: id, quotaExempt: false } });
   const usedCpu = vms.reduce((s, v) => s + v.cpu, 0);
   const usedRam = vms.reduce((s, v) => s + v.ram, 0);
   const usedStorage = vms.reduce((s, v) => s + v.storage, 0);

@@ -41,6 +41,8 @@ import { listDisks, addDataDisk, resizeDataDisk, removeDataDisk } from '../servi
 import {
   QuotaError,
   ResizeError,
+  CreateOptionError,
+  resolveCreateTarget,
   createVm,
   createContainer,
   kindOf,
@@ -152,10 +154,15 @@ const CreateVmSchema = z.object({
     .max(255)
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*\.(iso|img)$/i, 'Must be an ISO/IMG filename'),
   // Node name goes into the Proxmox API path — keep it to a safe charset.
+  // ADMIN-ONLY (enforced in the route): tenants never pin nodes.
   node: z
     .string()
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid node name')
     .optional(),
+  // Admin-only: deploy INTO this user's account…
+  forUserId: z.string().min(1).max(64).optional(),
+  // …optionally as a grant that doesn't count toward their quota.
+  quotaExempt: z.boolean().optional(),
 });
 
 router.post('/', async (req: Request, res: Response) => {
@@ -165,22 +172,28 @@ router.post('/', async (req: Request, res: Response) => {
     return;
   }
 
-  const { id } = (req as AuthRequest).user;
-  const user = await prisma.user.findUnique({ where: { id } });
-  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
-
+  const actor = (req as AuthRequest).user;
   try {
-    const vm = await createVm(user, parsed.data);
+    // The guest's OWNER (the acting user, or the admin's chosen tenant) — quota
+    // applies to them; node/forUserId/quotaExempt are admin-only options.
+    const owner = await resolveCreateTarget(actor, parsed.data);
+    const vm = await createVm(owner, parsed.data);
+    const forNote = owner.id !== actor.id ? ` for ${owner.email}` : '';
+    const exemptNote = vm.quotaExempt ? ', quota-exempt' : '';
     await recordAudit({
       action: 'vm.create',
-      actor: user,
+      actor,
       targetType: 'vm',
       targetId: vm.id,
-      detail: `${vm.name} (vmid ${vm.proxmoxVmId} on ${vm.proxmoxNode}, ${vm.cpu}c/${vm.ram}MB/${vm.storage}GB)`,
+      detail: `${vm.name}${forNote} (vmid ${vm.proxmoxVmId} on ${vm.proxmoxNode}, ${vm.cpu}c/${vm.ram}MB/${vm.storage}GB${exemptNote})`,
       req,
     });
     res.status(201).json({ vm, status: vm.status });
   } catch (err) {
+    if (err instanceof CreateOptionError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
     if (err instanceof QuotaError) {
       res.status(403).json({ error: 'Quota exceeded', details: err.details });
       return;
@@ -347,6 +360,9 @@ const CreateContainerSchema = z.object({
     .string()
     .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Invalid node name')
     .optional(),
+  // Admin-only options — see CreateVmSchema.
+  forUserId: z.string().min(1).max(64).optional(),
+  quotaExempt: z.boolean().optional(),
 });
 
 router.post('/containers', async (req: Request, res: Response) => {
@@ -360,22 +376,26 @@ router.post('/containers', async (req: Request, res: Response) => {
     return;
   }
 
-  const { id } = (req as AuthRequest).user;
-  const user = await prisma.user.findUnique({ where: { id } });
-  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
-
+  const actor = (req as AuthRequest).user;
   try {
-    const vm = await createContainer(user, parsed.data);
+    const owner = await resolveCreateTarget(actor, parsed.data);
+    const vm = await createContainer(owner, parsed.data);
+    const forNote = owner.id !== actor.id ? ` for ${owner.email}` : '';
+    const exemptNote = vm.quotaExempt ? ', quota-exempt' : '';
     await recordAudit({
       action: 'vm.create',
-      actor: user,
+      actor,
       targetType: 'vm',
       targetId: vm.id,
-      detail: `${vm.name} (LXC, vmid ${vm.proxmoxVmId} on ${vm.proxmoxNode}, ${vm.cpu}c/${vm.ram}MB/${vm.storage}GB)`,
+      detail: `${vm.name}${forNote} (LXC, vmid ${vm.proxmoxVmId} on ${vm.proxmoxNode}, ${vm.cpu}c/${vm.ram}MB/${vm.storage}GB${exemptNote})`,
       req,
     });
     res.status(201).json({ vm, status: vm.status });
   } catch (err) {
+    if (err instanceof CreateOptionError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
     if (err instanceof QuotaError) {
       res.status(403).json({ error: 'Quota exceeded', details: err.details });
       return;

@@ -102,6 +102,30 @@ export default function NewVmWizard() {
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+  // Admin-only deploy options: deploy INTO a tenant's account (optionally without
+  // counting toward their quota) and/or pin the target node. "self"/"auto" =
+  // the normal behavior every tenant gets.
+  const SELF = "self";
+  const AUTO_NODE = "auto";
+  const [adminUsers, setAdminUsers] = useState<{ id: string; email: string; displayName: string }[]>([]);
+  const [adminNodes, setAdminNodes] = useState<string[]>([]);
+  const [forUserId, setForUserId] = useState<string>(SELF);
+  const [countQuota, setCountQuota] = useState(true);
+  const [nodeChoice, setNodeChoice] = useState<string>(AUTO_NODE);
+
+  const meId = useAuthStore((s) => s.user?.id);
+  useEffect(() => {
+    if (!isAdmin) return;
+    // Both are conveniences — never block the wizard if they fail.
+    api
+      .get<{ id: string; email: string; displayName: string }[]>("/admin/all-vms")
+      .then((r) => setAdminUsers(r.data.filter((u) => u.id !== meId)))
+      .catch(() => setAdminUsers([]));
+    api
+      .get<{ nodes: { name: string; online: boolean }[] }>("/admin/nodes")
+      .then((r) => setAdminNodes(r.data.nodes.filter((n) => n.online).map((n) => n.name)))
+      .catch(() => setAdminNodes([]));
+  }, [isAdmin, meId]);
 
   useEffect(() => {
     Promise.all([
@@ -249,6 +273,18 @@ export default function NewVmWizard() {
     return Object.keys(e).length === 0;
   }
 
+  /** The admin-only create options actually selected (empty for tenants/defaults). */
+  function adminOpts(allowNode: boolean): { forUserId?: string; quotaExempt?: boolean; node?: string } {
+    if (!isAdmin) return {};
+    const forTenant = forUserId !== SELF;
+    return {
+      ...(forTenant ? { forUserId } : {}),
+      // The checkbox only matters when deploying for a tenant (admins bypass quota).
+      ...(forTenant && !countQuota ? { quotaExempt: true } : {}),
+      ...(allowNode && nodeChoice !== AUTO_NODE ? { node: nodeChoice } : {}),
+    };
+  }
+
   async function onSubmit(ev: React.FormEvent) {
     ev.preventDefault();
     if (!validate()) return;
@@ -273,8 +309,9 @@ export default function NewVmWizard() {
           ram: ramGb * 1024,
           storage: storageGb,
           os,
-          // No node is sent — the backend auto-schedules onto a node that has the
-          // chosen ISO and the disk pool, with the most free capacity.
+          // Tenants never send a node — the backend auto-schedules. Admins may
+          // pin one (or deploy for a tenant) via the admin options below.
+          ...adminOpts(true),
         });
         toast.success(`VM "${name}" is being created.`);
         router.push(`/vms/${res.data.vm.id}`);
@@ -287,6 +324,7 @@ export default function NewVmWizard() {
           template: lxcTemplate,
           sshKey: sshKey.trim() || undefined,
           password: password || undefined,
+          ...adminOpts(true),
         });
         toast.success(`Container "${name}" is being created.`);
         router.push(`/vms/${res.data.vm.id}`);
@@ -305,6 +343,8 @@ export default function NewVmWizard() {
                 features: selectedFeatures.length ? selectedFeatures : undefined,
               }
             : {}),
+          // Template clones stay on the template's node — no node option here.
+          ...adminOpts(false),
         });
         toast.success(`Deploying "${name}" from ${template?.name}.`);
         router.push(`/vms/${res.data.vm.id}`);
@@ -411,6 +451,78 @@ export default function NewVmWizard() {
                       <KeyRound className="size-3.5" /> Login &amp; notes for {template.name}
                     </div>
                     <p className="whitespace-pre-wrap break-words text-muted-foreground">{template.notes}</p>
+                  </div>
+                )}
+
+                {/* Admin-only deploy options — tenants never see these (and the API
+                    rejects them from non-admins). Restore-uploads don't support them. */}
+                {isAdmin && !isRestore && (
+                  <div className="grid gap-3 rounded-md border bg-muted/40 p-3">
+                    <div className="flex items-center gap-1.5 text-sm font-medium">
+                      <Rocket className="size-3.5" /> Admin options
+                    </div>
+                    <FormField
+                      label="Deploy for"
+                      hint={forUserId === SELF ? "Your own VM (admin account)." : "The VM lands in this tenant's account — they own it."}
+                    >
+                      <Select value={forUserId} onValueChange={(v) => setForUserId(v as string)}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={SELF}>Myself (admin)</SelectItem>
+                          {adminUsers.map((u) => (
+                            <SelectItem key={u.id} value={u.id}>
+                              {u.displayName} <span className="text-muted-foreground">· {u.email}</span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </FormField>
+                    {forUserId !== SELF && (
+                      <label className="flex cursor-pointer items-start gap-2.5 rounded-md border bg-background p-3">
+                        <input
+                          type="checkbox"
+                          checked={countQuota}
+                          onChange={(e) => setCountQuota(e.target.checked)}
+                          className="mt-0.5 size-4 accent-primary"
+                        />
+                        <span className="text-sm">
+                          <span className="font-medium">Count against their quota</span>
+                          <span className="block text-xs text-muted-foreground">
+                            Unchecked = a grant on top of their quota: this VM never consumes it, even
+                            when resized.
+                          </span>
+                        </span>
+                      </label>
+                    )}
+                    {(isCustom || isContainer) ? (
+                      <FormField
+                        label="Node"
+                        hint="Auto-select places it on the best-capacity eligible node."
+                      >
+                        <Select value={nodeChoice} onValueChange={(v) => setNodeChoice(v as string)}>
+                          <SelectTrigger className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={AUTO_NODE}>Auto-select (recommended)</SelectItem>
+                            {adminNodes.map((n) => (
+                              <SelectItem key={n} value={n}>
+                                <span className="flex items-center gap-2">
+                                  <Server className="size-3.5" /> {n}
+                                </span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </FormField>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Template deploys stay on the template&apos;s node (linked clone) — no node
+                        choice here.
+                      </p>
+                    )}
                   </div>
                 )}
 

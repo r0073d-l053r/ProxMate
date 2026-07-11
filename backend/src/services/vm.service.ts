@@ -39,14 +39,18 @@ export interface CreateVmInput {
   storage: number; // GB
   os: string; // ISO filename
   node?: string;
+  /** Admin-only: this VM is a grant that doesn't count toward the owner's quota. */
+  quotaExempt?: boolean;
 }
 
 /** Check the requested resources against the user's remaining quota. */
 export async function assertWithinQuota(user: User, input: CreateVmInput): Promise<void> {
-  // Admins (cluster owners) are not quota-limited.
-  if (user.role === 'admin') return;
+  // Admins (cluster owners) are not quota-limited; neither is an admin-granted
+  // exempt VM (the flag is settable only through admin-gated routes).
+  if (user.role === 'admin' || input.quotaExempt) return;
 
-  const existing = await prisma.virtualMachine.findMany({ where: { userId: user.id } });
+  // Exempt VMs never count toward usage — they're admin grants on top of quota.
+  const existing = await prisma.virtualMachine.findMany({ where: { userId: user.id, quotaExempt: false } });
   const usedCpu = existing.reduce((s, v) => s + v.cpu, 0);
   const usedRam = existing.reduce((s, v) => s + v.ram, 0);
   const usedStorage = existing.reduce((s, v) => s + v.storage, 0);
@@ -60,6 +64,39 @@ export async function assertWithinQuota(user: User, input: CreateVmInput): Promi
     violations['storage'] = { used: usedStorage, requested: input.storage, max: user.maxStorage };
 
   if (Object.keys(violations).length > 0) throw new QuotaError(violations);
+}
+
+/** A create-option violation the routes surface directly (status included). */
+export class CreateOptionError extends Error {
+  constructor(
+    message: string,
+    public status = 403,
+  ) {
+    super(message);
+    this.name = 'CreateOptionError';
+  }
+}
+
+/**
+ * Resolve who a new guest belongs to and police the admin-only create options.
+ * Tenants create for themselves with auto-placement; only admins may pin a node,
+ * deploy INTO another user's account (`forUserId`), or grant quota exemption.
+ * Returns the full User row the guest will belong to (quota is checked against
+ * THEM, not the acting admin).
+ */
+export async function resolveCreateTarget(
+  reqUser: { id: string; role: string },
+  opts: { forUserId?: string; quotaExempt?: boolean; node?: string },
+): Promise<User> {
+  const usesAdminOption = opts.forUserId !== undefined || opts.quotaExempt !== undefined || opts.node !== undefined;
+  if (usesAdminOption && reqUser.role !== 'admin') {
+    throw new CreateOptionError('Choosing a node, deploying for another user, or quota exemption is admin-only.');
+  }
+  const owner = await prisma.user.findUnique({ where: { id: opts.forUserId ?? reqUser.id } });
+  if (!owner) {
+    throw new CreateOptionError(opts.forUserId ? 'No such user to deploy for.' : 'User not found', 404);
+  }
+  return owner;
 }
 
 /**
@@ -127,6 +164,7 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
       storage: input.storage,
       os: input.os,
       status: 'creating',
+      quotaExempt: input.quotaExempt ?? false,
     },
   });
 
@@ -177,6 +215,8 @@ export interface CreateContainerInput {
   password?: string;
   sshKey?: string;
   node?: string;
+  /** Admin-only: this container is a grant that doesn't count toward the owner's quota. */
+  quotaExempt?: boolean;
 }
 
 /** Guess a container's CPU architecture from its OS-template filename. */
@@ -199,6 +239,7 @@ export async function createContainer(user: User, input: CreateContainerInput): 
     ram: input.ram,
     storage: input.storage,
     os: input.template,
+    quotaExempt: input.quotaExempt,
   });
 
   const client = await pve.getClient();
@@ -255,6 +296,7 @@ export async function createContainer(user: User, input: CreateContainerInput): 
       storage: input.storage,
       os: templateName,
       status: 'creating',
+      quotaExempt: input.quotaExempt ?? false,
     },
   });
 
@@ -309,6 +351,8 @@ export interface DeployTemplateInput {
   installSuperfile?: boolean; // installs superfile (spf), a headless terminal file manager
   /** Selected cloud-init extra ids (data-driven; supersedes the install* booleans). */
   features?: string[];
+  /** Admin-only: this VM is a grant that doesn't count toward the owner's quota. */
+  quotaExempt?: boolean;
 }
 
 /** Cloud-init knobs shared by template deploys and rebuilds. */
@@ -433,7 +477,14 @@ export async function deployFromTemplate(
 ): Promise<VirtualMachine> {
   // Can't deploy a disk smaller than the template's base image.
   const diskGb = Math.max(input.storage, template.diskGb || input.storage);
-  await assertWithinQuota(user, { name: input.name, cpu: input.cpu, ram: input.ram, storage: diskGb, os: template.name });
+  await assertWithinQuota(user, {
+    name: input.name,
+    cpu: input.cpu,
+    ram: input.ram,
+    storage: diskGb,
+    os: template.name,
+    quotaExempt: input.quotaExempt,
+  });
 
   const client = await pve.getClient();
   const isolate = (await getConfig('isolation_enabled')) !== 'false';
@@ -453,6 +504,7 @@ export async function deployFromTemplate(
       storage: diskGb,
       os: template.os ?? template.name,
       status: 'creating',
+      quotaExempt: input.quotaExempt ?? false,
     },
   });
 
@@ -747,11 +799,12 @@ export async function assertResizeWithinQuota(
   vm: VirtualMachine,
   target: { cpu: number; ram: number; storage: number },
 ): Promise<void> {
-  // Admins (cluster owners) are not quota-limited.
-  if (user.role === 'admin') return;
+  // Admins (cluster owners) are not quota-limited. An admin-granted exempt VM
+  // stays exempt across resizes — it never enters quota accounting at all.
+  if (user.role === 'admin' || vm.quotaExempt) return;
 
   const others = await prisma.virtualMachine.findMany({
-    where: { userId: user.id, id: { not: vm.id } },
+    where: { userId: user.id, id: { not: vm.id }, quotaExempt: false },
   });
   const usedCpu = others.reduce((s, v) => s + v.cpu, 0);
   const usedRam = others.reduce((s, v) => s + v.ram, 0);
