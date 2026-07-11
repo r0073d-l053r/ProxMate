@@ -54,11 +54,16 @@ is locked (no stop/delete/console) during the install.
    **OpenCode** AI agent already running.
 4. **Models:** the model picker shows what your admin shared. If your admin allows it, add your
    **own** API key under **Security ▸ AI keys** (it's used only through ProxMate, never exposed).
+   Tenants pick from the offered providers (OpenAI, OpenRouter, Groq); a **custom endpoint URL is
+   admin-only** — ask your admin to share the model instead.
 
 **Requirements for a VM to run the IDE:** the QEMU guest agent must be running, the VM needs
-**at least 8 GB RAM** (the editor + AI agent are heavy), and a modern CPU. ProxMate handles the
+**at least 8 GB RAM** (the editor + AI agent are heavy), and a CPU with AVX. ProxMate handles the
 CPU automatically; if it asks you to **reboot and reopen**, that's it enabling AVX (the AI agent
-needs it) — reboot the VM and click Open IDE again.
+needs it). If the node's own hardware can't do AVX, ProxMate offers a **one-click move** to a
+capable node instead — the VM shuts down, moves, starts again, and the IDE opens automatically.
+
+On a VM that's been **shared with you**, the IDE needs the **Manager** share level.
 
 ---
 
@@ -73,8 +78,9 @@ Admin **Settings ▸ ProxMate IDE**:
 - **Shared models + visibility:** pick which of the source's models tenants see (`shared`),
   which only admins see (`admin`), or neither (`none`).
 - **Bring-your-own keys:** toggle whether tenants may add their own provider keys. Tenant keys are
-  **held to public endpoints** (an SSRF guard blocks private/loopback/metadata addresses); admin
-  keys are exempt so LAN sources work.
+  **held to public endpoints** (an SSRF guard blocks private/loopback/metadata addresses) and to the
+  **fixed preset providers** — a free-form custom base URL is admin-only; admin keys are exempt so
+  LAN sources work.
 - **`ide_ingress_cidr`:** the address ProxMate's traffic reaches the guest from (see Networking).
 
 ### Networking requirement (the one thing to get right)
@@ -99,9 +105,9 @@ than out-of-band via the Proxmox API. So:
 - **Isolation preserved.** The `:8080` pinhole is a single inbound ACCEPT scoped to the ProxMate
   infrastructure address only — the guest keeps `policy_in=DROP`, so **tenants remain isolated
   from each other**. The IDE reuses your isolation firewall; it doesn't open the guest to the LAN.
-- **Ownership-gated transport.** The reverse proxy resolves each request through `getOwnedVm` (HTTP
-  *and* WebSocket) and refuses loopback/link-local targets, so a spoofed guest-reported IP can't
-  point the proxy at the host itself.
+- **Ownership-gated transport.** The reverse proxy resolves each request (HTTP *and* WebSocket)
+  through the per-VM capability gate — owner/admin, or a **Manager**-level share — and refuses
+  loopback/link-local targets, so a spoofed guest-reported IP can't point the proxy at the host.
 - **Gateway-enforced model access.** A per-VM token maps to `(user, VM)` and is re-checked live on
   every request (ownership + policy). `resolveModelRoute` is the single allow-list choke point: a
   tenant can reach only admin-shared models or — when enabled — their own BYO keys, and nothing else,
@@ -120,7 +126,7 @@ than out-of-band via the Proxmox API. So:
 | IDE opens on the **wrong VM** / every VM shows the same box | A stale `IDE_TARGET_OVERRIDE` (a rig-only escape hatch) is set — unset it; routing is per-VM by the guest's own IP. |
 | Editor loads but the connection **drops / "extension host unresponsive"** | The path to the guest is unstable (e.g. a relayed/flaky link). Use a *stable* route to the guest LAN (direct LAN, or a subnet route through a well-connected node), not a best-effort peer link. |
 | **"Unauthorized — missing session"** when the AI agent runs | The gateway base URL is `http://` and the edge 301-redirects to https, downgrading the POST to a GET. Ensure `TRUST_PROXY=1` and `BACKEND_PUBLIC_URL`/the origin are **https**. |
-| OpenCode crashes: **"CPU lacks AVX" / illegal instruction** | The VM's CPU masks AVX. ProxMate sets `cpu: host` at IDE-enable; **reboot the VM** and reopen so it takes effect. |
+| OpenCode crashes: **"CPU lacks AVX" / illegal instruction** | The VM's CPU masks AVX. ProxMate sets `cpu: host` at IDE-enable; **reboot the VM** and reopen so it takes effect. If the node's own silicon lacks AVX, ProxMate offers a **one-click move** to a capable node (stop → move → start → IDE opens). |
 | VM becomes **unresponsive right after Open IDE** | Undersized VM — the install OOMs. Give the VM **>= 8 GB RAM** (the `ide_min_ram_mb` floor) and retry. |
 | **"The QEMU guest agent is not responding"** | Install + start `qemu-guest-agent` in the VM (the IDE installs through it). |
 | AI agent can't reach a model / 403 | The model isn't shared to that tenant (check visibility), or BYO is disabled, or a BYO endpoint was blocked as private. |
