@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.js';
 import { getIdeCapability } from '../services/ide.service.js';
 import { issueGatewayToken, listModelPickerEntries, probeModels } from '../services/ide-gateway.service.js';
+import { getWritableVm, getViewableVm } from '../services/vm.service.js';
+import { startIdeProvision, refreshIdeState, IdeProvisionError } from '../services/ide-provision.service.js';
 import {
   listLlmKeys,
   addLlmKey,
@@ -53,6 +55,46 @@ router.post('/:id/gateway-token', async (req: Request, res: Response) => {
     req,
   });
   res.json({ token: issued.token, baseUrl: issued.baseUrl, models });
+});
+
+// ─── In-guest install (lazy provisioning on first "Open IDE") ──
+// POST /:id/provision installs code-server + OpenCode natively into the VM via the
+// guest agent (owner/admin/co-owner). GET /:id/status polls the install state so
+// the UI can show a loading screen and only open the IDE once it's ready.
+router.post('/:id/provision', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getWritableVm(req.params['id'] as string, user);
+  if (!vm) {
+    res.status(404).json({ error: 'VM not found' });
+    return;
+  }
+  const cap = await getIdeCapability({ role: user.role });
+  if (!cap.available) {
+    res.status(403).json({ error: 'ProxMate IDE is not available.' });
+    return;
+  }
+  const publicApiBaseUrl = `${req.protocol}://${req.get('host') ?? 'localhost'}`;
+  try {
+    const state = await startIdeProvision(vm, { id: user.id, role: user.role }, publicApiBaseUrl);
+    void recordAudit({ actor: user, action: 'ide.provision', targetType: 'vm', targetId: vm.id, req });
+    res.json({ state });
+  } catch (err) {
+    if (err instanceof IdeProvisionError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+router.get('/:id/status', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getViewableVm(req.params['id'] as string, user);
+  if (!vm) {
+    res.status(404).json({ error: 'VM not found' });
+    return;
+  }
+  res.json({ state: await refreshIdeState(vm) });
 });
 
 // ─── Bring-your-own AI keys (used only through the gateway) ────

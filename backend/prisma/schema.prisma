@@ -224,6 +224,13 @@ model VirtualMachine {
   // pre-rescue { boot, ide3 } config lines, restored on "exit rescue".
   rescueBoot    String?
 
+  // ProxMate IDE install lifecycle for THIS guest (lazy, on first "Open IDE"):
+  //   null / 'none' = not installed; 'installing' = provisioning in progress
+  //   (guest is LOCKED — no console/stop/delete until done); 'ready' = the
+  //   native code-server service is up; 'failed' = install errored (retryable).
+  ideState      String?
+  ideStateAt    DateTime?
+
   // Optional user labels for grouping/filtering (lowercase, comma-separated).
   tags          String?
 

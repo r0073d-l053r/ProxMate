@@ -35,7 +35,7 @@ import {
 import { SiTailscale } from "react-icons/si";
 import { TemplateIcon } from "@/components/template-icon";
 import { api, apiBaseUrl, apiError } from "@/lib/api";
-import type { IdeCapability, VmDetail } from "@/lib/types";
+import type { IdeCapability, IdeStatus, VmDetail } from "@/lib/types";
 import { copyText } from "@/lib/clipboard";
 import { formatRam, formatBytes, formatUptime, formatDate } from "@/lib/format";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
@@ -167,6 +167,50 @@ export default function VmDetailPage() {
       .then((r) => setIdeCap(r.data))
       .catch(() => setIdeCap(null));
   }, []);
+
+  // ProxMate IDE — lazy install on first "Open IDE". While installing, the VM is
+  // locked (the backend rejects console/stop/delete) and we show a loading state,
+  // then open the editor once the guest is serving.
+  const [ideInstalling, setIdeInstalling] = useState(false);
+
+  async function openIde() {
+    if (!vm) return;
+    const popup = () =>
+      window.open(`${apiBaseUrl}/ide/${vm.id}/proxy/`, `proxmate-ide-${vm.id}`, "popup,width=1500,height=940");
+    if (vm.ideState === "ready") {
+      popup();
+      return;
+    }
+    setIdeInstalling(true);
+    try {
+      await api.post(`/ide/${vm.id}/provision`, {});
+      toast.info("Installing the ProxMate IDE — this takes about a minute…");
+      const deadline = Date.now() + 12 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const state = await api
+          .get<IdeStatus>(`/ide/${vm.id}/status`)
+          .then((r) => r.data.state)
+          .catch(() => "installing" as const);
+        if (state === "ready") {
+          toast.success("ProxMate IDE is ready.");
+          popup();
+          break;
+        }
+        if (state === "failed") {
+          toast.error("The IDE install didn't finish. Check the VM and try again.");
+          break;
+        }
+      }
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setIdeInstalling(false);
+      load();
+    }
+  }
+
+  const ideBusy = ideInstalling || vm?.ideState === "installing";
 
   // Active tab, deep-linkable via ?tab= (e.g. /vms/abc?tab=backups). Kept in the
   // URL with replaceState so switching tabs never adds history entries.
@@ -381,6 +425,21 @@ export default function VmDetailPage() {
         <ArrowLeft /> Back to VMs
       </Button>
 
+      {/* IDE install lock: while the IDE is provisioning, the VM's console / power /
+          delete are blocked (backend-enforced) so nothing corrupts mid-install. */}
+      {ideBusy && (
+        <div className="mb-4 flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-4 text-sm">
+          <Loader2 className="size-5 shrink-0 animate-spin text-primary" />
+          <div>
+            <p className="font-medium">Installing the ProxMate IDE on this VM…</p>
+            <p className="text-muted-foreground">
+              This takes about a minute. The console, power, and delete actions are locked until it
+              finishes — you can safely navigate away and come back.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* DigitalOcean-style header: identity + status on the left, the two things
           you reach for most — Console and Actions — pinned on the right. */}
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
@@ -423,7 +482,7 @@ export default function VmDetailPage() {
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
-                  <Button variant="outline" disabled={!running || acting}>
+                  <Button variant="outline" disabled={!running || acting || ideBusy}>
                     <Terminal />
                     Console
                     <ChevronDown className="size-3.5 text-muted-foreground" />
@@ -431,28 +490,28 @@ export default function VmDetailPage() {
                 }
               />
               <DropdownMenuContent align="end" className="min-w-56">
-                <DropdownMenuItem onClick={() => router.push(`/vms/${vm.id}/console`)}>
+                <DropdownMenuItem disabled={ideBusy} onClick={() => router.push(`/vms/${vm.id}/console`)}>
                   <Terminal />
                   Graphical (noVNC)
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => router.push(`/vms/${vm.id}/console?mode=text`)}>
+                <DropdownMenuItem disabled={ideBusy} onClick={() => router.push(`/vms/${vm.id}/console?mode=text`)}>
                   <SquareTerminal />
                   Text — links, copy/paste
                 </DropdownMenuItem>
                 {ideCap?.available && vm.type !== "lxc" && isDesktop && (
                   <DropdownMenuItem
-                    disabled={!running}
+                    disabled={!running || ideBusy}
                     onClick={() => {
                       if (!isDesktop) return; // desktop-only feature (defense-in-depth)
-                      window.open(
-                        `${apiBaseUrl}/ide/${vm.id}/proxy/`,
-                        `proxmate-ide-${vm.id}`,
-                        "popup,width=1500,height=940",
-                      );
+                      openIde();
                     }}
                   >
-                    <Code2 />
-                    ProxMate IDE — code + AI
+                    {ideBusy ? <Loader2 className="animate-spin" /> : <Code2 />}
+                    {vm.ideState === "ready"
+                      ? "ProxMate IDE — code + AI"
+                      : ideBusy
+                        ? "Installing IDE…"
+                        : "ProxMate IDE — install & open"}
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
@@ -474,7 +533,7 @@ export default function VmDetailPage() {
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
-                  <Button>
+                  <Button disabled={ideBusy}>
                     Actions
                     <ChevronDown className="size-3.5" />
                   </Button>

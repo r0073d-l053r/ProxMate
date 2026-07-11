@@ -107,6 +107,13 @@ export interface VmDetail extends VirtualMachine {
   live: VmLiveStatus | null;
   /** Whether the admin has designated a rescue ISO (QEMU only). */
   rescueAvailable?: boolean;
+  /** ProxMate IDE install state: null/'none' | 'installing' | 'ready' | 'failed'. */
+  ideState?: "none" | "installing" | "ready" | "failed" | null;
+}
+
+/** GET /api/ide/:id/status */
+export interface IdeStatus {
+  state: "none" | "installing" | "ready" | "failed";
 }
 
 /** One 1 s sample from GET /vms/:id/live-stats (cached cluster/resources). */
