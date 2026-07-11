@@ -1,8 +1,17 @@
 import type { VirtualMachine } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
-import { getClient, guestAgentPing, guestFileWrite, guestExec } from './proxmox.service.js';
+import {
+  getClient,
+  guestAgentPing,
+  guestFileWrite,
+  guestExec,
+  guestExecOutput,
+  ensureIdePinhole,
+  ensureHostCpu,
+} from './proxmox.service.js';
 import { issueGatewayToken, listModelPickerEntries } from './ide-gateway.service.js';
+import { getConfig } from './config.service.js';
 import {
   IDE_SETTINGS_JSON,
   IDE_AUTOSTART_PACKAGE_JSON,
@@ -24,6 +33,17 @@ export type IdeState = 'none' | 'installing' | 'ready' | 'failed';
 // service still isn't up after this, mark it failed (retryable) so a stuck install
 // doesn't lock the VM forever.
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** Port code-server listens on inside the guest (and the isolation pinhole target). */
+const IDE_GUEST_PORT = Number(process.env['IDE_GUEST_PORT'] || 8080);
+
+/**
+ * Minimum guest RAM (MB) to install the IDE onto. code-server + the OpenCode
+ * agent spike memory during install/first-open — 4 GB OOMs and wedges the VM
+ * (steady-state is light, but the transient isn't). 8 GB is the proven-safe
+ * floor; admins can lower it via the `ide_min_ram_mb` SystemConfig key.
+ */
+const IDE_MIN_RAM_MB_DEFAULT = 8192;
 
 export function ideStateOf(vm: { ideState: string | null }): IdeState {
   const s = vm.ideState;
@@ -62,7 +82,7 @@ function buildBootstrap(token: string, opencodeJson: string): string {
   return `#!/bin/sh
 set -e
 # Detached via the guest agent — the environment is minimal, so set HOME (the
-# code-server installer runs 'set -u' and references \$HOME) and a sane PATH.
+# code-server installer runs 'set -u' and references $HOME) and a sane PATH.
 export HOME=/root
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export DEBIAN_FRONTEND=noninteractive
@@ -135,6 +155,50 @@ export async function startIdeProvision(
     );
   }
 
+  // Minimum-spec guardrail — refuse to install onto a box that can't run the IDE.
+  // (a) RAM floor: the install/first-open transient OOMs a small VM (4 GB wedges).
+  const minRamMb = Number(await getConfig('ide_min_ram_mb')) || IDE_MIN_RAM_MB_DEFAULT;
+  if (vm.ram < minRamMb) {
+    throw new IdeProvisionError(
+      `The ProxMate IDE needs at least ${Math.round(minRamMb / 1024)} GB of RAM — this VM has ${Math.round(
+        vm.ram / 1024,
+      )} GB. Resize it, then open the IDE again.`,
+    );
+  }
+  // (b) AVX: the OpenCode agent's Bun runtime needs it. Set the host CPU model
+  // (idempotent), then require the guest to actually expose AVX — a cpu-model
+  // change only lands on reboot, so if it's still missing, stop and have the
+  // tenant reboot (their next attempt passes).
+  await ensureHostCpu(vm.proxmoxNode, vm.proxmoxVmId, client);
+  const avx = await guestExecOutput(
+    vm.proxmoxNode,
+    vm.proxmoxVmId,
+    ['/bin/sh', '-c', 'grep -qw avx /proc/cpuinfo && echo yes || echo no'],
+    client,
+    8000,
+  );
+  if (avx.stdout.trim() !== 'yes') {
+    throw new IdeProvisionError(
+      "This VM's CPU doesn't expose AVX, which the OpenCode AI agent needs. I set its CPU type to 'host' — reboot the VM, then open the IDE again.",
+    );
+  }
+
+  // Reuse the tenant-isolation firewall instead of fighting it: add a single
+  // managed, infra-scoped :8080 pinhole so the reverse proxy can reach code-server
+  // while the guest stays isolated from every other tenant. `ide_ingress_cidr` is
+  // the ProxMate infrastructure source (node / subnet-router / backend host). If
+  // it's unset, an isolated guest stays unreachable — warn, but don't block (a
+  // flat network with isolation off doesn't need it).
+  const ingress = (await getConfig('ide_ingress_cidr'))?.trim();
+  if (ingress) {
+    await ensureIdePinhole(vm.proxmoxNode, vm.proxmoxVmId, { port: IDE_GUEST_PORT, source: ingress }, client);
+  } else {
+    logger.warn(
+      { vmId: vm.id },
+      'ide: ide_ingress_cidr is not set — the tenant-isolation firewall may block the reverse proxy from reaching code-server',
+    );
+  }
+
   const issued = await issueGatewayToken(user, vm.id, publicApiBaseUrl);
   if (!issued) throw new IdeProvisionError('ProxMate IDE is not available for this VM.');
 
@@ -166,8 +230,7 @@ export async function startIdeProvision(
 /** Is the guest's code-server serving yet? (probe the IDE target, fail-fast). */
 async function probeIdeUp(vm: VirtualMachine): Promise<boolean> {
   const override = process.env['IDE_TARGET_OVERRIDE'];
-  const port = process.env['IDE_GUEST_PORT'] || '8080';
-  const target = override || (vm.ipAddress ? `http://${vm.ipAddress}:${port}` : null);
+  const target = override || (vm.ipAddress ? `http://${vm.ipAddress}:${IDE_GUEST_PORT}` : null);
   if (!target) return false;
   try {
     const r = await fetch(target, { redirect: 'manual', signal: AbortSignal.timeout(3000) });

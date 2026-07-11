@@ -15,11 +15,27 @@ import {
   InvalidLlmKeyError,
 } from '../services/tenant-llm-key.service.js';
 import { recordAudit } from '../services/audit.service.js';
+import { assertPublicHttpUrl } from '../lib/ssrf.js';
 import type { AuthRequest } from '../types/index.js';
 
 const router = Router();
 
 router.use(requireAuth);
+
+/**
+ * The public base URL for this ProxMate, as the in-guest AI agent must reach it.
+ * MUST be https in production: OpenCode POSTs to `<base>/llm/v1/chat/completions`,
+ * and if the base is http the edge (Cloudflare/Caddy) 301-redirects to https —
+ * which downgrades the POST to a GET, dropping the body + Bearer token, so the
+ * request misses the POST-only gateway route and 401s as "missing session".
+ * `req.protocol` is http behind the tunnel (trust proxy is off), so trust the
+ * `x-forwarded-proto` the edge sets instead.
+ */
+function publicBaseUrl(req: Request): string {
+  const fwd = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0]!.trim();
+  const proto = fwd || req.protocol;
+  return `${proto}://${req.get('host') ?? 'localhost'}`;
+}
 
 // ─── GET /api/ide/config ──────────────────────────────────────
 // What the current user may do with ProxMate IDE: whether it's available to them,
@@ -39,7 +55,7 @@ router.get('/config', async (req: Request, res: Response) => {
 router.post('/:id/gateway-token', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vmId = req.params['id'] as string;
-  const publicApiBaseUrl = `${req.protocol}://${req.get('host') ?? 'localhost'}`;
+  const publicApiBaseUrl = publicBaseUrl(req);
   const issued = await issueGatewayToken({ id: user.id, role: user.role }, vmId, publicApiBaseUrl);
   if (!issued) {
     res.status(403).json({ error: 'ProxMate IDE is not available for this VM' });
@@ -73,7 +89,7 @@ router.post('/:id/provision', async (req: Request, res: Response) => {
     res.status(403).json({ error: 'ProxMate IDE is not available.' });
     return;
   }
-  const publicApiBaseUrl = `${req.protocol}://${req.get('host') ?? 'localhost'}`;
+  const publicApiBaseUrl = publicBaseUrl(req);
   try {
     const state = await startIdeProvision(vm, { id: user.id, role: user.role }, publicApiBaseUrl);
     void recordAudit({ actor: user, action: 'ide.provision', targetType: 'vm', targetId: vm.id, req });
@@ -170,6 +186,16 @@ router.post('/keys/:keyId/test', async (req: Request, res: Response) => {
   if (!ep) {
     res.status(404).json({ error: 'Key not found' });
     return;
+  }
+  // Tenants may only probe public endpoints (SSRF guard); admins configure LAN
+  // model sources (e.g. a private Ollama) and are trusted, so they're exempt.
+  if (user.role !== 'admin') {
+    try {
+      await assertPublicHttpUrl(ep.baseUrl);
+    } catch {
+      res.status(400).json({ ok: false, error: 'That endpoint address is not allowed.' });
+      return;
+    }
   }
   const probe = await probeModels(ep.baseUrl, ep.apiKey);
   res.json({ ok: probe.ok, modelCount: probe.models.length, models: probe.models.slice(0, 100), error: probe.error });

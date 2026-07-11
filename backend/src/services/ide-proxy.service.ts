@@ -8,6 +8,7 @@ import { getOwnedVm } from './vm.service.js';
 import { getIdeCapability } from './ide.service.js';
 import { SESSION_COOKIE } from '../lib/cookies.js';
 import { logger } from '../lib/logger.js';
+import { isLoopbackOrLinkLocal } from '../lib/ssrf.js';
 
 /**
  * ProxMate IDE transport (Phase 2): reverse-proxy an in-guest code-server (HTTP +
@@ -24,9 +25,18 @@ import { logger } from '../lib/logger.js';
  * admin IDE policy (getIdeCapability). No ticket in the URL; the cookie is sent
  * on every same-origin sub-request automatically.
  *
- * Target: a real guest's `ip:port` (Phase 2b adds the host→guest firewall
- * pinhole). `IDE_TARGET_OVERRIDE` points every session at one code-server so the
- * transport can be proven on the rig without a live guest.
+ * Target resolution (per-VM — see {@link resolveIdeTargetUrl}):
+ *   1. `IDE_TARGET_OVERRIDE` — a single fixed URL for the rig (no live guest).
+ *      TEST-ONLY: it clobbers per-VM routing, so it must NOT be set in a
+ *      multi-VM deployment (doing so sends every VM's IDE to the same box).
+ *   2. The guest's own LAN `ipAddress:port` (`IDE_GUEST_PORT` overrides 8080).
+ *
+ * Reaching code-server on the guest requires punching through the per-VM tenant
+ * isolation firewall — that is done as a MANAGED, infra-scoped `:8080` pinhole at
+ * IDE-enable (see ide-provision.service.ensureIdePinhole), consistent with how the
+ * isolation rules themselves are managed. On non-flat networks the ProxMate host
+ * reaches the guest LAN via its own routing (e.g. a Tailscale subnet route); the
+ * proxy target stays the guest's real LAN IP either way.
  */
 
 const IDE_HTTP_PATH = /^\/api\/ide\/([^/]+)\/proxy(\/[^?]*)?(\?.*)?$/;
@@ -70,17 +80,31 @@ function getCookie(header: string | undefined, name: string): string | undefined
   return undefined;
 }
 
+/**
+ * Pick the upstream code-server URL for a guest. Pure (env-injected) so the
+ * per-VM routing precedence is unit-testable. See the file header for the modes.
+ */
+export function resolveIdeTargetUrl(
+  vm: { ipAddress: string | null },
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const override = env['IDE_TARGET_OVERRIDE'];
+  if (override) return override;
+  // The guest agent reports the IP, and a tenant with root in their guest could
+  // report a bogus one. Refuse to proxy to the host's own loopback / link-local /
+  // metadata address (private LAN is fine — that's where guests live).
+  if (!vm.ipAddress || isLoopbackOrLinkLocal(vm.ipAddress)) return null;
+  const port = env['IDE_GUEST_PORT'] || '8080';
+  return `http://${vm.ipAddress}:${port}`;
+}
+
 /** Resolve the code-server target for a VM, enforcing ownership + the IDE policy. */
 async function resolveTarget(vmId: string, user: { id: string; role: string }): Promise<string | null> {
   const vm = await getOwnedVm(vmId, user);
   if (!vm) return null;
   const cap = await getIdeCapability({ role: user.role });
   if (!cap.available) return null;
-  const override = process.env['IDE_TARGET_OVERRIDE'];
-  if (override) return override;
-  if (!vm.ipAddress) return null;
-  const port = process.env['IDE_GUEST_PORT'] || '8080';
-  return `http://${vm.ipAddress}:${port}`;
+  return resolveIdeTargetUrl(vm);
 }
 
 /**
