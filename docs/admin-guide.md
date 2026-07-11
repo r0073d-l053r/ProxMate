@@ -202,6 +202,11 @@ As an admin, the New-VM wizard shows an **Admin options** block:
   get). Template deploys always stay on the template's node (linked clone), so the picker only
   applies to ISO and container builds.
 
+A VM you deploy for a tenant is **admin-managed**: the tenant can operate it (start/stop, console,
+IDE, backups) but **cannot resize it** — only an admin can change its CPU/RAM/disk. This is also a
+quota-safety rule: a tenant who could grow a quota-exempt grant would sidestep quota entirely.
+Resize it yourself from the VM's Actions ▸ Resize.
+
 Admin actions on a tenant's VM (including this deploy) are recorded in the **admin audit log**
 only — the tenant's per-VM Activity feed shows just their own and their shared users' actions.
 

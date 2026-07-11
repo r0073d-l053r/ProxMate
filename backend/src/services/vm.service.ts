@@ -42,6 +42,8 @@ export interface CreateVmInput {
   node?: string;
   /** Admin-only: this VM is a grant that doesn't count toward the owner's quota. */
   quotaExempt?: boolean;
+  /** Admin-only: the owning tenant may operate but not RESIZE this VM. */
+  adminManaged?: boolean;
 }
 
 /** Check the requested resources against the user's remaining quota. */
@@ -166,6 +168,7 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
       os: input.os,
       status: 'creating',
       quotaExempt: input.quotaExempt ?? false,
+      adminManaged: input.adminManaged ?? false,
     },
   });
 
@@ -218,6 +221,8 @@ export interface CreateContainerInput {
   node?: string;
   /** Admin-only: this container is a grant that doesn't count toward the owner's quota. */
   quotaExempt?: boolean;
+  /** Admin-only: the owning tenant may operate but not RESIZE this container. */
+  adminManaged?: boolean;
 }
 
 /** Guess a container's CPU architecture from its OS-template filename. */
@@ -241,6 +246,7 @@ export async function createContainer(user: User, input: CreateContainerInput): 
     storage: input.storage,
     os: input.template,
     quotaExempt: input.quotaExempt,
+    adminManaged: input.adminManaged,
   });
 
   const client = await pve.getClient();
@@ -298,6 +304,7 @@ export async function createContainer(user: User, input: CreateContainerInput): 
       os: templateName,
       status: 'creating',
       quotaExempt: input.quotaExempt ?? false,
+      adminManaged: input.adminManaged ?? false,
     },
   });
 
@@ -354,6 +361,8 @@ export interface DeployTemplateInput {
   features?: string[];
   /** Admin-only: this VM is a grant that doesn't count toward the owner's quota. */
   quotaExempt?: boolean;
+  /** Admin-only: the owning tenant may operate but not RESIZE this VM. */
+  adminManaged?: boolean;
 }
 
 /** Cloud-init knobs shared by template deploys and rebuilds. */
@@ -485,6 +494,7 @@ export async function deployFromTemplate(
     storage: diskGb,
     os: template.name,
     quotaExempt: input.quotaExempt,
+    adminManaged: input.adminManaged,
   });
 
   const client = await pve.getClient();
@@ -506,6 +516,7 @@ export async function deployFromTemplate(
       os: template.os ?? template.name,
       status: 'creating',
       quotaExempt: input.quotaExempt ?? false,
+      adminManaged: input.adminManaged ?? false,
     },
   });
 
