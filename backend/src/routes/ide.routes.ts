@@ -155,8 +155,10 @@ router.post('/keys', async (req: Request, res: Response) => {
     return;
   }
   try {
-    // Admins configure LAN model sources; tenants are held to public endpoints.
-    const key = await addLlmKey(user.id, parsed.data, { allowPrivate: user.role === 'admin' });
+    // Admins configure LAN model sources and free-form endpoints; tenants are held
+    // to public endpoints AND the fixed preset services (no custom base URLs).
+    const isAdmin = user.role === 'admin';
+    const key = await addLlmKey(user.id, parsed.data, { allowPrivate: isAdmin, allowCustomBase: isAdmin });
     void recordAudit({
       actor: user,
       action: 'ide.llm_key_add',
