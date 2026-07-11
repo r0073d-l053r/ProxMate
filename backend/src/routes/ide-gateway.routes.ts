@@ -6,6 +6,7 @@ import {
   resolveModelRoute,
   type GatewayContext,
 } from '../services/ide-gateway.service.js';
+import { gatewayAuthLimiter } from '../middleware/rate-limit.js';
 import { logger } from '../lib/logger.js';
 
 /**
@@ -75,7 +76,7 @@ async function requireGatewayToken(req: Request, res: Response, next: NextFuncti
 // ─── GET /api/ide/:id/llm/v1/models ───────────────────────────
 // The models this token's user may use (shared:* always, byo:* when BYO is on).
 // Never leaks the upstream endpoint, credentials, or real model names.
-router.get('/:id/llm/v1/models', requireGatewayToken, async (req: Request, res: Response) => {
+router.get('/:id/llm/v1/models', gatewayAuthLimiter, requireGatewayToken, async (req: Request, res: Response) => {
   const gw = (req as GwRequest).gw as GatewayContext;
   const data = await listGatewayModels(gw.user);
   res.json({ object: 'list', data });
@@ -85,7 +86,7 @@ router.get('/:id/llm/v1/models', requireGatewayToken, async (req: Request, res: 
 // Enforce the allow-list (resolveModelRoute → 403 if not permitted), rewrite the
 // model to its real upstream name, then forward — streaming the SSE response
 // straight through when the client asked for `stream: true`.
-router.post('/:id/llm/v1/chat/completions', requireGatewayToken, async (req: Request, res: Response) => {
+router.post('/:id/llm/v1/chat/completions', gatewayAuthLimiter, requireGatewayToken, async (req: Request, res: Response) => {
   const gw = (req as GwRequest).gw as GatewayContext;
   const body = (req.body ?? {}) as Record<string, unknown>;
   const modelId = typeof body['model'] === 'string' ? (body['model'] as string) : '';
