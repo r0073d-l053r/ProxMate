@@ -5,6 +5,7 @@ import { getConfig } from './config.service.js';
 import { getOwnedVm } from './vm.service.js';
 import { getIdeCapability, getIdeConfig } from './ide.service.js';
 import { getLlmKeyEndpointById } from './tenant-llm-key.service.js';
+import { assertPublicHttpUrl } from '../lib/ssrf.js';
 
 /**
  * ProxMate LLM gateway (Phase 4) — the policy + routing brain behind the
@@ -274,6 +275,15 @@ export async function resolveModelRoute(
         ? 'https://api.openai.com/v1'
         : (key.baseUrl && key.baseUrl.trim() ? key.baseUrl : '');
     if (!base) return null;
+    // SSRF re-check at forward time (blocks a key whose host now resolves private,
+    // e.g. DNS rebinding, or a key saved before the save-time guard existed).
+    if (key.provider !== 'openai') {
+      try {
+        await assertPublicHttpUrl(base);
+      } catch {
+        return null;
+      }
+    }
     void prisma.tenantLlmKey.update({ where: { id: key.id }, data: { lastUsedAt: new Date() } }).catch(() => {});
     return {
       url: normalizeBase(base),

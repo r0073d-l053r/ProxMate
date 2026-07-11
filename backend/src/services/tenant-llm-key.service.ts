@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { encrypt, decrypt } from '../lib/crypto.js';
+import { assertPublicHttpUrl, SsrfBlockedError } from '../lib/ssrf.js';
 
 /**
  * Tenant bring-your-own LLM keys. Used ONLY through the ProxMate gateway (single
@@ -80,6 +81,15 @@ export async function addLlmKey(userId: string, input: AddLlmKeyInput): Promise<
   // 'openai' uses its fixed endpoint; everything else must supply an http(s) base URL.
   if (provider !== 'openai' && (!baseUrl || !/^https?:\/\//i.test(baseUrl))) {
     throw new InvalidLlmKeyError('a valid http(s) base URL is required for an openai-compatible provider');
+  }
+  // SSRF guard: a tenant's own key must reach only the public internet, never the
+  // ProxMate host's internal network / metadata endpoint.
+  if (provider !== 'openai' && baseUrl) {
+    try {
+      await assertPublicHttpUrl(baseUrl);
+    } catch (e) {
+      throw new InvalidLlmKeyError(e instanceof SsrfBlockedError ? e.message : 'base URL is not allowed');
+    }
   }
 
   const count = await prisma.tenantLlmKey.count({ where: { userId } });

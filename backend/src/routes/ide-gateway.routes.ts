@@ -32,6 +32,26 @@ function bearer(req: Request): string | undefined {
   return h && h.startsWith('Bearer ') ? h.slice(7).trim() : undefined;
 }
 
+// Light per-VM abuse guard. The gateway is exempt from the global write limiter
+// (chat isn't a "write" and streaming must not be throttled), so a runaway or
+// stolen token could otherwise hammer the upstream. A fixed window per VM is
+// generous for real chat (1 request per completion) but caps a flood. In-memory
+// is fine — a single backend process, and the key space is bounded by VM count.
+const GW_WINDOW_MS = 60_000;
+const GW_MAX_PER_WINDOW = 120;
+const gwHits = new Map<string, { count: number; resetAt: number }>();
+function gatewayRateOk(vmId: string): boolean {
+  const now = Date.now();
+  const e = gwHits.get(vmId);
+  if (!e || now > e.resetAt) {
+    gwHits.set(vmId, { count: 1, resetAt: now + GW_WINDOW_MS });
+    return true;
+  }
+  if (e.count >= GW_MAX_PER_WINDOW) return false;
+  e.count += 1;
+  return true;
+}
+
 /** Gate on a gateway token that must be scoped to the `:id` VM in the path. */
 async function requireGatewayToken(req: Request, res: Response, next: NextFunction): Promise<void> {
   const vmId = req.params['id'] as string;
@@ -40,6 +60,12 @@ async function requireGatewayToken(req: Request, res: Response, next: NextFuncti
     res
       .status(401)
       .json({ error: { message: 'Invalid or expired ProxMate IDE gateway token', type: 'invalid_request_error' } });
+    return;
+  }
+  if (!gatewayRateOk(ctx.vmId)) {
+    res
+      .status(429)
+      .json({ error: { message: 'ProxMate IDE gateway: rate limit exceeded, slow down', type: 'rate_limit_error' } });
     return;
   }
   (req as GwRequest).gw = ctx;
