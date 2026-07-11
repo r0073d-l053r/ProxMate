@@ -15,6 +15,10 @@
   "terminal.integrated.defaultProfile.linux": "bash",
   "extensions.autoCheckUpdates": false,
   "window.menuBarVisibility": "compact",
+  // OpenCode is the focus agent — keep VS Code's built-in "Build with Agent" chat
+  // (the right/secondary sidebar) out of the way so it never pops up on open.
+  "workbench.secondarySideBar.defaultVisibility": "hidden",
+  "chat.commandCenter.enabled": false,
   "editor.fontFamily": "'Geist Mono', 'Cascadia Code', Menlo, Monaco, 'Courier New', monospace",
   "workbench.colorCustomizations": {
     "focusBorder": "#3186e9",
