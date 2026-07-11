@@ -1,5 +1,10 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { isBlockedIp, assertPublicHttpUrlShape, assertSafeOutboundUrl } from '../src/lib/url-safety.js';
+import {
+  isBlockedIp,
+  isLoopbackOrLinkLocal,
+  assertPublicHttpUrlShape,
+  assertSafeOutboundUrl,
+} from '../src/lib/url-safety.js';
 
 describe('isBlockedIp', () => {
   it('blocks IPv4 loopback / private / link-local / CGNAT / multicast / reserved', () => {
@@ -28,6 +33,19 @@ describe('isBlockedIp', () => {
 
   it('allows a public IPv6', () => {
     expect(isBlockedIp('2606:4700:4700::1111')).toBe(false);
+  });
+});
+
+describe('isLoopbackOrLinkLocal — IDE proxy target guard (private LAN allowed)', () => {
+  it('blocks only loopback / link-local / metadata / unspecified', () => {
+    for (const ip of ['127.0.0.1', '169.254.169.254', '0.0.0.0', '::1', 'fe80::abcd']) {
+      expect(isLoopbackOrLinkLocal(ip), ip).toBe(true);
+    }
+  });
+  it('ALLOWS private LAN (where tenant guests live) and public', () => {
+    for (const ip of ['192.168.50.40', '10.0.0.5', '172.16.9.9', '8.8.8.8']) {
+      expect(isLoopbackOrLinkLocal(ip), ip).toBe(false);
+    }
   });
 });
 

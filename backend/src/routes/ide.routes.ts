@@ -15,7 +15,7 @@ import {
   InvalidLlmKeyError,
 } from '../services/tenant-llm-key.service.js';
 import { recordAudit } from '../services/audit.service.js';
-import { assertPublicHttpUrl } from '../lib/ssrf.js';
+import { assertSafeOutboundUrl } from '../lib/url-safety.js';
 import type { AuthRequest } from '../types/index.js';
 
 const router = Router();
@@ -155,7 +155,8 @@ router.post('/keys', async (req: Request, res: Response) => {
     return;
   }
   try {
-    const key = await addLlmKey(user.id, parsed.data);
+    // Admins configure LAN model sources; tenants are held to public endpoints.
+    const key = await addLlmKey(user.id, parsed.data, { allowPrivate: user.role === 'admin' });
     void recordAudit({
       actor: user,
       action: 'ide.llm_key_add',
@@ -191,7 +192,7 @@ router.post('/keys/:keyId/test', async (req: Request, res: Response) => {
   // model sources (e.g. a private Ollama) and are trusted, so they're exempt.
   if (user.role !== 'admin') {
     try {
-      await assertPublicHttpUrl(ep.baseUrl);
+      await assertSafeOutboundUrl(ep.baseUrl, 'endpoint');
     } catch {
       res.status(400).json({ ok: false, error: 'That endpoint address is not allowed.' });
       return;

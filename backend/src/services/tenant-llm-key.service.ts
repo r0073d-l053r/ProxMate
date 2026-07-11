@@ -1,6 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { encrypt, decrypt } from '../lib/crypto.js';
-import { assertPublicHttpUrl, SsrfBlockedError } from '../lib/ssrf.js';
+import { assertPublicHttpUrlShape } from '../lib/url-safety.js';
 
 /**
  * Tenant bring-your-own LLM keys. Used ONLY through the ProxMate gateway (single
@@ -66,8 +66,16 @@ export interface AddLlmKeyInput {
   key: string;
 }
 
-/** Save a new BYO key for a user (secret encrypted at rest). Returns the safe view. */
-export async function addLlmKey(userId: string, input: AddLlmKeyInput): Promise<LlmKeyView> {
+/**
+ * Save a new BYO key for a user (secret encrypted at rest). Returns the safe view.
+ * `allowPrivate` exempts the SSRF host-shape check — set it for ADMINS, who
+ * legitimately point shared-model sources at a LAN endpoint (e.g. a local Ollama).
+ */
+export async function addLlmKey(
+  userId: string,
+  input: AddLlmKeyInput,
+  opts: { allowPrivate?: boolean } = {},
+): Promise<LlmKeyView> {
   const label = input.label?.trim();
   const provider = input.provider?.trim();
   const model = input.model?.trim();
@@ -83,12 +91,13 @@ export async function addLlmKey(userId: string, input: AddLlmKeyInput): Promise<
     throw new InvalidLlmKeyError('a valid http(s) base URL is required for an openai-compatible provider');
   }
   // SSRF guard: a tenant's own key must reach only the public internet, never the
-  // ProxMate host's internal network / metadata endpoint.
-  if (provider !== 'openai' && baseUrl) {
+  // ProxMate host's internal network / metadata endpoint. Admins are exempt (they
+  // configure LAN model sources), as is the ALLOW_PRIVATE_OUTBOUND_URLS escape hatch.
+  if (provider !== 'openai' && baseUrl && !opts.allowPrivate) {
     try {
-      await assertPublicHttpUrl(baseUrl);
+      assertPublicHttpUrlShape(baseUrl, 'base URL');
     } catch (e) {
-      throw new InvalidLlmKeyError(e instanceof SsrfBlockedError ? e.message : 'base URL is not allowed');
+      throw new InvalidLlmKeyError((e as Error).message);
     }
   }
 
