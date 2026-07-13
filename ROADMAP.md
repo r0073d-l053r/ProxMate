@@ -1,220 +1,164 @@
 # ProxMate Roadmap
 
-A living, prioritized list of suggested additions. ProxMate is already a mature,
-production-ready multi-tenant Proxmox dashboard — the items here are about **closing
-cloud-provider parity gaps and hardening for scale**, not fixing breakage. Tiers are
-rough priority bands, not commitments. Have an idea? Open a
+A living, prioritized list. ProxMate is a mature, production-ready multi-tenant Proxmox dashboard
+(live at proxmate.myhomelab.pro) — this roadmap is about **closing cloud-provider parity gaps,
+hardening for scale, and the EDU/commercial layer**, not fixing breakage. Tiers are rough priority
+bands, not commitments. Have an idea? Open a
 [discussion](https://github.com/r0073d-l053r/ProxMate/discussions/categories/ideas).
 
-> **Shipped (Tier 1):** _Live VM resize_ — resize a VM's vCPU / memory / disk in place
-> (quota-checked, disk grow-only). _Rebuild / reinstall_ — re-image a VM from a fresh ISO or
-> template while keeping its VMID, name, and resources. _Per-VM backup policy_ — configurable
-> MateState frequency + retention per VM.
+The detailed, dated log of everything already built lives in [`completed-tasks.md`](completed-tasks.md).
+This file leads with **what's still open**, then **new ideas**, then a condensed **shipped** index.
 
 ---
 
-## Shipped in v0.7.0 — ProxMate IDE (beta)
+## 🔜 Open — up next (pulled to the top)
 
-An in-browser IDE for tenants: **code-server** (VS Code in the browser) with the **OpenCode** AI agent,
-installed **natively inside the tenant's own VM** on first "Open IDE" and reverse-proxied by ProxMate — so
-tenants build their machine with an AI copilot, using admin-shared local models or their own LLM keys.
-Admin-gated end to end (off by default); a session can only ever reach the VM it was opened from. Includes
-the per-VM **LLM gateway** (allow-list choke point, per-VM tokens, streaming, two-layer rate limiting), a
-**managed isolation-consistent firewall pinhole** for reaching guests, **min-spec guardrails** (RAM floor,
-`cpu: host`/AVX), install + **cloud-init deploy locks**, and `DEPLOY_WITH_CLAUDE.md` — an agent-guided
-production deploy method. See `docs/proxmate-ide.md`.
+### In flight
 
-- **IDE follow-ups (open):** admin Settings field for `ide_ingress_cidr` + a one-click reachability test;
-  pin code-server/OpenCode installer versions in the provisioning bootstrap; wire the gateway as a provider
-  for code-server's built-in Chat view.
+- **Tenant controls & admin management pack (v0.8.0, in testing).** Built + on branch
+  `feat/tenant-admin-controls`, deployed to musebot for live testing; not yet released. Adds:
+  share **permission presets** (Viewer / Operator / Manager), **admin deploy-for-tenant** (into a
+  chosen tenant's account, optional node pin, optional quota-exempt grant), **admin-managed VMs are
+  resize-locked to admins**, tenant **activity feeds hide admin actions**, **IDE one-click relocate**
+  to an AVX-capable node, and **custom AI-key endpoints restricted to admins**. Breaking: share
+  `access` values renamed; tenants lose raw-API node pinning + shared-VM rebuild/passthrough.
+
+### IDE follow-ups (v0.7.0 deferred)
+
+- ✅ **Admin Settings field for `ide_ingress_cidr` + reachability test — BUILT (in testing).**
+  Validated CIDR field in Admin → Settings → ProxMate IDE, plus a "Test reachability" button that
+  dials a running VM's IDE port from the backend (the proxy's exact path) and names the likely
+  cause on failure.
+- ✅ **Pin code-server / OpenCode installer versions — BUILT (in testing).** The bootstrap installs
+  exactly the live-verified pair (code-server 4.128.0 / OpenCode 1.17.18), overridable via
+  `IDE_CODE_SERVER_VERSION` / `IDE_OPENCODE_VERSION`.
+- **Wire the gateway as a provider for code-server's built-in Chat view** (inert today; OpenCode
+  runs as a terminal TUI instead).
+- **Surface the in-guest provision log** — an `ideState: failed` today means shelling into the guest
+  to read `/var/log/pmide-provision.log`; add a "view install log" action (owner/admin, via the guest
+  agent) on the failed state so installs are debuggable from the browser.
+
+### Production hardening & ops
+
+- ✅ **Scheduled app-DB backup — BUILT (in testing).** Nightly `VACUUM INTO` snapshot of ProxMate's
+  own database to an admin-configured directory (point it at an off-host mount), rolling retention,
+  "Back up now" verification button in Admin → Settings.
+- **`ENCRYPTION_KEY` loss-safety** — losing the key means losing the Proxmox token, SMTP creds,
+  tenant AI keys, and TOTP secrets in one stroke. The docs runbook now pairs key backup with DB
+  backups explicitly; still open: an admin Settings warning that persists until the key is
+  confirmed backed up.
+- **Production validation passes** — the shipped OIDC SSO flow and the full 2FA/passkey matrix
+  (TOTP, recovery codes, passkeys, invite-enforced 2FA) each need a documented end-to-end QA pass
+  on a live deployment.
+
+### v0.8 pack follow-ups
+
+- ✅ **Size-lock extended to rebuild — BUILT (in testing).** A tenant rebuild of an admin-managed /
+  quota-exempt VM is 403'd (it wipes the admin's deployment, and template disk growth would bypass
+  quota on exempt grants); both Rebuild UI surfaces hidden for non-admins.
+- ✅ **Resize/rebuild quota billed to the OWNER — BUILT (in testing).** A Manager-share resize is
+  now checked against the owner's caps + usage (`quotaAccountFor`), not the caller's; admin bypass
+  unchanged; data disks already resolved the owner.
+- **Notify the tenant on admin deploy-for-tenant** — a granted VM just appears in their account
+  today; send the branded "you've been granted a VM" email + in-app note.
+- **Share notifications** — email the recipient when a VM is shared with them or their preset level
+  (Viewer / Operator / Manager) changes.
+- **Surface admin-managed / quota-exempt to the owner** — a badge + one-line explainer on the VM
+  detail ("set up by your admin — only an admin can resize it") instead of just the 403 on attempt.
+
+### Recorded follow-ups
+
+- **Read-only console (input-blocked viewing)** — a Viewer share gets no console today; the noted
+  follow-up is a view-only, input-blocked console stream.
+- **Node-drain migratability guard** — the balancer's migrate planner reads Proxmox's `allowed_nodes`
+  preflight and pins un-migratable guests; apply the *same* guard to the **node-drain** planner so it
+  can't propose an impossible evacuation (its apply error is already legible).
+- **Resize/rebuild quota vs owner** — a Manager-share resize is checked against the *caller's* quota
+  while the footprint counts against the *owner*. Load the owner's account for the quota check when
+  caller ≠ owner.
+- **The GPU on pve-4 (host project)** — the host is vfio/IOMMU-ready and the card is bound; running it
+  needs a fresh **q35 + OVMF + EFI-disk** VM (108 was installed under SeaBIOS). Owner's call when wanted.
+
+### EDU / commercial layer (post-CE)
+
+- **Usage-based billing & showback** — turn the `ResourceSample` history into per-tenant monthly
+  cost/showback reports (configurable $/vCPU-hr, $/GB-RAM, $/GB-disk) with CSV/PDF export.
+- **Ephemeral / TTL VMs (auto-expiry)** — a VM (or an invite's VMs) gets a lifetime: auto-stop, then
+  auto-delete at expiry, with warning emails first. Builds on invites + power schedules + notifications.
+- **IDE institutional layer** — instructor dashboards (visibility into student IDE sessions/activity),
+  per-class + per-student LLM-gateway quotas + token budgets, **assignment templates**
+  (pre-provisioned VMs with IDE + starter repos), bulk provisioning, LMS/roster + SCIM, support + SLAs.
 
 ---
 
-## Tier 1 — High-value, low-risk (cloud parity)
+## 💡 New ideas — proposed 2026-07-11
 
-- **Live VM resize / reconfigure** — change CPU/RAM/disk after creation
-  (`PATCH /api/vms/:id`; disk is grow-only). _Done._
-- **Rebuild / reinstall** — re-image a VM from a fresh ISO or template while keeping
-  its DB record, VMID, name, and resources (`POST /api/vms/:id/rebuild`). _Done._
-- **Per-VM backup policy** — configurable MateState frequency + retention per VM
-  (`PUT /api/vms/:id/backup-policy`); VMs without one stay on the cluster-wide weekly
-  default. _Done._
-- **Tags / projects + bulk actions** — per-VM tags with a tag filter, plus multi-select
-  bulk start/stop/restart/**delete** on the VM list. Bulk delete is guarded behind a typed
-  confirmation (you must type the exact count of selected VMs) so a destructive mass-action can't
-  happen on a stray click. _Done (delete restored in v0.2.7)._
+Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolation model.
 
-## Tier 2 — Notifications & sharing
+1. **Adopt an existing (unmanaged) Proxmox VM.** ProxMate only manages guests it created. An
+   admin-only **import** flow would let an operator onboard an existing cluster: pick an unmanaged
+   guest, assign an owner + quota accounting, apply the per-VM isolation firewall, and start managing
+   it — no rebuild. Closes the biggest "I already have VMs" adoption gap. _CE._
+2. **Bulk deploy from a template (class provisioning).** Deploy *N* VMs from one template in a single
+   action — for a tenant, or one-per-tenant across a selected group — each auto-placed and
+   isolation-firewalled. The concrete primitive behind EDU "assignment templates." _CE primitive, EDU UX._
+3. **Auto-snapshot before risky ops.** Optionally take a snapshot right before a rebuild/resize/rescue
+   (QEMU) so a bad change is one rollback away. Snapshots already exist; this just wires a safety net
+   into the destructive paths, with a retention cap. _CE._
+4. **Projects (tag rollups).** Tags exist per-VM; add a **project view** that groups a tenant's VMs by
+   a `project:<name>` tag with a per-project resource + cost rollup and bulk actions scoped to the
+   group. Low-risk, high polish. _CE._
+5. **Guest-agent file push.** Reuse the exact trust model as password-reset / SSH-key-inject (QEMU
+   guest agent, argv-safe) to let an owner upload a small file into a VM (e.g. a config or starter
+   script) from the browser — no SSH. Size-capped, owner/Manager only. _CE._
+6. **More notification channels.** The webhook engine supports Discord/Slack/Mattermost/generic; add
+   **ntfy** and **Telegram** presets, plus a weekly per-tenant **usage digest** email. _CE._
+7. **Two-person approval for destructive admin actions.** Optional policy: a second admin must confirm
+   a bulk-delete / node-drain / firewall-disable before it runs. Rides the existing audit log. _EDU._
+8. **Status page / scheduled reports.** A lightweight public/authed status page (node health, capacity,
+   incidents) and optional scheduled admin reports (capacity trend, top consumers) off the existing
+   `ResourceSample` + cluster-health data. _EDU._
 
-- **Event notifications** — admin-configured webhook (Discord / Slack / Mattermost /
-  generic) + optional email alerts for backup failed, VM provisioning error, and account
-  lockout. Per-event toggles and a "send test" button in Admin → Settings. _Done._
-- **Share a VM** with another tenant — grant **co-owner** (full lifecycle: start/stop/resize/
-  back up) or **read-only** (view details, live stats, activity) access by email, managed from the
-  VM detail page (`/api/vms/:id/shares`). The API enforces every action; shared VMs show in the
-  recipient's list with a role badge. _Done._ _(Read-only access to the **interactive console** —
-  input-blocked viewing — is the remaining follow-up; co-owners already get full console.)_
+---
 
-## Tier 3 — API & scale
+## ✅ Shipped — condensed index
 
-- **Public REST API + per-user API tokens** — `pm_…` Bearer tokens (managed under Security),
-  resolved alongside the session cookie; only a one-way HMAC-SHA256 hash is stored, never the token.
-  _Done._
-- **OpenAPI / Swagger spec** — served at `GET /api/openapi.json`. _Done._
-- **PostgreSQL option** — Prisma queries are portable and a switch is feasible, but **SQLite stays
-  the default** and is the only supported datasource for now.
-- **Cluster Balancer (DRS-style workload balancing)** — evens out node **memory** load (the
-  binding constraint) by live-migrating ProxMate-managed guests off the hottest node onto the
-  coldest. Admin policy in **Admin → Balancer**: _Off / Recommend only / Auto-apply_, an imbalance
-  tolerance, a per-run move cap, and a never-move list. Guardrails: architecture-aware (never
-  x86↔ARM), **anti-affinity** via `aa:<group>` tags, **pinning** via `pin`/`no-balance` tags, and
-  every candidate move must strictly lower the peak node load (no oscillation). Recommend mode shows
-  a reviewable plan you apply by hand; auto mode applies on a ~15-min scheduler tick. _Done._
-  - **Maintenance mode (node drain)** — before taking a node down, evacuate every
-    ProxMate-managed guest off it (`POST /api/admin/balancer/drain` → plan; reuses `/balancer/apply`):
-    auto best-fit placement **or** bulk-migrate all to one chosen target, running guests **live** (no
-    downtime), stopped guests offline — same arch + anti-affinity guardrails. Unmanaged/foreign guests
-    are flagged for manual handling. _Done._
-  - **Live migration on local storage + owner heads-up** — migration now passes
-    `--with-local-disks`, so a running guest on node-local storage (local-lvm / ZFS) live-migrates
-    (disk copied during the move) instead of being refused; a no-op on shared storage. Every
-    admin-initiated move (manual or drain) emails the VM's **owner** a branded heads-up ("maintenance
-    — brief momentary blip"); routine auto-balancing stays silent. _Done._
-  - **Migratability-aware planning** ✅ _(v0.6.6)_ — a VM whose disks live on node-local storage no
-    other node has (e.g. a local ZFS pool) can't migrate at all; the balancer used to keep proposing
-    the impossible move (surfaced only as "Request failed with status code 500"). It now reads
-    Proxmox's own migrate preflight (`allowed_nodes`), pins guests with nowhere to land, never targets
-    a node a VM can't reach, and records Proxmox's **real** failure reason. _Follow-up:_ apply the same
-    guard to the **node-drain** planner (it can still propose an impossible evacuation; its apply error
-    is already legible).
-  - **Migrate picker only offers reachable nodes** ✅ _(v0.6.7)_ — the manual "Migrate to another node"
-    dialog (admin-only) populates from `GET /vms/:id/migrate-targets` (allowed_nodes ∩ online); a VM
-    pinned to node-local storage shows "No eligible nodes" instead of doomed targets.
+Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
 
-## Tier 4 — Reliability & observability
+- **v0.7.0 — ProxMate IDE (beta).** In-browser code-server + OpenCode AI agent installed natively in
+  each tenant VM; per-VM LLM gateway (allow-list, per-VM tokens, streaming, two-layer rate limiting);
+  managed isolation-consistent `:8080` firewall pinhole; min-spec guardrails (RAM floor, `cpu:host`/AVX);
+  install + cloud-init **deploy locks**; `DEPLOY_WITH_CLAUDE.md` agent-guided deploy runbook. Off by
+  default. See `docs/proxmate-ide.md`.
+- **v0.6.x — GPU/PCI passthrough hardening + cluster ops.** Passthrough request→admin-attach workflow
+  with auto-migration to the device's node, live migration progress bar, and a pre-flight
+  host-readiness check (won't auto-start a GPU unless q35+OVMF — after two live node wedges);
+  migratability-aware balancer planning + migrate picker; backend security-hardening pass (SSRF guards,
+  fail-closed secrets, `/metrics` 404-in-prod, gateway rate limiting).
+- **v0.5.0 — tenant-experience arc.** Console power actions + pop-out/keep-on-top terminal, live
+  Insights, reset guest password, rescue mode, per-VM resource alerts, duplicate VM, cloud-image
+  freshness/auto-refresh, single-use backup download links.
+- **v0.4.x — LXC containers + passthrough requests.** Create/manage LXC alongside VMs (console,
+  isolation, quota, resize, backups; balancer pins them); GPU/PCI passthrough request workflow.
+- **v0.3.x — sharing, scale & ops.** Share-a-VM (roles), public REST API + `pm_…` tokens + OpenAPI,
+  Cluster Balancer (DRS-style, memory-based, recommend→auto) + node-drain maintenance mode, VM
+  migration between nodes, extra data disks, quota-increase requests, live SSE stats, per-tenant
+  resource history, admin broadcast email, cloud-init "extras" + on-demand snippet writing.
+- **v0.2.x — core platform.** Template Store + auto-scaling deploy, MateStates backups + retention,
+  secure external access (Cloudflare Tunnel / Tailscale, zero port-forwarding), admin monitor,
+  unified new-VM wizard, tags + bulk actions, event notifications, branded transactional email +
+  admin email invites, live resize/rebuild/per-VM backup policy.
+- **Cross-cutting (done).** Structured logging (pino) + request IDs, deep health checks, Prometheus
+  `/metrics`, Proxmox retry/backoff on idempotent reads, write rate-limiting, Playwright E2E +
+  Vitest/RTL, ESLint/Prettier, CI security scanning (CodeQL/Trivy/npm-audit/SBOM), append-only audit
+  log, TOTP 2FA + passkeys + OIDC SSO, invite-enforced 2FA, AGPL open-core licensing (CE + CLA).
 
-- **Structured logging** (pino) + request-correlation IDs (`x-request-id`). _Done._
-- **Deep health / readiness checks** — `GET /api/health` checks the DB; `?deep=1` probes
-  Proxmox. _Done._
-- **Prometheus `/metrics`** — request latency, `proxmate_proxmox_api_errors_total`,
-  `proxmate_vm_count`. _Done._
-- **Proxmox API timeouts + retry/backoff** — transient retries on idempotent reads only
-  (never mutations). _Done._
-- **Rate-limit all mutating endpoints** — a write limiter covers every non-GET API call.
-  _Done._
+### Explicitly declined / not feasible (kept for the record)
 
-## Tier 5 — Test & developer experience
-
-- **Playwright E2E** (login smoke) and **frontend unit tests** (Vitest + RTL). _Done._
-- **Backend ESLint + Prettier** (wired into CI). _Done._
-- **CI security scanning** — CodeQL / Trivy / `npm audit` + a CycloneDX SBOM. _Done._
-
-## Optional / larger bets
-
-- **LXC container support** — create and manage **LXC containers** alongside VMs:
-  create from an OS template, start/stop/restart, noVNC + text console, tenant
-  isolation, quota, cpu/ram/rootfs resize, and MateState backups. Live migration,
-  extra data disks, snapshots, and cloud-init extras stay VM-only (the balancer
-  treats containers as pinned and flags them on a node drain). _Done (v0.4.0)._
-- **Built-in public ingress** — **documented self-service** (`docs/cloudflare-tunnels.md`),
-  **not automated**. Automating it collides with the API-only + tenant-isolation model:
-  it would need DNS automation plus a path into isolated tenant networks (or cloudflared
-  installed inside each guest, which ProxMate can't reliably do). Left as a documented
-  manual setup.
-- **GPU / PCI passthrough requests** — a **request → admin-attach workflow** (mirrors
-  the quota-request flow): a tenant requests GPU/PCI passthrough for a VM they own → an
-  admin reviews and attaches an available Proxmox **PCI resource mapping**
-  (`hostpciN: mapping=<name>`), or denies. Host VFIO/IOMMU setup + defining the mapping
-  stays the admin's job (API-only, documented). QEMU-only. _Done (v0.4.1)._
-  - **Auto-migration on approve** ✅ _(v0.6.0)_ — mappings are node-scoped, so approving now
-    migrates the VM to the device's node first (live, with cross-storage disk relocation +
-    cloud-init drop/regenerate), background apply with progress + a startup reconciler.
-  - **Live migration progress bar** ✅ _(v0.6.1)_ — the admin approval card shows real
-    transfer percent/bytes/ETA while the VM migrates.
-  - **Pre-flight host-readiness check** ✅ _(v0.6.2)_ — approving/starting passthrough on an
-    unprepared host can **crash the node** (confirmed live 2026-07-06: VM 108's GPU start hung
-    pve-4). `checkPassthroughHostReadiness` now hard-blocks device-missing / identity-mismatch /
-    IOMMU-off before any stop/migrate, warns on the API-invisible `vfio-pci` binding + q35/OVMF +
-    IOMMU-group sharing, and **won't auto-start a GPU unless the guest is q35 AND OVMF** (tightened
-    after a second live pve-4 wedge). See [[Operations & Cluster]] and [[Decisions Log]] in the vault.
-
-## Candidate ideas — proposed 2026-06-29 (post-audit)
-
-Proposed 2026-06-29. Reviewed with the owner: build the **Community-Edition** items first,
-then the **EDU** items. Status below reflects the CE build pass (shipped in **v0.3.4**).
-
-1. **Usage-based billing & showback.** Turn the v0.3.1 `ResourceSample` history into
-   per-tenant monthly cost/showback reports (configurable $/vCPU-hr, $/GB-RAM, $/GB-disk)
-   with CSV/PDF export. _Builds on:_ per-tenant resource history. **→ EDU, planned next.**
-2. **Ephemeral / TTL VMs (auto-expiry).** A VM (or an invite's VMs) gets a lifetime —
-   auto-stop, then auto-delete at expiry, with warning emails first. _Builds on:_ invites +
-   power schedules + notifications. **→ EDU, planned next.**
-3. ~~**Tenant self-service firewall rules.**~~ _Declined by the owner._
-4. **Off-cluster backup targets — covered.** Achieved today by pointing the v0.3.0
-   backup-storage picker at a remote **NFS/CIFS/PBS** storage. _(S3/restic via ProxMate isn't
-   feasible in the API-only model — Proxmox has no API to read vzdump bytes, and S3 isn't a
-   native vzdump target.)_
-5. **VM migration between nodes — DONE (v0.3.4).** Admin-triggered live/offline migrate
-   (`POST /api/vms/:id/migrate`), arch-guardrailed.
-6. ~~**Custom cloud-init user-data editor.**~~ _Dropped — arbitrary user-data needs a host
-   snippet file the API can't write (the Docker/Tailscale extras rely on admin-placed snippets)._
-7. **Additional data disks / volume management — DONE (v0.3.4).** Attach / grow / remove
-   extra disks per VM, quota-aware.
-8. **Quota-increase request workflow — DONE (v0.3.4).** Tenants request from their
-   dashboard; admins approve (applies caps) or deny on the Users page.
-9. **Live updates over the wire — DONE (v0.3.4, via SSE).** One server poll loop fans live
-   stats out to all admins over Server-Sent Events; the monitor falls back to polling.
-10. ~~**Audit-log retention, export & SIEM streaming.**~~ _Declined by the owner._
-11. **Cluster Balancer (DRS-style) — DONE.** Professional-grade workload balancing for the
-    API-only model: memory-load-based, recommend-first then opt-in auto-apply, with arch +
-    anti-affinity + pinning guardrails (Admin → Balancer). _Builds on:_ VM migration (#5) + the
-    arch-aware placement guardrail. See Tier 3 above for the full description.
-
-> **UI:** the admin **Usage** tab is now merged into **Users** (an in-page _Accounts / Usage_
-> toggle), so cluster ops live under one fewer nav entry.
-
-## The v0.5 arc — planned 2026-07-02
-
-Reviewed with the owner; in progress. Continues the DigitalOcean-parity push for tenants.
-
-**Console & UX batch (in progress):**
-
-- **Console power actions** — an Actions menu on the console page (start / pause / resume /
-  restart / shutdown / force stop) so you never leave the terminal to manage the machine.
-  Pause/resume = QEMU suspend (new `POST /api/vms/:id/pause` + `/resume`).
-- **Pop-out text console** — the xterm console in its own chromeless window, with a
-  **"Keep on top"** floating mode (Document Picture-in-Picture, Chrome/Edge) so the
-  terminal stays visible over other windows. Real copy/paste throughout.
-- **Live Insights** — the per-VM metrics view gains a **Live** mode ticking every second
-  (rolling window, y-axis zoomed to the activity); Day/Week stay on Proxmox RRD history.
-- **OS logos** on the VM list and detail pages; **typed-name delete confirmation** with a
-  download-your-backups warning.
-
-**Feature slate (planned):**
-
-1. **Per-VM resource alerts** — tenant-set thresholds (CPU %, memory %, disk-full via the
-   guest agent, unexpected stop) with a sustained-duration + cooldown state machine, delivered
-   as a branded email to the VM owner + the admin webhook, evaluated on the existing 5-minute
-   sampling tick (no extra Proxmox calls). Managed from an **Alerts** card on the VM Settings tab.
-   _Done._
-2. **Rescue mode** — one-click boot from an admin-designated rescue ISO (`POST
-   /api/vms/:id/rescue`), snapshotting the boot config so **exit rescue** restores it; the disk
-   stays attached for repair via the console. Admin picks the rescue ISO in Settings. QEMU-only.
-   _Done._
-3. **Reset guest password** — via the guest agent's dedicated `set-user-password` call
-   (`POST /api/vms/:id/reset-password`; QEMU + agent), for locked-out users on key-only cloud
-   images. CSPRNG password shown once, never stored. _Done._
-4. **Duplicate VM** — self-service full clone of your own **stopped** VM (`POST
-   /api/vms/:id/duplicate`): quota-checked against the owner's caps, isolation firewall
-   re-applied before first boot, from the VM's Actions menu. QEMU-only. _Done._
-5. **Cloud image freshness** — per-template **Refresh** button + an optional **monthly**
-   auto-refresh (admin toggle): rebuild the template from its remembered source URL as a new
-   Proxmox template, repoint the same store entry (deploy links/notes survive), and remove the
-   old template VM — safe because cloud images are full-cloned, so nothing depends on the old
-   base. New deploys always boot a patched image. _Done._
-6. **Backup download links** — when the deployment mounts the backup share
-   (`BACKUP_DOWNLOAD_DIR`) and SMTP is configured, tenants get a **Download** button on each
-   MateState that emails them a **single-use, 1-hour link** (`GET /api/downloads/:token`,
-   public/token-authed, path-traversal-hardened, streams straight off the mount). The feature
-   hides itself when the share isn't mounted. (Direct vzdump streaming via the Proxmox API stays
-   impossible — this reads the file off the mount instead.) _Done._
+- **Tenant self-service firewall rules** — declined by the owner (curated presets could revisit it).
+- **Audit-log retention/export/SIEM streaming** — declined by the owner.
+- **Custom cloud-init user-data editor** — dropped (arbitrary user-data needs a host snippet file the
+  API can't write).
+- **Automated public ingress** — left as documented manual setup (collides with API-only + isolation).
+- **S3/restic backup targets** — not feasible (Proxmox has no API to read vzdump bytes; NFS/CIFS/PBS
+  remote storage covers off-cluster backups instead).
