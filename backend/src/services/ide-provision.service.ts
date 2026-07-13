@@ -45,6 +45,15 @@ const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 const IDE_GUEST_PORT = Number(process.env['IDE_GUEST_PORT'] || 8080);
 
 /**
+ * Pinned in-guest tool versions — the bootstrap installs EXACTLY these, so a new
+ * upstream release can't silently break provisioning (the reverse proxy also
+ * depends on code-server's relative-URL behavior, verified against this line).
+ * Bump deliberately after testing a live install, or override per-deploy via env.
+ */
+export const IDE_CODE_SERVER_VERSION = process.env['IDE_CODE_SERVER_VERSION'] || '4.128.0';
+export const IDE_OPENCODE_VERSION = process.env['IDE_OPENCODE_VERSION'] || '1.17.18';
+
+/**
  * Minimum guest RAM (MB) to install the IDE onto. code-server + the OpenCode
  * agent spike memory during install/first-open — 4 GB OOMs and wedges the VM
  * (steady-state is light, but the transient isn't). 8 GB is the proven-safe
@@ -93,10 +102,10 @@ set -e
 export HOME=/root
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export DEBIAN_FRONTEND=noninteractive
-echo "[proxmate-ide] installing code-server..."
-curl -fsSL https://code-server.dev/install.sh | sh
-echo "[proxmate-ide] installing OpenCode..."
-HOME=/root sh -c 'curl -fsSL https://opencode.ai/install | bash'
+echo "[proxmate-ide] installing code-server ${IDE_CODE_SERVER_VERSION}..."
+curl -fsSL https://code-server.dev/install.sh | sh -s -- --version ${IDE_CODE_SERVER_VERSION}
+echo "[proxmate-ide] installing OpenCode ${IDE_OPENCODE_VERSION}..."
+HOME=/root sh -c 'curl -fsSL https://opencode.ai/install | bash -s -- --version ${IDE_OPENCODE_VERSION}'
 install -m 0755 /root/.opencode/bin/opencode /usr/local/bin/opencode
 mkdir -p /root/.local/share/code-server/User /root/.local/share/code-server/extensions/proxmate-ide-autostart /root/.config/opencode
 cat > /root/.local/share/code-server/User/settings.json <<'PMEOF_SETTINGS'

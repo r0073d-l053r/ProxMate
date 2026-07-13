@@ -44,6 +44,12 @@ The IDE is installed **lazily** — on the first "Open IDE", ProxMate installs c
 OpenCode into the VM through the QEMU guest agent and opens the editor when it's ready. The VM
 is locked (no stop/delete/console) during the install.
 
+Installs are **version-pinned**: the bootstrap installs the exact code-server and OpenCode
+releases this ProxMate build was verified against (a new upstream release can't silently break
+provisioning). Operators can override per-deploy with the `IDE_CODE_SERVER_VERSION` and
+`IDE_OPENCODE_VERSION` backend env vars; existing guests keep whatever they already run until
+the IDE is reinstalled.
+
 ---
 
 ## For tenants (using it)
