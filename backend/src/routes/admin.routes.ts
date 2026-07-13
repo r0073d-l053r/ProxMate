@@ -57,6 +57,7 @@ import { getNotifyConfig, saveNotifyConfig, sendTestNotification, NOTIFY_EVENTS 
 import * as sso from '../services/sso.service.js';
 import { getIdeConfig, saveIdeConfig, isValidIngressCidr } from '../services/ide.service.js';
 import { probeIdeReachability } from '../services/ide-provision.service.js';
+import { getAppDbBackupConfig, saveAppDbBackupConfig, runAppDbBackup, isValidBackupDir } from '../services/appdb-backup.service.js';
 import { listLlmKeys, getLlmKeyEndpoint } from '../services/tenant-llm-key.service.js';
 import { probeModels } from '../services/ide-gateway.service.js';
 import { listResetRequests, adminResetPassword } from '../services/password-reset.service.js';
@@ -120,7 +121,50 @@ router.get('/settings', async (_req: Request, res: Response) => {
         }
       : { configured: false, callbackUrl: sso.callbackUrl() },
     ide: await getIdeConfig(),
+    appdbBackup: await getAppDbBackupConfig(),
   });
+});
+
+// ─── App-DB backups (ProxMate's own database) ─────────────────
+
+const AppDbBackupSchema = z.object({
+  dir: z
+    .string()
+    .max(500)
+    .refine(isValidBackupDir, 'Must be an absolute path (or empty to disable)'),
+  keep: z.number().int().min(1).max(365).default(7),
+});
+
+router.put('/settings/appdb-backup', async (req: Request, res: Response) => {
+  const parsed = AppDbBackupSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  await saveAppDbBackupConfig(parsed.data);
+  await recordAudit({ action: 'admin.appdb_backup_config', actor: (req as AuthRequest).user, req });
+  res.json({ success: true });
+});
+
+// Take a snapshot right now — proves the directory is writable and the whole
+// path works before trusting the nightly schedule with it.
+router.post('/settings/appdb-backup/run', async (req: Request, res: Response) => {
+  try {
+    const r = await runAppDbBackup();
+    if (!r.ran) {
+      res.status(400).json({ ok: false, error: r.reason ?? 'Backup did not run.' });
+      return;
+    }
+    await recordAudit({
+      action: 'admin.appdb_backup_run',
+      actor: (req as AuthRequest).user,
+      detail: r.file,
+      req,
+    });
+    res.json({ ok: true, file: r.file, pruned: r.pruned ?? 0 });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Backup failed.' });
+  }
 });
 
 // ─── SMTP (email) settings ────────────────────────────────────
