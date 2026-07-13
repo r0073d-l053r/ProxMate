@@ -439,6 +439,8 @@ export interface AdminSettings {
       };
   notify: NotifyConfig;
   ide: IdeSettings;
+  /** ProxMate app-DB backup schedule (dir empty = disabled). */
+  appdbBackup: { dir: string; keep: number };
 }
 
 /** Admin policy for ProxMate IDE (in-guest code-server + OpenCode). */
@@ -470,6 +472,8 @@ export interface IdeSettings {
   sharedModels: IdeSharedModel[];
   gatewayUrl: string;
   hasGatewayKey: boolean;
+  /** Infra source the managed per-VM pinhole admits to the guest IDE port ('' = unset). */
+  ingressCidr: string;
 }
 
 /** What the current user may do with ProxMate IDE (from GET /api/ide/config). */
