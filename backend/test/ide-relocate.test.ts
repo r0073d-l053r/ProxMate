@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // The relocate flow orchestrates proxmox + vm.service calls — mock both modules
 // and drive the pure decision logic (error codes, target intersection).
@@ -55,6 +55,7 @@ import { issueGatewayToken, listModelPickerEntries } from '../src/services/ide-g
 import {
   startIdeProvision,
   planIdeRelocate,
+  probeIdeReachability,
   IdeProvisionError,
   IDE_CODE_SERVER_VERSION,
   IDE_OPENCODE_VERSION,
@@ -153,6 +154,43 @@ describe('startIdeProvision — the bootstrap installs PINNED tool versions', ()
     // Sanity: the pins are real versions, not empty env fallbacks.
     expect(IDE_CODE_SERVER_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
     expect(IDE_OPENCODE_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+});
+
+describe('probeIdeReachability — the admin "test reachability" probe', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('reports a missing IP without dialing anything', async () => {
+    const r = await probeIdeReachability({ ipAddress: null });
+    expect(r.ok).toBe(false);
+    expect(r.target).toBeNull();
+    expect(r.error).toMatch(/no known IP/i);
+  });
+
+  it('reports ok when the guest answers (any HTTP status counts as reachable)', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ status: 302 }) as never;
+    const r = await probeIdeReachability({ ipAddress: '192.168.50.99' });
+    expect(r.ok).toBe(true);
+    expect(r.target).toBe('http://192.168.50.99:8080');
+  });
+
+  it('names the likely firewall/routing cause on a timeout', async () => {
+    const abort = new Error('aborted');
+    abort.name = 'TimeoutError';
+    globalThis.fetch = vi.fn().mockRejectedValue(abort) as never;
+    const r = await probeIdeReachability({ ipAddress: '192.168.50.99' });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/ide_ingress_cidr/);
+  });
+
+  it('surfaces plain connection errors as-is', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED')) as never;
+    const r = await probeIdeReachability({ ipAddress: '192.168.50.99' });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/ECONNREFUSED/);
   });
 });
 

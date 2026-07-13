@@ -266,14 +266,34 @@ export async function startIdeProvision(
 
 /** Is the guest's code-server serving yet? (probe the IDE target, fail-fast). */
 async function probeIdeUp(vm: VirtualMachine): Promise<boolean> {
+  return (await probeIdeReachability(vm)).ok;
+}
+
+/**
+ * Probe the backend→guest IDE path (the same dial the reverse proxy makes) and
+ * say WHY it failed — this is what the admin "test reachability" button reports,
+ * so a wrong `ide_ingress_cidr` / missing pinhole shows up as a timeout here
+ * instead of a silently-blank IDE for the tenant.
+ */
+export async function probeIdeReachability(
+  vm: Pick<VirtualMachine, 'ipAddress'>,
+): Promise<{ ok: boolean; target: string | null; error?: string }> {
   const override = process.env['IDE_TARGET_OVERRIDE'];
   const target = override || (vm.ipAddress ? `http://${vm.ipAddress}:${IDE_GUEST_PORT}` : null);
-  if (!target) return false;
+  if (!target) {
+    return { ok: false, target: null, error: 'The VM has no known IP address to dial.' };
+  }
   try {
-    const r = await fetch(target, { redirect: 'manual', signal: AbortSignal.timeout(3000) });
-    return r.status > 0;
-  } catch {
-    return false;
+    const r = await fetch(target, { redirect: 'manual', signal: AbortSignal.timeout(4000) });
+    if (r.status > 0) return { ok: true, target };
+    return { ok: false, target, error: 'The guest answered with an empty response.' };
+  } catch (e) {
+    const msg = e instanceof Error && e.name === 'TimeoutError'
+      ? 'Timed out — the isolation firewall or routing is likely blocking the backend from reaching the guest (check ide_ingress_cidr and the managed pinhole).'
+      : e instanceof Error
+        ? e.message
+        : 'Connection failed.';
+    return { ok: false, target, error: msg };
   }
 }
 

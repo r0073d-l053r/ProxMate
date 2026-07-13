@@ -55,7 +55,8 @@ import { announcementEmail } from '../lib/email-templates.js';
 import { unsubscribeToken } from '../services/broadcast-optout.service.js';
 import { getNotifyConfig, saveNotifyConfig, sendTestNotification, NOTIFY_EVENTS } from '../services/notify.service.js';
 import * as sso from '../services/sso.service.js';
-import { getIdeConfig, saveIdeConfig } from '../services/ide.service.js';
+import { getIdeConfig, saveIdeConfig, isValidIngressCidr } from '../services/ide.service.js';
+import { probeIdeReachability } from '../services/ide-provision.service.js';
 import { listLlmKeys, getLlmKeyEndpoint } from '../services/tenant-llm-key.service.js';
 import { probeModels } from '../services/ide-gateway.service.js';
 import { listResetRequests, adminResetPassword } from '../services/password-reset.service.js';
@@ -225,6 +226,12 @@ const IdeSchema = z.object({
   // vLLM), so it is deliberately NOT run through the public-URL SSRF shape check.
   gatewayUrl: z.string().max(2000).optional(),
   gatewayKey: z.string().max(500).optional(), // kept if blank
+  // The infra source the managed per-VM pinhole admits to the guest IDE port.
+  ingressCidr: z
+    .string()
+    .max(64)
+    .refine(isValidIngressCidr, 'Must be an IPv4 CIDR like 192.168.50.228/32 (or empty to clear)')
+    .optional(),
 });
 
 router.put('/settings/ide', async (req: Request, res: Response) => {
@@ -256,6 +263,35 @@ router.post('/ide/test-source', async (req: Request, res: Response) => {
   }
   const probe = await probeModels(ep.baseUrl, ep.apiKey);
   res.json({ ok: probe.ok, models: probe.models, error: probe.error });
+});
+
+// ─── IDE ingress reachability test ────────────────────────────
+// Dials a guest's IDE port from the backend — the exact path the reverse proxy
+// uses — so a wrong `ide_ingress_cidr` / missing pinhole / broken route shows up
+// here as a described failure instead of a silently-blank IDE for the tenant.
+// Probes the given VM, or the best candidate (an IDE-ready running VM, else any
+// running QEMU VM with a known IP).
+router.post('/ide/test-reachability', async (req: Request, res: Response) => {
+  const vmId = typeof req.body?.vmId === 'string' ? req.body.vmId : '';
+  const vm = vmId
+    ? await prisma.virtualMachine.findUnique({ where: { id: vmId } })
+    : ((await prisma.virtualMachine.findFirst({
+        where: { type: 'qemu', status: 'running', ideState: 'ready', ipAddress: { not: null } },
+        orderBy: { updatedAt: 'desc' },
+      })) ??
+      (await prisma.virtualMachine.findFirst({
+        where: { type: 'qemu', status: 'running', ipAddress: { not: null } },
+        orderBy: { updatedAt: 'desc' },
+      })));
+  if (!vm) {
+    res.status(404).json({
+      ok: false,
+      error: 'No running VM with a known IP to probe — start one (ideally with the IDE installed) and retry.',
+    });
+    return;
+  }
+  const probe = await probeIdeReachability(vm);
+  res.json({ ok: probe.ok, vmName: vm.name, target: probe.target, error: probe.error });
 });
 
 // ─── SSO (OIDC) settings ──────────────────────────────────────

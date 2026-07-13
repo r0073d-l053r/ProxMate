@@ -47,6 +47,8 @@ export function IdeSettingsCard() {
   // model ids reachable at each source key's endpoint, filled in on "Test".
   const [modelsByKey, setModelsByKey] = useState<Record<string, string[]>>({});
   const [testing, setTesting] = useState<string | null>(null);
+  const [ingressCidr, setIngressCidr] = useState("");
+  const [probing, setProbing] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -56,6 +58,7 @@ export function IdeSettingsCard() {
         setEnabled(ide.enabled);
         setAllowByoKeys(ide.allowByoKeys);
         setModels(ide.localModels ?? []);
+        setIngressCidr(ide.ingressCidr ?? "");
       }),
       api.get<IdeLlmKey[]>("/admin/ide/sources").then((r) => setSources(r.data)),
     ])
@@ -103,13 +106,37 @@ export function IdeSettingsCard() {
       }));
     setSaving(true);
     try {
-      await api.put("/admin/settings/ide", { enabled, allowByoKeys, localModels: clean });
+      await api.put("/admin/settings/ide", {
+        enabled,
+        allowByoKeys,
+        localModels: clean,
+        ingressCidr: ingressCidr.trim(),
+      });
       setModels(clean);
       toast.success("ProxMate IDE settings saved.");
     } catch (err) {
       toast.error(apiError(err));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function testReachability() {
+    setProbing(true);
+    try {
+      const r = await api.post<{ ok: boolean; vmName?: string; target?: string | null; error?: string }>(
+        "/admin/ide/test-reachability",
+        {},
+      );
+      if (r.data.ok) {
+        toast.success(`Reachable — the backend dialed ${r.data.vmName}'s IDE port successfully.`);
+      } else {
+        toast.error(r.data.error ?? "The probe failed.");
+      }
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setProbing(false);
     }
   }
 
@@ -160,6 +187,31 @@ export function IdeSettingsCard() {
             </label>
           </div>
         </div>
+
+        <FormField
+          label="IDE ingress source (CIDR)"
+          hint="The infrastructure address the per-VM firewall pinhole admits to each guest's IDE port — usually the ProxMate host or the subnet-router node, e.g. 192.168.50.228/32. Leave empty on a flat network with isolation off."
+        >
+          <div className="flex gap-2">
+            <Input
+              value={ingressCidr}
+              disabled={loading}
+              onChange={(e) => setIngressCidr(e.target.value)}
+              placeholder="e.g. 192.168.50.228/32"
+              className="font-mono"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              disabled={probing || loading}
+              onClick={testReachability}
+              title="Dial a running VM's IDE port from the backend — the exact path the IDE proxy uses"
+            >
+              {probing ? <Loader2 className="animate-spin" /> : <PlugZap />}
+              Test reachability
+            </Button>
+          </div>
+        </FormField>
 
         <div className="rounded-lg border p-3">
           <p className="text-sm font-medium">Local models</p>
