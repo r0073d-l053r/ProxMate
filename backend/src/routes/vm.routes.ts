@@ -121,16 +121,20 @@ function rejectIfLocked(vm: { ideState: string | null; deployState: string | nul
  * Resize lock: an admin-managed VM (deploy-for-tenant) may be RESIZED only by an
  * admin — the owning tenant operates it as-is. This also closes a quota bypass:
  * a tenant who could grow a quota-exempt grant would sidestep quota entirely
- * (quotaExempt implies adminManaged, but we check both defensively). Returns true
- * (and sends 403) when the non-admin caller may not change this VM's size.
+ * (quotaExempt implies adminManaged, but we check both defensively). The same
+ * lock covers REBUILD: re-imaging wipes the admin's deployment, and a rebuild to
+ * a template with a larger base disk grows the allocation — on an exempt grant
+ * that growth would never touch quota accounting. Returns true (and sends 403)
+ * when the non-admin caller may not perform `verb` on this VM.
  */
 export function rejectIfSizeLocked(
   vm: { adminManaged: boolean; quotaExempt: boolean },
   user: { role: string },
   res: Response,
+  verb: 'resize' | 'rebuild' = 'resize',
 ): boolean {
   if ((vm.adminManaged || vm.quotaExempt) && user.role !== 'admin') {
-    res.status(403).json({ error: 'This VM was set up by an admin — only an admin can resize it.' });
+    res.status(403).json({ error: `This VM was set up by an admin — only an admin can ${verb} it.` });
     return true;
   }
   return false;
@@ -1319,6 +1323,9 @@ router.post('/:id/rebuild', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Rebuild isn’t available for containers. Delete and recreate it instead.' });
     return;
   }
+  // Same lock as resize: re-imaging an admin-deployed VM (and any template-driven
+  // disk growth that comes with it) is admin-only — the tenant uses it as-is.
+  if (rejectIfSizeLocked(vm, authUser, res, 'rebuild')) return;
 
   const parsed = RebuildSchema.safeParse(req.body);
   if (!parsed.success) {

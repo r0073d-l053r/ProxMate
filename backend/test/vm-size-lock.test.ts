@@ -49,3 +49,36 @@ describe('rejectIfSizeLocked — admin-managed VMs are resize-locked to admins',
     expect(res.statusCode).toBe(0);
   });
 });
+
+describe('rejectIfSizeLocked — the same lock covers REBUILD (re-image wipes the admin deploy; template disk growth would bypass quota on exempt grants)', () => {
+  it('blocks a non-admin rebuild of an admin-managed VM with a rebuild-specific message', () => {
+    const res = fakeRes();
+    expect(
+      rejectIfSizeLocked({ adminManaged: true, quotaExempt: false }, { role: 'user' }, res, 'rebuild'),
+    ).toBe(true);
+    expect(res.statusCode).toBe(403);
+    expect((res.body as { error: string }).error).toMatch(/only an admin can rebuild/i);
+  });
+
+  it('blocks a non-admin rebuild of a quota-exempt grant (closes the template disk-growth bypass)', () => {
+    const res = fakeRes();
+    expect(
+      rejectIfSizeLocked({ adminManaged: false, quotaExempt: true }, { role: 'user' }, res, 'rebuild'),
+    ).toBe(true);
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('lets an ADMIN rebuild an admin-managed VM', () => {
+    const res = fakeRes();
+    expect(
+      rejectIfSizeLocked({ adminManaged: true, quotaExempt: true }, { role: 'admin' }, res, 'rebuild'),
+    ).toBe(false);
+    expect(res.statusCode).toBe(0);
+  });
+
+  it('the default verb stays "resize" (message unchanged for existing callers)', () => {
+    const res = fakeRes();
+    rejectIfSizeLocked({ adminManaged: true, quotaExempt: false }, { role: 'user' }, res);
+    expect((res.body as { error: string }).error).toMatch(/only an admin can resize/i);
+  });
+});
