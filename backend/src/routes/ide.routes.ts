@@ -34,10 +34,17 @@ router.use(requireAuth);
  * and if the base is http the edge (Cloudflare/Caddy) 301-redirects to https —
  * which downgrades the POST to a GET, dropping the body + Bearer token, so the
  * request misses the POST-only gateway route and 401s as "missing session".
- * `req.protocol` is http behind the tunnel (trust proxy is off), so trust the
- * `x-forwarded-proto` the edge sets instead.
+ *
+ * Header sniffing is NOT reliable for this: an intermediate proxy that isn't
+ * configured to trust upstream `X-Forwarded-*` REPLACES `x-forwarded-proto`
+ * with its own (http) view — live-confirmed on the cloudflared→Caddy chain,
+ * which minted `http://` gateway URLs into guests. So the operator-configured
+ * `BACKEND_PUBLIC_URL` (the deployment runbook sets it) wins outright; the
+ * header/protocol derivation is only the fallback for bare dev setups.
  */
-function publicBaseUrl(req: Request): string {
+export function publicBaseUrl(req: Request): string {
+  const configured = (process.env['BACKEND_PUBLIC_URL'] ?? '').trim().replace(/\/+$/, '');
+  if (configured) return configured;
   const fwd = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0]!.trim();
   const proto = fwd || req.protocol;
   return `${proto}://${req.get('host') ?? 'localhost'}`;
