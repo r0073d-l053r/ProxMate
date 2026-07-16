@@ -58,6 +58,7 @@ import * as sso from '../services/sso.service.js';
 import { getIdeConfig, saveIdeConfig, isValidIngressCidr } from '../services/ide.service.js';
 import { probeIdeReachability } from '../services/ide-provision.service.js';
 import { getAppDbBackupConfig, saveAppDbBackupConfig, runAppDbBackup, isValidBackupDir } from '../services/appdb-backup.service.js';
+import { isKioskPinSet, setKioskPin, isValidKioskPin } from '../services/kiosk.service.js';
 import { listLlmKeys, getLlmKeyEndpoint } from '../services/tenant-llm-key.service.js';
 import { probeModels } from '../services/ide-gateway.service.js';
 import { listResetRequests, adminResetPassword } from '../services/password-reset.service.js';
@@ -122,7 +123,31 @@ router.get('/settings', async (_req: Request, res: Response) => {
       : { configured: false, callbackUrl: sso.callbackUrl() },
     ide: await getIdeConfig(),
     appdbBackup: await getAppDbBackupConfig(),
+    kiosk: { pinSet: await isKioskPinSet() },
   });
+});
+
+// ─── Kiosk mode exit lock ─────────────────────────────────────
+// The exit PIN a kiosk panel requires to leave full-screen mode. Stored hashed;
+// only "is it set" is ever exposed. Empty string clears the lock.
+const KioskSchema = z.object({
+  pin: z.string().max(64).refine((v) => v === '' || isValidKioskPin(v), '4–12 digits (or empty to clear)'),
+});
+
+router.put('/settings/kiosk', async (req: Request, res: Response) => {
+  const parsed = KioskSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  await setKioskPin(parsed.data.pin);
+  await recordAudit({
+    action: 'admin.kiosk_config',
+    actor: (req as AuthRequest).user,
+    detail: parsed.data.pin === '' ? 'exit PIN cleared' : 'exit PIN set',
+    req,
+  });
+  res.json({ success: true });
 });
 
 // ─── App-DB backups (ProxMate's own database) ─────────────────

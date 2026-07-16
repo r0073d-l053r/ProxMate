@@ -14,6 +14,7 @@ import { RescueIsoCard } from "@/components/admin/rescue-iso-card";
 import { TemplateRefreshCard } from "@/components/admin/template-refresh-card";
 import { IdeSettingsCard } from "@/components/admin/ide-settings-card";
 import { AppDbBackupCard } from "@/components/admin/appdb-backup-card";
+import { KioskSettingsCard } from "@/components/admin/kiosk-settings-card";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -440,6 +441,9 @@ export default function SettingsPage() {
 
       {/* App-DB backups — ProxMate's own database, separate from MateStates. */}
       <AppDbBackupCard />
+
+      {/* Kiosk-mode exit lock. */}
+      <KioskSettingsCard />
 
       {/* Network isolation */}
       {isolation && (

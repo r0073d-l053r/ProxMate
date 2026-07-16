@@ -25,7 +25,8 @@ import {
 } from '../lib/cookies.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireAuthOrEnrollment } from '../middleware/enrollment.js';
-import { authLimiter, publicTokenLimiter } from '../middleware/rate-limit.js';
+import { authLimiter, publicTokenLimiter, kioskExitLimiter } from '../middleware/rate-limit.js';
+import { verifyKioskPin } from '../services/kiosk.service.js';
 import { recordAudit } from '../services/audit.service.js';
 import { isAccountLocked, registerFailedLogin, clearFailedLogins } from '../services/account-lockout.service.js';
 import { requestReset, resetWithToken } from '../services/password-reset.service.js';
@@ -225,6 +226,96 @@ router.post('/logout', requireAuth, async (req: Request, res: Response) => {
   res.json({ success: true });
 });
 
+// ─── POST /api/auth/session/refresh ───────────────────────────
+// Slide the session forward: mint a fresh 24h session for the SAME user, set the
+// new cookies, and drop the old session row. Sessions are a fixed 24h JWT with no
+// sliding renewal, so a long-lived unattended surface (the kiosk panel) would be
+// logged out mid-use every 24h; its heartbeat calls this to stay alive. Grants no
+// new privileges — it only re-ups the caller's own already-valid session.
+router.post('/session/refresh', requireAuth, async (req: Request, res: Response) => {
+  const ar = req as AuthRequest;
+  const { token, csrfToken, expiresAt } = await createSession(ar.user.id);
+  setAuthCookies(res, token, csrfToken, expiresAt);
+  if (ar.sessionToken && ar.sessionToken !== token) {
+    await prisma.session.deleteMany({ where: { token: ar.sessionToken } });
+  }
+  res.json({ ok: true, expiresAt });
+});
+
+// ─── POST /api/auth/kiosk-exit ────────────────────────────────
+// Re-auth check to LEAVE kiosk mode (the panel is admin-only + unattended, so the
+// exit gate proves a human present is the admin). Passkey unlock uses the normal
+// /passkeys/auth/verify flow; this covers the PIN and the account-password
+// fallback. Session-authed (the kiosk already holds a valid admin session) +
+// tightly rate-limited so a short PIN can't be swept by a passer-by.
+const KioskExitSchema = z.object({
+  method: z.enum(['pin', 'password']),
+  value: z.string().min(1).max(128),
+});
+router.post('/kiosk-exit', kioskExitLimiter, requireAuth, async (req: Request, res: Response) => {
+  const ar = req as AuthRequest;
+  if (ar.user.role !== 'admin') {
+    res.status(403).json({ error: 'Kiosk mode is admin-only.' });
+    return;
+  }
+  const parsed = KioskExitSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Enter your PIN or password.' });
+    return;
+  }
+  let ok = false;
+  if (parsed.data.method === 'pin') {
+    ok = await verifyKioskPin(parsed.data.value);
+  } else {
+    const user = await prisma.user.findUnique({ where: { id: ar.user.id } });
+    ok = await verifyPasswordSafe(parsed.data.value, user?.passwordHash ?? null);
+  }
+  if (!ok) {
+    res.status(401).json({ error: 'Incorrect — try again.' });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+// Kiosk exit via passkey. Unlike the passwordless-login passkey routes, these
+// verify against the CURRENT session's admin and do NOT mint a new session — so
+// presenting some other person's passkey can't downgrade the kiosk's session; it
+// simply won't unlock. Session-authed + admin-only + rate-limited.
+router.post('/kiosk-exit/passkey-options', kioskExitLimiter, requireAuth, async (req: Request, res: Response) => {
+  if ((req as AuthRequest).user.role !== 'admin') {
+    res.status(403).json({ error: 'Kiosk mode is admin-only.' });
+    return;
+  }
+  const options = await passkeys.authenticationOptions();
+  setChallengeCookie(res, options.challenge);
+  res.json(options);
+});
+
+router.post('/kiosk-exit/passkey-verify', kioskExitLimiter, requireAuth, async (req: Request, res: Response) => {
+  const ar = req as AuthRequest;
+  if (ar.user.role !== 'admin') {
+    res.status(403).json({ error: 'Kiosk mode is admin-only.' });
+    return;
+  }
+  const challenge = req.cookies?.[WEBAUTHN_COOKIE];
+  if (!challenge) {
+    res.status(400).json({ error: 'Passkey challenge expired — please try again.' });
+    return;
+  }
+  try {
+    const userId = await passkeys.verifyAuthentication(req.body, challenge);
+    clearChallengeCookie(res);
+    // Must be THIS admin's own passkey — no session is issued either way.
+    if (userId !== ar.user.id) {
+      res.status(401).json({ error: "That passkey isn't for this account." });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(401).json({ error: err instanceof Error ? err.message : 'Passkey check failed' });
+  }
+});
+
 // ─── GET /api/auth/me ─────────────────────────────────────────
 
 router.get('/me', requireAuth, async (req: Request, res: Response) => {
@@ -248,6 +339,9 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
       displayName: user.displayName,
       twoFactorEnabled: user.twoFactorEnabled,
       require2fa: user.require2fa,
+      // Lets the kiosk unlock dialog offer the passkey button only when the
+      // admin actually has one registered.
+      hasPasskeys: (await prisma.passkey.count({ where: { userId: user.id } })) > 0,
       mfaSetupRequired: await isMfaSetupRequired(user.id),
       broadcastOptOut: user.broadcastOptOut,
       createdAt: user.createdAt,
