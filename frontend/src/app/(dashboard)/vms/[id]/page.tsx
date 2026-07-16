@@ -476,6 +476,9 @@ export default function VmDetailPage() {
   // An admin-provisioned VM (deploy-for-tenant) is sized by the admin — the owning
   // tenant may operate it but not resize it (backend 403s too). Admins always can.
   const canResize = canConfigure && (isAdmin || !vm.adminManaged);
+  // Rebuild wipes the admin's deployment (and template growth re-sizes the disk),
+  // so it carries the same admin-only lock (backend 403s too).
+  const canRebuild = isAdmin || !vm.adminManaged;
   const canBackups = caps.has("backups");
   const canIde = caps.has("ide");
   // Owner-exclusive surface (delete, rebuild, shares, migrate): never for shares.
@@ -666,8 +669,9 @@ export default function VmDetailPage() {
                       Resize
                     </DropdownMenuItem>
                   )}
-                  {/* Rebuild re-images the disk — owner/admin only, like Delete. */}
-                  {!isLxc && isManager && (
+                  {/* Rebuild re-images the disk — owner/admin only, like Delete,
+                      and admin-only on admin-managed VMs (same lock as resize). */}
+                  {!isLxc && isManager && canRebuild && (
                     <DropdownMenuItem disabled={busy} onClick={() => setDialog("rebuild")}>
                       <RotateCcw />
                       Rebuild
@@ -1075,7 +1079,7 @@ export default function VmDetailPage() {
                 <CardTitle className="text-sm text-destructive">Danger zone</CardTitle>
               </CardHeader>
               <CardContent className="divide-y">
-                {!isLxc && (
+                {!isLxc && canRebuild && (
                   <SettingRow
                     title="Rebuild"
                     description="Re-image from a fresh ISO or template. Keeps name and resources — erases the current disk."

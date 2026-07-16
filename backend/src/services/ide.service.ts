@@ -72,6 +72,24 @@ export interface IdeConfig {
   gatewayUrl: string;
   /** Whether a legacy upstream gateway key is stored (the secret is never returned). */
   hasGatewayKey: boolean;
+  /**
+   * The infrastructure source (backend host / subnet router) that the managed
+   * per-VM firewall pinhole admits to the guest's IDE port. Empty = no pinhole
+   * is added (fine on a flat network with isolation off; on an isolated cluster
+   * the IDE stays unreachable until this is set).
+   */
+  ingressCidr: string;
+}
+
+/** Valid `ide_ingress_cidr`: empty (clear it) or an IPv4 CIDR like 192.168.50.228/32. */
+export function isValidIngressCidr(v: string): boolean {
+  const s = v.trim();
+  if (s === '') return true;
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/.exec(s);
+  if (!m) return false;
+  const octets = m.slice(1, 5).map(Number);
+  const prefix = Number(m[5]);
+  return octets.every((o) => o >= 0 && o <= 255) && prefix >= 0 && prefix <= 32;
 }
 
 const TIERS: readonly IdeTier[] = ['off', 'admin', 'tenants'];
@@ -133,13 +151,14 @@ function parseLocalModels(v: string | null): LocalModel[] {
 
 /** Full IDE policy for the admin settings view (upstream secret masked to a boolean). */
 export async function getIdeConfig(): Promise<IdeConfig> {
-  const [enabled, byo, local, models, gatewayUrl, gatewayKey] = await Promise.all([
+  const [enabled, byo, local, models, gatewayUrl, gatewayKey, ingressCidr] = await Promise.all([
     getConfig('ide_enabled'),
     getConfig('ide_allow_byo_keys'),
     getConfig('ide_local_models'),
     getConfig('ide_shared_models'),
     getConfig('ide_gateway_url'),
     getConfig('ide_gateway_key'),
+    getConfig('ide_ingress_cidr'),
   ]);
   return {
     enabled: parseTier(enabled),
@@ -148,6 +167,7 @@ export async function getIdeConfig(): Promise<IdeConfig> {
     sharedModels: parseSharedModels(models),
     gatewayUrl: gatewayUrl ?? '',
     hasGatewayKey: !!gatewayKey,
+    ingressCidr: ingressCidr?.trim() ?? '',
   };
 }
 
@@ -162,6 +182,7 @@ export async function saveIdeConfig(data: {
   sharedModels?: SharedModel[];
   gatewayUrl?: string;
   gatewayKey?: string; // blank = keep existing
+  ingressCidr?: string; // '' clears it (undefined = leave untouched)
 }): Promise<void> {
   await setConfig('ide_enabled', data.enabled);
   await setConfig('ide_allow_byo_keys', String(data.allowByoKeys));
@@ -177,6 +198,9 @@ export async function saveIdeConfig(data: {
   }
   if (data.gatewayKey && data.gatewayKey.trim().length > 0) {
     await setConfig('ide_gateway_key', data.gatewayKey.trim(), true);
+  }
+  if (data.ingressCidr !== undefined) {
+    await setConfig('ide_ingress_cidr', data.ingressCidr.trim());
   }
 }
 

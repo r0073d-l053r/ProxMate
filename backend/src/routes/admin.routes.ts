@@ -55,7 +55,10 @@ import { announcementEmail } from '../lib/email-templates.js';
 import { unsubscribeToken } from '../services/broadcast-optout.service.js';
 import { getNotifyConfig, saveNotifyConfig, sendTestNotification, NOTIFY_EVENTS } from '../services/notify.service.js';
 import * as sso from '../services/sso.service.js';
-import { getIdeConfig, saveIdeConfig } from '../services/ide.service.js';
+import { getIdeConfig, saveIdeConfig, isValidIngressCidr } from '../services/ide.service.js';
+import { probeIdeReachability } from '../services/ide-provision.service.js';
+import { getAppDbBackupConfig, saveAppDbBackupConfig, runAppDbBackup, isValidBackupDir } from '../services/appdb-backup.service.js';
+import { isKioskPinSet, setKioskPin, isValidKioskPin } from '../services/kiosk.service.js';
 import { listLlmKeys, getLlmKeyEndpoint } from '../services/tenant-llm-key.service.js';
 import { probeModels } from '../services/ide-gateway.service.js';
 import { listResetRequests, adminResetPassword } from '../services/password-reset.service.js';
@@ -119,7 +122,74 @@ router.get('/settings', async (_req: Request, res: Response) => {
         }
       : { configured: false, callbackUrl: sso.callbackUrl() },
     ide: await getIdeConfig(),
+    appdbBackup: await getAppDbBackupConfig(),
+    kiosk: { pinSet: await isKioskPinSet() },
   });
+});
+
+// ─── Kiosk mode exit lock ─────────────────────────────────────
+// The exit PIN a kiosk panel requires to leave full-screen mode. Stored hashed;
+// only "is it set" is ever exposed. Empty string clears the lock.
+const KioskSchema = z.object({
+  pin: z.string().max(64).refine((v) => v === '' || isValidKioskPin(v), '4–12 digits (or empty to clear)'),
+});
+
+router.put('/settings/kiosk', async (req: Request, res: Response) => {
+  const parsed = KioskSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  await setKioskPin(parsed.data.pin);
+  await recordAudit({
+    action: 'admin.kiosk_config',
+    actor: (req as AuthRequest).user,
+    detail: parsed.data.pin === '' ? 'exit PIN cleared' : 'exit PIN set',
+    req,
+  });
+  res.json({ success: true });
+});
+
+// ─── App-DB backups (ProxMate's own database) ─────────────────
+
+const AppDbBackupSchema = z.object({
+  dir: z
+    .string()
+    .max(500)
+    .refine(isValidBackupDir, 'Must be an absolute path (or empty to disable)'),
+  keep: z.number().int().min(1).max(365).default(7),
+});
+
+router.put('/settings/appdb-backup', async (req: Request, res: Response) => {
+  const parsed = AppDbBackupSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  await saveAppDbBackupConfig(parsed.data);
+  await recordAudit({ action: 'admin.appdb_backup_config', actor: (req as AuthRequest).user, req });
+  res.json({ success: true });
+});
+
+// Take a snapshot right now — proves the directory is writable and the whole
+// path works before trusting the nightly schedule with it.
+router.post('/settings/appdb-backup/run', async (req: Request, res: Response) => {
+  try {
+    const r = await runAppDbBackup();
+    if (!r.ran) {
+      res.status(400).json({ ok: false, error: r.reason ?? 'Backup did not run.' });
+      return;
+    }
+    await recordAudit({
+      action: 'admin.appdb_backup_run',
+      actor: (req as AuthRequest).user,
+      detail: r.file,
+      req,
+    });
+    res.json({ ok: true, file: r.file, pruned: r.pruned ?? 0 });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Backup failed.' });
+  }
 });
 
 // ─── SMTP (email) settings ────────────────────────────────────
@@ -225,6 +295,12 @@ const IdeSchema = z.object({
   // vLLM), so it is deliberately NOT run through the public-URL SSRF shape check.
   gatewayUrl: z.string().max(2000).optional(),
   gatewayKey: z.string().max(500).optional(), // kept if blank
+  // The infra source the managed per-VM pinhole admits to the guest IDE port.
+  ingressCidr: z
+    .string()
+    .max(64)
+    .refine(isValidIngressCidr, 'Must be an IPv4 CIDR like 192.168.50.228/32 (or empty to clear)')
+    .optional(),
 });
 
 router.put('/settings/ide', async (req: Request, res: Response) => {
@@ -256,6 +332,35 @@ router.post('/ide/test-source', async (req: Request, res: Response) => {
   }
   const probe = await probeModels(ep.baseUrl, ep.apiKey);
   res.json({ ok: probe.ok, models: probe.models, error: probe.error });
+});
+
+// ─── IDE ingress reachability test ────────────────────────────
+// Dials a guest's IDE port from the backend — the exact path the reverse proxy
+// uses — so a wrong `ide_ingress_cidr` / missing pinhole / broken route shows up
+// here as a described failure instead of a silently-blank IDE for the tenant.
+// Probes the given VM, or the best candidate (an IDE-ready running VM, else any
+// running QEMU VM with a known IP).
+router.post('/ide/test-reachability', async (req: Request, res: Response) => {
+  const vmId = typeof req.body?.vmId === 'string' ? req.body.vmId : '';
+  const vm = vmId
+    ? await prisma.virtualMachine.findUnique({ where: { id: vmId } })
+    : ((await prisma.virtualMachine.findFirst({
+        where: { type: 'qemu', status: 'running', ideState: 'ready', ipAddress: { not: null } },
+        orderBy: { updatedAt: 'desc' },
+      })) ??
+      (await prisma.virtualMachine.findFirst({
+        where: { type: 'qemu', status: 'running', ipAddress: { not: null } },
+        orderBy: { updatedAt: 'desc' },
+      })));
+  if (!vm) {
+    res.status(404).json({
+      ok: false,
+      error: 'No running VM with a known IP to probe — start one (ideally with the IDE installed) and retry.',
+    });
+    return;
+  }
+  const probe = await probeIdeReachability(vm);
+  res.json({ ok: probe.ok, vmName: vm.name, target: probe.target, error: probe.error });
 });
 
 // ─── SSO (OIDC) settings ──────────────────────────────────────

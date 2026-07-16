@@ -56,6 +56,20 @@ export const publicTokenLimiter = createRateLimiter({
 });
 
 /**
+ * Tight throttle for the kiosk exit-unlock PIN/password check. The kiosk is an
+ * UNATTENDED, already-authenticated admin session on a physical panel; the exit
+ * gate proves a human at the panel is the admin. A short numeric PIN would be
+ * trivially brute-forceable by a passer-by without this. Deliberately strict:
+ * a real admin needs a handful of tries, an attacker gets far too few to sweep
+ * even a 4-digit space. Keyed by IP; passkey unlock (WebAuthn) needs no limit.
+ */
+export const kioskExitLimiter = createRateLimiter({
+  windowMs: Number(process.env.KIOSK_EXIT_RATE_LIMIT_WINDOW_MS ?? 5 * 60 * 1000),
+  max: Number(process.env.KIOSK_EXIT_RATE_LIMIT_MAX ?? 10),
+  message: 'Too many unlock attempts — wait a few minutes and try again.',
+});
+
+/**
  * Pre-auth throttle for the IDE LLM gateway. The gateway is exempt from
  * apiWriteLimiter (chat streaming must not be throttled mid-conversation), so
  * without this the Bearer-token verification — a hash + DB lookup on every

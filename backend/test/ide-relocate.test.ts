@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // The relocate flow orchestrates proxmox + vm.service calls — mock both modules
 // and drive the pure decision logic (error codes, target intersection).
@@ -43,6 +43,7 @@ import type { VirtualMachine } from '@prisma/client';
 import {
   guestAgentPing,
   guestExecOutput,
+  guestFileWrite,
   ensureHostCpu,
   getNodeAvxMap,
   migratableTargets,
@@ -50,7 +51,15 @@ import {
   pickBestNode,
 } from '../src/services/proxmox.service.js';
 import { getConfig } from '../src/services/config.service.js';
-import { startIdeProvision, planIdeRelocate, IdeProvisionError } from '../src/services/ide-provision.service.js';
+import { issueGatewayToken, listModelPickerEntries } from '../src/services/ide-gateway.service.js';
+import {
+  startIdeProvision,
+  planIdeRelocate,
+  probeIdeReachability,
+  IdeProvisionError,
+  IDE_CODE_SERVER_VERSION,
+  IDE_OPENCODE_VERSION,
+} from '../src/services/ide-provision.service.js';
 
 const ping = vi.mocked(guestAgentPing);
 const execOut = vi.mocked(guestExecOutput);
@@ -117,6 +126,71 @@ describe('startIdeProvision — AVX guardrail codes', () => {
     avxMap.mockResolvedValue(new Map([['n-old', 'unknown']]) as never);
     const err = await provisionErr(vm());
     expect(err.code).toBe('reboot_required');
+  });
+});
+
+describe('startIdeProvision — the bootstrap installs PINNED tool versions', () => {
+  it('ships a bootstrap that pins code-server and OpenCode (never "latest")', async () => {
+    execOut.mockResolvedValue({ exitcode: 0, stdout: 'yes', stderr: '' } as never); // AVX ok
+    vi.mocked(issueGatewayToken).mockResolvedValue({
+      token: 'tok_abc123',
+      baseUrl: 'https://x/api/ide/vm-1/llm/v1',
+    } as never);
+    vi.mocked(listModelPickerEntries).mockResolvedValue([] as never);
+
+    const state = await startIdeProvision(vm(), { id: 'u1', role: 'user' }, 'https://x/api');
+    expect(state).toBe('installing');
+
+    // The script is shipped base64 via the guest agent — decode what really lands.
+    const write = vi.mocked(guestFileWrite).mock.calls[0];
+    expect(write?.[2]).toBe('/tmp/pmide-bootstrap.b64');
+    const script = Buffer.from(String(write?.[3]), 'base64').toString('utf8');
+
+    expect(script).toContain(`install.sh | sh -s -- --version ${IDE_CODE_SERVER_VERSION}`);
+    expect(script).toContain(`--version ${IDE_OPENCODE_VERSION}`);
+    // No unpinned fallbacks left behind.
+    expect(script).not.toMatch(/install\.sh \| sh\s*$/m);
+    expect(script).not.toMatch(/opencode\.ai\/install \| bash\s*'?\s*$/m);
+    // Sanity: the pins are real versions, not empty env fallbacks.
+    expect(IDE_CODE_SERVER_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(IDE_OPENCODE_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+});
+
+describe('probeIdeReachability — the admin "test reachability" probe', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('reports a missing IP without dialing anything', async () => {
+    const r = await probeIdeReachability({ ipAddress: null });
+    expect(r.ok).toBe(false);
+    expect(r.target).toBeNull();
+    expect(r.error).toMatch(/no known IP/i);
+  });
+
+  it('reports ok when the guest answers (any HTTP status counts as reachable)', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ status: 302 }) as never;
+    const r = await probeIdeReachability({ ipAddress: '192.168.50.99' });
+    expect(r.ok).toBe(true);
+    expect(r.target).toBe('http://192.168.50.99:8080');
+  });
+
+  it('names the likely firewall/routing cause on a timeout', async () => {
+    const abort = new Error('aborted');
+    abort.name = 'TimeoutError';
+    globalThis.fetch = vi.fn().mockRejectedValue(abort) as never;
+    const r = await probeIdeReachability({ ipAddress: '192.168.50.99' });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/ide_ingress_cidr/);
+  });
+
+  it('surfaces plain connection errors as-is', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED')) as never;
+    const r = await probeIdeReachability({ ipAddress: '192.168.50.99' });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/ECONNREFUSED/);
   });
 });
 

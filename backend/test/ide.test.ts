@@ -9,9 +9,50 @@ vi.mock('../src/services/config.service.js', () => ({
   }),
 }));
 
-import { getIdeConfig, saveIdeConfig, getIdeCapability } from '../src/services/ide.service.js';
+import { getIdeConfig, saveIdeConfig, getIdeCapability, isValidIngressCidr } from '../src/services/ide.service.js';
 
 beforeEach(() => store.clear());
+
+describe('ide_ingress_cidr (admin-visible pinhole source)', () => {
+  it('defaults to empty and round-trips through save/get (trimmed)', async () => {
+    expect((await getIdeConfig()).ingressCidr).toBe('');
+    await saveIdeConfig({ enabled: 'tenants', allowByoKeys: false, ingressCidr: ' 192.168.50.228/32 ' });
+    expect((await getIdeConfig()).ingressCidr).toBe('192.168.50.228/32');
+  });
+
+  it('an empty string clears it; undefined leaves it untouched', async () => {
+    await saveIdeConfig({ enabled: 'tenants', allowByoKeys: false, ingressCidr: '10.0.0.1/32' });
+    await saveIdeConfig({ enabled: 'tenants', allowByoKeys: false }); // untouched
+    expect((await getIdeConfig()).ingressCidr).toBe('10.0.0.1/32');
+    await saveIdeConfig({ enabled: 'tenants', allowByoKeys: false, ingressCidr: '' }); // cleared
+    expect((await getIdeConfig()).ingressCidr).toBe('');
+  });
+
+  it('never leaks into the tenant-facing capability', async () => {
+    await saveIdeConfig({ enabled: 'tenants', allowByoKeys: false, ingressCidr: '10.9.9.9/32' });
+    expect(await getIdeCapability({ role: 'user' })).not.toHaveProperty('ingressCidr');
+  });
+
+  it('isValidIngressCidr accepts real IPv4 CIDRs and the empty clear-value', () => {
+    for (const ok of ['', '  ', '192.168.50.228/32', '10.0.0.0/8', '0.0.0.0/0', '172.16.4.1/26']) {
+      expect(isValidIngressCidr(ok), ok).toBe(true);
+    }
+  });
+
+  it('isValidIngressCidr rejects malformed values', () => {
+    for (const bad of [
+      '192.168.50.228', // no prefix
+      '192.168.50.228/33', // prefix out of range
+      '256.1.1.1/24', // octet out of range
+      '192.168.1/24', // short
+      'fe80::1/64', // v6 (the pinhole builder is IPv4)
+      'not-a-cidr',
+      '10.0.0.1/32; DROP TABLE', // junk suffix
+    ]) {
+      expect(isValidIngressCidr(bad), bad).toBe(false);
+    }
+  });
+});
 
 describe('ide.service policy + gating', () => {
   it('defaults to off, and nobody has access', async () => {

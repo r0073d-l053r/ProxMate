@@ -5,15 +5,19 @@ import { useRouter } from "next/navigation";
 import { Server, Maximize, Minimize, X, LayoutDashboard, MonitorPlay, Activity, Crown, User, ServerOff } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
-import type { ClusterStats, ClusterHealth, LiveStats, UserGroup, AuditEntry } from "@/lib/types";
+import type { ClusterStats, ClusterHealth, LiveStats, UserGroup, AuditEntry, MeResponse, AdminSettings } from "@/lib/types";
 import { usedPercent, formatRam } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { LiveVmCard } from "@/components/admin/live-vm-card";
 import { KioskCommandCenter } from "@/components/kiosk/command-center";
+import { KioskUnlockDialog } from "@/components/kiosk/unlock-dialog";
 
 const FAST_MS = 1000; // cluster + live VM stats
 const GROUPS_MS = 5000; // VM inventory (rarely changes)
 const AUDIT_MS = 15000; // activity ticker
+// Sessions are a fixed 24h JWT with no sliding renewal, so an always-on panel
+// would be logged out mid-shift. Re-up well inside that window while visible.
+const SESSION_REFRESH_MS = 15 * 60 * 1000; // 15 min
 
 type Tab = "overview" | "vms";
 
@@ -26,6 +30,11 @@ export default function KioskPage() {
   const [tab, setTab] = useState<Tab>("overview");
   const [now, setNow] = useState(() => Date.now());
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Exit gate: tapping ✕ opens the unlock dialog instead of leaving directly.
+  const [unlockOpen, setUnlockOpen] = useState(false);
+  const [hasPasskeys, setHasPasskeys] = useState(false);
+  const [pinSet, setPinSet] = useState(false);
 
   const [cluster, setCluster] = useState<ClusterStats | null>(null);
   const [cpuHist, setCpuHist] = useState<number[]>([]);
@@ -143,6 +152,26 @@ export default function KioskPage() {
     return () => clearInterval(id);
   }, []);
 
+  // Which unlock methods to offer (passkey button / PIN keypad). The kiosk holds
+  // an admin session, so it can read both. Failures leave the safe defaults
+  // (password fallback always works).
+  useEffect(() => {
+    api.get<MeResponse>("/auth/me").then((r) => setHasPasskeys(!!r.data.user.hasPasskeys)).catch(() => {});
+    api.get<AdminSettings>("/admin/settings").then((r) => setPinSet(!!r.data.kiosk?.pinSet)).catch(() => {});
+  }, []);
+
+  // Session heartbeat: keep the long-lived panel from being logged out at the
+  // 24h session boundary. Only while visible; a failure is non-fatal (the next
+  // real API call surfaces any genuine auth loss).
+  useEffect(() => {
+    const beat = () => {
+      if (document.visibilityState !== "visible") return;
+      api.post("/auth/session/refresh").catch(() => {});
+    };
+    const id = setInterval(beat, SESSION_REFRESH_MS);
+    return () => clearInterval(id);
+  }, []);
+
   // Track fullscreen state for the toggle icon.
   useEffect(() => {
     const onChange = () => setIsFullscreen(!!document.fullscreenElement);
@@ -186,7 +215,8 @@ export default function KioskPage() {
     }
   };
 
-  const exitKiosk = async () => {
+  // Actually leave — only reached after the unlock dialog re-authenticates.
+  const doExit = async () => {
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
     } catch {
@@ -246,7 +276,7 @@ export default function KioskPage() {
             {isFullscreen ? <Minimize className="size-5" /> : <Maximize className="size-5" />}
           </button>
           <button
-            onClick={exitKiosk}
+            onClick={() => setUnlockOpen(true)}
             aria-label="Exit kiosk mode"
             className="flex size-11 items-center justify-center rounded-xl bg-card/60 text-muted-foreground transition-colors hover:bg-destructive hover:text-white"
           >
@@ -254,6 +284,18 @@ export default function KioskPage() {
           </button>
         </div>
       </header>
+
+      {unlockOpen && (
+        <KioskUnlockDialog
+          hasPasskeys={hasPasskeys}
+          pinSet={pinSet}
+          onUnlock={() => {
+            setUnlockOpen(false);
+            void doExit();
+          }}
+          onCancel={() => setUnlockOpen(false)}
+        />
+      )}
 
       {/* Body */}
       <main className="min-h-0 flex-1 p-4">

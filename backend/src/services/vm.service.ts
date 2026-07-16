@@ -828,6 +828,20 @@ export class ResizeError extends Error {
  * caps, counting every OTHER VM they own plus the requested target values — so a
  * resize is judged on the delta, not by double-counting the VM's current size.
  */
+/**
+ * The account a size change is billed to. Quota always tracks the VM's OWNER —
+ * a shared-VM Manager resizing someone else's VM must be checked against the
+ * owner's caps and usage, not their own (the footprint lands on the owner).
+ * Admin callers keep their bypass (assertResizeWithinQuota checks `role`), so
+ * they pass through unchanged; a missing owner row (orphaned VM) falls back to
+ * the caller, which is the stricter of the two options.
+ */
+export async function quotaAccountFor(user: User, vm: VirtualMachine): Promise<User> {
+  if (user.role === 'admin' || user.id === vm.userId) return user;
+  const owner = await prisma.user.findUnique({ where: { id: vm.userId } });
+  return owner ?? user;
+}
+
 export async function assertResizeWithinQuota(
   user: User,
   vm: VirtualMachine,
@@ -889,7 +903,7 @@ export async function resizeVm(
   const growDisk = targetStorage > vm.storage;
   if (!resourcesChanged && !growDisk) return vm; // nothing to do
 
-  await assertResizeWithinQuota(user, vm, { cpu: targetCpu, ram: targetRam, storage: targetStorage });
+  await assertResizeWithinQuota(await quotaAccountFor(user, vm), vm, { cpu: targetCpu, ram: targetRam, storage: targetStorage });
 
   let current = await syncVmNode(vm);
   const client = await pve.getClient();
@@ -1204,7 +1218,11 @@ export async function rebuildVm(
     diskGb = Math.max(current.storage, template.diskGb || current.storage);
     osLabel = template.os ?? template.name;
     if (diskGb !== current.storage) {
-      await assertResizeWithinQuota(user, current, { cpu: current.cpu, ram: current.ram, storage: diskGb });
+      await assertResizeWithinQuota(await quotaAccountFor(user, current), current, {
+        cpu: current.cpu,
+        ram: current.ram,
+        storage: diskGb,
+      });
     }
   }
 

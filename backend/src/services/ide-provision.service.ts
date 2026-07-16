@@ -45,6 +45,15 @@ const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 const IDE_GUEST_PORT = Number(process.env['IDE_GUEST_PORT'] || 8080);
 
 /**
+ * Pinned in-guest tool versions — the bootstrap installs EXACTLY these, so a new
+ * upstream release can't silently break provisioning (the reverse proxy also
+ * depends on code-server's relative-URL behavior, verified against this line).
+ * Bump deliberately after testing a live install, or override per-deploy via env.
+ */
+export const IDE_CODE_SERVER_VERSION = process.env['IDE_CODE_SERVER_VERSION'] || '4.128.0';
+export const IDE_OPENCODE_VERSION = process.env['IDE_OPENCODE_VERSION'] || '1.17.18';
+
+/**
  * Minimum guest RAM (MB) to install the IDE onto. code-server + the OpenCode
  * agent spike memory during install/first-open — 4 GB OOMs and wedges the VM
  * (steady-state is light, but the transient isn't). 8 GB is the proven-safe
@@ -93,10 +102,10 @@ set -e
 export HOME=/root
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export DEBIAN_FRONTEND=noninteractive
-echo "[proxmate-ide] installing code-server..."
-curl -fsSL https://code-server.dev/install.sh | sh
-echo "[proxmate-ide] installing OpenCode..."
-HOME=/root sh -c 'curl -fsSL https://opencode.ai/install | bash'
+echo "[proxmate-ide] installing code-server ${IDE_CODE_SERVER_VERSION}..."
+curl -fsSL https://code-server.dev/install.sh | sh -s -- --version ${IDE_CODE_SERVER_VERSION}
+echo "[proxmate-ide] installing OpenCode ${IDE_OPENCODE_VERSION}..."
+HOME=/root sh -c 'curl -fsSL https://opencode.ai/install | bash -s -- --version ${IDE_OPENCODE_VERSION}'
 install -m 0755 /root/.opencode/bin/opencode /usr/local/bin/opencode
 mkdir -p /root/.local/share/code-server/User /root/.local/share/code-server/extensions/proxmate-ide-autostart /root/.config/opencode
 cat > /root/.local/share/code-server/User/settings.json <<'PMEOF_SETTINGS'
@@ -257,14 +266,34 @@ export async function startIdeProvision(
 
 /** Is the guest's code-server serving yet? (probe the IDE target, fail-fast). */
 async function probeIdeUp(vm: VirtualMachine): Promise<boolean> {
+  return (await probeIdeReachability(vm)).ok;
+}
+
+/**
+ * Probe the backend→guest IDE path (the same dial the reverse proxy makes) and
+ * say WHY it failed — this is what the admin "test reachability" button reports,
+ * so a wrong `ide_ingress_cidr` / missing pinhole shows up as a timeout here
+ * instead of a silently-blank IDE for the tenant.
+ */
+export async function probeIdeReachability(
+  vm: Pick<VirtualMachine, 'ipAddress'>,
+): Promise<{ ok: boolean; target: string | null; error?: string }> {
   const override = process.env['IDE_TARGET_OVERRIDE'];
   const target = override || (vm.ipAddress ? `http://${vm.ipAddress}:${IDE_GUEST_PORT}` : null);
-  if (!target) return false;
+  if (!target) {
+    return { ok: false, target: null, error: 'The VM has no known IP address to dial.' };
+  }
   try {
-    const r = await fetch(target, { redirect: 'manual', signal: AbortSignal.timeout(3000) });
-    return r.status > 0;
-  } catch {
-    return false;
+    const r = await fetch(target, { redirect: 'manual', signal: AbortSignal.timeout(4000) });
+    if (r.status > 0) return { ok: true, target };
+    return { ok: false, target, error: 'The guest answered with an empty response.' };
+  } catch (e) {
+    const msg = e instanceof Error && e.name === 'TimeoutError'
+      ? 'Timed out — the isolation firewall or routing is likely blocking the backend from reaching the guest (check ide_ingress_cidr and the managed pinhole).'
+      : e instanceof Error
+        ? e.message
+        : 'Connection failed.';
+    return { ok: false, target, error: msg };
   }
 }
 
