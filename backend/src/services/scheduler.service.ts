@@ -5,6 +5,7 @@ import { sampleResourceUsage, pruneResourceSamples } from './resource-history.se
 import { evaluateAlerts } from './alert.service.js';
 import { refreshAllTemplates } from './template.service.js';
 import { runAutoBalance } from './cluster-balancer.service.js';
+import { runAppDbBackup } from './appdb-backup.service.js';
 import { getConfig, setConfig } from './config.service.js';
 
 /** SystemConfig key: ISO timestamp of the last successful weekly backup run. */
@@ -23,16 +24,19 @@ let backupTask: ReturnType<typeof cron.schedule> | null = null;
 let historyTask: ReturnType<typeof cron.schedule> | null = null;
 let balancerTask: ReturnType<typeof cron.schedule> | null = null;
 let templateTask: ReturnType<typeof cron.schedule> | null = null;
+let appDbTask: ReturnType<typeof cron.schedule> | null = null;
 let running = false;
 let powerRunning = false;
 let backupRunning = false;
 let historyRunning = false;
 let balancerRunning = false;
 let templateRunning = false;
+let appDbRunning = false;
 
 const DEFAULT_SCHEDULE = '0 3 * * 0'; // Sun 03:00
 const DEFAULT_BALANCER_SCHEDULE = '*/15 * * * *'; // every 15 min (auto mode only)
 const DEFAULT_TEMPLATE_SCHEDULE = '0 4 1 * *'; // 1st of the month, 04:00 (when enabled)
+const DEFAULT_APPDB_SCHEDULE = '30 2 * * *'; // nightly 02:30 (no-op until a dir is configured)
 
 /** The effective weekly schedule (env override, validated, else the default). */
 function resolveSchedule(): string {
@@ -203,4 +207,25 @@ export function startScheduler(): void {
   });
 
   console.log(`[scheduler] cloud-image refresh scheduled (${templateExpr}, when enabled)`);
+
+  // ProxMate's OWN database: nightly snapshot to the admin-configured directory
+  // (VACUUM INTO — safe on the live DB). A cheap no-op until a dir is set.
+  const appDbExpr =
+    process.env['APPDB_BACKUP_CRON'] && cron.validate(process.env['APPDB_BACKUP_CRON'])
+      ? process.env['APPDB_BACKUP_CRON']
+      : DEFAULT_APPDB_SCHEDULE;
+  appDbTask = cron.schedule(appDbExpr, async () => {
+    if (appDbRunning) return;
+    appDbRunning = true;
+    try {
+      const r = await runAppDbBackup();
+      if (r.ran) console.log(`[scheduler] app-db backup: ${r.file} (pruned ${r.pruned ?? 0})`);
+    } catch (err) {
+      console.error('[scheduler] app-db backup tick failed:', err);
+    } finally {
+      appDbRunning = false;
+    }
+  });
+
+  console.log(`[scheduler] app-db backups scheduled (${appDbExpr}, when a directory is configured)`);
 }

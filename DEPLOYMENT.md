@@ -298,10 +298,19 @@ Run these against the production HTTPS site (passkeys won't work otherwise).
 
 - [ ] **Host firewall:** only 80/443 (and your admin SSH) open to the world; app
       ports stay on `127.0.0.1`.
-- [ ] **`ENCRYPTION_KEY`** backed up in a secret manager — losing it orphans every stored secret.
+- [ ] **`ENCRYPTION_KEY`** backed up in a secret manager — losing it orphans every stored secret
+      (the Proxmox token, SMTP creds, tenant AI keys, TOTP secrets). A database backup **without
+      this key cannot be restored usefully** — treat the key and the DB backups as a pair, stored
+      in different places than the host itself.
 - [ ] **`.env` permissions:** `chmod 600 .env`; never commit it.
 - [ ] **Proxmox isolation enforcement ON** (§7.3) and verified.
-- [ ] **Backups:** snapshot the `proxmate-data` volume (the SQLite DB) regularly —
+- [ ] **Backups (built-in):** set a directory under **Admin → Settings → App-database backups**
+      and ProxMate snapshots its own DB nightly (`VACUUM INTO`, consistent on the live DB) with
+      rolling retention. Mount an off-host share (NFS/CIFS) into the backend container and point
+      the setting at it, e.g. add `- /mnt/backups/proxmate:/backups` to the backend `volumes` and
+      set the directory to `/backups`. Use **Back up now** to prove the path is writable.
+      Schedule override: `APPDB_BACKUP_CRON` (default nightly 02:30).
+- [ ] **Backups (manual alternative):** snapshot the `proxmate-data` volume —
       `docker run --rm -v proxmate_proxmate-data:/data -v "$PWD":/backup alpine tar czf /backup/proxmate-db-$(date +%F).tgz -C /data .`
 - [ ] **Updates:** `git pull && docker compose up -d --build` (migrations apply on boot).
 - [ ] Consider enforcing **2FA on the owner/admin** account immediately after setup.

@@ -30,6 +30,8 @@ export interface MeResponse {
     twoFactorEnabled?: boolean;
     require2fa?: boolean;
     mfaSetupRequired?: boolean;
+    // Whether the user has ≥1 passkey (drives the kiosk unlock dialog's passkey option).
+    hasPasskeys?: boolean;
     // CE: opted out of admin broadcast (announcement) emails. Security emails unaffected.
     broadcastOptOut?: boolean;
   };
@@ -439,6 +441,10 @@ export interface AdminSettings {
       };
   notify: NotifyConfig;
   ide: IdeSettings;
+  /** ProxMate app-DB backup schedule (dir empty = disabled). */
+  appdbBackup: { dir: string; keep: number };
+  /** Kiosk-mode exit lock — whether a PIN is set (the value is never returned). */
+  kiosk: { pinSet: boolean };
 }
 
 /** Admin policy for ProxMate IDE (in-guest code-server + OpenCode). */
@@ -470,6 +476,8 @@ export interface IdeSettings {
   sharedModels: IdeSharedModel[];
   gatewayUrl: string;
   hasGatewayKey: boolean;
+  /** Infra source the managed per-VM pinhole admits to the guest IDE port ('' = unset). */
+  ingressCidr: string;
 }
 
 /** What the current user may do with ProxMate IDE (from GET /api/ide/config). */

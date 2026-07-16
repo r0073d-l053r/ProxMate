@@ -17,6 +17,7 @@ import { prisma } from '../src/lib/prisma.js';
 import {
   assertWithinQuota,
   assertResizeWithinQuota,
+  quotaAccountFor,
   resolveCreateTarget,
   CreateOptionError,
   getOwnedVm,
@@ -95,6 +96,59 @@ describe('assertWithinQuota', () => {
     await expect(
       assertWithinQuota(user(), input({ cpu: 2, ram: 1024, storage: 10 })),
     ).rejects.toBeInstanceOf(QuotaError);
+  });
+});
+
+describe('quotaAccountFor (resize/rebuild quota is billed to the OWNER, not the caller)', () => {
+  const vm = { id: 'vm1', userId: 'owner1' } as never;
+
+  it('an admin caller stays the account (keeps the admin bypass), no owner lookup', async () => {
+    const admin = user({ id: 'a1', role: 'admin' });
+    await expect(quotaAccountFor(admin, vm)).resolves.toBe(admin);
+    expect(userFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('the owner resizing their own VM stays the account, no lookup', async () => {
+    const owner = user({ id: 'owner1' });
+    await expect(quotaAccountFor(owner, vm)).resolves.toBe(owner);
+    expect(userFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('a Manager-share caller resolves to the OWNER account (caps + usage land on the owner)', async () => {
+    const manager = user({ id: 'mgr1', maxCpu: 999, maxRam: 999999, maxStorage: 9999 });
+    const ownerRow = user({ id: 'owner1', maxCpu: 2 });
+    userFindUnique.mockResolvedValue(ownerRow as never);
+    await expect(quotaAccountFor(manager, vm)).resolves.toBe(ownerRow);
+    expect(userFindUnique).toHaveBeenCalledWith({ where: { id: 'owner1' } });
+  });
+
+  it('a missing owner row falls back to the caller (stricter than skipping the check)', async () => {
+    const manager = user({ id: 'mgr1' });
+    userFindUnique.mockResolvedValue(null as never);
+    await expect(quotaAccountFor(manager, vm)).resolves.toBe(manager);
+  });
+
+  it('end-to-end: the resolved owner account is what the resize check enforces', async () => {
+    // Manager has a huge personal quota; the owner is maxed out. The resize
+    // must fail against the OWNER's caps — proving the caller's quota is moot.
+    const manager = user({ id: 'mgr1', maxCpu: 999, maxRam: 9_999_999, maxStorage: 99999 });
+    const ownerRow = user({ id: 'owner1', maxCpu: 2, maxRam: 2048, maxStorage: 20 });
+    userFindUnique.mockResolvedValue(ownerRow as never);
+    // The owner's OTHER VMs already use 2 cores → any growth on this one violates.
+    findMany.mockResolvedValue([{ cpu: 2, ram: 1024, storage: 10 }] as never);
+
+    const account = await quotaAccountFor(manager, vm);
+    await expect(
+      assertResizeWithinQuota(account, { id: 'vm1', userId: 'owner1', quotaExempt: false } as never, {
+        cpu: 1,
+        ram: 512,
+        storage: 5,
+      }),
+    ).rejects.toBeInstanceOf(QuotaError);
+    // And the usage sweep was scoped to the owner's VMs, not the manager's.
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ userId: 'owner1' }) }),
+    );
   });
 });
 
