@@ -1,8 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Plug, Save, RefreshCw, ShieldCheck, ShieldAlert, Mail, Building2, Copy, Bell } from "lucide-react";
+import {
+  Loader2,
+  Plug,
+  Save,
+  RefreshCw,
+  ShieldCheck,
+  ShieldAlert,
+  Mail,
+  Building2,
+  Copy,
+  Bell,
+  Server,
+  Code2,
+  KeyRound,
+  Wrench,
+} from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 import type { AdminSettings, ProxmoxResources, IsolationStatus, NotifyEvent } from "@/lib/types";
@@ -19,6 +34,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/form-field";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -42,10 +58,33 @@ import { BroadcastCard } from "@/components/admin/broadcast-card";
 // Sentinel for "let the backend auto-pick the first backup-capable storage".
 const BACKUP_AUTO = "__auto__";
 
+/** DigitalOcean-style top-level sections of the admin Settings page. */
+const TAB_VALUES = ["proxmox", "ide", "notifications", "access", "maintenance"] as const;
+type TabValue = (typeof TAB_VALUES)[number];
+
+function isTabValue(v: string | null): v is TabValue {
+  return !!v && (TAB_VALUES as readonly string[]).includes(v);
+}
+
 export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [resources, setResources] = useState<ProxmoxResources | null>(null);
   const [resourceError, setResourceError] = useState<string | null>(null);
+
+  // Active tab, deep-linkable via ?tab= (e.g. /admin/settings?tab=access). Kept in
+  // the URL with replaceState so switching tabs never adds history entries.
+  const [tab, setTabState] = useState<TabValue>(() => {
+    if (typeof window === "undefined") return "proxmox";
+    const t = new URLSearchParams(window.location.search).get("tab");
+    return isTabValue(t) ? t : "proxmox";
+  });
+  const setTab = useCallback((t: TabValue) => {
+    setTabState(t);
+    const url = new URL(window.location.href);
+    if (t === "proxmox") url.searchParams.delete("tab");
+    else url.searchParams.set("tab", t);
+    window.history.replaceState(null, "", url);
+  }, []);
 
   // Connection
   const [host, setHost] = useState("");
@@ -412,7 +451,7 @@ export default function SettingsPage() {
 
   if (loading) {
     return (
-      <div className="mx-auto max-w-2xl">
+      <div className="mx-auto max-w-5xl">
         <PageHeader title="Settings" />
         <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" /> Loading…
@@ -422,595 +461,629 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl">
-      <PageHeader title="Settings" description="Reconfigure the Proxmox connection and VM defaults." />
+    <div className="mx-auto max-w-5xl">
+      <PageHeader
+        title="Settings"
+        description="Manage your ProxMate server — Proxmox connection, the IDE, notifications, access, and maintenance."
+      />
 
-      {/* Updates */}
-      <div className="mb-6">
-        <UpdatesCard />
-      </div>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as TabValue)}>
+        <TabsList>
+          <TabsTrigger value="proxmox">
+            <Server />
+            Proxmox
+          </TabsTrigger>
+          <TabsTrigger value="ide">
+            <Code2 />
+            IDE
+          </TabsTrigger>
+          <TabsTrigger value="notifications">
+            <Bell />
+            Notifications
+          </TabsTrigger>
+          <TabsTrigger value="access">
+            <KeyRound />
+            Access
+          </TabsTrigger>
+          <TabsTrigger value="maintenance">
+            <Wrench />
+            Maintenance
+          </TabsTrigger>
+        </TabsList>
 
-      {/* Rescue ISO (VM Settings → Recovery) */}
-      <RescueIsoCard />
-
-      {/* Cloud-image auto-refresh (monthly) */}
-      <TemplateRefreshCard />
-
-      {/* ProxMate IDE (in-guest code-server + OpenCode) */}
-      <IdeSettingsCard />
-
-      {/* App-DB backups — ProxMate's own database, separate from MateStates. */}
-      <AppDbBackupCard />
-
-      {/* Kiosk-mode exit lock. */}
-      <KioskSettingsCard />
-
-      {/* Network isolation */}
-      {isolation && (
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              {isolation.enforced ? (
-                <ShieldCheck className="size-4 text-emerald-500" />
-              ) : (
-                <ShieldAlert className="size-4 text-amber-500" />
-              )}
-              Tenant network isolation
-            </CardTitle>
-            <CardDescription>
-              When enabled, every VM ProxMate creates gets a firewall that blocks access to your LAN,
-              other VMs, and the Proxmox host — while still allowing internet access.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-4">
-            <label className="flex items-center gap-2 text-sm select-none">
-              <input
-                type="checkbox"
-                checked={isolation.isolationEnabled}
-                disabled={togglingIsolation}
-                onChange={(e) => toggleIsolation(e.target.checked)}
-                className="size-4 rounded border-input accent-primary"
-              />
-              Apply isolation firewall to new VMs
-            </label>
-
-            <div
-              className={cn(
-                "rounded-lg border p-3 text-sm",
-                isolation.enforced
-                  ? "border-emerald-500/30 bg-emerald-500/10"
-                  : "border-amber-500/30 bg-amber-500/10",
-              )}
-            >
-              {isolation.enforced ? (
-                <p>
-                  <span className="font-medium">Isolation is enforced.</span> New VMs are firewalled
-                  off from the rest of your infrastructure.
-                </p>
-              ) : !isolation.clusterFirewallEnabled ? (
-                <p>
-                  <span className="font-medium">Not enforced yet.</span> ProxMate is configuring each
-                  VM&apos;s firewall, but rules only take effect once the{" "}
-                  <span className="font-medium">Proxmox cluster firewall</span> is enabled. Until
-                  then, VMs share your LAN. See <code>SECURITY.md</code> for the safe steps to enable
-                  it (and the recommended dedicated-VLAN setup).
-                </p>
-              ) : (
-                <p>
-                  <span className="font-medium">Isolation is disabled.</span> New VMs will be placed
-                  on your network without isolation rules.
-                </p>
-              )}
-            </div>
-
-            {/* Optional DNS allow-list for tenant isolation */}
-            {isolation.isolationEnabled && (
-              <div className="grid gap-2">
+        {/* ── Proxmox: cluster connection, VM defaults, tenant isolation ───────── */}
+        <TabsContent value="proxmox" className="pt-6">
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>Proxmox connection</CardTitle>
+              <CardDescription>
+                Update the API endpoint or token. Leave the secret blank to keep the current one.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={saveConnection} className="grid gap-4">
+                <FormField label="Proxmox host URL" htmlFor="host">
+                  <Input id="host" value={host} onChange={(e) => setHost(e.target.value)} />
+                </FormField>
+                <FormField label="API token ID" htmlFor="tokenId">
+                  <Input id="tokenId" value={tokenId} onChange={(e) => setTokenId(e.target.value)} />
+                </FormField>
                 <FormField
-                  label="DNS servers (optional)"
-                  htmlFor="dnsServers"
-                  hint="Tenant VMs always resolve names — by default DNS is allowed to any resolver. To tighten, list your DNS server IP(s), comma-separated, and isolation will permit DNS only to those. Leave blank for auto."
+                  label="API token secret"
+                  htmlFor="tokenSecret"
+                  hint={hasSecret ? "A secret is currently set. Leave blank to keep it." : "No secret set yet."}
                 >
                   <Input
-                    id="dnsServers"
-                    value={dnsServers}
-                    onChange={(e) => setDnsServers(e.target.value)}
-                    placeholder="e.g. 192.168.60.13"
+                    id="tokenSecret"
+                    type="password"
+                    value={tokenSecret}
+                    onChange={(e) => setTokenSecret(e.target.value)}
+                    placeholder={hasSecret ? "••••••••" : ""}
                   />
                 </FormField>
-                <Button className="w-fit" disabled={savingDns} onClick={saveDnsServers}>
-                  {savingDns ? <Loader2 className="animate-spin" /> : null}
-                  Save DNS settings
-                </Button>
-              </div>
-            )}
-
-            {/* Guided enforcement: enable/disable the Proxmox cluster firewall */}
-            {isolation.isolationEnabled && !isolation.enforced && (
-              <div className="grid gap-2">
-                <FormField
-                  label="Management subnet (kept reachable)"
-                  htmlFor="mgmtCidr"
-                  hint="Your admin network — an allow-rule is added for web UI (8006) + SSH (22) before enabling, so you aren't locked out."
-                >
-                  <Input
-                    id="mgmtCidr"
-                    value={mgmtCidr}
-                    onChange={(e) => setMgmtCidr(e.target.value)}
-                    placeholder="192.168.1.0/24"
-                  />
-                </FormField>
-                <AlertDialog>
-                  <AlertDialogTrigger
-                    render={
-                      <Button className="w-fit" disabled={enforcing}>
-                        {enforcing ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
-                        Enable enforcement
-                      </Button>
-                    }
-                  />
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Enable the Proxmox cluster firewall?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        This turns on the datacenter firewall so per-VM isolation takes effect. An
-                        allow-rule for <span className="font-medium">{mgmtCidr || "your subnet"}</span>{" "}
-                        (ports 8006 + 22) is added first so you keep management access; Proxmox keeps
-                        cluster traffic flowing automatically. You can disable it again here at any time.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={enableEnforcement}>Enable</AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              </div>
-            )}
-
-            {isolation.enforced && (
-              <Button
-                variant="outline"
-                className="w-fit"
-                disabled={enforcing}
-                onClick={disableEnforcement}
-              >
-                {enforcing ? <Loader2 className="animate-spin" /> : <ShieldAlert />}
-                Disable enforcement
-              </Button>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Proxmox connection</CardTitle>
-          <CardDescription>
-            Update the API endpoint or token. Leave the secret blank to keep the current one.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={saveConnection} className="grid gap-4">
-            <FormField label="Proxmox host URL" htmlFor="host">
-              <Input id="host" value={host} onChange={(e) => setHost(e.target.value)} />
-            </FormField>
-            <FormField label="API token ID" htmlFor="tokenId">
-              <Input id="tokenId" value={tokenId} onChange={(e) => setTokenId(e.target.value)} />
-            </FormField>
-            <FormField
-              label="API token secret"
-              htmlFor="tokenSecret"
-              hint={hasSecret ? "A secret is currently set. Leave blank to keep it." : "No secret set yet."}
-            >
-              <Input
-                id="tokenSecret"
-                type="password"
-                value={tokenSecret}
-                onChange={(e) => setTokenSecret(e.target.value)}
-                placeholder={hasSecret ? "••••••••" : ""}
-              />
-            </FormField>
-            <label className="flex items-center gap-2 text-sm select-none">
-              <input
-                type="checkbox"
-                checked={verifySsl}
-                onChange={(e) => setVerifySsl(e.target.checked)}
-                className="size-4 rounded border-input accent-primary"
-              />
-              Verify TLS certificate
-            </label>
-            <div className="flex gap-2">
-              <Button type="submit" disabled={savingConn}>
-                {savingConn ? <Loader2 className="animate-spin" /> : <Save />}
-                Save changes
-              </Button>
-              <Button type="button" variant="outline" onClick={testConnection} disabled={testing}>
-                {testing ? <Loader2 className="animate-spin" /> : <Plug />}
-                Test connection
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Mail className="size-4" /> Email (SMTP)
-          </CardTitle>
-          <CardDescription>
-            Optional. Lets ProxMate send password-reset emails — point it at any SMTP relay (e.g. the
-            same one your Proxmox uses). Without it, password resets fall back to admin approval.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={saveSmtp} className="grid gap-4">
-            <FormField label="Host" htmlFor="smtpHost">
-              <Input
-                id="smtpHost"
-                value={smtpHost}
-                onChange={(e) => setSmtpHost(e.target.value)}
-                placeholder="smtp.example.com"
-              />
-            </FormField>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <FormField label="Port" htmlFor="smtpPort">
-                <Input
-                  id="smtpPort"
-                  type="number"
-                  value={smtpPort}
-                  onChange={(e) => setSmtpPort(Number(e.target.value))}
-                />
-              </FormField>
-              <FormField label="From address" htmlFor="smtpFrom">
-                <Input
-                  id="smtpFrom"
-                  value={smtpFrom}
-                  onChange={(e) => setSmtpFrom(e.target.value)}
-                  placeholder="noreply@example.com"
-                />
-              </FormField>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <FormField label="Username" htmlFor="smtpUser" hint="Blank for unauthenticated relays.">
-                <Input id="smtpUser" value={smtpUser} onChange={(e) => setSmtpUser(e.target.value)} />
-              </FormField>
-              <FormField
-                label="Password"
-                htmlFor="smtpPass"
-                hint={smtpHasPass ? "A password is set. Leave blank to keep it." : undefined}
-              >
-                <Input
-                  id="smtpPass"
-                  type="password"
-                  value={smtpPass}
-                  onChange={(e) => setSmtpPass(e.target.value)}
-                  placeholder={smtpHasPass ? "••••••••" : ""}
-                />
-              </FormField>
-            </div>
-            <label className="flex items-center gap-2 text-sm select-none">
-              <input
-                type="checkbox"
-                checked={smtpSecure}
-                onChange={(e) => setSmtpSecure(e.target.checked)}
-                className="size-4 rounded border-input accent-primary"
-              />
-              Use TLS (port 465). Leave off for STARTTLS on 587.
-            </label>
-            <div className="flex gap-2">
-              <Button type="submit" disabled={savingSmtp}>
-                {savingSmtp ? <Loader2 className="animate-spin" /> : <Save />}
-                Save email settings
-              </Button>
-              <Button type="button" variant="outline" onClick={testSmtp} disabled={testingSmtp}>
-                {testingSmtp ? <Loader2 className="animate-spin" /> : <Plug />}
-                Test
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Bell className="size-4" /> Notifications
-          </CardTitle>
-          <CardDescription>
-            Optional. Get alerted when something needs attention. The webhook works with Discord,
-            Slack, Mattermost, or any JSON receiver; email reuses the SMTP settings above.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={saveNotify} className="grid gap-4">
-            <FormField
-              label="Webhook URL"
-              htmlFor="notifyWebhook"
-              hint="Paste a Discord/Slack incoming-webhook URL. Leave blank to disable the webhook."
-            >
-              <Input
-                id="notifyWebhook"
-                value={notifyWebhook}
-                onChange={(e) => setNotifyWebhook(e.target.value)}
-                placeholder="https://discord.com/api/webhooks/…"
-              />
-            </FormField>
-
-            <label className="flex items-center gap-2 text-sm select-none">
-              <input
-                type="checkbox"
-                checked={notifyEmailEnabled}
-                onChange={(e) => setNotifyEmailEnabled(e.target.checked)}
-                className="size-4 rounded border-input accent-primary"
-              />
-              Also send email (requires SMTP configured above)
-            </label>
-            {notifyEmailEnabled && (
-              <FormField label="Email recipient" htmlFor="notifyEmailTo" hint="Blank = all admins.">
-                <Input
-                  id="notifyEmailTo"
-                  value={notifyEmailTo}
-                  onChange={(e) => setNotifyEmailTo(e.target.value)}
-                  placeholder="ops@example.com"
-                />
-              </FormField>
-            )}
-
-            <div className="grid gap-2">
-              <span className="text-sm font-medium">Notify me about</span>
-              {(Object.keys(NOTIFY_EVENT_LABELS) as NotifyEvent[]).map((ev) => (
-                <label key={ev} className="flex items-center gap-2 text-sm select-none">
+                <label className="flex items-center gap-2 text-sm select-none">
                   <input
                     type="checkbox"
-                    checked={notifyEvents.includes(ev)}
-                    onChange={() => toggleNotifyEvent(ev)}
+                    checked={verifySsl}
+                    onChange={(e) => setVerifySsl(e.target.checked)}
                     className="size-4 rounded border-input accent-primary"
                   />
-                  {NOTIFY_EVENT_LABELS[ev]}
+                  Verify TLS certificate
                 </label>
-              ))}
-            </div>
+                <div className="flex gap-2">
+                  <Button type="submit" disabled={savingConn}>
+                    {savingConn ? <Loader2 className="animate-spin" /> : <Save />}
+                    Save changes
+                  </Button>
+                  <Button type="button" variant="outline" onClick={testConnection} disabled={testing}>
+                    {testing ? <Loader2 className="animate-spin" /> : <Plug />}
+                    Test connection
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
 
-            <div className="flex gap-2">
-              <Button type="submit" disabled={savingNotify}>
-                {savingNotify ? <Loader2 className="animate-spin" /> : <Save />}
-                Save notifications
-              </Button>
-              <Button type="button" variant="outline" onClick={testNotify} disabled={testingNotify}>
-                {testingNotify ? <Loader2 className="animate-spin" /> : <Plug />}
-                Send test
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>VM defaults</CardTitle>
+              <CardDescription>Applied when users create new VMs.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {resourceError ? (
+                <div className="grid gap-3 py-2 text-center">
+                  <p className="text-sm text-destructive">{resourceError}</p>
+                  <Button variant="outline" onClick={loadResources} className="justify-self-center">
+                    <RefreshCw /> Retry
+                  </Button>
+                </div>
+              ) : !resources ? (
+                <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" /> Fetching resources…
+                </div>
+              ) : (
+                <form onSubmit={saveDefaults} className="grid gap-4">
+                  <FormField label="Default storage pool">
+                    <Select value={storage} onValueChange={(v) => setStorage(v as string)}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select a storage pool" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {resources.storages.map((s) => (
+                          <SelectItem key={s.name} value={s.name}>
+                            {s.name}
+                            <span className="text-muted-foreground"> · {s.type}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </FormField>
+                  <FormField label="Default network bridge">
+                    <Select value={bridge} onValueChange={(v) => setBridge(v as string)}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select a bridge" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {resources.bridges.map((b) => (
+                          <SelectItem key={b.name} value={b.name}>
+                            {b.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </FormField>
+                  <FormField label="ISO storage">
+                    <Select value={isoStorage} onValueChange={(v) => setIsoStorage(v as string)}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select ISO storage" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {resources.isoStorages.map((s) => (
+                          <SelectItem key={s.name} value={s.name}>
+                            {s.name}
+                            <span className="text-muted-foreground"> · {s.type}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </FormField>
+                  <FormField
+                    label="Backup storage"
+                    hint="Where MateState backups are written. Auto picks the first backup-capable storage."
+                  >
+                    <Select value={backupStorage} onValueChange={(v) => setBackupStorage(v as string)}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={BACKUP_AUTO}>Auto (first backup-capable)</SelectItem>
+                        {resources.backupStorages.map((s) => (
+                          <SelectItem key={s.name} value={s.name}>
+                            {s.name}
+                            <span className="text-muted-foreground"> · {s.type}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </FormField>
+                  <Button type="submit" disabled={savingDefaults} className="w-fit">
+                    {savingDefaults ? <Loader2 className="animate-spin" /> : <Save />}
+                    Save defaults
+                  </Button>
+                </form>
+              )}
+            </CardContent>
+          </Card>
 
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Building2 className="size-4" /> Single sign-on (OIDC)
-          </CardTitle>
-          <CardDescription>
-            Optional. Let users sign in with your identity provider (Keycloak, Authentik, Auth0, Entra ID,
-            Google…). Local passwords keep working alongside it. Save first, then use Test.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={saveSso} className="grid gap-4">
-            <FormField
-              label="Redirect / callback URL"
-              htmlFor="ssoCallback"
-              hint="Register this exact URL in your provider as the allowed redirect URI."
-            >
-              <div className="flex gap-2">
-                <Input id="ssoCallback" value={ssoCallbackUrl} readOnly className="font-mono text-xs" />
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => copyText(ssoCallbackUrl)}
-                  aria-label="Copy callback URL"
+          {/* Network isolation */}
+          {isolation && (
+            <Card className="mb-6">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  {isolation.enforced ? (
+                    <ShieldCheck className="size-4 text-emerald-500" />
+                  ) : (
+                    <ShieldAlert className="size-4 text-amber-500" />
+                  )}
+                  Tenant network isolation
+                </CardTitle>
+                <CardDescription>
+                  When enabled, every VM ProxMate creates gets a firewall that blocks access to your LAN,
+                  other VMs, and the Proxmox host — while still allowing internet access.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4">
+                <label className="flex items-center gap-2 text-sm select-none">
+                  <input
+                    type="checkbox"
+                    checked={isolation.isolationEnabled}
+                    disabled={togglingIsolation}
+                    onChange={(e) => toggleIsolation(e.target.checked)}
+                    className="size-4 rounded border-input accent-primary"
+                  />
+                  Apply isolation firewall to new VMs
+                </label>
+
+                <div
+                  className={cn(
+                    "rounded-lg border p-3 text-sm",
+                    isolation.enforced
+                      ? "border-emerald-500/30 bg-emerald-500/10"
+                      : "border-amber-500/30 bg-amber-500/10",
+                  )}
                 >
-                  <Copy />
-                </Button>
-              </div>
-            </FormField>
-            <FormField
-              label="Issuer URL"
-              htmlFor="ssoIssuer"
-              hint="The provider's base URL — it must serve /.well-known/openid-configuration."
-            >
-              <Input
-                id="ssoIssuer"
-                value={ssoIssuer}
-                onChange={(e) => setSsoIssuer(e.target.value)}
-                placeholder="https://keycloak.example.com/realms/main"
-              />
-            </FormField>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <FormField label="Client ID" htmlFor="ssoClientId">
-                <Input
-                  id="ssoClientId"
-                  value={ssoClientId}
-                  onChange={(e) => setSsoClientId(e.target.value)}
-                  placeholder="proxmate"
-                />
-              </FormField>
-              <FormField
-                label="Client secret"
-                htmlFor="ssoClientSecret"
-                hint={ssoHasSecret ? "A secret is set. Leave blank to keep it." : undefined}
-              >
-                <Input
-                  id="ssoClientSecret"
-                  type="password"
-                  value={ssoClientSecret}
-                  onChange={(e) => setSsoClientSecret(e.target.value)}
-                  placeholder={ssoHasSecret ? "••••••••" : ""}
-                />
-              </FormField>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <FormField label="Scopes" htmlFor="ssoScopes">
-                <Input
-                  id="ssoScopes"
-                  value={ssoScopes}
-                  onChange={(e) => setSsoScopes(e.target.value)}
-                  placeholder="openid profile email"
-                />
-              </FormField>
-              <FormField label="Login button label" htmlFor="ssoButtonLabel">
-                <Input
-                  id="ssoButtonLabel"
-                  value={ssoButtonLabel}
-                  onChange={(e) => setSsoButtonLabel(e.target.value)}
-                  placeholder="Sign in with Keycloak"
-                />
-              </FormField>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <FormField label="Groups claim" htmlFor="ssoGroupsClaim" hint="ID-token claim listing the user's groups.">
-                <Input
-                  id="ssoGroupsClaim"
-                  value={ssoGroupsClaim}
-                  onChange={(e) => setSsoGroupsClaim(e.target.value)}
-                  placeholder="groups"
-                />
-              </FormField>
-              <FormField label="Admin group" htmlFor="ssoAdminGroup" hint="Members become admins. Blank = no mapping.">
-                <Input
-                  id="ssoAdminGroup"
-                  value={ssoAdminGroup}
-                  onChange={(e) => setSsoAdminGroup(e.target.value)}
-                  placeholder="proxmate-admins"
-                />
-              </FormField>
-            </div>
-            <label className="flex items-center gap-2 text-sm select-none">
-              <input
-                type="checkbox"
-                checked={ssoAllowSignup}
-                onChange={(e) => setSsoAllowSignup(e.target.checked)}
-                className="size-4 rounded border-input accent-primary"
-              />
-              Auto-create accounts for new SSO users. Off = only existing/invited accounts may sign in.
-            </label>
-            <label className="flex items-center gap-2 text-sm select-none">
-              <input
-                type="checkbox"
-                checked={ssoEnabled}
-                onChange={(e) => setSsoEnabled(e.target.checked)}
-                className="size-4 rounded border-input accent-primary"
-              />
-              Enable SSO (show the button on the login page).
-            </label>
-            <div className="flex gap-2">
-              <Button type="submit" disabled={savingSso}>
-                {savingSso ? <Loader2 className="animate-spin" /> : <Save />}
-                Save SSO settings
-              </Button>
-              <Button type="button" variant="outline" onClick={testSso} disabled={testingSso}>
-                {testingSso ? <Loader2 className="animate-spin" /> : <Plug />}
-                Test
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+                  {isolation.enforced ? (
+                    <p>
+                      <span className="font-medium">Isolation is enforced.</span> New VMs are firewalled
+                      off from the rest of your infrastructure.
+                    </p>
+                  ) : !isolation.clusterFirewallEnabled ? (
+                    <p>
+                      <span className="font-medium">Not enforced yet.</span> ProxMate is configuring each
+                      VM&apos;s firewall, but rules only take effect once the{" "}
+                      <span className="font-medium">Proxmox cluster firewall</span> is enabled. Until
+                      then, VMs share your LAN. See <code>SECURITY.md</code> for the safe steps to enable
+                      it (and the recommended dedicated-VLAN setup).
+                    </p>
+                  ) : (
+                    <p>
+                      <span className="font-medium">Isolation is disabled.</span> New VMs will be placed
+                      on your network without isolation rules.
+                    </p>
+                  )}
+                </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>VM defaults</CardTitle>
-          <CardDescription>Applied when users create new VMs.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {resourceError ? (
-            <div className="grid gap-3 py-2 text-center">
-              <p className="text-sm text-destructive">{resourceError}</p>
-              <Button variant="outline" onClick={loadResources} className="justify-self-center">
-                <RefreshCw /> Retry
-              </Button>
-            </div>
-          ) : !resources ? (
-            <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" /> Fetching resources…
-            </div>
-          ) : (
-            <form onSubmit={saveDefaults} className="grid gap-4">
-              <FormField label="Default storage pool">
-                <Select value={storage} onValueChange={(v) => setStorage(v as string)}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select a storage pool" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {resources.storages.map((s) => (
-                      <SelectItem key={s.name} value={s.name}>
-                        {s.name}
-                        <span className="text-muted-foreground"> · {s.type}</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FormField>
-              <FormField label="Default network bridge">
-                <Select value={bridge} onValueChange={(v) => setBridge(v as string)}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select a bridge" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {resources.bridges.map((b) => (
-                      <SelectItem key={b.name} value={b.name}>
-                        {b.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FormField>
-              <FormField label="ISO storage">
-                <Select value={isoStorage} onValueChange={(v) => setIsoStorage(v as string)}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select ISO storage" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {resources.isoStorages.map((s) => (
-                      <SelectItem key={s.name} value={s.name}>
-                        {s.name}
-                        <span className="text-muted-foreground"> · {s.type}</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FormField>
-              <FormField
-                label="Backup storage"
-                hint="Where MateState backups are written. Auto picks the first backup-capable storage."
-              >
-                <Select value={backupStorage} onValueChange={(v) => setBackupStorage(v as string)}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={BACKUP_AUTO}>Auto (first backup-capable)</SelectItem>
-                    {resources.backupStorages.map((s) => (
-                      <SelectItem key={s.name} value={s.name}>
-                        {s.name}
-                        <span className="text-muted-foreground"> · {s.type}</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FormField>
-              <Button type="submit" disabled={savingDefaults} className="w-fit">
-                {savingDefaults ? <Loader2 className="animate-spin" /> : <Save />}
-                Save defaults
-              </Button>
-            </form>
+                {/* Optional DNS allow-list for tenant isolation */}
+                {isolation.isolationEnabled && (
+                  <div className="grid gap-2">
+                    <FormField
+                      label="DNS servers (optional)"
+                      htmlFor="dnsServers"
+                      hint="Tenant VMs always resolve names — by default DNS is allowed to any resolver. To tighten, list your DNS server IP(s), comma-separated, and isolation will permit DNS only to those. Leave blank for auto."
+                    >
+                      <Input
+                        id="dnsServers"
+                        value={dnsServers}
+                        onChange={(e) => setDnsServers(e.target.value)}
+                        placeholder="e.g. 192.168.60.13"
+                      />
+                    </FormField>
+                    <Button className="w-fit" disabled={savingDns} onClick={saveDnsServers}>
+                      {savingDns ? <Loader2 className="animate-spin" /> : null}
+                      Save DNS settings
+                    </Button>
+                  </div>
+                )}
+
+                {/* Guided enforcement: enable/disable the Proxmox cluster firewall */}
+                {isolation.isolationEnabled && !isolation.enforced && (
+                  <div className="grid gap-2">
+                    <FormField
+                      label="Management subnet (kept reachable)"
+                      htmlFor="mgmtCidr"
+                      hint="Your admin network — an allow-rule is added for web UI (8006) + SSH (22) before enabling, so you aren't locked out."
+                    >
+                      <Input
+                        id="mgmtCidr"
+                        value={mgmtCidr}
+                        onChange={(e) => setMgmtCidr(e.target.value)}
+                        placeholder="192.168.1.0/24"
+                      />
+                    </FormField>
+                    <AlertDialog>
+                      <AlertDialogTrigger
+                        render={
+                          <Button className="w-fit" disabled={enforcing}>
+                            {enforcing ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
+                            Enable enforcement
+                          </Button>
+                        }
+                      />
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Enable the Proxmox cluster firewall?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This turns on the datacenter firewall so per-VM isolation takes effect. An
+                            allow-rule for <span className="font-medium">{mgmtCidr || "your subnet"}</span>{" "}
+                            (ports 8006 + 22) is added first so you keep management access; Proxmox keeps
+                            cluster traffic flowing automatically. You can disable it again here at any time.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction onClick={enableEnforcement}>Enable</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </div>
+                )}
+
+                {isolation.enforced && (
+                  <Button
+                    variant="outline"
+                    className="w-fit"
+                    disabled={enforcing}
+                    onClick={disableEnforcement}
+                  >
+                    {enforcing ? <Loader2 className="animate-spin" /> : <ShieldAlert />}
+                    Disable enforcement
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
           )}
-        </CardContent>
-      </Card>
+        </TabsContent>
 
-      <BroadcastCard />
+        {/* ── IDE: in-guest code-server + OpenCode ─────────────────────────────── */}
+        <TabsContent value="ide" className="pt-6">
+          <IdeSettingsCard />
+        </TabsContent>
+
+        {/* ── Notifications: SMTP transport, event alerts, broadcasts ──────────── */}
+        <TabsContent value="notifications" className="pt-6">
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Mail className="size-4" /> Email (SMTP)
+              </CardTitle>
+              <CardDescription>
+                Optional. Lets ProxMate send password-reset emails — point it at any SMTP relay (e.g. the
+                same one your Proxmox uses). Without it, password resets fall back to admin approval.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={saveSmtp} className="grid gap-4">
+                <FormField label="Host" htmlFor="smtpHost">
+                  <Input
+                    id="smtpHost"
+                    value={smtpHost}
+                    onChange={(e) => setSmtpHost(e.target.value)}
+                    placeholder="smtp.example.com"
+                  />
+                </FormField>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FormField label="Port" htmlFor="smtpPort">
+                    <Input
+                      id="smtpPort"
+                      type="number"
+                      value={smtpPort}
+                      onChange={(e) => setSmtpPort(Number(e.target.value))}
+                    />
+                  </FormField>
+                  <FormField label="From address" htmlFor="smtpFrom">
+                    <Input
+                      id="smtpFrom"
+                      value={smtpFrom}
+                      onChange={(e) => setSmtpFrom(e.target.value)}
+                      placeholder="noreply@example.com"
+                    />
+                  </FormField>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FormField label="Username" htmlFor="smtpUser" hint="Blank for unauthenticated relays.">
+                    <Input id="smtpUser" value={smtpUser} onChange={(e) => setSmtpUser(e.target.value)} />
+                  </FormField>
+                  <FormField
+                    label="Password"
+                    htmlFor="smtpPass"
+                    hint={smtpHasPass ? "A password is set. Leave blank to keep it." : undefined}
+                  >
+                    <Input
+                      id="smtpPass"
+                      type="password"
+                      value={smtpPass}
+                      onChange={(e) => setSmtpPass(e.target.value)}
+                      placeholder={smtpHasPass ? "••••••••" : ""}
+                    />
+                  </FormField>
+                </div>
+                <label className="flex items-center gap-2 text-sm select-none">
+                  <input
+                    type="checkbox"
+                    checked={smtpSecure}
+                    onChange={(e) => setSmtpSecure(e.target.checked)}
+                    className="size-4 rounded border-input accent-primary"
+                  />
+                  Use TLS (port 465). Leave off for STARTTLS on 587.
+                </label>
+                <div className="flex gap-2">
+                  <Button type="submit" disabled={savingSmtp}>
+                    {savingSmtp ? <Loader2 className="animate-spin" /> : <Save />}
+                    Save email settings
+                  </Button>
+                  <Button type="button" variant="outline" onClick={testSmtp} disabled={testingSmtp}>
+                    {testingSmtp ? <Loader2 className="animate-spin" /> : <Plug />}
+                    Test
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Bell className="size-4" /> Notifications
+              </CardTitle>
+              <CardDescription>
+                Optional. Get alerted when something needs attention. The webhook works with Discord,
+                Slack, Mattermost, or any JSON receiver; email reuses the SMTP settings above.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={saveNotify} className="grid gap-4">
+                <FormField
+                  label="Webhook URL"
+                  htmlFor="notifyWebhook"
+                  hint="Paste a Discord/Slack incoming-webhook URL. Leave blank to disable the webhook."
+                >
+                  <Input
+                    id="notifyWebhook"
+                    value={notifyWebhook}
+                    onChange={(e) => setNotifyWebhook(e.target.value)}
+                    placeholder="https://discord.com/api/webhooks/…"
+                  />
+                </FormField>
+
+                <label className="flex items-center gap-2 text-sm select-none">
+                  <input
+                    type="checkbox"
+                    checked={notifyEmailEnabled}
+                    onChange={(e) => setNotifyEmailEnabled(e.target.checked)}
+                    className="size-4 rounded border-input accent-primary"
+                  />
+                  Also send email (requires SMTP configured above)
+                </label>
+                {notifyEmailEnabled && (
+                  <FormField label="Email recipient" htmlFor="notifyEmailTo" hint="Blank = all admins.">
+                    <Input
+                      id="notifyEmailTo"
+                      value={notifyEmailTo}
+                      onChange={(e) => setNotifyEmailTo(e.target.value)}
+                      placeholder="ops@example.com"
+                    />
+                  </FormField>
+                )}
+
+                <div className="grid gap-2">
+                  <span className="text-sm font-medium">Notify me about</span>
+                  {(Object.keys(NOTIFY_EVENT_LABELS) as NotifyEvent[]).map((ev) => (
+                    <label key={ev} className="flex items-center gap-2 text-sm select-none">
+                      <input
+                        type="checkbox"
+                        checked={notifyEvents.includes(ev)}
+                        onChange={() => toggleNotifyEvent(ev)}
+                        className="size-4 rounded border-input accent-primary"
+                      />
+                      {NOTIFY_EVENT_LABELS[ev]}
+                    </label>
+                  ))}
+                </div>
+
+                <div className="flex gap-2">
+                  <Button type="submit" disabled={savingNotify}>
+                    {savingNotify ? <Loader2 className="animate-spin" /> : <Save />}
+                    Save notifications
+                  </Button>
+                  <Button type="button" variant="outline" onClick={testNotify} disabled={testingNotify}>
+                    {testingNotify ? <Loader2 className="animate-spin" /> : <Plug />}
+                    Send test
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+
+          <BroadcastCard />
+        </TabsContent>
+
+        {/* ── Access: single sign-on + kiosk-mode exit lock ────────────────────── */}
+        <TabsContent value="access" className="pt-6">
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Building2 className="size-4" /> Single sign-on (OIDC)
+              </CardTitle>
+              <CardDescription>
+                Optional. Let users sign in with your identity provider (Keycloak, Authentik, Auth0, Entra ID,
+                Google…). Local passwords keep working alongside it. Save first, then use Test.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={saveSso} className="grid gap-4">
+                <FormField
+                  label="Redirect / callback URL"
+                  htmlFor="ssoCallback"
+                  hint="Register this exact URL in your provider as the allowed redirect URI."
+                >
+                  <div className="flex gap-2">
+                    <Input id="ssoCallback" value={ssoCallbackUrl} readOnly className="font-mono text-xs" />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => copyText(ssoCallbackUrl)}
+                      aria-label="Copy callback URL"
+                    >
+                      <Copy />
+                    </Button>
+                  </div>
+                </FormField>
+                <FormField
+                  label="Issuer URL"
+                  htmlFor="ssoIssuer"
+                  hint="The provider's base URL — it must serve /.well-known/openid-configuration."
+                >
+                  <Input
+                    id="ssoIssuer"
+                    value={ssoIssuer}
+                    onChange={(e) => setSsoIssuer(e.target.value)}
+                    placeholder="https://keycloak.example.com/realms/main"
+                  />
+                </FormField>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FormField label="Client ID" htmlFor="ssoClientId">
+                    <Input
+                      id="ssoClientId"
+                      value={ssoClientId}
+                      onChange={(e) => setSsoClientId(e.target.value)}
+                      placeholder="proxmate"
+                    />
+                  </FormField>
+                  <FormField
+                    label="Client secret"
+                    htmlFor="ssoClientSecret"
+                    hint={ssoHasSecret ? "A secret is set. Leave blank to keep it." : undefined}
+                  >
+                    <Input
+                      id="ssoClientSecret"
+                      type="password"
+                      value={ssoClientSecret}
+                      onChange={(e) => setSsoClientSecret(e.target.value)}
+                      placeholder={ssoHasSecret ? "••••••••" : ""}
+                    />
+                  </FormField>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FormField label="Scopes" htmlFor="ssoScopes">
+                    <Input
+                      id="ssoScopes"
+                      value={ssoScopes}
+                      onChange={(e) => setSsoScopes(e.target.value)}
+                      placeholder="openid profile email"
+                    />
+                  </FormField>
+                  <FormField label="Login button label" htmlFor="ssoButtonLabel">
+                    <Input
+                      id="ssoButtonLabel"
+                      value={ssoButtonLabel}
+                      onChange={(e) => setSsoButtonLabel(e.target.value)}
+                      placeholder="Sign in with Keycloak"
+                    />
+                  </FormField>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FormField label="Groups claim" htmlFor="ssoGroupsClaim" hint="ID-token claim listing the user's groups.">
+                    <Input
+                      id="ssoGroupsClaim"
+                      value={ssoGroupsClaim}
+                      onChange={(e) => setSsoGroupsClaim(e.target.value)}
+                      placeholder="groups"
+                    />
+                  </FormField>
+                  <FormField label="Admin group" htmlFor="ssoAdminGroup" hint="Members become admins. Blank = no mapping.">
+                    <Input
+                      id="ssoAdminGroup"
+                      value={ssoAdminGroup}
+                      onChange={(e) => setSsoAdminGroup(e.target.value)}
+                      placeholder="proxmate-admins"
+                    />
+                  </FormField>
+                </div>
+                <label className="flex items-center gap-2 text-sm select-none">
+                  <input
+                    type="checkbox"
+                    checked={ssoAllowSignup}
+                    onChange={(e) => setSsoAllowSignup(e.target.checked)}
+                    className="size-4 rounded border-input accent-primary"
+                  />
+                  Auto-create accounts for new SSO users. Off = only existing/invited accounts may sign in.
+                </label>
+                <label className="flex items-center gap-2 text-sm select-none">
+                  <input
+                    type="checkbox"
+                    checked={ssoEnabled}
+                    onChange={(e) => setSsoEnabled(e.target.checked)}
+                    className="size-4 rounded border-input accent-primary"
+                  />
+                  Enable SSO (show the button on the login page).
+                </label>
+                <div className="flex gap-2">
+                  <Button type="submit" disabled={savingSso}>
+                    {savingSso ? <Loader2 className="animate-spin" /> : <Save />}
+                    Save SSO settings
+                  </Button>
+                  <Button type="button" variant="outline" onClick={testSso} disabled={testingSso}>
+                    {testingSso ? <Loader2 className="animate-spin" /> : <Plug />}
+                    Test
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+
+          <KioskSettingsCard />
+        </TabsContent>
+
+        {/* ── Maintenance: updates, app-DB backups, recovery ISO, image refresh ── */}
+        <TabsContent value="maintenance" className="pt-6">
+          <div className="mb-6">
+            <UpdatesCard />
+          </div>
+          <AppDbBackupCard />
+          <RescueIsoCard />
+          <TemplateRefreshCard />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
