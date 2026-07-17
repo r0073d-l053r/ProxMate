@@ -282,6 +282,7 @@ export function KioskCommandCenter({
                   <span className="min-w-0 flex-1 truncate">
                     <span className="font-medium">{humanizeAction(e.action)}</span>
                     {e.actorEmail && <span className="text-muted-foreground"> · {e.actorEmail}</span>}
+                    {e.detail && <span className="text-muted-foreground"> — {e.detail}</span>}
                   </span>
                   <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
                     {formatRelative(e.createdAt)}
