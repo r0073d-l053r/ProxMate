@@ -5,6 +5,7 @@ import type { ClusterStats, ClusterHealth, AuditEntry } from "@/lib/types";
 import { formatBytes, usedPercent, formatRelative, formatUptime } from "@/lib/format";
 import { Sparkline } from "@/components/dashboard/sparkline";
 import { cn } from "@/lib/utils";
+import { severityDot, humanizeAction, vmLabel } from "./audit-format";
 
 /** Colour ramp for a load percentage — green → amber → red. */
 function loadColor(pct: number): string {
@@ -161,19 +162,6 @@ function QuorumTile({ health }: { health: ClusterHealth | null }) {
   );
 }
 
-/** Severity heuristic for the activity ticker dot. */
-function severityDot(action: string): string {
-  const a = action.toLowerCase();
-  if (/(delete|destroy|force|fail|lock|error)/.test(a)) return "bg-destructive";
-  if (/(stop|restart|reset|update|rollback)/.test(a)) return "bg-amber-500";
-  return "bg-emerald-500";
-}
-
-function humanizeAction(action: string): string {
-  return action
-    .replace(/[._]/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
 
 export function KioskCommandCenter({
   cluster,
@@ -276,19 +264,26 @@ export function KioskCommandCenter({
             {audit.length === 0 ? (
               <div className="py-6 text-center text-sm text-muted-foreground">No recent activity.</div>
             ) : (
-              audit.map((e) => (
-                <div key={e.id} className="flex items-center gap-2.5 text-sm">
-                  <span className={cn("size-2.5 shrink-0 rounded-full", severityDot(e.action))} />
-                  <span className="min-w-0 flex-1 truncate">
-                    <span className="font-medium">{humanizeAction(e.action)}</span>
-                    {e.actorEmail && <span className="text-muted-foreground"> · {e.actorEmail}</span>}
-                    {e.detail && <span className="text-muted-foreground"> — {e.detail}</span>}
-                  </span>
-                  <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
-                    {formatRelative(e.createdAt)}
-                  </span>
-                </div>
-              ))
+              audit.map((e) => {
+                // No actor emails / free-text detail on the wall panel — rows
+                // are action + VM + IP + time only (owner decision 2026-07-17).
+                const vm = vmLabel(e);
+                return (
+                  <div key={e.id} className="flex items-center gap-2.5 text-sm">
+                    <span className={cn("size-2.5 shrink-0 rounded-full", severityDot(e.action))} />
+                    <span className="min-w-0 flex-1 truncate">
+                      <span className="font-medium">{humanizeAction(e.action)}</span>
+                      {vm && <span className="text-muted-foreground"> · {vm}</span>}
+                    </span>
+                    {e.ip && (
+                      <span className="shrink-0 font-mono text-xs text-muted-foreground">{e.ip}</span>
+                    )}
+                    <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
+                      {formatRelative(e.createdAt)}
+                    </span>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
