@@ -5,6 +5,7 @@ import {
   hashPassword,
   verifyPasswordSafe,
   createSession,
+  retireSessionWithGrace,
   signChallenge,
   verifyChallenge,
   signEnrollment,
@@ -228,17 +229,23 @@ router.post('/logout', requireAuth, async (req: Request, res: Response) => {
 
 // ─── POST /api/auth/session/refresh ───────────────────────────
 // Slide the session forward: mint a fresh 24h session for the SAME user, set the
-// new cookies, and drop the old session row. Sessions are a fixed 24h JWT with no
-// sliding renewal, so a long-lived unattended surface (the kiosk panel) would be
-// logged out mid-use every 24h; its heartbeat calls this to stay alive. Grants no
+// new cookies, and retire the old session after a short overlap. Sessions are a
+// fixed 24h JWT with no sliding renewal, so a long-lived unattended surface (the
+// kiosk panel) would be logged out mid-use every 24h; its heartbeat calls this to
+// stay alive. The old row must NOT be deleted outright — the kiosk polls every
+// second, and in-flight requests still carrying the old cookie would 401, which
+// the frontend treats as "logged out" (see retireSessionWithGrace). Grants no
 // new privileges — it only re-ups the caller's own already-valid session.
 router.post('/session/refresh', requireAuth, async (req: Request, res: Response) => {
   const ar = req as AuthRequest;
   const { token, csrfToken, expiresAt } = await createSession(ar.user.id);
   setAuthCookies(res, token, csrfToken, expiresAt);
   if (ar.sessionToken && ar.sessionToken !== token) {
-    await prisma.session.deleteMany({ where: { token: ar.sessionToken } });
+    await retireSessionWithGrace(ar.sessionToken);
   }
+  // Opportunistic tidy-up: nothing prunes expired Session rows on a schedule,
+  // and a 24/7 kiosk rotates ~96 sessions a day — sweep this user's dead rows.
+  await prisma.session.deleteMany({ where: { userId: ar.user.id, expiresAt: { lt: new Date() } } });
   res.json({ ok: true, expiresAt });
 });
 
