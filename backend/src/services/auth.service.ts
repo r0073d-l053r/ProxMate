@@ -61,6 +61,28 @@ export async function createSession(
 }
 
 /**
+ * Retire a session with a short overlap instead of deleting it outright. Used
+ * by session rotation (`POST /auth/session/refresh`): the kiosk panel polls
+ * every second, so requests carrying the OLD cookie are still in flight when
+ * the rotation response (with the new cookie) reaches the browser. Deleting
+ * the old row immediately made those stragglers 401 — and the frontend clears
+ * auth on any 401 — so the panel bounced to /login at a random heartbeat (the
+ * "kiosk randomly logs out" bug). A ~90s grace lets in-flight requests finish;
+ * `verifySession`'s expiresAt check then retires the row naturally.
+ *
+ * Shrink-only by construction: the WHERE clause touches only rows that expire
+ * AFTER the grace mark, so a session's life is never extended here — and
+ * explicit logout still hard-deletes immediately.
+ */
+export async function retireSessionWithGrace(token: string, graceMs = 90_000): Promise<void> {
+  const grace = new Date(Date.now() + graceMs);
+  await prisma.session.updateMany({
+    where: { token, expiresAt: { gt: grace } },
+    data: { expiresAt: grace },
+  });
+}
+
+/**
  * Verify a JWT and its backing session, returning the user + the session's CSRF
  * token (or null). Used by the HTTP auth middleware (which enforces CSRF on
  * cookie-authenticated mutating requests).
