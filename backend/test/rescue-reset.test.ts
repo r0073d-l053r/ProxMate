@@ -5,6 +5,10 @@
 vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
     virtualMachine: { findMany: vi.fn(), update: vi.fn() },
+    // Power-on paths now check the OWNER's compute-access window. Default the
+    // owner to "never expires" so these tests exercise the rescue/resume logic
+    // rather than the access gate (that gate has its own tests).
+    user: { findUnique: vi.fn(async () => ({ role: 'user', accessExpiresAt: null })) },
     systemConfig: { findUnique: vi.fn() },
   },
 }));

@@ -1,6 +1,7 @@
 import { AuthGuard } from "@/components/dashboard/auth-guard";
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { Topbar } from "@/components/dashboard/topbar";
+import { AccessExpiryBanner } from "@/components/dashboard/access-expiry-banner";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -9,7 +10,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <Sidebar />
         <div className="flex min-w-0 flex-1 flex-col">
           <Topbar />
-          <main className="flex-1 overflow-y-auto p-6">{children}</main>
+          <main className="flex-1 overflow-y-auto p-6">
+            <AccessExpiryBanner />
+            {children}
+          </main>
         </div>
       </div>
     </AuthGuard>

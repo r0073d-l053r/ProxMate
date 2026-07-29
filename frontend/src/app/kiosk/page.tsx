@@ -5,11 +5,12 @@ import { useRouter } from "next/navigation";
 import { Server, Maximize, Minimize, X, LayoutDashboard, MonitorPlay, Activity, Crown, User, ServerOff } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
-import type { ClusterStats, ClusterHealth, LiveStats, UserGroup, AuditEntry, MeResponse, AdminSettings } from "@/lib/types";
+import type { ClusterStats, ClusterHealth, LiveStats, UserGroup, AuditEntry, AuditListResponse, MeResponse, AdminSettings } from "@/lib/types";
 import { usedPercent, formatRam } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { LiveVmCard } from "@/components/admin/live-vm-card";
 import { KioskCommandCenter } from "@/components/kiosk/command-center";
+import { KioskActivityList } from "@/components/kiosk/activity-list";
 import { KioskUnlockDialog } from "@/components/kiosk/unlock-dialog";
 
 const FAST_MS = 1000; // cluster + live VM stats
@@ -19,7 +20,7 @@ const AUDIT_MS = 15000; // activity ticker
 // would be logged out mid-shift. Re-up well inside that window while visible.
 const SESSION_REFRESH_MS = 15 * 60 * 1000; // 15 min
 
-type Tab = "overview" | "vms";
+type Tab = "overview" | "vms" | "activity";
 
 type WakeLockLike = { release: () => Promise<void> };
 
@@ -47,6 +48,7 @@ export default function KioskPage() {
   const [statsError, setStatsError] = useState<string | null>(null);
   const [lastTick, setLastTick] = useState<number | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const [auditTotal, setAuditTotal] = useState(0);
 
   const fastInFlight = useRef(false);
 
@@ -124,17 +126,19 @@ export default function KioskPage() {
     };
   }, [loadGroups]);
 
+  // Audit feed: the endpoint returns `{ items, total, … }` (AuditListResponse).
+  // One poll serves both surfaces — the Overview ticker takes the first few, the
+  // Activity tab shows the whole fetched window.
   useEffect(() => {
     let cancelled = false;
     const tick = () => {
       if (document.visibilityState !== "visible") return;
       api
-        .get<AuditEntry[] | { entries: AuditEntry[] }>("/admin/audit")
+        .get<AuditListResponse>("/admin/audit", { params: { limit: 200 } })
         .then((res) => {
           if (cancelled) return;
-          const data = res.data;
-          const entries = Array.isArray(data) ? data : (data.entries ?? []);
-          setAudit(entries.slice(0, 8));
+          setAudit(res.data.items);
+          setAuditTotal(res.data.total);
         })
         .catch(() => {});
     };
@@ -261,6 +265,9 @@ export default function KioskPage() {
           <TabButton active={tab === "vms"} onClick={() => setTab("vms")} icon={MonitorPlay}>
             VMs {vmTotal > 0 && <span className="opacity-70">({vmTotal})</span>}
           </TabButton>
+          <TabButton active={tab === "activity"} onClick={() => setTab("activity")} icon={Activity}>
+            Activity
+          </TabButton>
         </div>
 
         <div className="flex items-center gap-2">
@@ -308,9 +315,11 @@ export default function KioskPage() {
             vmRunning={vmRunning}
             vmStopped={vmStopped}
             vmTotal={vmTotal}
-            audit={audit}
+            audit={audit.slice(0, 8)}
             clusterError={clusterError}
           />
+        ) : tab === "activity" ? (
+          <KioskActivityList audit={audit} total={auditTotal} />
         ) : (
           <div className="h-full overflow-y-auto pr-1">
             {groups === null ? (

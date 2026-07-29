@@ -1,5 +1,6 @@
 import { randomBytes, createHmac } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
+import { isAccessExpired } from './access.service.js';
 import type { AuthUser } from '../types/index.js';
 
 const PREFIX = 'pm_';
@@ -64,10 +65,22 @@ export async function verifyApiToken(raw: string): Promise<AuthUser | null> {
   if (!isApiToken(raw)) return null;
   const row = await prisma.apiToken.findUnique({
     where: { tokenHash: hashToken(raw) },
-    include: { user: { select: { id: true, email: true, role: true, displayName: true } } },
+    include: {
+      user: {
+        select: {
+          id: true, email: true, role: true, displayName: true,
+          // Needed for the access-window check below — a personal API token
+          // never reaches requireAuth's session path, so it would otherwise
+          // outlive its owner's suspension.
+          accessExpiresAt: true,
+        },
+      },
+    },
   });
   if (!row) return null;
   if (row.expiresAt && row.expiresAt.getTime() < Date.now()) return null;
+  if (isAccessExpired(row.user)) return null;
   prisma.apiToken.update({ where: { id: row.id }, data: { lastUsedAt: new Date() } }).catch(() => undefined);
-  return row.user;
+  const { id, email, role, displayName } = row.user;
+  return { id, email, role, displayName };
 }

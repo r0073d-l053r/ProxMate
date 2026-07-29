@@ -11,13 +11,14 @@ import { assertSafeOutboundUrl } from '../lib/url-safety.js';
  * Each event type can be toggled. All sends are best-effort: a failing channel is
  * logged and never propagates into the operation that triggered the notification.
  */
-export const NOTIFY_EVENTS = ['backup.failed', 'vm.error', 'auth.lockout'] as const;
+export const NOTIFY_EVENTS = ['backup.failed', 'vm.error', 'auth.lockout', 'access.expired'] as const;
 export type NotifyEvent = (typeof NOTIFY_EVENTS)[number];
 
 export const NOTIFY_EVENT_LABEL: Record<NotifyEvent, string> = {
   'backup.failed': 'Backup failed',
   'vm.error': 'VM error',
   'auth.lockout': 'Account locked',
+  'access.expired': 'Tenant access expired',
 };
 
 export interface NotifyConfig {
@@ -33,24 +34,42 @@ export interface NotifyPayload {
   message: string; // body
 }
 
-function parseEvents(csv: string | null): NotifyEvent[] {
+/**
+ * Events added AFTER the settings UI shipped. An install where an admin ever
+ * saved notification settings holds a CSV that predates these, so filtering
+ * strictly would leave the new event silently off forever — and nobody would
+ * be told a tenant lapsed. Opt these in unless explicitly turned off, i.e.
+ * unless the admin has saved settings SINCE the event existed (detected by the
+ * marker below).
+ */
+const EVENTS_ADDED_LATER: NotifyEvent[] = ['access.expired'];
+
+/** Bumped whenever EVENTS_ADDED_LATER grows; stored in `notify_events_version`. */
+const EVENTS_VERSION = '2';
+
+function parseEvents(csv: string | null, version: string | null): NotifyEvent[] {
   if (csv == null) return [...NOTIFY_EVENTS]; // default: everything on
   const set = new Set(csv.split(',').map((s) => s.trim()));
+  // A CSV saved before these events existed cannot have opted out of them, so
+  // treat them as on. Once the admin saves from a UI that knows about them the
+  // version matches and a deliberate opt-out is respected.
+  if (version !== EVENTS_VERSION) for (const e of EVENTS_ADDED_LATER) set.add(e);
   return NOTIFY_EVENTS.filter((e) => set.has(e));
 }
 
 export async function getNotifyConfig(): Promise<NotifyConfig> {
-  const [url, emailEnabled, emailTo, events] = await Promise.all([
+  const [url, emailEnabled, emailTo, events, eventsVersion] = await Promise.all([
     getConfig('notify_webhook_url'),
     getConfig('notify_email_enabled'),
     getConfig('notify_email_to'),
     getConfig('notify_events'),
+    getConfig('notify_events_version'),
   ]);
   return {
     webhookUrl: url ?? '',
     emailEnabled: emailEnabled === 'true',
     emailTo: emailTo ?? '',
-    events: parseEvents(events),
+    events: parseEvents(events, eventsVersion),
   };
 }
 
@@ -67,6 +86,10 @@ export async function saveNotifyConfig(cfg: {
   await setConfig('notify_email_enabled', String(cfg.emailEnabled));
   await setConfig('notify_email_to', (cfg.emailTo ?? '').trim());
   await setConfig('notify_events', cfg.events.filter((e) => NOTIFY_EVENTS.includes(e)).join(','));
+  // Records that this CSV was written by a UI aware of every current event, so
+  // parseEvents stops auto-enabling the later additions and an explicit
+  // opt-out sticks.
+  await setConfig('notify_events_version', EVENTS_VERSION);
 }
 
 /** POST a payload to the configured webhook. `content` is read by Discord, `text` by Slack/Mattermost. */

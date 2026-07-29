@@ -142,6 +142,19 @@ const formatRamMb = (mb: number): string => {
 
 const formatWhen = (d: Date | string): string => new Date(d).toUTCString();
 
+/**
+ * Render a compute-access window for humans. null/'never' is the common case
+ * and must read as reassuring, not as missing data.
+ */
+const humanizeAccessDuration = (d: string | null | undefined): string => {
+  if (!d || d === 'never') return 'No expiry';
+  const days = parseInt(d, 10);
+  if (!Number.isFinite(days)) return 'No expiry';
+  if (days === 365) return '1 year from sign-up';
+  if (days % 30 === 0 && days >= 60) return `${days / 30} months from sign-up`;
+  return `${days} days from sign-up`;
+};
+
 // ─── Templates ────────────────────────────────────────────────────────────────
 
 /** Branded password-reset email (HTML + plain-text fallback). */
@@ -237,10 +250,12 @@ export function inviteEmail(opts: {
   maxRam: number; // MB
   maxStorage: number; // GB
   require2fa: boolean;
+  /** Compute window granted by this invite. null = never expires. */
+  accessDuration?: string | null;
   expiresAt: Date;
   inviterName?: string | null;
 }): RenderedEmail {
-  const { inviteUrl, maxCpu, maxRam, maxStorage, require2fa, expiresAt, inviterName } = opts;
+  const { inviteUrl, maxCpu, maxRam, maxStorage, require2fa, accessDuration, expiresAt, inviterName } = opts;
   const subject = "You're invited to ProxMate";
 
   const from = inviterName ? `${inviterName} has invited you` : "You've been invited";
@@ -254,7 +269,10 @@ export function inviteEmail(opts: {
     ['vCPU', String(maxCpu)],
     ['Memory', formatRamMb(maxRam)],
     ['Storage', `${maxStorage} GB`],
-    ['Invite expires', formatWhen(expiresAt)],
+    // Two different clocks — label them so they can't be confused: this one is
+    // how long the LINK stays usable, the next is how long the ACCESS lasts.
+    ['Invite link expires', formatWhen(expiresAt)],
+    ['Access', humanizeAccessDuration(accessDuration)],
   ];
   if (require2fa) rows.push(['Two-step auth', 'Required at sign-up']);
 
@@ -402,4 +420,50 @@ export function backupDownloadEmail(opts: { vmName?: string; link: string; filen
     });
 
   return { subject, text, html: wrapEmail('Your ProxMate backup is ready to download', bodyRows) };
+}
+
+/**
+ * Heads-up that a tenant's compute window is about to close (sent 7 days and
+ * again 1 day out). Deliberately non-alarming: nothing is deleted at expiry,
+ * and the fix is a conversation with the admin — so the email says exactly
+ * that rather than implying data loss.
+ */
+export function accessExpiringEmail(opts: {
+  displayName: string;
+  expiresAt: Date;
+  daysLeft: number;
+  vmCount: number;
+  dashboardUrl: string;
+}): RenderedEmail {
+  const { displayName, expiresAt, daysLeft, vmCount, dashboardUrl } = opts;
+  const when = daysLeft <= 1 ? 'tomorrow' : `in ${daysLeft} days`;
+  const subject = `[ProxMate] Your access ends ${when}`;
+  const machines = vmCount === 1 ? '1 machine' : `${vmCount} machines`;
+
+  const text =
+    `Hi ${displayName},\n\n` +
+    `Your ProxMate access ends ${when} (${formatWhen(expiresAt)}).\n\n` +
+    `When it does, your ${machines} will be powered off and you won't be able to sign in. ` +
+    `Nothing is deleted — your disks and backups are kept, and an administrator can restore ` +
+    `your access at any time.\n\n${dashboardUrl}\n`;
+
+  const rows: Array<[string, string]> = [
+    ['Access ends', formatWhen(expiresAt)],
+    ['Days left', String(Math.max(0, daysLeft))],
+    ['Machines affected', String(vmCount)],
+  ];
+
+  const bodyRows =
+    h1(`Your ProxMate access ends ${escapeHtml(when)}`) +
+    p(`Hi ${escapeHtml(displayName)} — your compute window closes ${escapeHtml(when)}.`) +
+    infoTable(rows) +
+    p(
+      `Your ${escapeHtml(machines)} will be powered off and sign-in will stop working. ` +
+        '<strong>Nothing is deleted</strong> — your disks and backups are kept, and an ' +
+        'administrator can restore your access at any time.',
+    ) +
+    button(dashboardUrl, 'Open ProxMate') +
+    linkFallback(dashboardUrl);
+
+  return { subject, text, html: wrapEmail(`Your ProxMate access ends ${when}.`, bodyRows) };
 }
