@@ -510,7 +510,7 @@ export interface IdeLlmKey {
   lastUsedAt: string | null;
 }
 
-export type NotifyEvent = "backup.failed" | "vm.error" | "auth.lockout";
+export type NotifyEvent = "backup.failed" | "vm.error" | "auth.lockout" | "access.expired";
 
 export interface NotifyConfig {
   webhookUrl: string;
@@ -523,6 +523,7 @@ export const NOTIFY_EVENT_LABELS: Record<NotifyEvent, string> = {
   "backup.failed": "Backup failed",
   "vm.error": "VM provisioning error",
   "auth.lockout": "Account locked (brute-force)",
+  "access.expired": "Tenant compute access expired",
 };
 
 export interface IsolationStatus {
