@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/admin.js';
 import { generateToken, parseExpiry } from '../services/invite.service.js';
+import { ACCESS_DURATIONS } from '../services/access.service.js';
 import { isMailConfigured, sendMail } from '../services/mail.service.js';
 import { inviteEmail } from '../lib/email-templates.js';
 
@@ -35,6 +36,7 @@ async function emailInvite(to: string, invite: InviteToken, inviterName?: string
       maxRam: invite.maxRam,
       maxStorage: invite.maxStorage,
       require2fa: invite.require2fa,
+      accessDuration: invite.accessDuration,
       expiresAt: invite.expiresAt,
       inviterName,
     });
@@ -55,6 +57,10 @@ const CreateInviteSchema = z.object({
   email: z.string().trim().email().max(254).optional(),
   expiresIn: z.string().default('7d'),
   require2fa: z.boolean().default(false),
+  // How long the tenant may use the cluster once they redeem this invite.
+  // Omitted / 'never' => never expires. Distinct from `expiresIn`, which is how
+  // long the LINK stays redeemable.
+  accessDuration: z.enum(ACCESS_DURATIONS).optional(),
 });
 
 router.post('/', async (req: Request, res: Response) => {
@@ -83,6 +89,12 @@ router.post('/', async (req: Request, res: Response) => {
       maxRam: parsed.data.maxRam,
       maxStorage: parsed.data.maxStorage,
       require2fa: parsed.data.require2fa,
+      // null = the tenant's access never expires (the default when the admin
+      // picks "Never expires").
+      accessDuration:
+        !parsed.data.accessDuration || parsed.data.accessDuration === 'never'
+          ? null
+          : parsed.data.accessDuration,
       expiresAt,
     },
   });
@@ -104,6 +116,7 @@ router.post('/', async (req: Request, res: Response) => {
     maxRam: invite.maxRam,
     maxStorage: invite.maxStorage,
     require2fa: invite.require2fa,
+    accessDuration: invite.accessDuration,
     expiresAt: invite.expiresAt.toISOString(),
     emailed: !!parsed.data.email && !emailError,
     emailError: emailError ?? undefined,
@@ -168,6 +181,7 @@ router.get('/', async (_req: Request, res: Response) => {
       maxRam: inv.maxRam,
       maxStorage: inv.maxStorage,
       require2fa: inv.require2fa,
+      accessDuration: inv.accessDuration,
       used: !!inv.usedById,
       usedBy: inv.usedBy ? { email: inv.usedBy.email, displayName: inv.usedBy.displayName } : null,
       expired: inv.expiresAt < new Date(),

@@ -6,6 +6,7 @@ import { evaluateAlerts } from './alert.service.js';
 import { refreshAllTemplates } from './template.service.js';
 import { runAutoBalance } from './cluster-balancer.service.js';
 import { runAppDbBackup } from './appdb-backup.service.js';
+import { runAccessExpiryTick } from './access-sweep.service.js';
 import { getConfig, setConfig } from './config.service.js';
 
 /** SystemConfig key: ISO timestamp of the last successful weekly backup run. */
@@ -25,6 +26,8 @@ let historyTask: ReturnType<typeof cron.schedule> | null = null;
 let balancerTask: ReturnType<typeof cron.schedule> | null = null;
 let templateTask: ReturnType<typeof cron.schedule> | null = null;
 let appDbTask: ReturnType<typeof cron.schedule> | null = null;
+let accessTask: ReturnType<typeof cron.schedule> | null = null;
+let accessRunning = false;
 let running = false;
 let powerRunning = false;
 let backupRunning = false;
@@ -228,4 +231,39 @@ export function startScheduler(): void {
   });
 
   console.log(`[scheduler] app-db backups scheduled (${appDbExpr}, when a directory is configured)`);
+
+  // Tenant compute-access windows: warn, then suspend when one closes.
+  // HOURLY, not daily — refusing sign-in is instantaneous (it's a per-request
+  // check), but a lapsed tenant's guests would otherwise keep burning cluster
+  // resources for up to a day. Two indexed queries and an early return when
+  // nothing is due. :20 keeps it clear of the 02:30 app-db snapshot and the
+  // Sunday 03:00 backup window.
+  const accessExpr =
+    process.env['ACCESS_EXPIRY_CRON'] && cron.validate(process.env['ACCESS_EXPIRY_CRON'])
+      ? process.env['ACCESS_EXPIRY_CRON']
+      : '20 * * * *';
+  accessTask = cron.schedule(accessExpr, () => void accessTick());
+
+  // Catch-up: the backend may have been down across a deadline, and a tenant
+  // whose window closed overnight should not get a free extra hour.
+  setTimeout(() => void accessTick(), 15_000);
+
+  console.log(`[scheduler] access-expiry sweep scheduled (${accessExpr})`);
+}
+
+async function accessTick(): Promise<void> {
+  if (accessRunning) return;
+  accessRunning = true;
+  try {
+    const r = await runAccessExpiryTick(new Date());
+    if (r.suspended || r.warned) {
+      console.log(
+        `[scheduler] access expiry: ${r.suspended} suspended (${r.stopped} guest(s) stopped), ${r.warned} warned`,
+      );
+    }
+  } catch (err) {
+    console.error('[scheduler] access-expiry tick failed:', err);
+  } finally {
+    accessRunning = false;
+  }
 }

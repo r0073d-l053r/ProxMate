@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { verifySession, verifyEnrollment } from '../services/auth.service.js';
 import { isMfaSetupRequired } from '../services/mfa.service.js';
+import { isAccessExpired } from '../services/access.service.js';
 import { prisma } from '../lib/prisma.js';
 import { SESSION_COOKIE } from '../lib/cookies.js';
 import type { AuthRequest } from '../types/index.js';
@@ -28,6 +29,10 @@ async function authenticateEnrollment(req: Request): Promise<AuthUserResult | nu
 
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) return null;
+  // The enrollment token is its own credential and never passes through
+  // verifySession, so a suspended tenant could otherwise still complete 2FA
+  // setup and keep poking the enrollment endpoints.
+  if (isAccessExpired(user)) return null;
 
   return {
     user: { id: user.id, email: user.email, role: user.role, displayName: user.displayName },

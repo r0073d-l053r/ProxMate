@@ -112,7 +112,13 @@ function fieldProbe(field: string, min: number, max: number): boolean {
  */
 export async function runDuePowerActions(now: Date = new Date()): Promise<{ started: number; stopped: number }> {
   const vms = await prisma.virtualMachine.findMany({
-    where: { OR: [{ startCron: { not: null } }, { stopCron: { not: null } }] },
+    where: {
+      OR: [{ startCron: { not: null } }, { stopCron: { not: null } }],
+      // A suspended tenant's guests must not be auto-started back up the next
+      // morning — that would quietly undo the suspension. Their scheduled STOPS
+      // are dropped too, which is harmless: the machines are already off.
+      NOT: { user: { accessSuspendedAt: { not: null } } },
+    },
   });
   if (vms.length === 0) return { started: 0, stopped: 0 };
 

@@ -17,6 +17,13 @@ import { formatRam, formatDate, formatBytes, formatUptime } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { UsageReport } from "@/components/admin/usage-report";
 import { FormField } from "@/components/form-field";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
@@ -365,6 +372,7 @@ export default function UsersPage() {
                   <TableHead>Role</TableHead>
                   <TableHead>VMs</TableHead>
                   <TableHead>Quota</TableHead>
+                  <TableHead>Access</TableHead>
                   <TableHead>Joined</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -394,6 +402,15 @@ export default function UsersPage() {
                     <TableCell className="text-muted-foreground">
                       {u.quota.cpu.used}/{u.quota.cpu.max} vCPU · {formatRam(u.quota.ram.used)}/
                       {formatRam(u.quota.ram.max)} · {u.quota.storage.used}/{u.quota.storage.max} GB
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {u.role === "admin" || !u.accessExpiresAt ? (
+                        <span className="text-xs">Never expires</span>
+                      ) : u.accessSuspendedAt ? (
+                        <Badge variant="destructive">Suspended</Badge>
+                      ) : (
+                        <span className="text-xs">{formatDate(u.accessExpiresAt)}</span>
+                      )}
                     </TableCell>
                     <TableCell className="text-muted-foreground">{formatDate(u.createdAt)}</TableCell>
                     <TableCell className="text-right">
@@ -445,11 +462,26 @@ export default function UsersPage() {
  * cluster they can use. Existing VMs are left alone — quotas bind at create/resize
  * time, so the current usage is shown for context.
  */
+/** Windows an admin can grant. Mirrors ACCESS_DURATIONS on the backend. */
+const ACCESS_OPTIONS = [
+  { value: "never", label: "Never expires" },
+  { value: "7d", label: "7 days" },
+  { value: "14d", label: "14 days" },
+  { value: "30d", label: "30 days" },
+  { value: "60d", label: "60 days" },
+  { value: "90d", label: "90 days" },
+  { value: "180d", label: "6 months" },
+  { value: "365d", label: "1 year" },
+];
+
 function EditQuotaDialog({ user, onDone }: { user: ManagedUser; onDone: () => void }) {
   const [open, setOpen] = useState(false);
   const [cpu, setCpu] = useState(user.quota.cpu.max);
   const [ramGb, setRamGb] = useState(Math.round(user.quota.ram.max / 1024));
   const [storage, setStorage] = useState(user.quota.storage.max);
+  // "keep" = don't touch the window at all, so a quota edit never silently
+  // resets someone's expiry. Any other value re-anchors it from today.
+  const [access, setAccess] = useState("keep");
   const [busy, setBusy] = useState(false);
 
   const num = (v: string) => Math.max(0, Math.floor(Number(v) || 0));
@@ -461,6 +493,7 @@ function EditQuotaDialog({ user, onDone }: { user: ManagedUser; onDone: () => vo
       setCpu(user.quota.cpu.max);
       setRamGb(Math.round(user.quota.ram.max / 1024));
       setStorage(user.quota.storage.max);
+      setAccess("keep"); // the dialog never unmounts — re-seed on every open
     }
   }
 
@@ -471,8 +504,15 @@ function EditQuotaDialog({ user, onDone }: { user: ManagedUser; onDone: () => vo
         maxCpu: cpu,
         maxRam: ramGb * 1024,
         maxStorage: storage,
+        ...(access !== "keep" && { accessDuration: access }),
       });
-      toast.success(`Updated ${user.displayName}'s quota.`);
+      toast.success(
+        access === "keep"
+          ? `Updated ${user.displayName}'s quota.`
+          : access === "never"
+            ? `${user.displayName}'s access no longer expires.`
+            : `${user.displayName}'s access now runs for ${ACCESS_OPTIONS.find((o) => o.value === access)?.label ?? access} from today.`,
+      );
       setOpen(false);
       onDone();
     } catch (err) {
@@ -516,6 +556,38 @@ function EditQuotaDialog({ user, onDone }: { user: ManagedUser; onDone: () => vo
             />
           </FormField>
         </div>
+
+        {/* Compute access window. Admins never expire, so the control is only
+            meaningful (and only accepted by the API) for tenants. */}
+        {user.role !== "admin" && (
+          <div className="grid gap-3 border-t pt-3">
+            <FormField
+              label="Compute access"
+              hint={
+                user.accessSuspendedAt
+                  ? "Suspended — their machines are powered off. Choosing a new window restores access immediately."
+                  : user.accessExpiresAt
+                    ? `Currently ends ${formatDate(user.accessExpiresAt)}. A new window is counted from today.`
+                    : "Currently never expires."
+              }
+            >
+              <Select value={access} onValueChange={(v) => setAccess(v as string)}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="keep">Leave unchanged</SelectItem>
+                  {ACCESS_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.value === "never" ? o.label : `${o.label} from today`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+          </div>
+        )}
+
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
           <Button onClick={save} disabled={busy}>
