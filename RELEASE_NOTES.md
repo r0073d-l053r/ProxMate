@@ -1,131 +1,111 @@
 ## Highlights
 
-A follow-up to v0.8.0 built around one theme — **deciding how long someone gets
-to use your cluster** — plus a redesigned admin Settings page and three kiosk
-fixes, one of which had been broken since kiosk mode first shipped.
+A hardening release. The kiosk wall panel becomes monitoring-only and stops
+leaking who owns what, and app-database backups can finally be pointed at a
+directory on the host without hitting a wall.
 
-- **Compute access windows, including "never"** — set how long an invited person
-  may use the cluster, and change it later for anyone who already accepted.
-- **Admin Settings, reorganised** — one long scroll of thirteen cards becomes a
-  tabbed layout mirroring the VM Overview page.
-- **Kiosk panel fixes** — the activity feed (empty since v0.2.5) now works, gains
-  a full Activity tab, and the panel no longer logs itself out.
+- **Kiosk is monitoring only** — the VMs tab no longer carries power controls,
+  and three separate ways out of the panel that skipped the passkey/PIN exit
+  gate are closed.
+- **App-database backups: choose the host location in `.env`** — the setting
+  now works out of the box, and failures explain themselves instead of emitting
+  a bare `EACCES`.
 
-No breaking changes, and nothing to configure. Existing accounts are unaffected.
+No breaking changes. Upgrading from v0.8.5 is a normal update.
 
-## Compute access windows — including "never"
+## Kiosk mode: monitoring only
 
-Until now, handing someone a slice of the cluster was permanent unless you
-deleted their account. The invite form's expiry dropdown looked like it
-controlled that, but it only ever governed how long the invite **link** stayed
-clickable.
+The wall panel's VMs tab was rendering the admin VM card verbatim, so anyone
+walking past could **start, gracefully shut down, hard power off, or reboot any
+tenant's machine**, and open its console. A rack panel should show state, not
+change it. Those controls are now removed from the panel entirely — not
+disabled, removed, because a greyed-out button still advertises an action that
+doesn't belong there. Live status, sparklines, and per-node health are unchanged.
 
-**When you invite someone** (Admin → Invites) there is a new **Compute access**
-control: *Never expires* (the default), 7 days, 14, 30, 60, 90, 6 months, or
-1 year. The old control is now labelled **Invite link expires in**, so the two
-clocks can't be confused. The window is counted from the day they **sign up**,
-not the day you created the invite — an invite that sits unopened for a week
-still grants its full term. The invite email states the window alongside the
-quota.
+An adversarial review of the panel then found three more ways past the exit
+lock, all now closed:
 
-**For someone who already accepted** (Admin → Users) click their name. Below the
-quota fields is a **Compute access** control showing their current window, where
-you can extend it, shorten it, or set **Never expires**. It defaults to *Leave
-unchanged*, so editing a quota never silently resets someone's expiry. The users
-table gains an **Access** column and a **Suspended** badge.
+- **The browser Back button left kiosk entirely.** One gesture — Back, an
+  edge-swipe, or `Alt+Left` — landed on the admin dashboard with a live admin
+  session and every power control, without ever showing the passkey/PIN prompt.
+  Kiosk is now entered so that nothing sits behind it in history, and a
+  back-navigation opens the same unlock dialog as the corner exit button.
+- **A long-press opened the browser context menu**, offering Back again and
+  Inspect — a developer console on an authenticated admin session. Suppressed.
+- **The VM name and console icon were links** into the full dashboard, which
+  walked around the exit gate the same way.
 
-**When a window closes, the account is suspended — never deleted.** Their
-machines are powered off and sign-in is refused with a clear explanation instead
-of a wrong-password error. Disks, backups, snapshots and quotas are all left
-intact. Setting a new window (or *Never expires*) restores everything
-immediately and lets them power their machines back on.
+## Kiosk mode: what's on the glass
 
-**Nobody is surprised by it.** Warning emails go out 7 days and 1 day before the
-window closes, each sent once per deadline — extending the window automatically
-re-arms them. Tenants also see a countdown banner in the dashboard, and you get
-an `access.expired` notification (webhook and/or email) when someone lapses.
+Two disclosure fixes, holding the panel to the standard the Activity tab already
+set (show what happened, never who did it):
 
-**Admins never expire**, anywhere — including a tenant later promoted to admin,
-who keeps the window from their original invite.
+- **The activity feed could print a tenant's email address.** Sharing a VM
+  records an audit line beginning with the recipient's address, and the panel's
+  label logic took that leading word and displayed it styled as a machine name.
+  VM names are now resolved from the actual inventory, so a label is either a
+  real machine name or absent. This also stops node names and stray words being
+  dressed up as VMs.
+- **The VMs tab no longer names each tenant.** It listed every owner's display
+  name beside their machines and quota — a who-owns-what map readable from the
+  hallway. Groups now read "Tenant · 3 guests", with the crown icon still
+  distinguishing admin-owned guests from tenant-owned ones.
 
-Enforcement is applied at every authenticated entry point, not just the login
-form: session validation, the console WebSocket, the IDE proxy and IDE
-WebSocket, personal API tokens, the 2FA-enrollment token, and the IDE LLM
-gateway. `GET /auth/me` and `POST /auth/logout` deliberately remain reachable so
-a suspended tenant is told *why* rather than being bounced to the login screen to
-retype a correct password.
+## App-database backups: pick the host directory
 
-## Admin Settings, reorganised
+Pointing the backup setting at a folder created on the host failed with:
 
-The Settings page is now a tabbed layout mirroring the VM Overview page, with
-related settings grouped into boxed sections:
+```
+EACCES: permission denied, mkdir '/srv/backups'
+```
 
-- **Proxmox** — connection, VM defaults, tenant network isolation
-- **IDE** — ProxMate IDE
-- **Notifications** — email (SMTP), event notifications, broadcast
-- **Access** — single sign-on (OIDC), kiosk mode
-- **Maintenance** — updates, app-database backups, rescue ISO, cloud-image refresh
+That reads like a file-permission problem and sends you off fixing ownership on
+the host. It isn't one: ProxMate runs in a container and can only write to
+directories **mounted into** it, so a host folder that was never mounted is
+unreachable no matter what its permissions are.
 
-Each tab is deep-linkable (for example `/admin/settings?tab=access`). No settings
-were added, removed or renamed — this is purely a reorganisation.
+The host location is now chosen where it has to be — when the container is
+created:
 
-## Kiosk panel fixes
+```bash
+# .env
+PROXMATE_BACKUP_DIR=/mnt/backups/proxmate
+```
 
-**The activity feed was always empty.** The kiosk read the wrong field from the
-audit API, so the Overview panel's "Recent activity" had shown nothing since
-kiosk mode shipped in v0.2.5. The audit log was being recorded correctly the
-whole time; the panel simply never displayed it.
+The container-side path is fixed and is the default for the in-app setting, so
+backups work out of the box rather than requiring you to discover which paths
+are writable. An explicitly empty directory still means "disabled".
 
-**A new Activity tab** shows the full audit window (latest 200 entries) in
-touch-sized rows. Because a wall panel is readable by anyone walking past, rows
-show **what happened, which VM, from which IP, and when** — and deliberately
-never who did it. Actor identity stays in the authenticated Admin → Audit page.
-Tap any row's IP or VM chip to filter the list to that IP or that machine; tap
-the chip in the header to clear it.
+Failures now explain themselves. A permission error names the container-mount
+cause and says creating the folder on the host isn't enough on its own; missing
+directories, read-only (`:ro`) mounts, and full disks each get their own
+message. The directory is also checked **when you press Save**, so a bad path is
+rejected while you're looking at it instead of failing silently at 02:30.
 
-**The panel no longer logs itself out.** The 15-minute session heartbeat that
-keeps an unattended panel signed in was itself causing the logouts: it minted a
-new session and deleted the old one instantly, while the panel's once-per-second
-polling still had requests in flight carrying the old cookie. Those requests
-failed, and the app treats any authentication failure as "signed out". The old
-session is now retired with a 90-second overlap so in-flight requests finish
-cleanly. The change is shrink-only — a session's lifetime can never be extended
-by it — and an explicit sign-out still ends the session immediately.
-
-## Smaller fixes
-
-- Scheduled auto-start no longer powers a suspended tenant's machines back on the
-  next morning.
-- A co-owner of a shared VM can no longer start, restart, resume, rescue or
-  duplicate a machine whose **owner's** access window has closed. Power-on
-  decisions now check the owner, not the caller.
-- A guest that ignores the graceful shutdown request at expiry (no ACPI handler,
-  an installer sitting at a prompt) is now force-stopped on the following sweep
-  instead of being reported as stopped while still running.
-- The create-invite form's grid no longer leaves an empty half-row; the two
-  expiry controls sit side by side.
+`DEPLOYMENT.md` gains an App-database backups section covering the container
+boundary, setup, restore steps, and the reminder that a snapshot is useless
+without the matching `ENCRYPTION_KEY`.
 
 ## Upgrade notes
 
-Standard update — pull the release and rebuild. The database migration adds five
-nullable columns and applies automatically at container start.
+Standard update — pull the release and rebuild. No database migration.
 
-**Existing accounts are unaffected.** A null access window means "never expires",
-which is the default for every account that predates this release, so nothing
-changes for anyone until you set a window on someone.
+`docker-compose.yml` gains a backup mount that defaults to `./backups` beside
+the compose file, so existing installs get a working backup target without any
+configuration. Set `PROXMATE_BACKUP_DIR` in `.env` to put it somewhere better —
+ideally a different disk from the database, or an off-host share.
 
-If you have previously saved notification settings, the new `access.expired`
-event is enabled for you automatically; you can turn it off under
-Settings → Notifications.
+If you run a kiosk panel, its VM controls are gone by design. Power actions live
+in **Admin → Monitor** and on each VM's page, behind a normal login.
 
 ## Verification
 
-709 backend tests (19 new), backend typecheck and lint clean, frontend lint and
+718 backend tests, 12 frontend tests, typecheck and lint clean on both, frontend
 production build green, Playwright smoke passing, CodeQL / Trivy / npm audit /
 SBOM green.
 
-The access-expiry work additionally went through an adversarial multi-agent
-review before merge, which caught two high-severity defects — an unverified
-shutdown that could leave a suspended tenant's machine running, and four
-unguarded power-on paths reachable by a share-holder — both fixed and covered by
-regression tests in this release.
+The kiosk changes came out of an adversarial multi-agent review of the panel
+that produced 11 candidate findings; the 4 that survived independent
+verification are the ones fixed above. The backup change was verified end to end
+on a live host: a mounted directory produces real snapshots from both the manual
+button and the scheduled (non-root) path.
