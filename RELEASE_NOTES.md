@@ -1,128 +1,131 @@
 ## Highlights
 
-The first release since v0.7.0, bundling three bodies of work:
+A follow-up to v0.8.0 built around one theme — **deciding how long someone gets
+to use your cluster** — plus a redesigned admin Settings page and three kiosk
+fixes, one of which had been broken since kiosk mode first shipped.
 
-- **Tenant controls & admin management** — capability-based VM sharing (Viewer /
-  Operator / Manager), admins deploying VMs into a tenant's account (optionally
-  off-quota), admin-managed VMs that tenants can operate but not resize, private
-  admin actions, and tighter AI-key rules. **This pack contains breaking changes —
-  see Upgrade notes.**
-- **Production hardening** — closes a quota-bypass on rebuild, bills shared-VM
-  resizes to the owner, pins the in-guest IDE tool versions, adds an admin
-  reachability test for the IDE, adds scheduled backups of ProxMate's own
-  database, and fixes an IDE gateway URL that could break the AI agent behind some
-  reverse proxies.
-- **Kiosk mode** — the wall-panel command center now stays signed in during long
-  shifts and requires re-authentication to leave.
+- **Compute access windows, including "never"** — set how long an invited person
+  may use the cluster, and change it later for anyone who already accepted.
+- **Admin Settings, reorganised** — one long scroll of thirteen cards becomes a
+  tabbed layout mirroring the VM Overview page.
+- **Kiosk panel fixes** — the activity feed (empty since v0.2.5) now works, gains
+  a full Activity tab, and the panel no longer logs itself out.
 
-Existing behavior is otherwise unchanged; every new capability is off or empty by
-default.
+No breaking changes, and nothing to configure. Existing accounts are unaffected.
 
-## Tenant controls & admin management
+## Compute access windows — including "never"
 
-### Sharing with permission levels (BREAKING)
+Until now, handing someone a slice of the cluster was permanent unless you
+deleted their account. The invite form's expiry dropdown looked like it
+controlled that, but it only ever governed how long the invite **link** stayed
+clickable.
 
-VM sharing is now capability-based with three presets:
+**When you invite someone** (Admin → Invites) there is a new **Compute access**
+control: *Never expires* (the default), 7 days, 14, 30, 60, 90, 6 months, or
+1 year. The old control is now labelled **Invite link expires in**, so the two
+clocks can't be confused. The window is counted from the day they **sign up**,
+not the day you created the invite — an invite that sits unopened for a week
+still grants its full term. The invite email states the window alongside the
+quota.
 
-- **Viewer** — see the VM and its status.
-- **Operator** — Viewer, plus power actions and the console.
-- **Manager** — Operator, plus configuration, resize, backups, and the IDE.
+**For someone who already accepted** (Admin → Users) click their name. Below the
+quota fields is a **Compute access** control showing their current window, where
+you can extend it, shorten it, or set **Never expires**. It defaults to *Leave
+unchanged*, so editing a quota never silently resets someone's expiry. The users
+table gains an **Access** column and a **Suspended** badge.
 
-Shares can **never** delete, rebuild, or otherwise destroy a VM — those stay with
-the owner and admins. The old `access` values were renamed (co-owner → **manager**,
-read-only → **viewer**); existing shares migrate automatically on upgrade.
+**When a window closes, the account is suspended — never deleted.** Their
+machines are powered off and sign-in is refused with a clear explanation instead
+of a wrong-password error. Disks, backups, snapshots and quotas are all left
+intact. Setting a new window (or *Never expires*) restores everything
+immediately and lets them power their machines back on.
 
-### Admin: deploy a VM into a tenant's account
+**Nobody is surprised by it.** Warning emails go out 7 days and 1 day before the
+window closes, each sent once per deadline — extending the window automatically
+re-arms them. Tenants also see a countdown banner in the dashboard, and you get
+an `access.expired` notification (webhook and/or email) when someone lapses.
 
-Admins can create a VM directly in a chosen tenant's account, optionally pinning
-the node, and optionally as a **quota-exempt grant** that does not count against
-the tenant's quota. An admin-provisioned VM is **resize- and rebuild-locked to
-admins** — the tenant operates it as sized. This also closes a quota loophole: a
-tenant who could grow a quota-exempt grant (directly, or by rebuilding onto a
-larger template) would have sidestepped quota entirely.
+**Admins never expire**, anywhere — including a tenant later promoted to admin,
+who keeps the window from their original invite.
 
-### Private admin actions
+Enforcement is applied at every authenticated entry point, not just the login
+form: session validation, the console WebSocket, the IDE proxy and IDE
+WebSocket, personal API tokens, the 2FA-enrollment token, and the IDE LLM
+gateway. `GET /auth/me` and `POST /auth/logout` deliberately remain reachable so
+a suspended tenant is told *why* rather than being bounced to the login screen to
+retype a correct password.
 
-Actions an admin takes on a tenant's VM no longer appear in that tenant's activity
-feed. The audit log itself is unchanged and complete for admins — the filtering is
-presentation-only, applied at read time.
+## Admin Settings, reorganised
 
-### AI keys: custom endpoints are admin-only
+The Settings page is now a tabbed layout mirroring the VM Overview page, with
+related settings grouped into boxed sections:
 
-Tenants keep the built-in providers (OpenAI, OpenRouter, Groq); pointing the IDE
-agent at an arbitrary custom endpoint URL is now admin-only, enforced server-side.
+- **Proxmox** — connection, VM defaults, tenant network isolation
+- **IDE** — ProxMate IDE
+- **Notifications** — email (SMTP), event notifications, broadcast
+- **Access** — single sign-on (OIDC), kiosk mode
+- **Maintenance** — updates, app-database backups, rescue ISO, cloud-image refresh
 
-### IDE: one-click relocate to a capable node
+Each tab is deep-linkable (for example `/admin/settings?tab=access`). No settings
+were added, removed or renamed — this is purely a reorganisation.
 
-When a VM's node can't run the AI agent (no AVX), the IDE offers a one-click move:
-ProxMate picks a capable node, stops → migrates → starts the VM, and reopens the
-IDE. Tenants never choose nodes.
+## Kiosk panel fixes
 
-## Production hardening
+**The activity feed was always empty.** The kiosk read the wrong field from the
+audit API, so the Overview panel's "Recent activity" had shown nothing since
+kiosk mode shipped in v0.2.5. The audit log was being recorded correctly the
+whole time; the panel simply never displayed it.
 
-- **Rebuild size-lock.** Rebuild is now covered by the same admin-only lock as
-  resize on admin-managed / quota-exempt VMs — a rebuild re-images the disk, and a
-  rebuild onto a larger template grows the allocation, which on an exempt grant
-  never touched quota. Both are now blocked for non-admins.
-- **Shared-VM resize quota is billed to the owner.** A Manager-share resize is now
-  checked against the VM **owner's** quota and usage (the footprint lands on the
-  owner), not the caller's. Admins remain unlimited.
-- **Pinned IDE tool versions.** The in-guest install now pins exact, verified
-  releases of code-server and OpenCode instead of pulling `latest`, so an upstream
-  release can't silently break new IDE installs. Override with
-  `IDE_CODE_SERVER_VERSION` / `IDE_OPENCODE_VERSION`.
-- **IDE ingress CIDR + reachability test.** The firewall-pinhole source
-  (`ide_ingress_cidr`) is now a validated field in **Settings → ProxMate IDE**,
-  with a **Test reachability** button that dials a running VM's IDE port from the
-  backend and reports the likely cause on failure — instead of a silently blank
-  IDE.
-- **Scheduled backups of ProxMate's own database.** Point **Settings →
-  App-database backups** at a directory (ideally an off-host mount) and ProxMate
-  takes a consistent nightly snapshot with rolling retention; a **Back up now**
-  button proves the path first. MateStates back up guest VMs; this backs up
-  ProxMate itself. Restoring a snapshot still requires the same `ENCRYPTION_KEY` —
-  keep the key backed up separately.
-- **IDE gateway URL fix.** Behind a reverse proxy that rewrites `X-Forwarded-*`
-  (for example Cloudflare Tunnel → Caddy), the AI agent could be handed an `http://`
-  gateway URL and fail with "Unauthorized — missing session." ProxMate now builds
-  the gateway URL from the configured `BACKEND_PUBLIC_URL`. IDE guests provisioned
-  before this upgrade keep their old URL until the IDE is reinstalled.
+**A new Activity tab** shows the full audit window (latest 200 entries) in
+touch-sized rows. Because a wall panel is readable by anyone walking past, rows
+show **what happened, which VM, from which IP, and when** — and deliberately
+never who did it. Actor identity stays in the authenticated Admin → Audit page.
+Tap any row's IP or VM chip to filter the list to that IP or that machine; tap
+the chip in the header to clear it.
 
-## Kiosk mode: stays signed in, locks on exit
+**The panel no longer logs itself out.** The 15-minute session heartbeat that
+keeps an unattended panel signed in was itself causing the logouts: it minted a
+new session and deleted the old one instantly, while the panel's once-per-second
+polling still had requests in flight carrying the old cookie. Those requests
+failed, and the app treats any authentication failure as "signed out". The old
+session is now retired with a 90-second overlap so in-flight requests finish
+cleanly. The change is shrink-only — a session's lifetime can never be extended
+by it — and an explicit sign-out still ends the session immediately.
 
-- **No more mid-shift logout.** A long-running wall panel used to hit the session
-  expiry and get bounced to the login screen. Kiosk mode now keeps its own session
-  refreshed while it is on screen.
-- **Re-authenticate to exit.** Leaving kiosk mode now requires proof it's the
-  admin — a **passkey**, an admin-set **exit PIN**, or the account password — so a
-  passer-by can't tap an unattended panel back into the admin console. Set the PIN
-  under **Settings → Kiosk mode** (4–12 digits, stored hashed, rate-limited on the
-  panel).
+## Smaller fixes
+
+- Scheduled auto-start no longer powers a suspended tenant's machines back on the
+  next morning.
+- A co-owner of a shared VM can no longer start, restart, resume, rescue or
+  duplicate a machine whose **owner's** access window has closed. Power-on
+  decisions now check the owner, not the caller.
+- A guest that ignores the graceful shutdown request at expiry (no ACPI handler,
+  an installer sitting at a prompt) is now force-stopped on the following sweep
+  instead of being reported as stopped while still running.
+- The create-invite form's grid no longer leaves an empty half-row; the two
+  expiry controls sit side by side.
 
 ## Upgrade notes
 
-- **Breaking — share `access` values renamed.** If you read or script the API,
-  update your mappings: **co-owner → manager**, **read-only → viewer** (owner is
-  unchanged). Existing shares are migrated automatically on the first boot after
-  the upgrade. The share endpoint accepts the new names; the old names are
-  tolerated for one release.
-- **Breaking — non-admin API scope tightened.** Non-admin callers can no longer
-  pass a `node` on VM create, request passthrough, or rebuild a shared VM.
-- **No action required for the rest.** App-database backups, `ide_ingress_cidr`,
-  and the kiosk exit PIN are all unset/off by default. New optional env overrides:
-  `IDE_CODE_SERVER_VERSION`, `IDE_OPENCODE_VERSION`, `APPDB_BACKUP_CRON`,
-  `KIOSK_EXIT_RATE_LIMIT_WINDOW_MS` / `KIOSK_EXIT_RATE_LIMIT_MAX`.
-- **Set `BACKEND_PUBLIC_URL`.** The documented production deploy already sets it;
-  the IDE gateway now depends on it (see the IDE gateway fix above).
-- Standard upgrade: pull and rebuild — database migrations apply automatically on
-  boot.
+Standard update — pull the release and rebuild. The database migration adds five
+nullable columns and applies automatically at container start.
+
+**Existing accounts are unaffected.** A null access window means "never expires",
+which is the default for every account that predates this release, so nothing
+changes for anyone until you set a window on someone.
+
+If you have previously saved notification settings, the new `access.expired`
+event is enabled for you automatically; you can turn it off under
+Settings → Notifications.
 
 ## Verification
 
-- **687 backend tests** green; frontend production build green; CodeQL / Trivy /
-  npm-audit / SBOM clean.
-- The tenant-controls pack and the hardening changes were deployed to and
-  live-tested on the production instance ahead of this release.
-- The kiosk backend was exercised end-to-end against a running server (set / clear
-  PIN, correct and incorrect PIN and password, format validation, and the session
-  slide) before release.
+709 backend tests (19 new), backend typecheck and lint clean, frontend lint and
+production build green, Playwright smoke passing, CodeQL / Trivy / npm audit /
+SBOM green.
+
+The access-expiry work additionally went through an adversarial multi-agent
+review before merge, which caught two high-severity defects — an unverified
+shutdown that could leave a suspended tenant's machine running, and four
+unguarded power-on paths reachable by a share-holder — both fixed and covered by
+regression tests in this release.
