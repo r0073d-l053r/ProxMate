@@ -17,7 +17,16 @@ type Filter = { kind: "ip" | "vm"; value: string; label: string } | null;
  * carry emails): a wall panel is glanceable by anyone walking past, so rows
  * are action + VM + IP + time only. The list is fed by the page's 15s poll.
  */
-export function KioskActivityList({ audit, total }: { audit: AuditEntry[]; total: number }) {
+export function KioskActivityList({
+  audit,
+  total,
+  vmNames,
+}: {
+  audit: AuditEntry[];
+  total: number;
+  /** VM id -> name, from the inventory the page already polls. */
+  vmNames?: Map<string, string>;
+}) {
   const [filter, setFilter] = useState<Filter>(null);
 
   const rows = useMemo(() => {
@@ -55,7 +64,7 @@ export function KioskActivityList({ audit, total }: { audit: AuditEntry[]; total
           </div>
         ) : (
           rows.map((e) => {
-            const vm = vmLabel(e);
+            const vm = vmLabel(e, vmNames);
             return (
               <div key={e.id} className="flex items-center gap-3 rounded-xl bg-background/40 px-3 py-2 text-sm">
                 <span className={cn("size-2.5 shrink-0 rounded-full", severityDot(e.action))} />

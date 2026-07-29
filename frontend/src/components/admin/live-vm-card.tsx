@@ -22,6 +22,16 @@ interface Props {
   vm: VirtualMachine;
   live: LiveVmStats | undefined;
   onActionDone: () => void;
+  /**
+   * Monitoring only: hide every power control AND every link out of the page.
+   *
+   * Used by the kiosk wall panel, which is unattended and touchable by anyone
+   * walking past — a stray tap must not be able to power off a tenant's VM.
+   * The links matter just as much as the buttons: navigating to /vms/:id or the
+   * console would leave kiosk mode entirely, walking straight around the
+   * passkey/PIN exit gate.
+   */
+  readOnly?: boolean;
 }
 
 function pushSample(buf: number[], value: number): number[] {
@@ -32,7 +42,7 @@ function pushSample(buf: number[], value: number): number[] {
   return next;
 }
 
-export function LiveVmCard({ vm, live, onActionDone }: Props) {
+export function LiveVmCard({ vm, live, onActionDone, readOnly = false }: Props) {
   const [cpuSeries, setCpuSeries] = useState<number[]>([]);
   const [memSeries, setMemSeries] = useState<number[]>([]);
   const [netSeries, setNetSeries] = useState<number[]>([]);
@@ -153,9 +163,13 @@ export function LiveVmCard({ vm, live, onActionDone }: Props) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <Link href={`/vms/${vm.id}`} className="truncate text-sm font-medium hover:underline">
-              {vm.name}
-            </Link>
+            {readOnly ? (
+              <span className="truncate text-sm font-medium">{vm.name}</span>
+            ) : (
+              <Link href={`/vms/${vm.id}`} className="truncate text-sm font-medium hover:underline">
+                {vm.name}
+              </Link>
+            )}
             <VmStatusBadge status={transition ?? status} />
             {busy && (
               <span className="text-xs text-muted-foreground tabular-nums" title="Time in this transition">
@@ -169,6 +183,7 @@ export function LiveVmCard({ vm, live, onActionDone }: Props) {
           </div>
         </div>
 
+        {!readOnly && (
         <div className="flex flex-wrap items-center gap-1.5">
           <Button
             size="sm"
@@ -216,6 +231,7 @@ export function LiveVmCard({ vm, live, onActionDone }: Props) {
             <Terminal />
           </Button>
         </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
