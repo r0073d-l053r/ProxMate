@@ -1,68 +1,120 @@
 <svg width="1280" height="400" viewBox="0 0 1280 400" role="img" xmlns="http://www.w3.org/2000/svg">
 <title>ProxMate</title>
 <desc>ProxMate — your Proxmox cluster, shared like the cloud. Invite-only, per-tenant isolation, backups.</desc>
+
+<!--
+  Palette is taken verbatim from the app's dark theme (frontend/src/app/globals.css),
+  converted from its OKLCH tokens, so the banner cannot drift from the product:
+    background #0d1013   card #15191c              muted #23272b
+    foreground #f3f5f8   muted-foreground #95a0ab
+    primary    #e2e5e7   primary-foreground #15191c
+    border     rgba(255,255,255,0.09)
+  The mark is the app's own icon.svg geometry (lucide "Server", exactly TWO dots)
+  scaled 1.5x. Deliberately no gradients: ProxMate's UI is flat monochrome slate,
+  and the old blue-to-teal treatment belonged to a retired art direction.
+-->
+
 <defs>
-<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0f1422"/><stop offset="0.55" stop-color="#151d2c"/><stop offset="1" stop-color="#0b0f17"/></linearGradient>
-<linearGradient id="accent" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5b8cff"/><stop offset="1" stop-color="#2dd4bf"/></linearGradient>
-<linearGradient id="sparkfill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2dd4bf" stop-opacity="0.34"/><stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/></linearGradient>
-<radialGradient id="glow" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#3b7dff" stop-opacity="0.30"/><stop offset="1" stop-color="#3b7dff" stop-opacity="0"/></radialGradient>
-<radialGradient id="glow2" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#2dd4bf" stop-opacity="0.18"/><stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/></radialGradient>
-<pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1" fill="#6f8dff" fill-opacity="0.05"/></pattern>
+  <!-- Barely-there texture so a 1280x400 flat fill doesn't band on compression. -->
+  <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+    <path d="M32 0H0V32" fill="none" stroke="#ffffff" stroke-opacity="0.022" stroke-width="1"/>
+  </pattern>
+  <radialGradient id="vignette" cx="0.62" cy="0.30" r="0.75">
+    <stop offset="0" stop-color="#ffffff" stop-opacity="0.035"/>
+    <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+  </radialGradient>
+  <clipPath id="sparkClip"><rect x="784" y="104" width="392" height="86"/></clipPath>
 </defs>
-<rect x="0" y="0" width="1280" height="400" fill="url(#bg)"/>
-<rect x="0" y="0" width="1280" height="400" fill="url(#dots)"/>
-<ellipse cx="1120" cy="40" rx="520" ry="360" fill="url(#glow)"/>
-<ellipse cx="1230" cy="360" rx="360" ry="260" fill="url(#glow2)"/>
-<rect x="0" y="397" width="1280" height="3" fill="url(#accent)"/>
 
-<rect x="80" y="132" width="100" height="100" rx="24" fill="url(#accent)"/>
-<rect x="104" y="151" width="52" height="12" rx="5" fill="#0c1018" fill-opacity="0.18"/>
-<rect x="104" y="176" width="52" height="12" rx="5" fill="#0c1018" fill-opacity="0.18"/>
-<rect x="104" y="201" width="52" height="12" rx="5" fill="#0c1018" fill-opacity="0.18"/>
-<circle cx="113" cy="157" r="3" fill="#0c1018" fill-opacity="0.45"/>
-<circle cx="113" cy="182" r="3" fill="#0c1018" fill-opacity="0.45"/>
-<circle cx="113" cy="207" r="3" fill="#0c1018" fill-opacity="0.45"/>
+<rect width="1280" height="400" fill="#0d1013"/>
+<rect width="1280" height="400" fill="url(#grid)"/>
+<rect width="1280" height="400" fill="url(#vignette)"/>
 
-<text x="204" y="197" font-family="'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif" font-size="76" font-weight="700" letter-spacing="-1.5"><tspan fill="#eef2f7">Prox</tspan><tspan fill="url(#accent)">Mate</tspan></text>
-<text x="207" y="238" font-family="'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif" font-size="23" font-weight="400" fill="#9aa4b5">Your Proxmox cluster, shared like the cloud.</text>
-
-<g font-family="'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif" font-size="15" font-weight="500">
-<rect x="206" y="266" width="142" height="34" rx="17" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.12"/>
-<circle cx="226" cy="283" r="4" fill="#5b8cff"/><text x="240" y="288" fill="#cbd2dc">Invite-only</text>
-<rect x="360" y="266" width="218" height="34" rx="17" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.12"/>
-<circle cx="380" cy="283" r="4" fill="#2dd4bf"/><text x="394" y="288" fill="#cbd2dc">Per-tenant isolation</text>
-<rect x="590" y="266" width="120" height="34" rx="17" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.12"/>
-<circle cx="610" cy="283" r="4" fill="#f5b65c"/><text x="624" y="288" fill="#cbd2dc">Backups</text>
+<!-- ── Brand mark: frontend/src/app/icon.svg, scaled 1.5x (64 -> 96) ───────── -->
+<g transform="translate(80 128) scale(1.5)">
+  <rect x="3" y="3" width="58" height="58" rx="14" fill="#e2e5e7"/>
+  <g transform="translate(12 12) scale(1.6667)" stroke="#15191c" stroke-width="2.25"
+     stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+    <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+    <line x1="6" y1="6" x2="6.01" y2="6"/>
+    <line x1="6" y1="18" x2="6.01" y2="18"/>
+  </g>
 </g>
 
-<rect x="752" y="64" width="456" height="272" rx="20" fill="#ffffff" fill-opacity="0.03" stroke="#ffffff" stroke-opacity="0.07"/>
+<!-- ── Wordmark + tagline ──────────────────────────────────────────────────── -->
+<g font-family="'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif">
+  <text x="200" y="196" font-size="64" font-weight="600" letter-spacing="-1.6" fill="#f3f5f8">ProxMate</text>
+  <text x="203" y="234" font-size="21" font-weight="400" letter-spacing="-0.1" fill="#95a0ab">Your Proxmox cluster, shared like the cloud.</text>
 
-<polygon points="776,138 818,116 860,128 902,102 944,122 986,100 1028,126 1070,108 1112,130 1154,106 1184,120 1184,172 776,172" fill="url(#sparkfill)"/>
-<polyline points="776,138 818,116 860,128 902,102 944,122 986,100 1028,126 1070,108 1112,130 1154,106 1184,120" fill="none" stroke="url(#accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-<circle cx="986" cy="100" r="3.5" fill="#2dd4bf"/><circle cx="1154" cy="106" r="3.5" fill="#5b8cff"/>
+  <!-- Capability pills, drawn as the app draws a muted chip -->
+  <g font-size="14.5" font-weight="500">
+    <rect x="202" y="266" width="132" height="34" rx="10" fill="#15191c" stroke="#ffffff" stroke-opacity="0.09"/>
+    <circle cx="222" cy="283" r="3.5" fill="#95a0ab"/>
+    <text x="236" y="288" fill="#c4ccd4">Invite-only</text>
 
-<line x1="836" y1="250" x2="836" y2="302" stroke="#ffffff" stroke-opacity="0.10" stroke-width="0.75"/>
-<line x1="980" y1="238" x2="980" y2="302" stroke="#ffffff" stroke-opacity="0.10" stroke-width="0.75"/>
-<line x1="1124" y1="254" x2="1124" y2="302" stroke="#ffffff" stroke-opacity="0.10" stroke-width="0.75"/>
+    <rect x="346" y="266" width="196" height="34" rx="10" fill="#15191c" stroke="#ffffff" stroke-opacity="0.09"/>
+    <circle cx="366" cy="283" r="3.5" fill="#95a0ab"/>
+    <text x="380" y="288" fill="#c4ccd4">Per-tenant isolation</text>
 
-<line x1="1052" y1="172" x2="1052" y2="300" stroke="#2dd4bf" stroke-opacity="0.45" stroke-width="1.5" stroke-dasharray="5 6"/>
-<circle cx="1052" cy="270" r="12" fill="#0f1a24" stroke="#2dd4bf" stroke-opacity="0.7" stroke-width="1.25"/>
-<path d="M1047 268 a5 5 0 0 1 10 0" fill="none" stroke="#2dd4bf" stroke-width="1.5"/>
-<rect x="1045" y="268" width="14" height="9" rx="2" fill="#2dd4bf"/>
-
-<rect x="772" y="192" width="128" height="58" rx="11" fill="#1b2434" stroke="#ffffff" stroke-opacity="0.10"/>
-<circle cx="788" cy="210" r="4" fill="#34d399"/><rect x="802" y="205" width="62" height="7" rx="3.5" fill="#ffffff" fill-opacity="0.22"/><rect x="788" y="225" width="88" height="6" rx="3" fill="#ffffff" fill-opacity="0.10"/>
-<rect x="916" y="180" width="128" height="58" rx="11" fill="#1b2434" stroke="#ffffff" stroke-opacity="0.10"/>
-<circle cx="932" cy="198" r="4" fill="#f5b65c"/><rect x="946" y="193" width="62" height="7" rx="3.5" fill="#ffffff" fill-opacity="0.22"/><rect x="932" y="213" width="88" height="6" rx="3" fill="#ffffff" fill-opacity="0.10"/>
-<rect x="1060" y="196" width="128" height="58" rx="11" fill="#1b2434" stroke="#ffffff" stroke-opacity="0.10"/>
-<circle cx="1076" cy="214" r="4" fill="#34d399"/><rect x="1090" y="209" width="62" height="7" rx="3.5" fill="#ffffff" fill-opacity="0.22"/><rect x="1076" y="229" width="88" height="6" rx="3" fill="#ffffff" fill-opacity="0.10"/>
-
-<g font-family="'Cascadia Code','Consolas',ui-monospace,monospace" font-size="13">
-<rect x="772" y="302" width="128" height="28" rx="8" fill="#121a27" stroke="#ffffff" stroke-opacity="0.10"/>
-<circle cx="788" cy="316" r="3.5" fill="#34d399"/><text x="800" y="321" fill="#9aa4b5">pve-0</text>
-<rect x="916" y="302" width="128" height="28" rx="8" fill="#121a27" stroke="#ffffff" stroke-opacity="0.10"/>
-<circle cx="932" cy="316" r="3.5" fill="#34d399"/><text x="944" y="321" fill="#9aa4b5">pve-1</text>
-<rect x="1060" y="302" width="128" height="28" rx="8" fill="#121a27" stroke="#ffffff" stroke-opacity="0.10"/>
-<circle cx="1076" cy="316" r="3.5" fill="#34d399"/><text x="1088" y="321" fill="#9aa4b5">pve-2</text>
+    <rect x="554" y="266" width="116" height="34" rx="10" fill="#15191c" stroke="#ffffff" stroke-opacity="0.09"/>
+    <circle cx="574" cy="283" r="3.5" fill="#95a0ab"/>
+    <text x="588" y="288" fill="#c4ccd4">Backups</text>
+  </g>
 </g>
+
+<!-- ── Product mock: the admin monitor, in the app's real card treatment ───── -->
+<g font-family="'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif">
+  <rect x="752" y="56" width="456" height="288" rx="14" fill="#15191c" stroke="#ffffff" stroke-opacity="0.09"/>
+
+  <!-- Card header -->
+  <text x="784" y="88" font-size="13" font-weight="600" letter-spacing="0.4" fill="#95a0ab">CLUSTER LOAD</text>
+  <circle cx="1160" cy="83" r="4" fill="#34d399"/>
+  <text x="1172" y="88" font-size="12.5" font-weight="500" fill="#95a0ab" text-anchor="start">live</text>
+
+  <!-- Sparkline: monochrome, matching the app's neutral charting -->
+  <g clip-path="url(#sparkClip)">
+    <polyline points="784,168 823,150 862,160 901,138 940,152 979,132 1018,156 1057,142 1096,162 1135,136 1176,148"
+              fill="none" stroke="#f3f5f8" stroke-opacity="0.55" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="784,178 823,166 862,174 901,158 940,170 979,154 1018,172 1057,160 1096,176 1135,156 1176,166"
+              fill="none" stroke="#95a0ab" stroke-opacity="0.30" stroke-width="1.75"
+              stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4 5"/>
+  </g>
+  <line x1="784" y1="190" x2="1176" y2="190" stroke="#ffffff" stroke-opacity="0.07" stroke-width="1"/>
+
+  <!-- Three node rows: the muted surface + emerald status dot the app actually uses -->
+  <g>
+    <rect x="784" y="206" width="124" height="54" rx="10" fill="#23272b"/>
+    <circle cx="800" cy="226" r="3.5" fill="#34d399"/>
+    <text x="812" y="230" font-size="12.5" font-weight="500" fill="#c4ccd4">pve-0</text>
+    <rect x="800" y="242" width="92" height="5" rx="2.5" fill="#ffffff" fill-opacity="0.10"/>
+    <rect x="800" y="242" width="58" height="5" rx="2.5" fill="#f3f5f8" fill-opacity="0.55"/>
+
+    <rect x="918" y="206" width="124" height="54" rx="10" fill="#23272b"/>
+    <circle cx="934" cy="226" r="3.5" fill="#34d399"/>
+    <text x="946" y="230" font-size="12.5" font-weight="500" fill="#c4ccd4">pve-1</text>
+    <rect x="934" y="242" width="92" height="5" rx="2.5" fill="#ffffff" fill-opacity="0.10"/>
+    <rect x="934" y="242" width="41" height="5" rx="2.5" fill="#f3f5f8" fill-opacity="0.55"/>
+
+    <rect x="1052" y="206" width="124" height="54" rx="10" fill="#23272b"/>
+    <circle cx="1068" cy="226" r="3.5" fill="#34d399"/>
+    <text x="1080" y="230" font-size="12.5" font-weight="500" fill="#c4ccd4">pve-2</text>
+    <rect x="1068" y="242" width="92" height="5" rx="2.5" fill="#ffffff" fill-opacity="0.10"/>
+    <rect x="1068" y="242" width="70" height="5" rx="2.5" fill="#f3f5f8" fill-opacity="0.55"/>
+  </g>
+
+  <!-- Footer stats, mirroring the monitor's count tiles -->
+  <g font-size="12.5">
+    <text x="784" y="300" font-weight="600" fill="#f3f5f8">12</text>
+    <text x="806" y="300" fill="#95a0ab">guests</text>
+    <text x="884" y="300" font-weight="600" fill="#f3f5f8">3</text>
+    <text x="898" y="300" fill="#95a0ab">nodes</text>
+    <text x="966" y="300" font-weight="600" fill="#34d399">Quorate</text>
+    <text x="1176" y="300" fill="#95a0ab" text-anchor="end">isolation enforced</text>
+  </g>
+</g>
+
+<!-- Hairline base, in the primary tone rather than an accent gradient -->
+<rect x="0" y="398" width="1280" height="2" fill="#e2e5e7" fill-opacity="0.14"/>
 </svg>
