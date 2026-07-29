@@ -238,7 +238,7 @@ export default function InvitesPage() {
         </CardHeader>
         <CardContent>
           <form onSubmit={onCreate} className="grid gap-4">
-            <div className="grid gap-4 sm:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-3">
               <FormField label="Max vCPU" htmlFor="cpu">
                 <Input id="cpu" type="number" min={1} value={cpu} onChange={(e) => setCpu(Number(e.target.value))} />
               </FormField>
@@ -248,7 +248,12 @@ export default function InvitesPage() {
               <FormField label="Max storage (GB)" htmlFor="storage">
                 <Input id="storage" type="number" min={1} value={storage} onChange={(e) => setStorage(Number(e.target.value))} />
               </FormField>
-              <FormField label="Invite link expires in" hint="How long the link stays usable">
+            </div>
+            {/* The two clocks sit side by side: they're easy to confuse, so
+                pairing them makes the distinction obvious — and it avoids
+                orphaning one control on a half-empty row. */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField label="Invite link expires in" hint="How long the link stays usable before it's redeemed">
                 <Select value={expiresIn} onValueChange={(v) => setExpiresIn(v as string)}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
@@ -262,11 +267,9 @@ export default function InvitesPage() {
                   </SelectContent>
                 </Select>
               </FormField>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
               <FormField
                 label="Compute access"
-                hint="How long they can use the cluster, counted from the day they sign up. You can change this later from Users."
+                hint="How long they can use the cluster, from the day they sign up. Changeable later in Users."
               >
                 <Select value={accessDuration} onValueChange={(v) => setAccessDuration(v as string)}>
                   <SelectTrigger className="w-full">
