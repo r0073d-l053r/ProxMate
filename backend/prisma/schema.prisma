@@ -38,6 +38,26 @@ model User {
   // edition deliberately has no opt-out (instructors must reach every student).
   broadcastOptOut Boolean @default(false)
 
+  // ── Compute access window ────────────────────────────────────────────────
+  // How long this tenant may use the cluster. Seeded from the invite's
+  // accessDuration at registration; an admin can extend or clear it later.
+  //
+  // NULL MEANS NEVER EXPIRES — that is the default, so every pre-existing
+  // account (and every admin) keeps working untouched after this migration.
+  // Admins are exempt regardless of the value.
+  accessExpiresAt DateTime?
+  // Set when the expiry lapsed and the tenant was suspended (VMs powered off,
+  // sign-in refused). Cleared the moment access is extended or set to never,
+  // which is what makes suspension reversible. Also stops the scheduler
+  // re-stopping VMs and re-notifying admins on every tick.
+  accessSuspendedAt DateTime?
+  // Which expiry value each warning email was sent FOR. Comparing against the
+  // CURRENT accessExpiresAt (rather than storing a bare "sent" flag) means an
+  // admin extending the window automatically re-arms both warnings, and a
+  // warning is never sent twice for the same deadline.
+  accessWarned7For DateTime?
+  accessWarned1For DateTime?
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -179,7 +199,14 @@ model InviteToken {
   maxStorage  Int
   require2fa  Boolean   @default(false) // force the invited user to set up 2FA
 
+  // How long the invited tenant may use the cluster once they register, as a
+  // duration string ('30d', '365d', …). NULL MEANS NEVER EXPIRES.
+  // Distinct from `expiresAt` below: that governs how long the invite LINK
+  // stays redeemable, this governs the compute window the link grants.
+  accessDuration String?
+
   usedById    String?   @unique
+  // How long the invite LINK itself stays redeemable (not the compute window).
   expiresAt   DateTime
   createdAt   DateTime  @default(now())
 

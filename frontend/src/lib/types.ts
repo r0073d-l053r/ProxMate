@@ -34,6 +34,13 @@ export interface MeResponse {
     hasPasskeys?: boolean;
     // CE: opted out of admin broadcast (announcement) emails. Security emails unaffected.
     broadcastOptOut?: boolean;
+    /** Compute-access window. null/absent = never expires. Drives the countdown banner. */
+    accessExpiresAt?: string | null;
+    /**
+     * Server-computed. The ONLY value the UI may trust to decide "expired" — a
+     * wrong client clock must never lock someone out nor keep them in.
+     */
+    accessExpired?: boolean;
   };
 }
 
@@ -264,6 +271,10 @@ export interface ManagedUser {
   vmCount: number;
   quota: Quota;
   createdAt: string;
+  /** Compute-access window. null = never expires. */
+  accessExpiresAt: string | null;
+  /** Set once the window lapsed and their machines were powered off. */
+  accessSuspendedAt: string | null;
 }
 
 /** A GPU/PCI passthrough request the current user has made (for the pending badge). */

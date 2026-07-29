@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { User, VirtualMachine, Template } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { isAccessExpired } from './access.service.js';
 import { getConfig } from './config.service.js';
 import { notify } from './notify.service.js';
 import { isMailConfigured, sendMail } from './mail.service.js';
@@ -1291,7 +1292,25 @@ export async function rebuildVm(
   }
 }
 
+/**
+ * Guard a power-on against the OWNER's compute window — not the caller's.
+ *
+ * Without this, suspension is decorative on any shared VM: a co-owner whose own
+ * access is fine holds the `power` capability, so one click on Start undoes the
+ * suspension of the machine's actual owner.
+ */
+async function assertOwnerAccessActive(vm: VirtualMachine): Promise<void> {
+  const owner = await prisma.user.findUnique({
+    where: { id: vm.userId },
+    select: { role: true, accessExpiresAt: true },
+  });
+  if (owner && isAccessExpired(owner)) {
+    throw new Error("This machine's owner has reached the end of their compute access window.");
+  }
+}
+
 export async function startVm(vm: VirtualMachine): Promise<void> {
+  await assertOwnerAccessActive(vm);
   const currentVm = await syncVmNode(vm);
   await pve.startVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kindOf(currentVm));
   await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'running' } });
@@ -1306,6 +1325,7 @@ export async function stopVm(vm: VirtualMachine, force: boolean): Promise<void> 
 }
 
 export async function restartVm(vm: VirtualMachine): Promise<void> {
+  await assertOwnerAccessActive(vm); // same owner-window guard as startVm
   const currentVm = await syncVmNode(vm);
   await pve.rebootVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kindOf(currentVm));
   await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'running' } });

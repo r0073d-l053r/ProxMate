@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma.js';
 import { getConfig } from './config.service.js';
+import { isAccessExpired } from './access.service.js';
 import type { AuthUser } from '../types/index.js';
 
 export async function hashPassword(password: string): Promise<string> {
@@ -89,7 +90,7 @@ export async function retireSessionWithGrace(token: string, graceMs = 90_000): P
  */
 export async function verifySession(
   token: string,
-): Promise<{ user: AuthUser; csrfToken: string | null } | null> {
+): Promise<{ user: AuthUser; csrfToken: string | null; accessExpired: boolean; accessExpiresAt: Date | null } | null> {
   try {
     const secret = await getJwtSecret();
     // Pin the algorithm — never let a token dictate its own verification alg.
@@ -104,6 +105,11 @@ export async function verifySession(
     return {
       user: { id: user.id, email: user.email, role: user.role, displayName: user.displayName },
       csrfToken: session.csrfToken,
+      // Reported, never `return null`: a lapsed access window is NOT a broken
+      // session, and collapsing the two would bounce the tenant to /login with
+      // no explanation of why. The caller decides what to do about it.
+      accessExpired: isAccessExpired(user),
+      accessExpiresAt: user.accessExpiresAt,
     };
   } catch {
     return null;
@@ -112,10 +118,17 @@ export async function verifySession(
 
 /**
  * Verify a token and return just the user (or null). Shared by the WebSocket
- * console upgrade, which authenticates via the session cookie (not a header).
+ * console upgrade and the IDE proxy, which authenticate via the session cookie
+ * (not a header).
+ *
+ * A lapsed access window collapses to null HERE, deliberately: these callers
+ * are raw socket/proxy transports with no JSON error channel, and doing it at
+ * this one spot means any future transport that copies the `verifyToken`
+ * pattern inherits the check instead of silently bypassing it.
  */
 export async function verifyToken(token: string): Promise<AuthUser | null> {
-  return (await verifySession(token))?.user ?? null;
+  const s = await verifySession(token);
+  return !s || s.accessExpired ? null : s.user;
 }
 
 /**
