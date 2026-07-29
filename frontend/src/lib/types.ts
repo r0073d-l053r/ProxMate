@@ -453,7 +453,12 @@ export interface AdminSettings {
   notify: NotifyConfig;
   ide: IdeSettings;
   /** ProxMate app-DB backup schedule (dir empty = disabled). */
-  appdbBackup: { dir: string; keep: number };
+  appdbBackup: {
+    dir: string;
+    keep: number;
+    /** Container-side directory the host mount lands on ("" if none is mounted). */
+    mountedDir?: string;
+  };
   /** Kiosk-mode exit lock — whether a PIN is set (the value is never returned). */
   kiosk: { pinSet: boolean };
 }

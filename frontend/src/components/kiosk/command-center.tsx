@@ -172,6 +172,7 @@ export function KioskCommandCenter({
   vmStopped,
   vmTotal,
   audit,
+  vmNames,
   clusterError,
 }: {
   cluster: ClusterStats | null;
@@ -182,6 +183,8 @@ export function KioskCommandCenter({
   vmStopped: number;
   vmTotal: number;
   audit: AuditEntry[];
+  /** VM id -> name, so the ticker never guesses a label out of free text. */
+  vmNames?: Map<string, string>;
   clusterError: string | null;
 }) {
   const cpuPct = cluster ? usedPercent(cluster.cpu.used, cluster.cpu.total) : 0;
@@ -267,7 +270,7 @@ export function KioskCommandCenter({
               audit.map((e) => {
                 // No actor emails / free-text detail on the wall panel — rows
                 // are action + VM + IP + time only (owner decision 2026-07-17).
-                const vm = vmLabel(e);
+                const vm = vmLabel(e, vmNames);
                 return (
                   <div key={e.id} className="flex items-center gap-2.5 text-sm">
                     <span className={cn("size-2.5 shrink-0 rounded-full", severityDot(e.action))} />
