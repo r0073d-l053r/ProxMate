@@ -16,7 +16,8 @@ import { accessExpiringEmail } from '../lib/email-templates.js';
 import { getConfig } from './config.service.js';
 import { recordAudit } from './audit.service.js';
 import { notify } from './notify.service.js';
-import { stopVm } from './vm.service.js';
+import { stopVm, kindOf } from './vm.service.js';
+import * as pve from './proxmox.service.js';
 import { pveMessage } from './proxmox.service.js';
 
 const DAY_MS = 86_400_000;
@@ -108,7 +109,12 @@ async function suspendLapsed(now: Date): Promise<{ suspended: number; stopped: n
       // machines. Belt and braces with isAccessExpired's own admin exemption.
       role: { not: 'admin' },
       accessExpiresAt: { lte: now },
-      accessSuspendedAt: null, // latch: suspend once, not every tick
+      // NOTE: deliberately NOT filtered on `accessSuspendedAt: null`. The latch
+      // controls the one-shot notification, not the power-off. A guest that
+      // ignores the graceful shutdown (no ACPI handler, an installer at a
+      // prompt, a Windows "are you sure?" dialog) must be caught on a later
+      // tick — filtering here made the stop a single unverified attempt that
+      // silently left the machine running forever.
     },
     include: { vms: true },
   });
@@ -117,41 +123,65 @@ async function suspendLapsed(now: Date): Promise<{ suspended: number; stopped: n
   let stopped = 0;
 
   for (const u of lapsed) {
+    const firstPass = u.accessSuspendedAt === null;
     let stoppedForUser = 0;
+    let stillRunning = 0;
+
     for (const vm of u.vms) {
+      // Ask Proxmox, not our own DB: stopVm writes status:'stopped' whether or
+      // not the guest actually went down, so the DB can't be trusted here.
+      let live: string | undefined;
       try {
-        await stopVm(vm, false); // graceful ACPI; kind-aware inside stopVm
+        live = (await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, undefined, kindOf(vm)))?.status;
+      } catch (err) {
+        console.error(`[access] status read for vm ${vm.proxmoxVmId} failed:`, pveMessage(err));
+        stillRunning++; // unknown → assume it needs attention on the next tick
+        continue;
+      }
+      if (live !== 'running' && live !== 'paused') continue; // already down
+
+      try {
+        // First pass: ask nicely. Any later pass means the graceful request was
+        // ignored, so escalate to a hard stop — the whole point is to release
+        // the cluster resources a lapsed tenant is holding.
+        await stopVm(vm, !firstPass);
         await recordAudit({
           action: 'vm.stop',
           actor: null,
           targetType: 'vm',
           targetId: vm.id,
-          detail: `${vm.name}: owner's compute access expired`,
+          detail: `${vm.name}: owner's compute access expired${firstPass ? '' : ' (forced after graceful shutdown was ignored)'}`,
         });
         stoppedForUser++;
       } catch (err) {
+        stillRunning++;
         console.error(`[access] stop of vm ${vm.proxmoxVmId} failed:`, pveMessage(err));
       }
     }
 
-    await prisma.user.update({ where: { id: u.id }, data: { accessSuspendedAt: now } });
-    await recordAudit({
-      action: 'admin.access_suspended',
-      actor: null,
-      targetType: 'user',
-      targetId: u.id,
-      detail: `${u.email}: window closed ${u.accessExpiresAt!.toISOString()} — ${stoppedForUser}/${u.vms.length} guest(s) stopped`,
-    });
-    await notify({
-      event: 'access.expired',
-      title: `${u.displayName} (${u.email}) has reached the end of their access window`,
-      message:
-        `Access ended ${u.accessExpiresAt!.toUTCString()}. ` +
-        `${stoppedForUser} of ${u.vms.length} machine(s) were powered off. Nothing was deleted — ` +
-        `extend their window (or set it to never expire) in Admin → Users to restore access immediately.`,
-    });
+    if (firstPass) {
+      await prisma.user.update({ where: { id: u.id }, data: { accessSuspendedAt: now } });
+      await recordAudit({
+        action: 'admin.access_suspended',
+        actor: null,
+        targetType: 'user',
+        targetId: u.id,
+        detail: `${u.email}: window closed ${u.accessExpiresAt!.toISOString()} — shutdown requested for ${stoppedForUser}/${u.vms.length} guest(s)`,
+      });
+      await notify({
+        event: 'access.expired',
+        title: `${u.displayName} (${u.email}) has reached the end of their access window`,
+        message:
+          `Access ended ${u.accessExpiresAt!.toUTCString()}. ` +
+          `Shutdown was requested for ${stoppedForUser} of ${u.vms.length} machine(s); any that don't stop ` +
+          `gracefully are forced on the next sweep. Nothing was deleted — extend their window (or set it to ` +
+          `never expire) in Admin → Users to restore access immediately.`,
+      });
+      suspended++;
+    } else if (stoppedForUser > 0) {
+      console.log(`[access] forced ${stoppedForUser} lingering guest(s) for suspended ${u.email}`);
+    }
 
-    suspended++;
     stopped += stoppedForUser;
   }
 

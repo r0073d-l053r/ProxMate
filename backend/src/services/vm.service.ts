@@ -565,6 +565,8 @@ export async function deployFromTemplate(
  * clone endpoint); the new VM is owned by the same user as the source.
  */
 export async function duplicateVm(source: VirtualMachine, newName: string): Promise<VirtualMachine> {
+  // The copy inherits the source's owner and is started — same owner gate.
+  await assertOwnerAccessActive(source);
   if (kindOf(source) === 'lxc') throw new Error('Containers (LXC) can\'t be duplicated');
 
   const client = await pve.getClient();
@@ -1349,6 +1351,9 @@ export async function resumeVm(vm: VirtualMachine): Promise<void> {
   if (kindOf(vm) === 'lxc') throw new Error('Containers (LXC) cannot be paused');
   const client = await pve.getClient();
   const currentVm = await syncVmNode(vm);
+  // Resuming is a power-ON: gate on the OWNER's window (a share-holder whose
+  // own access is fine must not be able to revive a suspended tenant's guest).
+  await assertOwnerAccessActive(vm);
   await pve.resumeVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client);
 }
 
@@ -1454,6 +1459,7 @@ export async function enterRescue(vm: VirtualMachine): Promise<VirtualMachine> {
     where: { id: current.id },
     data: { rescueBoot: JSON.stringify(snap), status: 'running' },
   });
+  await assertOwnerAccessActive(vm); // booting the guest — gate on the owner's window
   await pve.startVm(current.proxmoxNode, current.proxmoxVmId, client);
   return updated;
 }
@@ -1476,6 +1482,7 @@ export async function exitRescue(vm: VirtualMachine): Promise<VirtualMachine> {
     where: { id: current.id },
     data: { rescueBoot: null, status: 'running' },
   });
+  await assertOwnerAccessActive(vm); // booting the guest — gate on the owner's window
   await pve.startVm(current.proxmoxNode, current.proxmoxVmId, client);
   return updated;
 }

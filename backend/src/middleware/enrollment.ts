@@ -60,7 +60,10 @@ export async function requireAuthOrEnrollment(
 
   // 1) Real session first (a logged-in /security user).
   const session = await verifySession(cookieToken ?? bearer ?? '');
-  if (session) {
+  // verifySession REPORTS a lapsed window rather than returning null, so this
+  // branch has to check it explicitly or a suspended tenant keeps reaching the
+  // enrollment endpoints with an ordinary session cookie.
+  if (session && !session.accessExpired) {
     if (cookieToken && MUTATING.has(req.method)) {
       const csrf = req.header('x-csrf-token');
       if (!csrf || !session.csrfToken || csrf !== session.csrfToken) {

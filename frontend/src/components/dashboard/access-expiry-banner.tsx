@@ -20,6 +20,7 @@ const WARN_WITHIN_DAYS = 7;
  */
 export function AccessExpiryBanner() {
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
+  const [expired, setExpired] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
@@ -29,6 +30,7 @@ export function AccessExpiryBanner() {
       .then((r) => {
         if (!active) return;
         setExpiresAt(r.data.user.accessExpiresAt ?? null);
+        setExpired(!!r.data.user.accessExpired);
         setIsAdmin(r.data.user.role === "admin");
       })
       .catch(() => {
@@ -40,6 +42,23 @@ export function AccessExpiryBanner() {
   }, []);
 
   if (isAdmin || !expiresAt) return null;
+
+  // Already lapsed: say so plainly instead of counting down to a past date.
+  // `expired` is the server's verdict — never recomputed from the client clock.
+  if (expired) {
+    return (
+      <div className="mb-4 flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm">
+        <CalendarClock className="mt-0.5 size-4 shrink-0 text-destructive" />
+        <div>
+          <p className="font-medium">Your compute access has ended.</p>
+          <p className="mt-0.5 text-muted-foreground">
+            It ended on {formatDate(expiresAt)}, so your machines have been powered off. Nothing has
+            been deleted — ask your administrator to restore your access.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const msLeft = new Date(expiresAt).getTime() - Date.now();
   const daysLeft = Math.ceil(msLeft / 86_400_000);

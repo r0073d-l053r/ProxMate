@@ -117,7 +117,11 @@ export async function runDuePowerActions(now: Date = new Date()): Promise<{ star
       // A suspended tenant's guests must not be auto-started back up the next
       // morning — that would quietly undo the suspension. Their scheduled STOPS
       // are dropped too, which is harmless: the machines are already off.
-      NOT: { user: { accessSuspendedAt: { not: null } } },
+      // Admins are never suspended in effect (isAccessExpired exempts them), so
+      // exempt them here too — a tenant later PROMOTED to admin keeps the stale
+      // accessSuspendedAt latch and would otherwise lose every power schedule
+      // permanently, with no UI to clear it.
+      NOT: { user: { accessSuspendedAt: { not: null }, role: { not: 'admin' } } },
     },
   });
   if (vms.length === 0) return { started: 0, stopped: 0 };
