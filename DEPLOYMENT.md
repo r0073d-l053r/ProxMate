@@ -304,12 +304,11 @@ Run these against the production HTTPS site (passkeys won't work otherwise).
       in different places than the host itself.
 - [ ] **`.env` permissions:** `chmod 600 .env`; never commit it.
 - [ ] **Proxmox isolation enforcement ON** (§7.3) and verified.
-- [ ] **Backups (built-in):** set a directory under **Admin → Settings → App-database backups**
-      and ProxMate snapshots its own DB nightly (`VACUUM INTO`, consistent on the live DB) with
-      rolling retention. Mount an off-host share (NFS/CIFS) into the backend container and point
-      the setting at it, e.g. add `- /mnt/backups/proxmate:/backups` to the backend `volumes` and
-      set the directory to `/backups`. Use **Back up now** to prove the path is writable.
-      Schedule override: `APPDB_BACKUP_CRON` (default nightly 02:30).
+- [ ] **Backups (built-in):** set `PROXMATE_BACKUP_DIR` in `.env` to where snapshots should land
+      on the **host**, then confirm the directory under **Admin → Settings → Maintenance →
+      App-database backups**. ProxMate snapshots its own DB nightly (`VACUUM INTO`, consistent on
+      the live DB) with rolling retention. Use **Back up now** to prove the path works.
+      Schedule override: `APPDB_BACKUP_CRON` (default nightly 02:30). See §12.
 - [ ] **Backups (manual alternative):** snapshot the `proxmate-data` volume —
       `docker run --rm -v proxmate_proxmate-data:/data -v "$PWD":/backup alpine tar czf /backup/proxmate-db-$(date +%F).tgz -C /data .`
 - [ ] **Updates:** `git pull && docker compose up -d --build` (migrations apply on boot).
@@ -317,7 +316,78 @@ Run these against the production HTTPS site (passkeys won't work otherwise).
 
 ---
 
-## 12. Final verification checklist
+## 12. App-database backups
+
+ProxMate can snapshot **its own database** (users, VM records, settings, encrypted
+secrets) on a schedule. This is separate from MateStates, which back up the guests.
+
+### The one thing that trips people up
+
+ProxMate runs **in a container**. It can only write to directories that were
+**mounted into** that container from the host. Creating a folder on the host and
+typing its path into the app does *not* work — the container has its own
+filesystem, so `/srv/backups` on the host and `/srv/backups` in the container are
+unrelated paths.
+
+That is why the host directory is chosen with an environment variable, not in the
+app: the mount has to exist before the container starts.
+
+### Setup
+
+1. In `.env`, point `PROXMATE_BACKUP_DIR` at the host directory you want:
+
+   ```bash
+   PROXMATE_BACKUP_DIR=/mnt/backups/proxmate
+   ```
+
+   Prefer a disk that is **not** the one holding the database, ideally an
+   off-host mount (NFS/CIFS) so losing the host doesn't lose the backups with it.
+   The default is `./backups` next to `docker-compose.yml`, which works out of
+   the box but lives on the same machine.
+
+2. Make sure the directory is writable by the container's non-root user
+   (uid 1000), then recreate the backend so the mount is picked up:
+
+   ```bash
+   sudo mkdir -p /mnt/backups/proxmate && sudo chown 1000:1000 /mnt/backups/proxmate
+   docker compose up -d backend
+   ```
+
+3. In **Admin → Settings → Maintenance → App-database backups**, the directory
+   should already read `/var/backups/proxmate` — the fixed container-side path
+   your host directory is mounted onto. Set **Keep** (rolling retention) and
+   press **Back up now** to prove the whole path works.
+
+Snapshots are named `proxmate-appdb-YYYYMMDD-HHMMSS.db`. Retention only ever
+deletes files matching that pattern, so anything else in the directory is safe.
+
+Schedule override: `APPDB_BACKUP_CRON` (default nightly 02:30).
+
+### Restoring
+
+A snapshot is a plain SQLite database file. To restore:
+
+```bash
+docker compose stop backend
+docker run --rm -v proxmate_proxmate-data:/data -v /mnt/backups/proxmate:/src alpine   cp /src/proxmate-appdb-20260729-023000.db /data/proxmate.db
+docker compose up -d backend
+```
+
+Migrations run automatically on start, so restoring an older snapshot onto a
+newer ProxMate is fine.
+
+> **The backup is useless without the matching `ENCRYPTION_KEY`.** Every stored
+> secret — the Proxmox API token, SMTP credentials, TOTP secrets, tenant AI keys —
+> is encrypted with it. Restoring a database with a different key leaves the app
+> running but unable to decrypt any of them. Back the key up separately from the
+> database, in a password manager or secret store.
+
+Take a copy of the current database before restoring over it, so a wrong choice
+of snapshot is reversible.
+
+---
+
+## 13. Final verification checklist
 
 - [ ] `https://proxmate.example.com` loads over a valid certificate.
 - [ ] OOBE done; Proxmox connected; a test VM created, console opened, deleted.
@@ -329,7 +399,7 @@ Run these against the production HTTPS site (passkeys won't work otherwise).
 
 ---
 
-## 13. Updating ProxMate
+## 14. Updating ProxMate
 
 ProxMate ships an in-app updater. **Admin ▸ Settings ▸ Updates** shows your running
 version and a **Check for updates** button that reads the latest **GitHub Release**;
@@ -407,7 +477,7 @@ applies DB migrations on boot (`docker-entrypoint.sh`). **Back up the DB first**
 
 ---
 
-## 14. Rack kiosk mode (touch panel)
+## 15. Rack kiosk mode (touch panel)
 
 ProxMate has a full-screen, touch-friendly **kiosk** view designed for a small panel mounted
 on/near the cluster (e.g. a Raspberry Pi Touch Display 2 at 1280×720). It shows an at-a-glance
@@ -456,7 +526,7 @@ Notes:
 
 ---
 
-## 14b. ProxMate IDE (optional, in-guest editor + AI agent)
+## 15b. ProxMate IDE (optional, in-guest editor + AI agent)
 
 If you want the per-VM browser IDE, the full setup + security model is in
 [`docs/proxmate-ide.md`](docs/proxmate-ide.md). The production essentials:
@@ -477,7 +547,14 @@ Prefer an agent to do it? [`DEPLOY_WITH_CLAUDE.md`](DEPLOY_WITH_CLAUDE.md) cover
 
 ---
 
-## 15. Troubleshooting
+## 16. Troubleshooting
+
+**"EACCES: permission denied, mkdir …" when saving the app-database backup
+directory.** The path isn't mounted into the backend container — ProxMate can
+only write to directories mounted in from the host, and creating the folder on
+the host is not enough on its own. Set `PROXMATE_BACKUP_DIR` in `.env` and
+recreate the backend (`docker compose up -d backend`); the in-app field should
+then read `/var/backups/proxmate`. See §12.
 
 | Symptom | Likely cause / fix |
 |---|---|
