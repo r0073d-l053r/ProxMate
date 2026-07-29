@@ -51,6 +51,8 @@ export default function KioskPage() {
   const [auditTotal, setAuditTotal] = useState(0);
 
   const fastInFlight = useRef(false);
+  // Set by doExit so the history trap below lets the ONE legitimate exit through.
+  const exiting = useRef(false);
 
   // Cluster shows cluster-wide data → admins only. AuthGuard (layout) guarantees
   // `user` is loaded by the time we render; bounce anyone else back to the app.
@@ -176,6 +178,24 @@ export default function KioskPage() {
     return () => clearInterval(id);
   }, []);
 
+  // History trap: the browser Back button (or an edge-swipe, or Alt+Left) would
+  // otherwise walk straight out of the panel into the admin dashboard — with a
+  // live admin session and every power control — completely bypassing the
+  // passkey/PIN exit gate. Nothing server-side can catch that: /auth/kiosk-exit
+  // is a pure re-auth check and mints no state, so the lock is only as good as
+  // the ways out we cover. Park a sentinel entry and bounce any back-navigation
+  // into the same unlock dialog as the corner X.
+  useEffect(() => {
+    window.history.pushState(null, "", window.location.href);
+    const onPop = () => {
+      if (exiting.current) return; // the real, authenticated exit
+      window.history.pushState(null, "", window.location.href); // re-arm
+      setUnlockOpen(true);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
   // Track fullscreen state for the toggle icon.
   useEffect(() => {
     const onChange = () => setIsFullscreen(!!document.fullscreenElement);
@@ -221,6 +241,7 @@ export default function KioskPage() {
 
   // Actually leave — only reached after the unlock dialog re-authenticates.
   const doExit = async () => {
+    exiting.current = true; // let the history trap pass this one through
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
     } catch {
@@ -232,12 +253,22 @@ export default function KioskPage() {
   if (user && user.role !== "admin") return null;
 
   const allVms = groups?.flatMap((g) => g.vms) ?? [];
+  // id -> name, so audit rows show a REAL machine name or nothing at all,
+  // rather than guessing a label out of free-text detail (which once printed a
+  // tenant's email local-part on the wall).
+  const vmNames = new Map(allVms.map((v) => [v.id, v.name]));
   const vmTotal = allVms.length;
   const vmRunning = allVms.filter((vm) => stats[vm.proxmoxVmId]?.status === "running").length;
   const vmStopped = vmTotal - vmRunning;
 
   return (
-    <div className="fixed inset-0 z-50 flex cursor-none select-none flex-col bg-background text-foreground">
+    <div
+      className="fixed inset-0 z-50 flex cursor-none select-none flex-col bg-background text-foreground"
+      // A long-press on a touch panel opens the browser context menu, which
+      // offers Back (another way around the exit gate) and Inspect (a devtools
+      // console on a live admin session). `select-none` does not prevent it.
+      onContextMenu={(e) => e.preventDefault()}
+    >
       {/* Header */}
       <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b px-4">
         <div className="flex items-center gap-3">
@@ -316,10 +347,11 @@ export default function KioskPage() {
             vmStopped={vmStopped}
             vmTotal={vmTotal}
             audit={audit.slice(0, 8)}
+            vmNames={vmNames}
             clusterError={clusterError}
           />
         ) : tab === "activity" ? (
-          <KioskActivityList audit={audit} total={auditTotal} />
+          <KioskActivityList audit={audit} total={auditTotal} vmNames={vmNames} />
         ) : (
           <div className="h-full overflow-y-auto pr-1">
             {groups === null ? (
@@ -340,7 +372,19 @@ export default function KioskPage() {
                         ) : (
                           <User className="size-4 text-muted-foreground" />
                         )}
-                        <h2 className="text-sm font-semibold">{g.displayName}</h2>
+                        {/* Deliberately NOT the owner's display name. The panel
+                            is readable by anyone walking past, and naming the
+                            tenant beside their machines and quota is a
+                            who-owns-what map — the same standard the Activity
+                            tab already holds (no actor identity on the wall).
+                            The crown/person icon still distinguishes admin-owned
+                            guests from tenant-owned ones. */}
+                        <h2 className="text-sm font-semibold">
+                          {g.role === "admin" ? "Admin" : "Tenant"}
+                          <span className="ml-1.5 font-normal text-muted-foreground">
+                            · {g.vms.length} {g.vms.length === 1 ? "guest" : "guests"}
+                          </span>
+                        </h2>
                         {g.role !== "admin" && (
                           <span className="text-xs text-muted-foreground">
                             · quota {g.quota.cpu} vCPU / {formatRam(g.quota.ram)} / {g.quota.storage} GB
@@ -354,6 +398,11 @@ export default function KioskPage() {
                             vm={vm}
                             live={stats[vm.proxmoxVmId]}
                             onActionDone={loadGroups}
+                            // The wall panel is monitoring only. It sits
+                            // unattended where anyone can touch it, so no power
+                            // controls and no links that would navigate out of
+                            // kiosk (which would sidestep the exit gate).
+                            readOnly
                           />
                         ))}
                       </div>
