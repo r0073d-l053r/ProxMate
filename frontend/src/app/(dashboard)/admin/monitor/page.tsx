@@ -139,7 +139,9 @@ export default function AdminMonitorPage() {
     } catch {
       /* unsupported / denied — the kiosk route still works, just not fullscreen */
     }
-    router.push("/kiosk");
+    // replace, not push: leaving the dashboard one history entry beneath the
+      // panel is what made the browser Back button an exit-gate bypass.
+      router.replace("/kiosk");
   };
 
   return (
