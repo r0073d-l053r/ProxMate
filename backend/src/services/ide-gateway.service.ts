@@ -4,6 +4,7 @@ import { decrypt } from '../lib/crypto.js';
 import { getConfig } from './config.service.js';
 import { getVmWithCap } from './vm.service.js';
 import { getIdeCapability, getIdeConfig } from './ide.service.js';
+import { isAccessExpired } from './access.service.js';
 import { getLlmKeyEndpointById } from './tenant-llm-key.service.js';
 import { assertSafeOutboundUrl } from '../lib/url-safety.js';
 
@@ -105,8 +106,15 @@ export async function verifyGatewayToken(raw: string | undefined, pathVmId: stri
   if (row.revokedAt) return null;
   if (row.expiresAt && row.expiresAt.getTime() < Date.now()) return null;
 
-  const user = await prisma.user.findUnique({ where: { id: row.userId }, select: { id: true, role: true } });
+  const user = await prisma.user.findUnique({
+    where: { id: row.userId },
+    select: { id: true, role: true, accessExpiresAt: true },
+  });
   if (!user) return null;
+  // This router mounts bare (no shared auth middleware), so the access window
+  // has to be enforced right here or a lapsed tenant's IDE agent keeps burning
+  // the admin's LLM credits after suspension.
+  if (isAccessExpired(user)) return null;
 
   // Live re-authorization: the mint-time checks are not enough on their own.
   const vm = await getVmWithCap(row.vmId, user, 'ide');

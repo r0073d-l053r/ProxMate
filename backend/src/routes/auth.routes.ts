@@ -5,6 +5,7 @@ import {
   hashPassword,
   verifyPasswordSafe,
   createSession,
+  retireSessionWithGrace,
   signChallenge,
   verifyChallenge,
   signEnrollment,
@@ -13,6 +14,12 @@ import * as twofa from '../services/twofactor.service.js';
 import * as passkeys from '../services/passkey.service.js';
 import * as sso from '../services/sso.service.js';
 import { isMfaSetupRequired } from '../services/mfa.service.js';
+import {
+  isAccessExpired,
+  accessExpiryFrom,
+  accessExpiredMessage,
+  ACCESS_EXPIRED_CODE,
+} from '../services/access.service.js';
 import {
   setAuthCookies,
   clearAuthCookies,
@@ -23,7 +30,7 @@ import {
   clearSsoCookie,
   SSO_COOKIE,
 } from '../lib/cookies.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, allowExpiredAccess } from '../middleware/auth.js';
 import { requireAuthOrEnrollment } from '../middleware/enrollment.js';
 import { authLimiter, publicTokenLimiter, kioskExitLimiter } from '../middleware/rate-limit.js';
 import { verifyKioskPin } from '../services/kiosk.service.js';
@@ -73,6 +80,10 @@ router.post('/register', authLimiter, async (req: Request, res: Response) => {
       maxRam: invite.maxRam,
       maxStorage: invite.maxStorage,
       require2fa: invite.require2fa,
+      // The compute window starts NOW, when the invite is redeemed — not when
+      // it was minted. An invite that sits unopened for a week would otherwise
+      // silently eat a week of the tenant's trial. Null = never expires.
+      accessExpiresAt: accessExpiryFrom(invite.accessDuration),
     },
   });
 
@@ -148,6 +159,21 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
   // Correct password — clear any prior failure streak before continuing.
   await clearFailedLogins(user);
 
+  // Compute-access window (admins exempt). This MUST come before the 2FA and
+  // enrollment branches below: those hand out real credentials (a 5-minute 2FA
+  // challenge, or an enrollment token), and a suspended tenant must not walk
+  // away holding either. Deliberately a distinct, honest message — this is an
+  // entitlement problem, not a wrong password, and the account is not a secret
+  // to its own owner at this point (they just proved the password).
+  if (isAccessExpired(user)) {
+    await recordAudit({ action: 'auth.login_blocked', actor: user, detail: 'compute access expired', req });
+    res.status(403).json({
+      code: ACCESS_EXPIRED_CODE,
+      error: accessExpiredMessage(user.accessExpiresAt),
+    });
+    return;
+  }
+
   // Required 2FA but no factor enrolled yet → no session. Hand back an enrollment
   // token so an interrupted setup resumes here (a correct password never yields a
   // session until a second factor exists).
@@ -218,7 +244,7 @@ router.post('/2fa/verify', authLimiter, async (req: Request, res: Response) => {
 
 // ─── POST /api/auth/logout ────────────────────────────────────
 
-router.post('/logout', requireAuth, async (req: Request, res: Response) => {
+router.post('/logout', allowExpiredAccess, requireAuth, async (req: Request, res: Response) => {
   const ar = req as AuthRequest;
   if (ar.sessionToken) await prisma.session.deleteMany({ where: { token: ar.sessionToken } });
   clearAuthCookies(res);
@@ -228,17 +254,23 @@ router.post('/logout', requireAuth, async (req: Request, res: Response) => {
 
 // ─── POST /api/auth/session/refresh ───────────────────────────
 // Slide the session forward: mint a fresh 24h session for the SAME user, set the
-// new cookies, and drop the old session row. Sessions are a fixed 24h JWT with no
-// sliding renewal, so a long-lived unattended surface (the kiosk panel) would be
-// logged out mid-use every 24h; its heartbeat calls this to stay alive. Grants no
+// new cookies, and retire the old session after a short overlap. Sessions are a
+// fixed 24h JWT with no sliding renewal, so a long-lived unattended surface (the
+// kiosk panel) would be logged out mid-use every 24h; its heartbeat calls this to
+// stay alive. The old row must NOT be deleted outright — the kiosk polls every
+// second, and in-flight requests still carrying the old cookie would 401, which
+// the frontend treats as "logged out" (see retireSessionWithGrace). Grants no
 // new privileges — it only re-ups the caller's own already-valid session.
 router.post('/session/refresh', requireAuth, async (req: Request, res: Response) => {
   const ar = req as AuthRequest;
   const { token, csrfToken, expiresAt } = await createSession(ar.user.id);
   setAuthCookies(res, token, csrfToken, expiresAt);
   if (ar.sessionToken && ar.sessionToken !== token) {
-    await prisma.session.deleteMany({ where: { token: ar.sessionToken } });
+    await retireSessionWithGrace(ar.sessionToken);
   }
+  // Opportunistic tidy-up: nothing prunes expired Session rows on a schedule,
+  // and a 24/7 kiosk rotates ~96 sessions a day — sweep this user's dead rows.
+  await prisma.session.deleteMany({ where: { userId: ar.user.id, expiresAt: { lt: new Date() } } });
   res.json({ ok: true, expiresAt });
 });
 
@@ -318,7 +350,7 @@ router.post('/kiosk-exit/passkey-verify', kioskExitLimiter, requireAuth, async (
 
 // ─── GET /api/auth/me ─────────────────────────────────────────
 
-router.get('/me', requireAuth, async (req: Request, res: Response) => {
+router.get('/me', allowExpiredAccess, requireAuth, async (req: Request, res: Response) => {
   const { id } = (req as AuthRequest).user;
 
   const user = await prisma.user.findUnique({ where: { id } });
@@ -344,6 +376,12 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
       hasPasskeys: (await prisma.passkey.count({ where: { userId: user.id } })) > 0,
       mfaSetupRequired: await isMfaSetupRequired(user.id),
       broadcastOptOut: user.broadcastOptOut,
+      // Compute-access window. `accessExpiresAt: null` = never expires.
+      // `accessExpired` is computed SERVER-side and is the only thing the UI may
+      // trust to decide "expired" — a wrong client clock must not lock someone
+      // out, nor let them look active. The date is for the countdown copy only.
+      accessExpiresAt: user.accessExpiresAt,
+      accessExpired: isAccessExpired(user),
       createdAt: user.createdAt,
       quota: {
         cpu: { used: usedCpu, max: user.maxCpu },

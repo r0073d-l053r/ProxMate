@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma.js';
 import { getConfig } from './config.service.js';
+import { isAccessExpired } from './access.service.js';
 import type { AuthUser } from '../types/index.js';
 
 export async function hashPassword(password: string): Promise<string> {
@@ -61,13 +62,35 @@ export async function createSession(
 }
 
 /**
+ * Retire a session with a short overlap instead of deleting it outright. Used
+ * by session rotation (`POST /auth/session/refresh`): the kiosk panel polls
+ * every second, so requests carrying the OLD cookie are still in flight when
+ * the rotation response (with the new cookie) reaches the browser. Deleting
+ * the old row immediately made those stragglers 401 — and the frontend clears
+ * auth on any 401 — so the panel bounced to /login at a random heartbeat (the
+ * "kiosk randomly logs out" bug). A ~90s grace lets in-flight requests finish;
+ * `verifySession`'s expiresAt check then retires the row naturally.
+ *
+ * Shrink-only by construction: the WHERE clause touches only rows that expire
+ * AFTER the grace mark, so a session's life is never extended here — and
+ * explicit logout still hard-deletes immediately.
+ */
+export async function retireSessionWithGrace(token: string, graceMs = 90_000): Promise<void> {
+  const grace = new Date(Date.now() + graceMs);
+  await prisma.session.updateMany({
+    where: { token, expiresAt: { gt: grace } },
+    data: { expiresAt: grace },
+  });
+}
+
+/**
  * Verify a JWT and its backing session, returning the user + the session's CSRF
  * token (or null). Used by the HTTP auth middleware (which enforces CSRF on
  * cookie-authenticated mutating requests).
  */
 export async function verifySession(
   token: string,
-): Promise<{ user: AuthUser; csrfToken: string | null } | null> {
+): Promise<{ user: AuthUser; csrfToken: string | null; accessExpired: boolean; accessExpiresAt: Date | null } | null> {
   try {
     const secret = await getJwtSecret();
     // Pin the algorithm — never let a token dictate its own verification alg.
@@ -82,6 +105,11 @@ export async function verifySession(
     return {
       user: { id: user.id, email: user.email, role: user.role, displayName: user.displayName },
       csrfToken: session.csrfToken,
+      // Reported, never `return null`: a lapsed access window is NOT a broken
+      // session, and collapsing the two would bounce the tenant to /login with
+      // no explanation of why. The caller decides what to do about it.
+      accessExpired: isAccessExpired(user),
+      accessExpiresAt: user.accessExpiresAt,
     };
   } catch {
     return null;
@@ -90,10 +118,17 @@ export async function verifySession(
 
 /**
  * Verify a token and return just the user (or null). Shared by the WebSocket
- * console upgrade, which authenticates via the session cookie (not a header).
+ * console upgrade and the IDE proxy, which authenticate via the session cookie
+ * (not a header).
+ *
+ * A lapsed access window collapses to null HERE, deliberately: these callers
+ * are raw socket/proxy transports with no JSON error channel, and doing it at
+ * this one spot means any future transport that copies the `verifyToken`
+ * pattern inherits the check instead of silently bypassing it.
  */
 export async function verifyToken(token: string): Promise<AuthUser | null> {
-  return (await verifySession(token))?.user ?? null;
+  const s = await verifySession(token);
+  return !s || s.accessExpired ? null : s.user;
 }
 
 /**

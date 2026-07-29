@@ -1,10 +1,25 @@
 import type { Request, Response, NextFunction } from 'express';
 import { verifySession } from '../services/auth.service.js';
 import { isApiToken, verifyApiToken } from '../services/api-token.service.js';
+import { ACCESS_EXPIRED_CODE, accessExpiredMessage } from '../services/access.service.js';
 import { SESSION_COOKIE } from '../lib/cookies.js';
 import type { AuthRequest } from '../types/index.js';
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/**
+ * Mark a route as reachable with a lapsed access window.
+ *
+ * Only `GET /auth/me` and `POST /auth/logout` use it. Without the first, the
+ * frontend's AuthGuard — which bounces to /login on ANY /auth/me failure —
+ * would eject a suspended tenant to the login screen where they'd type correct
+ * credentials forever with no idea why. Without the second, they couldn't even
+ * clear their own cookie. Must be mounted BEFORE requireAuth.
+ */
+export function allowExpiredAccess(req: Request, _res: Response, next: NextFunction): void {
+  (req as AuthRequest).allowExpiredAccess = true;
+  next();
+}
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   // Prefer the httpOnly session cookie (browser); fall back to a Bearer token
@@ -38,6 +53,19 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   const session = await verifySession(token);
   if (!session) {
     res.status(401).json({ error: 'Invalid or expired session' });
+    return;
+  }
+
+  // The tenant's compute-access window (admins exempt). Checked BEFORE CSRF so
+  // a suspended tenant gets the real reason rather than a baffling CSRF error.
+  // 403 (not 401) on purpose: the session is valid, the entitlement isn't — and
+  // the frontend interceptor only clears auth on 401, so the UI keeps enough
+  // state to explain what happened instead of dumping them at /login.
+  if (session.accessExpired && !(req as AuthRequest).allowExpiredAccess) {
+    res.status(403).json({
+      error: accessExpiredMessage(session.accessExpiresAt),
+      code: ACCESS_EXPIRED_CODE,
+    });
     return;
   }
 

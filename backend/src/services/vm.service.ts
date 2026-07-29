@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { User, VirtualMachine, Template } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { isAccessExpired } from './access.service.js';
 import { getConfig } from './config.service.js';
 import { notify } from './notify.service.js';
 import { isMailConfigured, sendMail } from './mail.service.js';
@@ -564,6 +565,8 @@ export async function deployFromTemplate(
  * clone endpoint); the new VM is owned by the same user as the source.
  */
 export async function duplicateVm(source: VirtualMachine, newName: string): Promise<VirtualMachine> {
+  // The copy inherits the source's owner and is started — same owner gate.
+  await assertOwnerAccessActive(source);
   if (kindOf(source) === 'lxc') throw new Error('Containers (LXC) can\'t be duplicated');
 
   const client = await pve.getClient();
@@ -1291,7 +1294,25 @@ export async function rebuildVm(
   }
 }
 
+/**
+ * Guard a power-on against the OWNER's compute window — not the caller's.
+ *
+ * Without this, suspension is decorative on any shared VM: a co-owner whose own
+ * access is fine holds the `power` capability, so one click on Start undoes the
+ * suspension of the machine's actual owner.
+ */
+async function assertOwnerAccessActive(vm: VirtualMachine): Promise<void> {
+  const owner = await prisma.user.findUnique({
+    where: { id: vm.userId },
+    select: { role: true, accessExpiresAt: true },
+  });
+  if (owner && isAccessExpired(owner)) {
+    throw new Error("This machine's owner has reached the end of their compute access window.");
+  }
+}
+
 export async function startVm(vm: VirtualMachine): Promise<void> {
+  await assertOwnerAccessActive(vm);
   const currentVm = await syncVmNode(vm);
   await pve.startVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kindOf(currentVm));
   await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'running' } });
@@ -1306,6 +1327,7 @@ export async function stopVm(vm: VirtualMachine, force: boolean): Promise<void> 
 }
 
 export async function restartVm(vm: VirtualMachine): Promise<void> {
+  await assertOwnerAccessActive(vm); // same owner-window guard as startVm
   const currentVm = await syncVmNode(vm);
   await pve.rebootVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kindOf(currentVm));
   await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'running' } });
@@ -1329,6 +1351,9 @@ export async function resumeVm(vm: VirtualMachine): Promise<void> {
   if (kindOf(vm) === 'lxc') throw new Error('Containers (LXC) cannot be paused');
   const client = await pve.getClient();
   const currentVm = await syncVmNode(vm);
+  // Resuming is a power-ON: gate on the OWNER's window (a share-holder whose
+  // own access is fine must not be able to revive a suspended tenant's guest).
+  await assertOwnerAccessActive(vm);
   await pve.resumeVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client);
 }
 
@@ -1434,6 +1459,7 @@ export async function enterRescue(vm: VirtualMachine): Promise<VirtualMachine> {
     where: { id: current.id },
     data: { rescueBoot: JSON.stringify(snap), status: 'running' },
   });
+  await assertOwnerAccessActive(vm); // booting the guest — gate on the owner's window
   await pve.startVm(current.proxmoxNode, current.proxmoxVmId, client);
   return updated;
 }
@@ -1456,6 +1482,7 @@ export async function exitRescue(vm: VirtualMachine): Promise<VirtualMachine> {
     where: { id: current.id },
     data: { rescueBoot: null, status: 'running' },
   });
+  await assertOwnerAccessActive(vm); // booting the guest — gate on the owner's window
   await pve.startVm(current.proxmoxNode, current.proxmoxVmId, client);
   return updated;
 }

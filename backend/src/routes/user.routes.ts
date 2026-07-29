@@ -6,6 +6,7 @@ import { requireAdmin } from '../middleware/admin.js';
 import { enforceMfaSetup } from '../middleware/mfa.js';
 import { destroyVm } from '../services/vm.service.js';
 import { recordAudit } from '../services/audit.service.js';
+import { ACCESS_DURATIONS, accessExpiryFrom } from '../services/access.service.js';
 import { pveMessage } from '../services/proxmox.service.js';
 import type { AuthRequest } from '../types/index.js';
 
@@ -13,6 +14,7 @@ import type { AuthRequest } from '../types/index.js';
 function toManagedUser(u: {
   id: string; email: string; displayName: string; role: string;
   maxCpu: number; maxRam: number; maxStorage: number; createdAt: Date;
+  accessExpiresAt: Date | null; accessSuspendedAt: Date | null;
   vms: { cpu: number; ram: number; storage: number }[];
   _count: { vms: number };
 }) {
@@ -27,6 +29,10 @@ function toManagedUser(u: {
       ram: { used: u.vms.reduce((s, v) => s + v.ram, 0), max: u.maxRam },
       storage: { used: u.vms.reduce((s, v) => s + v.storage, 0), max: u.maxStorage },
     },
+    // Compute-access window. null = never expires (the default for every
+    // account that predates this feature, and for every admin).
+    accessExpiresAt: u.accessExpiresAt ? u.accessExpiresAt.toISOString() : null,
+    accessSuspendedAt: u.accessSuspendedAt ? u.accessSuspendedAt.toISOString() : null,
     createdAt: u.createdAt.toISOString(),
   };
 }
@@ -55,6 +61,15 @@ const UpdateQuotaSchema = z.object({
   maxCpu: z.number().int().min(0).max(1024),
   maxRam: z.number().int().min(0), // MB
   maxStorage: z.number().int().min(0), // GB
+  /**
+   * Change the tenant's compute window. Omit to leave it untouched (the common
+   * case — a quota edit must not silently reset someone's expiry).
+   *   - a duration ('30d', '365d') → that long FROM NOW
+   *   - 'never'                    → clears the expiry
+   * `.optional()` + a tri-state is deliberate: `null` alone couldn't be told
+   * apart from "not supplied" once zod stripped it.
+   */
+  accessDuration: z.enum(ACCESS_DURATIONS).optional(),
 });
 
 router.patch('/:id', async (req: Request, res: Response) => {
@@ -70,10 +85,29 @@ router.patch('/:id', async (req: Request, res: Response) => {
     return;
   }
 
-  const { maxCpu, maxRam, maxStorage } = parsed.data;
+  const { maxCpu, maxRam, maxStorage, accessDuration } = parsed.data;
+
+  // An admin's own access never expires, so arming a window on one would be a
+  // silently-ignored no-op — refuse instead of pretending it worked.
+  if (accessDuration && accessDuration !== 'never' && target.role === 'admin') {
+    res.status(400).json({ error: 'Admin accounts never expire — their access window cannot be set.' });
+    return;
+  }
+
+  const accessData =
+    accessDuration === undefined
+      ? {} // not supplied → leave the window exactly as it is
+      : {
+          accessExpiresAt: accessExpiryFrom(accessDuration),
+          // Restoring access is the whole point of this control: clear the
+          // suspension latch so the scheduler stops treating them as lapsed and
+          // they can power their machines back on immediately.
+          accessSuspendedAt: null,
+        };
+
   const updated = await prisma.user.update({
     where: { id: targetId },
-    data: { maxCpu, maxRam, maxStorage },
+    data: { maxCpu, maxRam, maxStorage, ...accessData },
     include: { _count: { select: { vms: true } }, vms: true },
   });
   await recordAudit({
@@ -84,6 +118,18 @@ router.patch('/:id', async (req: Request, res: Response) => {
     detail: `${target.email}: ${maxCpu} vCPU / ${maxRam} MB / ${maxStorage} GB`,
     req,
   });
+  if (accessDuration !== undefined) {
+    await recordAudit({
+      action: 'admin.update_access',
+      actor: (req as AuthRequest).user,
+      targetType: 'user',
+      targetId,
+      detail: `${target.email}: access ${
+        updated.accessExpiresAt ? `until ${updated.accessExpiresAt.toISOString()}` : 'never expires'
+      }${target.accessSuspendedAt ? ' (suspension lifted)' : ''}`,
+      req,
+    });
+  }
   res.json(toManagedUser(updated));
 });
 

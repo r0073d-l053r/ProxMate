@@ -39,11 +39,25 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
+// How long the invite LINK stays clickable before it's redeemed.
 const EXPIRY_OPTIONS = [
   { value: "1d", label: "1 day" },
   { value: "7d", label: "7 days" },
   { value: "30d", label: "30 days" },
   { value: "90d", label: "90 days" },
+];
+
+// How long the person may USE the cluster once they sign up — a different clock
+// entirely from the link expiry above, so the two are labelled distinctly.
+const ACCESS_OPTIONS = [
+  { value: "never", label: "Never expires" },
+  { value: "7d", label: "7 days" },
+  { value: "14d", label: "14 days" },
+  { value: "30d", label: "30 days" },
+  { value: "60d", label: "60 days" },
+  { value: "90d", label: "90 days" },
+  { value: "180d", label: "6 months" },
+  { value: "365d", label: "1 year" },
 ];
 
 const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
@@ -131,6 +145,7 @@ export default function InvitesPage() {
   const [label, setLabel] = useState("");
   const [email, setEmail] = useState("");
   const [expiresIn, setExpiresIn] = useState("7d");
+  const [accessDuration, setAccessDuration] = useState("never");
   const [require2fa, setRequire2fa] = useState(false);
   const [creating, setCreating] = useState(false);
   const [lastUrl, setLastUrl] = useState<string | null>(null);
@@ -161,6 +176,7 @@ export default function InvitesPage() {
         label: label.trim() || undefined,
         email: to || undefined,
         expiresIn,
+        accessDuration,
         require2fa,
       });
       setLastUrl(res.data.inviteUrl);
@@ -232,13 +248,32 @@ export default function InvitesPage() {
               <FormField label="Max storage (GB)" htmlFor="storage">
                 <Input id="storage" type="number" min={1} value={storage} onChange={(e) => setStorage(Number(e.target.value))} />
               </FormField>
-              <FormField label="Expires in">
+              <FormField label="Invite link expires in" hint="How long the link stays usable">
                 <Select value={expiresIn} onValueChange={(v) => setExpiresIn(v as string)}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {EXPIRY_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FormField>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField
+                label="Compute access"
+                hint="How long they can use the cluster, counted from the day they sign up. You can change this later from Users."
+              >
+                <Select value={accessDuration} onValueChange={(v) => setAccessDuration(v as string)}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ACCESS_OPTIONS.map((o) => (
                       <SelectItem key={o.value} value={o.value}>
                         {o.label}
                       </SelectItem>
