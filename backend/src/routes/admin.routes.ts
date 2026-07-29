@@ -1,5 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { promises as fsp } from 'node:fs';
+import path from 'node:path';
 import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/admin.js';
 import { enforceMfaSetup } from '../middleware/mfa.js';
@@ -57,7 +59,14 @@ import { getNotifyConfig, saveNotifyConfig, sendTestNotification, NOTIFY_EVENTS 
 import * as sso from '../services/sso.service.js';
 import { getIdeConfig, saveIdeConfig, isValidIngressCidr } from '../services/ide.service.js';
 import { probeIdeReachability } from '../services/ide-provision.service.js';
-import { getAppDbBackupConfig, saveAppDbBackupConfig, runAppDbBackup, isValidBackupDir } from '../services/appdb-backup.service.js';
+import {
+  getAppDbBackupConfig,
+  saveAppDbBackupConfig,
+  runAppDbBackup,
+  isValidBackupDir,
+  explainBackupDirError,
+  DEFAULT_BACKUP_DIR,
+} from '../services/appdb-backup.service.js';
 import { isKioskPinSet, setKioskPin, isValidKioskPin } from '../services/kiosk.service.js';
 import { listLlmKeys, getLlmKeyEndpoint } from '../services/tenant-llm-key.service.js';
 import { probeModels } from '../services/ide-gateway.service.js';
@@ -122,7 +131,13 @@ router.get('/settings', async (_req: Request, res: Response) => {
         }
       : { configured: false, callbackUrl: sso.callbackUrl() },
     ide: await getIdeConfig(),
-    appdbBackup: await getAppDbBackupConfig(),
+    appdbBackup: {
+      ...(await getAppDbBackupConfig()),
+      // The container-side directory the compose file mounts a host dir onto.
+      // The UI shows this so an admin isn't left guessing which paths are
+      // writable (the #1 confusion: a folder made on the host isn't reachable).
+      mountedDir: DEFAULT_BACKUP_DIR,
+    },
     kiosk: { pinSet: await isKioskPinSet() },
   });
 });
@@ -166,6 +181,23 @@ router.put('/settings/appdb-backup', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
     return;
   }
+  // Reject a directory the container can't actually write to, at SAVE time.
+  // Accepting it silently means the admin only finds out when the nightly job
+  // fails at 02:30 with nobody watching — the failure mode this whole change
+  // exists to remove.
+  const dir = parsed.data.dir.trim();
+  if (dir) {
+    try {
+      await fsp.mkdir(dir, { recursive: true });
+      const probe = path.join(dir, `.proxmate-write-test-${process.pid}`);
+      await fsp.writeFile(probe, '');
+      await fsp.unlink(probe);
+    } catch (err) {
+      res.status(400).json({ error: explainBackupDirError(dir, err) });
+      return;
+    }
+  }
+
   await saveAppDbBackupConfig(parsed.data);
   await recordAudit({ action: 'admin.appdb_backup_config', actor: (req as AuthRequest).user, req });
   res.json({ success: true });

@@ -28,6 +28,10 @@ services:
       NODE_ENV: production
       # SQLite lives on the named volume so data survives container rebuilds.
       DATABASE_URL: file:/data/proxmate.db
+      # Where app-database snapshots are written INSIDE the container. Paired
+      # with the ${PROXMATE_BACKUP_DIR} mount below; change the host side there,
+      # not here. Used as the default for the in-app setting.
+      APPDB_BACKUP_DIR: /var/backups/proxmate
       # Used for the CORS allow-list — set to your public frontend origin.
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       # REQUIRED and must be stable across restarts (losing it makes stored
@@ -86,6 +90,12 @@ services:
       retries: 3
     volumes:
       - proxmate-data:/data
+      # App-database backups (Settings -> Maintenance). ProxMate runs in a
+      # container, so it can only write to paths mounted in from the host —
+      # creating a folder on the host alone does nothing. The container-side
+      # path is fixed; PROXMATE_BACKUP_DIR in .env chooses where on the HOST the
+      # snapshots actually land (default: ./backups next to this file).
+      - ${PROXMATE_BACKUP_DIR:-./backups}:/var/backups/proxmate
       # Uncomment to enable one-click updates (the host updater watches this dir):
       # - ./deploy/update-control:/control
       # Uncomment to trust a private Proxmox CA (set PROXMOX_CA_CERT_FILE=/certs/pve-ca.pem):

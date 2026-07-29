@@ -40,8 +40,20 @@ export interface AppDbBackupConfig {
 
 const KEEP_DEFAULT = 7;
 
+/**
+ * The container-side directory the compose file mounts a host directory onto
+ * (`PROXMATE_BACKUP_DIR` in `.env` chooses the host side). Used as the default
+ * target so backups work out of the box instead of requiring the admin to
+ * discover that only mounted paths are writable.
+ */
+export const DEFAULT_BACKUP_DIR = process.env['APPDB_BACKUP_DIR']?.trim() || '';
+
 export async function getAppDbBackupConfig(): Promise<AppDbBackupConfig> {
-  const dir = (await getConfig('appdb_backup_dir'))?.trim() ?? '';
+  const stored = (await getConfig('appdb_backup_dir'))?.trim();
+  // `null` = never configured -> fall back to the mounted default. An explicit
+  // empty string is the admin deliberately turning backups OFF, and must not be
+  // silently re-enabled by the default.
+  const dir = stored === undefined || stored === null ? DEFAULT_BACKUP_DIR : stored;
   const keepRaw = Number(await getConfig('appdb_backup_keep'));
   const keep = Number.isInteger(keepRaw) && keepRaw >= 1 && keepRaw <= 365 ? keepRaw : KEEP_DEFAULT;
   return { dir, keep };
@@ -56,6 +68,48 @@ export async function saveAppDbBackupConfig(data: { dir: string; keep: number })
 export function isValidBackupDir(dir: string): boolean {
   const s = dir.trim();
   return s === '' || path.isAbsolute(s);
+}
+
+/**
+ * Turn a filesystem failure on the backup directory into something an admin can
+ * act on.
+ *
+ * ProxMate runs in a container, so a path only reaches the host if it was
+ * MOUNTED IN — and creating the directory on the host does nothing by itself.
+ * The raw errors here ("EACCES: permission denied, mkdir '/srv/backups'") send
+ * people off chasing host file permissions, which is the wrong trail entirely
+ * and is exactly how this was first hit in the wild.
+ *
+ * Deliberately does NOT try to widen permissions or fall back to a writable
+ * container path: a backup written inside the container's own layer looks like
+ * it worked and then disappears on the next rebuild, which is worse than a
+ * loud failure.
+ */
+export function explainBackupDirError(dir: string, err: unknown): string {
+  const code = (err as NodeJS.ErrnoException)?.code;
+  const mounted = DEFAULT_BACKUP_DIR;
+  const hint =
+    mounted && !dir.startsWith(mounted)
+      ? ` The directory mounted into this container is "${mounted}" — use it, or a folder inside it.`
+      : ' Mount a host directory into the backend container (set PROXMATE_BACKUP_DIR in .env) and point this at it.';
+
+  if (code === 'EACCES' || code === 'EPERM') {
+    return (
+      `Can't write to "${dir}" — ProxMate runs in a container and can only write to paths mounted into it. ` +
+      `Creating the folder on the host is not enough on its own.${hint} See DEPLOYMENT.md "App-database backups".`
+    );
+  }
+  if (code === 'ENOENT' || code === 'ENOTDIR') {
+    return (
+      `"${dir}" doesn't exist inside the ProxMate container and couldn't be created.${hint} ` +
+      `See DEPLOYMENT.md "App-database backups".`
+    );
+  }
+  if (code === 'EROFS') {
+    return `"${dir}" is mounted read-only into the container. Mount it read-write (drop the ":ro" suffix).${hint}`;
+  }
+  if (code === 'ENOSPC') return `No space left on the device holding "${dir}".`;
+  return `Couldn't write to "${dir}": ${err instanceof Error ? err.message : String(err)}`;
 }
 
 /**
@@ -87,7 +141,19 @@ export async function runAppDbBackup(now: Date = new Date()): Promise<AppDbBacku
   if (!dir) return { ran: false, reason: 'disabled — no backup directory configured' };
   if (!isValidBackupDir(dir)) return { ran: false, reason: `not an absolute path: ${dir}` };
 
-  await fsp.mkdir(dir, { recursive: true });
+  // Create + prove writability BEFORE the VACUUM, so a misconfigured directory
+  // fails with an explanation instead of a raw errno from deep inside SQLite.
+  try {
+    await fsp.mkdir(dir, { recursive: true });
+    const probe = path.join(dir, `.proxmate-write-test-${process.pid}`);
+    await fsp.writeFile(probe, '');
+    await fsp.unlink(probe);
+  } catch (err) {
+    const reason = explainBackupDirError(dir, err);
+    logger.warn({ dir, err }, 'app-db backup target is not writable');
+    return { ran: false, reason };
+  }
+
   const file = path.join(dir, appDbBackupFileName(now));
   // VACUUM INTO snapshots a live SQLite DB consistently. The path rides inside a
   // SQL string literal — escape quotes (the path itself is admin-configured).

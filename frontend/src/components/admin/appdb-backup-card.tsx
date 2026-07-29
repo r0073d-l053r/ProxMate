@@ -22,6 +22,9 @@ export function AppDbBackupCard() {
   const [running, setRunning] = useState(false);
 
   const [dir, setDir] = useState("");
+  // Container-side path the host mount lands on; drives the hint so the admin
+  // isn't left guessing which paths are actually writable.
+  const [mountedDir, setMountedDir] = useState("");
   const [keep, setKeep] = useState(7);
 
   useEffect(() => {
@@ -31,6 +34,7 @@ export function AppDbBackupCard() {
         if (r.data.appdbBackup) {
           setDir(r.data.appdbBackup.dir);
           setKeep(r.data.appdbBackup.keep);
+          setMountedDir(r.data.appdbBackup.mountedDir ?? "");
         }
       })
       .catch((err) => toast.error(apiError(err)))
@@ -85,7 +89,14 @@ export function AppDbBackupCard() {
       </CardHeader>
       <CardContent className="grid gap-4">
         <div className="grid gap-4 sm:grid-cols-[1fr_140px]">
-          <FormField label="Backup directory" hint="Absolute path inside the backend container/host. Empty = disabled.">
+          <FormField
+            label="Backup directory"
+            hint={
+              mountedDir
+                ? `Must be ${mountedDir} (or a folder inside it) — that's the host directory mounted into ProxMate. Change where it lands on the host with PROXMATE_BACKUP_DIR in .env. Empty = disabled.`
+                : "Must be a path mounted into the backend container — set PROXMATE_BACKUP_DIR in .env (see DEPLOYMENT.md). Creating a folder on the host alone won't work. Empty = disabled."
+            }
+          >
             <Input
               value={dir}
               disabled={loading}
