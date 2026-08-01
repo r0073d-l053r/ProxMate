@@ -27,6 +27,19 @@ export function proxy(request: NextRequest) {
   const pinnedConnect = process.env.CSP_CONNECT_SRC?.trim();
   const connectSrc = pinnedConnect || (isDev ? "'self' https: http: wss: ws:" : "'self' https: wss:");
 
+  // `upgrade-insecure-requests` rewrites every http:// URL on the page to https://.
+  // On an HTTPS deployment that is useful hardening; on a plain-HTTP one it is fatal
+  // — the browser upgrades the page's OWN script/style/font URLs, nothing is
+  // listening on :3000 over TLS, and every asset dies with ERR_SSL_PROTOCOL_ERROR
+  // before the app can render. So only send it when the public origin really is
+  // HTTPS. NEXT_PUBLIC_SITE_URL is set by the operator (build arg + runtime env), so
+  // it is preferred over the request headers, which a client could forge.
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+  const isHttps = siteUrl
+    ? siteUrl.startsWith("https://")
+    : (forwardedProto ?? request.nextUrl.protocol.replace(":", "")) === "https";
+
   const scriptSrc = isDev
     ? `'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval' 'unsafe-inline'`
     : `'self' 'nonce-${nonce}' 'strict-dynamic'`;
@@ -42,7 +55,7 @@ export function proxy(request: NextRequest) {
     `base-uri 'self'`,
     `form-action 'self'`,
     `frame-ancestors 'none'`,
-    `upgrade-insecure-requests`,
+    ...(isHttps ? [`upgrade-insecure-requests`] : []),
   ].join("; ");
 
   // Forward the nonce on the request so Next can apply it during SSR…
