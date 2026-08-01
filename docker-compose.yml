@@ -146,7 +146,13 @@ services:
       # Optional: pin the CSP connect-src to your exact API + WebSocket origin,
       # e.g. "'self' https://proxmate.example.com wss://proxmate.example.com".
       # Blank = a safe default ('self' https: wss:). See frontend/src/proxy.ts.
+      # In .env this value MUST be wrapped in double quotes, or compose stops
+      # reading at the first closing single quote and you get just `self`.
       CSP_CONNECT_SRC: ${CSP_CONNECT_SRC:-}
+      # Also passed at RUNTIME (not only as a build arg) so the proxy can tell an
+      # HTTPS deployment from a plain-HTTP one and decide whether it is safe to
+      # send `upgrade-insecure-requests` — on HTTP that directive breaks the page.
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
     depends_on:
       backend:
         # Wait for the backend to be healthy (migrated + DB up), not just started,
