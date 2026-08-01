@@ -32,11 +32,7 @@ backend/prisma/migrations/**/migration_lock.toml
 *.log
 npm-debug.log*
 
-# AI agent / local dev tooling (not for public repo)
-.claude/
-/CLAUDE.md
-frontend/AGENTS.md
-frontend/CLAUDE.md
+# Local working notes (not for public repo)
 completed-tasks.md
 
 # TypeScript incremental build cache
