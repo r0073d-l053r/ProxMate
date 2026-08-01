@@ -69,7 +69,7 @@ ProxMate can do that for you safely from the admin UI (§7.3).
   from your management network by design.
   - Datacenter ▸ SDN ▸ Zones → add a **VLAN** (or **Simple**) zone; add a **VNet**
     (e.g. `tenants`, VLAN tag 50); **Apply**.
-  - Set ProxMate's default bridge to that VNet in admin **Settings ▸ VM defaults**
+  - Set ProxMate's default bridge to that VNet in admin **Settings ▸ Proxmox tab ▸ VM defaults**
     after first run.
 - Keep the **Proxmox management interface (8006) and SSH on a separate VLAN/subnet**
   the tenants can't reach.
@@ -125,11 +125,20 @@ Fill in the **PRODUCTION** block (replace the domain). The key values:
 | `COOKIE_SECURE` | `true` | Send `Secure` cookies (HTTPS). |
 | `TRUST_PROXY` | `1` | One proxy hop (Caddy) → real client IP for rate-limit + audit. |
 | `BIND_ADDR` | `127.0.0.1` | Only the local reverse proxy can reach the app ports. |
+| `PROXMATE_BACKUP_DIR` | *(recommended)* e.g. `/mnt/backups/proxmate-db` | **Where ProxMate's own database snapshots land on the HOST** (§12). The container-side path is fixed at `/var/backups/proxmate`; this chooses the host directory that gets mounted there. Creating a folder on the host does **nothing** unless it's set here — the backend runs in a container and can only write to paths mounted into it. Changing it requires `docker compose up -d backend` (a mount is only established at container-create time), not a restart. Default: `./backups` next to `docker-compose.yml`. |
 | `BACKUP_DOWNLOAD_DIR` | *(optional)* e.g. `/backups` | **Enables tenant backup downloads.** Mount your backup share (the same NFS/CIFS/PBS-dir Proxmox writes vzdumps to) into the API container and point this at it. Tenants then get a **Download** button on each MateState that emails them a single-use, 1-hour link; ProxMate streams the file off this mount (the Proxmox API can't stream vzdump bytes). Requires SMTP. Leave unset to keep the feature off. |
 | `RESTORE_UPLOAD_MAX_GB` | *(optional)* default `50` | Size cap for **restore-from-upload** (below). `0` disables the cap. |
 | `SNIPPET_DIR` + `SNIPPET_STORAGE` | *(optional)* e.g. `/snippets` + `local` | **Enables on-demand cloud-init snippet writing.** Point `SNIPPET_DIR` at a snippets directory that is both mounted into the API container **and** backed by a Proxmox storage every node can read (an NFS export is ideal), and set `SNIPPET_STORAGE` to that storage's id (with the `snippets` content type enabled). ProxMate then writes the exact cloud-init extras a deploy needs, atomically, at deploy time — no per-node file placement. Leave unset to fall back to manual snippet pre-placement. |
-| `METRICS_TOKEN` | *(recommended)* a random string | Guards `GET /metrics`. **In production `/metrics` returns 404 unless this is set** (or scrape only over localhost). Scrapers send `Authorization: Bearer <token>`. |
+| `METRICS_TOKEN` | *(recommended)* a random string | Guards `GET /metrics`. **In production `/metrics` returns 404 unless this is set** — there is no localhost exemption, so a Prometheus scrape from `127.0.0.1` gets a 404 too. Scrapers send `Authorization: Bearer <token>`. |
 | `ALLOW_PRIVATE_OUTBOUND_URLS` | *(optional)* `true` | Admin-configured **webhooks** and **cloud-image URLs** are blocked from targeting private/loopback/metadata addresses (SSRF guard). Set `true` only if you legitimately point at a **LAN** service (self-hosted Mattermost/ntfy, a local image mirror). The scheme + no-credentials checks always stay enforced. |
+| `MATESTATE_CRON` / `ACCESS_EXPIRY_CRON` | *(optional)* 5-field cron | Override the guest-backup schedule (default Sundays 03:00) and the compute-access-window sweep (default hourly at :20). |
+
+> **`SNIPPET_DIR` and `BACKUP_DOWNLOAD_DIR` are CONTAINER paths.** Setting the variable is only
+> half the job — the host directory must also be **mounted into the backend container**, or the
+> path simply won't exist inside it. `docker-compose.yml` ships both mounts commented out next to
+> the `proxmate-data` volume; uncomment the one you need and keep its container-side path identical
+> to the variable. (This is the same container-boundary trap described for `PROXMATE_BACKUP_DIR`
+> in §12.)
 
 > **Restore from old build (upload a MateState backup).** When `BACKUP_DOWNLOAD_DIR` is
 > mounted **read-write** (`rw`, not `:ro`), the create-VM wizard gains a **"Restore from old
@@ -219,7 +228,7 @@ Browse to **https://proxmate.example.com** — you should land on the setup wiza
   open the **noVNC console** (this exercises the WebSocket relay through Caddy) → delete.
 
 ### 7.3 Turn on tenant isolation enforcement
-- Admin **Settings ▸ Network isolation** → click **Enable enforcement**. ProxMate
+- Admin **Settings ▸ Proxmox tab ▸ Tenant network isolation** → click **Enable enforcement**. ProxMate
   first adds management allow-rules (web 8006 + SSH 22 on the auto-derived
   `suggestedMgmtCidr`) **before** flipping the datacenter firewall on, so you don't
   lock yourself out. Confirm the suggested CIDR matches your mgmt network.
@@ -230,9 +239,20 @@ Browse to **https://proxmate.example.com** — you should land on the setup wiza
 
 ## 8. Email (SMTP)
 
-Enables password-reset emails. Without it, resets fall back to admin approval.
+Enables password-reset emails — without it, resets fall back to an admin-approval queue.
+SMTP also gates a lot more than resets, so it's worth configuring even if you're happy
+approving resets by hand:
 
-1. Admin **Settings ▸ Email (SMTP)** → enter host, port (587 STARTTLS or 465 TLS),
+- **Compute access-window warnings** (§12b) — the 7-day and 1-day notices before a tenant's
+  access lapses, plus the `access.expired` notification to admins. Without SMTP the
+  suspension still happens, just silently.
+- **Invites** sent by email, **account-lockout** alerts, backup-failure and
+  provisioning-error notifications, and the **single-use backup download links**
+  (`BACKUP_DOWNLOAD_DIR`, §4) — which cannot work at all without it.
+
+All of it renders from one branded template, so verifying a single send covers the lot.
+
+1. Admin **Settings ▸ Notifications tab ▸ Email (SMTP)** → enter host, port (587 STARTTLS or 465 TLS),
    username, password, and a From address. Point it at any relay (e.g. the same one
    your Proxmox notifications use).
 2. Click **Save**, then **Test** (verifies the connection/credentials).
@@ -259,7 +279,7 @@ Enables password-reset emails. Without it, resets fall back to admin approval.
    (it must serve `…/realms/proxmate/.well-known/openid-configuration`).
 
 ### 9.2 In ProxMate
-Admin **Settings ▸ Single sign-on (OIDC)**:
+Admin **Settings ▸ Access tab ▸ Single sign-on (OIDC)**:
 - **Issuer URL:** `https://<keycloak-host>/realms/proxmate`
 - **Client ID / Client secret:** from Keycloak
 - **Scopes:** `openid profile email`
@@ -385,6 +405,33 @@ newer ProxMate is fine.
 Take a copy of the current database before restoring over it, so a wrong choice
 of snapshot is reversible.
 
+> **Get `ENCRYPTION_KEY` off this host.** The key never changes, so one copy in a
+> password manager or secret store closes the risk permanently. Snapshots stored on a
+> second disk in the same machine do **not** protect you: lose the chassis and every
+> secret inside those backups is undecryptable. Do this now rather than at restore time.
+
+---
+
+## 12b. Compute access windows (time-boxed tenants)
+
+Invites can grant access for a **fixed term** or **never expire**. The clock is anchored at
+sign-up (not at invite creation), and admins can override any user's window afterwards under
+**Settings ▸ Access**.
+
+What operators need to know before handing out invites:
+
+- **Expiry suspends, it never deletes.** When a window closes the tenant's VMs are stopped and
+  sign-in is refused, but nothing is destroyed — extending the window restores access intact.
+- **Enforcement is everywhere**, not just at login: the console WebSocket, the IDE proxy, and
+  both API-token families all check it, so an expired tenant can't keep working through a
+  still-open tab or a saved token.
+- **Admins never expire.**
+- A sweep runs **hourly at :20**, with a catch-up shortly after boot — so a window that lapsed
+  while the host was down is still enforced on the way back up. Override the schedule with
+  `ACCESS_EXPIRY_CRON` (§4).
+- **Warning emails (7-day and 1-day) and the admin `access.expired` notification require SMTP
+  (§8).** Without it, tenants get suspended with no warning.
+
 ---
 
 ## 13. Final verification checklist
@@ -401,7 +448,7 @@ of snapshot is reversible.
 
 ## 14. Updating ProxMate
 
-ProxMate ships an in-app updater. **Admin ▸ Settings ▸ Updates** shows your running
+ProxMate ships an in-app updater. **Admin ▸ Settings ▸ Maintenance tab ▸ Updates** shows your running
 version and a **Check for updates** button that reads the latest **GitHub Release**;
 if a newer one exists it shows the release notes and lets you decide whether to apply it.
 
@@ -422,7 +469,7 @@ flowchart TD
   app -->|poll status| ctrl
 ```
 
-### 13.1 Publishing a release (so there's a "Latest" to find)
+### 14.1 Publishing a release (so there's a "Latest" to find)
 
 The check compares `backend/package.json`'s `version` against the latest GitHub Release tag.
 To cut one:
@@ -439,7 +486,7 @@ auto-generated notes. (Manual alternative: `gh release create v0.2.0 --generate-
 
 > Set `UPDATE_REPO` in `.env` if you track a fork instead of the upstream repo.
 
-### 13.2 Manual update (no host changes needed)
+### 14.2 Manual update (no host changes needed)
 
 ```bash
 cd /opt/proxmate
@@ -452,7 +499,7 @@ The script checks out the tag, runs `docker compose build` + `up -d`, and the ba
 applies DB migrations on boot (`docker-entrypoint.sh`). **Back up the DB first** (the
 `proxmate-data` volume) so you can roll back. Rollback = `./deploy/update.sh <previous-tag>`.
 
-### 13.3 Enabling the one-click "Install update" button
+### 14.3 Enabling the one-click "Install update" button
 
 1. **Mount the control dir + enable the flag** — in `docker-compose.yml`, uncomment
    `- ./deploy/update-control:/control` under the backend `volumes`, and in `.env` set:
@@ -482,13 +529,20 @@ applies DB migrations on boot (`docker-entrypoint.sh`). **Back up the DB first**
 ProxMate has a full-screen, touch-friendly **kiosk** view designed for a small panel mounted
 on/near the cluster (e.g. a Raspberry Pi Touch Display 2 at 1280×720). It shows an at-a-glance
 **command center** — cluster CPU/memory/storage gauges, per-node health + quorum, VM
-running/stopped counts, trend sparklines, and a live activity ticker — plus a **VMs** tab with
-touch power controls.
+running/stopped counts, trend sparklines, a live activity feed with tap-to-filter, and a **VMs**
+tab of live per-guest cards.
+
+> **The kiosk is monitoring only (since v0.8.6).** The VM cards carry **no power controls** and no
+> links off the panel — an unattended screen anyone can walk up to must not be able to stop a
+> tenant's VM, or navigate out of kiosk mode and thereby walk around the exit gate. The panel also
+> shows no tenant identities (no owner emails or display names).
 
 - **Enter from the app:** **Admin ▸ Monitor ▸ "Kiosk mode"**. The tap requests browser
   fullscreen (a user gesture is required) and routes to the chromeless kiosk.
-- **Exit:** the **X (close)** button in the top-right corner returns to the dashboard; the
-  **fullscreen toggle** button switches full-screen on and off.
+- **Exit requires re-authentication.** Tapping **X (close)** opens a full-screen unlock gate
+  offering a passkey, the admin-set exit PIN, or the account password; only on success does it
+  leave fullscreen and route to **Admin ▸ Monitor**. The **fullscreen toggle** switches
+  full-screen on and off.
 - **Admin-only:** the kiosk shows cluster-wide data, so it's gated to admins (and the underlying
   `/api/admin/*` feeds are admin-gated server-side).
 - It keeps the panel awake via the **Screen Wake Lock API** and hides the cursor for a true
@@ -501,7 +555,7 @@ flowchart LR
   P["Pi boots Chromium<br/>--kiosk https://HOST/kiosk"] --> K
 ```
 
-### 14.1 Auto-launch on the Raspberry Pi (boot straight into kiosk)
+### 15.1 Auto-launch on the Raspberry Pi (boot straight into kiosk)
 
 `/kiosk` is a stable deep link. For the panel to come up in fullscreen kiosk after a reboot, point
 Chromium at it with the `--kiosk` flag (browsers can't self-trigger OS-level fullscreen without a
@@ -518,15 +572,16 @@ X-GNOME-Autostart-enabled=true
 
 Notes:
 - The browser must already hold a logged-in **admin** session (sign in once on the panel; the
-  `proxmate_session` cookie persists). Treat the panel as a trusted, physically-secured device —
-  it stays signed in.
+  `proxmate_session` cookie persists). The panel stays signed in by design — set an **exit PIN**
+  (or enrol a passkey) so leaving kiosk mode still demands a credential, since anyone can physically
+  touch the screen. The kiosk itself is read-only, so a passer-by can look but not act.
 - Use the externally reachable origin (the same one in `NEXT_PUBLIC_SITE_URL` / your tunnel host).
 - To keep the Pi display from blanking at the OS level too, disable DPMS/screen-blanking in your
   Pi's display settings (the in-app Wake Lock covers the browser, but the OS may still blank).
 
 ---
 
-## 15b. ProxMate IDE (optional, in-guest editor + AI agent)
+## 16. ProxMate IDE (optional, in-guest editor + AI agent)
 
 If you want the per-VM browser IDE, the full setup + security model is in
 [`docs/proxmate-ide.md`](docs/proxmate-ide.md). The production essentials:
@@ -534,20 +589,22 @@ If you want the per-VM browser IDE, the full setup + security model is in
 - **Reachability:** the ProxMate host must reach tenant VM IPs on **TCP :8080**. On a flat
   network this is automatic; on a non-flat one you provide the routing (Tailscale subnet route,
   VPN, static route). ProxMate can't create it.
-- **`TRUST_PROXY=1` + an https origin** (`BACKEND_PUBLIC_URL`) are required — the in-guest AI
-  agent's gateway URL is https-derived, and an http URL is 301'd (which breaks the agent's POST).
+- **`BACKEND_PUBLIC_URL` must be your https origin** — the in-guest AI agent's gateway URL is built
+  from it directly. Since v0.8.0 the configured value wins outright; deriving the scheme from
+  `X-Forwarded-Proto` proved unreliable behind a proxy that rewrites it (an http URL gets 301'd,
+  which breaks the agent's POST). Header derivation remains only a fallback for bare dev setups.
 - **Firewall:** with isolation on, ProxMate opens a managed, infra-scoped `:8080` pinhole on each
   IDE VM, scoped to **`ide_ingress_cidr`** — set it to the address ProxMate's traffic arrives from
   (the backend host on a flat LAN; the subnet-router node's LAN IP when routed).
 - **Guest specs:** IDE VMs need the **qemu-guest-agent** running, **>= 8 GB RAM** (`ide_min_ram_mb`),
   and AVX (ProxMate sets `cpu: host` automatically; reboot to apply).
-- Enable + configure models in **admin Settings ▸ ProxMate IDE**.
+- Enable + configure models in **admin Settings ▸ IDE tab**.
 
 Prefer an agent to do it? [`DEPLOY_WITH_CLAUDE.md`](DEPLOY_WITH_CLAUDE.md) covers the IDE in §7.
 
 ---
 
-## 16. Troubleshooting
+## 17. Troubleshooting
 
 **"EACCES: permission denied, mkdir …" when saving the app-database backup
 directory.** The path isn't mounted into the backend container — ProxMate can

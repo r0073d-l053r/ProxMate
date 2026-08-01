@@ -29,18 +29,20 @@ Proxmox admin panel.
 
 ## Features
 
-- **Invite-only multi-tenancy** — invite links carry CPU/RAM/disk quotas; per-VM firewall keeps tenants off your LAN, your other guests, and the host
-- **VMs & LXC containers** — create from an ISO, the Template Store, or 16 curated cloud images; resize, rebuild, rename, snapshots, power schedules, tags & bulk actions
+- **Invite-only multi-tenancy** — invite links carry CPU/RAM/disk quotas; a per-VM firewall keeps tenants off your LAN, your other guests, and the host **once the Proxmox cluster firewall is enabled** (ProxMate walks you through that in-app)
+- **VMs & LXC containers** — create from an ISO, the Template Store, or 20 curated cloud images (16 x86-64 + 4 ARM64); resize, rebuild, rename, snapshots, power schedules, tags & bulk actions
+- **Share a VM** — hand another tenant access at one of three preset levels (Viewer / Operator / Manager); no share level can delete, rebuild, migrate, or re-share
 - **In-browser consoles** — graphical (noVNC) *and* a text console with clickable links, real copy/paste, and scrollback — no SSH, no open ports
 - **ProxMate IDE (beta)** — a per-VM **browser IDE** (VS Code / code-server) opened inside the tenant's own VM, with an **in-guest AI coding agent** (OpenCode) wired to admin-controlled models; reuses your tenant-isolation firewall — [docs](docs/proxmate-ide.md)
 - **Serious auth** — TOTP 2FA, passkeys (WebAuthn), bring-your-own OIDC SSO, SMTP password resets, optional invite-enforced 2FA
-- **MateStates backups** — scheduled backups with rolling retention, one-click in-place restore, per-VM policies, quick snapshots
+- **Time-boxed access** — invites can grant a fixed term (or never expire); when a window closes ProxMate **suspends, never deletes** — VMs stop, sign-in is refused, nothing is destroyed
+- **MateStates backups** — scheduled backups with rolling retention, one-click in-place restore, per-VM policies, quick snapshots — plus nightly backups of **ProxMate's own database** to a host directory
 - **Cluster operations** — automatic VM placement, live migration, DRS-style memory balancer, maintenance node-drain, GPU/PCI passthrough requests
-- **Operator visibility** — live admin monitor (1 Hz sparklines), rack-panel kiosk mode, audit log, Prometheus `/metrics`
+- **Operator visibility** — live admin monitor (1 Hz sparklines), monitoring-only rack-panel kiosk, audit log, Prometheus `/metrics`
 - **In-app updates** — check the latest GitHub release and one-click rebuild onto it
 
 <details>
-<summary><b>Full feature matrix</b> — every feature, one table</summary>
+<summary><b>Full feature matrix</b> — the feature set, one table</summary>
 <br/>
 
 | Feature | Description |
@@ -51,7 +53,7 @@ Proxmox admin panel.
 | **SMTP & Password Recovery** | Email-based secure password resets, with a database-backed "contact admin" request queue if SMTP is disabled |
 | **VM Lifecycle Management** | Create, start, stop, restart, **rename**, and delete VMs — each VM page has editable **notes**, an **activity timeline**, and **CPU/memory history charts**. The create wizard offers one-click **size presets** (Small → X-Large) |
 | **LXC Containers** | Spin up lightweight **LXC containers** alongside full VMs — create from an OS template, start/stop/restart, in-browser console, tenant isolation, quotas, cpu/RAM/rootfs resize, and MateStates backups. Shares the host kernel, boots in seconds |
-| **Cloud-Init Deploys** | One-click cloud images (16 curated distros + custom URLs), imported entirely through the Proxmox API — paste an SSH key for a ready-to-SSH box in ~60s. Admin-curated first-boot **extras** (Docker, Tailscale, Superfile, Cockpit, Netdata, Caddy, code-server, …) plus an **always-on base** (fail2ban / unattended-upgrades / btop) installed on every VM. ProxMate can **write the cloud-init snippet on demand** to a shared storage at deploy time (no per-node file placement). **Save SSH keys** to your profile and pick them on deploy |
+| **Cloud-Init Deploys** | One-click cloud images (20 curated distros — 16 x86-64 and 4 ARM64 — plus custom URLs), imported entirely through the Proxmox API — paste an SSH key for a ready-to-SSH box in ~60s. Admin-curated first-boot **extras** (Docker, Tailscale, Superfile, Cockpit, Netdata, Caddy, code-server, …) plus an **always-on base** (fail2ban / unattended-upgrades / btop) installed on every VM. ProxMate can **write the cloud-init snippet on demand** to a shared storage at deploy time (no per-node file placement). **Save SSH keys** to your profile and pick them on deploy |
 | **Add an SSH key to a running VM** | Drop one of your saved (or pasted) public keys onto an existing VM's user — appended to `authorized_keys` **via the QEMU guest agent**, no rebuild or reboot. Idempotent, permission-safe, and validated (no shell-injection surface) |
 | **Template Store** | Publish Proxmox templates as one-click OS builds — cloned and autoscaled on deploy, with OS-matched (or custom-uploaded) icons and admin-authored login notes |
 | **Automatic VM Placement** | Tenants never pick a node — the scheduler auto-places each VM on a node that has the chosen image, with the most free capacity |
@@ -64,8 +66,13 @@ Proxmox admin panel.
 | **Power Schedule** | Auto start/stop any VM on a weekly schedule — handy for dev boxes that don't need to run overnight |
 | **In-App Updates** | Admins check the latest GitHub release, see what's new, and (opt-in) one-click rebuild + restart onto the new version |
 | **Live Admin Monitor** | Per-VM CPU / memory / network sparklines at 1 Hz, with power controls, grouped by owner |
-| **Kiosk Mode** | A full-screen, touch-friendly command center for a rack-mounted panel — cluster gauges, quorum tile, per-node strip, activity ticker |
-| **Tenant Network Isolation** | Per-VM Proxmox firewall — MAC filtering, RFC1918 drop rules, and a configurable DNS allow-list — keeps guests off your LAN, your other VMs, and the host |
+| **Kiosk Mode** | A full-screen, touch-friendly wall panel for a rack-mounted display — cluster gauges, quorum tile, per-node strip, activity feed. **Monitoring only**: no VM power controls and no links off the panel, so an unattended screen can't be used to act on a tenant's VM or slip past the passkey/PIN exit gate |
+| **Compute Access Windows** | Time-box a tenant's access — invites can grant a fixed term (or never expire), with an admin per-user override. Expiry **suspends, never deletes**: VMs stop and sign-in is refused across every auth path, but nothing is destroyed. 7-day and 1-day warning emails, plus an admin notification when a window closes |
+| **App-Database Backups** | ProxMate backs up **itself** on a nightly schedule (`VACUUM INTO`, consistent on a live DB) with rolling retention, written to a host directory you choose via `PROXMATE_BACKUP_DIR`. Pair it with an off-host copy of `ENCRYPTION_KEY` — a snapshot without the key restores nothing |
+| **Tenant Network Isolation** | Per-VM Proxmox firewall — MAC filtering, RFC1918 drop rules, and a configurable DNS allow-list — keeps guests off your LAN, your other VMs, and the host. **Requires the Proxmox cluster firewall to be enabled**; ProxMate turns it on for you from the admin UI, adding management allow-rules first so you can't lock yourself out |
+| **Share a VM** | Grant another tenant access to a guest at one of three preset levels — **Viewer** (see the VM and its status), **Operator** (+ power actions and console), **Manager** (+ config, resize, backups, IDE). No share level can delete, rebuild, migrate, re-share, or touch passthrough — those stay owner/admin only |
+| **Admin Deploy-for-Tenant** | Admins create a VM directly inside a chosen tenant's account, optionally pinning the node and optionally as a **quota-exempt** grant. Admin-provisioned VMs are resize- and rebuild-locked to admins, and a Manager-share resize bills the VM **owner's** quota, not the caller's |
+| **Personal API Tokens & REST API** | Per-user `pm_…` Bearer tokens for the public REST API (OpenAPI spec included) — only the token hash is stored, and public token lookups are separately throttled |
 | **Audit Log** | Who created / deleted / restored / started which VM, plus sign-ins — an admin-viewable activity trail |
 | **Rate Limiting** | Built-in brute-force protection on the login / register / invite endpoints, plus per-account lockout with admin alerts and dedicated throttling on public token lookups |
 | **Outbound & Secret Hardening** | Admin-configured webhooks and cloud-image URLs are **SSRF-guarded** (private/loopback/metadata blocked; opt-in for LAN targets); secrets are AES-256-GCM at rest with a **fail-closed** key requirement; `/metrics` is token-gated in production |
@@ -171,12 +178,32 @@ invite links for your users from **Admin → Invites**.
 ```bash
 cp .env.docker.example .env
 openssl rand -hex 32           # → paste into ENCRYPTION_KEY in .env
-docker compose up -d --build   # frontend :3000, API :4000
+nano .env                      # ← do not skip: see the note below
+docker compose up -d --build
 ```
 
+> **Editing `.env` is not optional.** The file ships with its **PRODUCTION** block
+> active and pointing at `proxmate.example.com`, bound to `127.0.0.1`. Either replace
+> that domain throughout, or comment the PRODUCTION block out and uncomment the LOCAL
+> one. Skipping this gets you a frontend bundle that calls a domain you don't own, on
+> ports only reachable from the machine itself — `NEXT_PUBLIC_API_URL` is baked in at
+> **build time**, so fixing it later means rebuilding the frontend image.
+
 > **`ENCRYPTION_KEY` must stay constant** across restarts — it decrypts your stored
-> Proxmox token and JWT secret. Back it up. `NEXT_PUBLIC_API_URL` is baked into the
-> frontend at **build time**, so rebuild the frontend image if it changes.
+> Proxmox token, JWT secret, SMTP password, and TOTP secrets. **Keep one copy off the
+> host** (a password manager is enough — it never changes): every database backup is
+> encrypted under this key, so a snapshot without it restores nothing useful. Losing
+> the machine and the key together loses the secrets even if the backups survived.
+> `NEXT_PUBLIC_API_URL` is baked into the frontend at **build time**, so rebuild the
+> frontend image if it changes.
+
+Upgrades run from a **release tag**, not `main`, and database migrations apply
+automatically when the backend container starts — never run them by hand:
+
+```bash
+./deploy/update.sh             # newest vX.Y.Z tag, rebuild + restart
+./deploy/update.sh v0.8.6      # or pin a specific tag
+```
 
 For a real public deployment, serve ProxMate from a **single HTTPS origin** (passkeys,
 `Secure` cookies, and OIDC SSO require it) behind Caddy / nginx / Traefik or a
@@ -189,11 +216,11 @@ tenant isolation, Keycloak SSO, SMTP, and the 2FA test matrix — is in
 
 ## Testing & CI
 
-The backend ships a Vitest suite (~500 tests) covering the security-critical logic —
-quotas, the per-VM firewall builder, placement, retention, ownership, balancer/drain
-planning, cloud-init snippet generation, guest-agent SSH-key injection, migration
-migratability, and the outbound-URL/SSRF guard — against a mocked Proxmox API (no live
-cluster needed):
+The backend ships a Vitest suite (718 tests) covering the security-critical logic —
+quotas, the per-VM firewall builder, placement, retention, ownership and share
+permissions, compute access windows, balancer/drain planning, cloud-init snippet
+generation, guest-agent SSH-key injection, migration migratability, and the
+outbound-URL/SSRF guard — against a mocked Proxmox API (no live cluster needed):
 
 ```bash
 cd backend && npm test
@@ -207,7 +234,8 @@ separate [security workflow](.github/workflows/security.yml) (CodeQL, Trivy, SBO
 
 ## Documentation
 
-All guides are also surfaced in-app under **Help & Docs**.
+The three tenant guides are surfaced in-app under **Help & Docs**, along with the admin
+and security guides for admins.
 
 | Guide | Audience | What's inside |
 |---|---|---|
