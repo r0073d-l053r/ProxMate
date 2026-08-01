@@ -141,6 +141,30 @@ if [ "$(id -u)" -ne 0 ]; then
   if have sudo; then SUDO="sudo"; fi
 fi
 
+# Who is really doing this. Bash does NOT set $USER — login/PAM/sshd/su do — so
+# under `env -i`, cron, or a non-PAM context it is unset, and an unbound-variable
+# error under `set -u` is NOT caught by `|| die`; the script would abort with a raw
+# bash error as its entire output. Process credentials always exist.
+RUN_USER="$(id -un)"
+# Under `sudo bash install.sh` the invoking human is SUDO_USER, not root. Without
+# this the checkout, the mode-600 .env and ./backups all end up root-owned and the
+# human is never added to the docker group — see chown_to_invoker below.
+REAL_USER="${SUDO_USER:-$RUN_USER}"
+REAL_UID="${SUDO_UID:-$(id -u)}"
+REAL_GID="${SUDO_GID:-$(id -g)}"
+
+# Hand anything we created back to the human when we are root via sudo. Silent
+# no-op in every other case.
+chown_to_invoker() {
+  [ "$(id -u)" -eq 0 ] || return 0
+  [ -n "${SUDO_USER:-}" ] || return 0
+  [ -e "$1" ] || return 0
+  chown -R "$REAL_UID:$REAL_GID" "$1" 2>/dev/null || true
+}
+
+DISTRO_ID=""
+[ -r /etc/os-release ] && DISTRO_ID="$( . /etc/os-release 2>/dev/null && printf '%s' "${ID:-}" )"
+
 PKG_MGR=""
 detect_pkg_mgr() {
   if   have apt-get; then PKG_MGR="apt"
@@ -156,24 +180,71 @@ detect_pkg_mgr
 pkg_install() {
   # $@ = package names, already translated for this distro
   case "$PKG_MGR" in
-    apt)    $SUDO apt-get update -qq && DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq "$@" ;;
+    # `VAR=x sudo cmd` sets the variable for SUDO, and sudo's default env_reset
+    # throws it away before cmd ever sees it. It has to go through `sudo env`.
+    apt)    $SUDO apt-get update -qq \
+              && $SUDO env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+                   apt-get install -y -qq "$@" ;;
     dnf)    $SUDO dnf install -y -q "$@" ;;
     yum)    $SUDO yum install -y -q "$@" ;;
-    pacman) $SUDO pacman -Sy --noconfirm --needed "$@" ;;
+    # Deliberately NOT `pacman -Sy <pkg>`: refreshing the sync DB without
+    # upgrading resolves dependencies against versions the host doesn't have —
+    # the partial-upgrade state Arch declares unsupported. Adding -u is no better:
+    # it would turn this into an unattended full system upgrade of someone else's
+    # machine. So on Arch we ask rather than act (see the caller).
     zypper) $SUDO zypper --non-interactive install "$@" ;;
     apk)    $SUDO apk add --no-cache "$@" ;;
     *)      return 1 ;;
   esac
 }
 
-# Docker's own installer covers Debian/Ubuntu/Fedora/RHEL/CentOS/SLES and more,
-# and is the method Docker documents. We download it to a file first so it can be
-# read before it runs — `curl | sudo bash` is the habit this project refuses to
-# teach, and it matters more here than usual because ProxMate ends up holding a
-# Proxmox token that is effectively root on your cluster.
+# get.docker.com is Docker's own installer and the method Docker documents, but it
+# only dispatches on a handful of distro IDs — arch, opensuse-*, alpine and
+# almalinux all hit its "Unsupported distribution" exit. Those distros package
+# Docker and the compose plugin themselves, so use that instead of sending the
+# user into an installer that cannot work.
+#
+# Where get.docker.com IS used it is downloaded to a file and the path printed
+# first, never piped into a root shell — the habit this project refuses to teach,
+# and it matters more here than usual because ProxMate ends up holding a Proxmox
+# token that is effectively root on your cluster.
 install_docker() {
+  case "$PKG_MGR" in
+    pacman)
+      warn "on Arch, installing packages without a full system upgrade is unsupported."
+      die "Please run:  sudo pacman -Syu docker docker-compose
+  then start it with:  sudo systemctl enable --now docker
+  and run this script again." ;;
+    zypper)
+      $SUDO zypper --non-interactive install docker docker-compose || \
+        die "could not install Docker from the openSUSE repositories."
+      $SUDO systemctl enable --now docker || warn "could not start the docker service (see above)"
+      return 0 ;;
+    apk)
+      $SUDO apk add --no-cache docker docker-cli-compose || \
+        die "could not install Docker from the Alpine repositories."
+      # rc-update, not just rc-service: without it Docker does not survive a reboot
+      # and the stack silently fails to come back.
+      $SUDO rc-update add docker default 2>/dev/null || true
+      $SUDO rc-service docker start || warn "could not start the docker service (see above)"
+      return 0 ;;
+  esac
+
+  case "$DISTRO_ID" in
+    ubuntu|debian|raspbian|centos|fedora|rhel|rocky) : ;;
+    *)
+      die "Docker's official installer does not support '${DISTRO_ID:-this system}'.
+  Install Docker Engine and the Compose v2 plugin from your distribution's
+  repositories, then run this script again:
+      https://docs.docker.com/engine/install/" ;;
+  esac
+
   local script
-  script="$(mktemp /tmp/get-docker.XXXXXX.sh)"
+  # The six X's MUST be the final characters: busybox/musl mktemp rejects a
+  # trailing suffix with EINVAL, which under `set -e` would abort the script with
+  # no message at all, right after packages were installed.
+  script="$(mktemp "${TMPDIR:-/tmp}/get-docker.XXXXXX")" \
+    || die "could not create a temporary file in ${TMPDIR:-/tmp}"
   info "downloading Docker's official installer to $script"
   if ! curl -fsSL https://get.docker.com -o "$script"; then
     rm -f "$script"
@@ -183,17 +254,20 @@ install_docker() {
   info "running it (you can read it at $script first if you'd rather)"
   if ! $SUDO sh "$script"; then
     rm -f "$script"
-    die "Docker's installer failed. Install it manually and re-run this script:
+    die "Docker's installer failed — its own output is above.
+  Install Docker manually and re-run this script:
   https://docs.docker.com/engine/install/"
   fi
   rm -f "$script"
 
   # get.docker.com starts and enables the service on systemd distros; on others
-  # (and inside some VMs) it may not be running yet.
+  # (WSL, systemd-less containers, some VMs) it may not be running yet. Keep the
+  # `|| warn` — letting `set -e` abort here would give zero output — but do NOT
+  # discard stderr, or the reason is lost and the user gets a generic message.
   if have systemctl; then
-    $SUDO systemctl enable --now docker >/dev/null 2>&1 || true
+    $SUDO systemctl enable --now docker || warn "could not enable/start the docker service (see above) — continuing"
   elif have rc-service; then
-    $SUDO rc-service docker start >/dev/null 2>&1 || true
+    $SUDO rc-service docker start || warn "could not start the docker service (see above) — continuing"
   fi
 }
 
@@ -285,9 +359,16 @@ if [ -n "$MISSING_LABELS" ]; then
   echo
   if [ -n "$NEED_PKGS" ]; then
     step "Installing:$NEED_PKGS"
+    # Check the OUTCOME, not the exit status. zypper reserves 100-106 for
+    # informational results — 106 means "a repo failed to refresh but the
+    # transaction succeeded" — so trusting the code tells someone their package
+    # failed while they watch it install fine.
     # shellcheck disable=SC2086
-    pkg_install $NEED_PKGS || die "could not install:$NEED_PKGS
-  Install them yourself and re-run this script."
+    pkg_install $NEED_PKGS || true
+    for _p in $NEED_PKGS; do
+      have "$_p" || die "could not install: $_p
+  Its package manager's output is above. Install it yourself and re-run this script."
+    done
     ok "installed:$NEED_PKGS"
   fi
   if [ "$NEED_DOCKER" -eq 1 ] || [ "$NEED_COMPOSE" -eq 1 ]; then
@@ -309,9 +390,22 @@ fi
 if ! docker ps >/dev/null 2>&1; then
   if [ "$(id -u)" -ne 0 ] && [ -n "$SUDO" ] && ! id -nG 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
     warn "your user isn't in the 'docker' group yet — adding it"
-    $SUDO usermod -aG docker "$USER" || die "could not add $USER to the docker group.
+    # busybox (Alpine) ships adduser/addgroup, not the shadow suite, so usermod
+    # may not exist. Without this the script dies advising the very command that
+    # just failed with "not found".
+    if have usermod; then
+      $SUDO usermod -aG docker "$RUN_USER" || die "could not add $RUN_USER to the docker group.
   Do it yourself, start a new session, and re-run:
-      sudo usermod -aG docker \"\$USER\""
+      sudo usermod -aG docker \"$RUN_USER\""
+    elif have addgroup; then
+      $SUDO addgroup "$RUN_USER" docker || die "could not add $RUN_USER to the docker group.
+  Do it yourself, start a new session, and re-run:
+      sudo addgroup \"$RUN_USER\" docker"
+    else
+      die "no 'usermod' or 'addgroup' found, so $RUN_USER cannot be added to the
+  'docker' group automatically. On Alpine:  sudo apk add shadow
+  Then:  sudo usermod -aG docker \"$RUN_USER\"  — and re-run this script."
+    fi
     # Group membership only takes effect in a new session. Re-exec through `sg`
     # so this run can continue without making you log out and back in.
     if have sg && [ -z "${PROXMATE_REEXEC:-}" ]; then
@@ -323,14 +417,35 @@ if ! docker ps >/dev/null 2>&1; then
       # ORIG_ARGV, not "$@" — the parser above already consumed the arguments.
       exec sg docker -c "bash $(printf '%q ' "$0" ${ORIG_ARGV[@]+"${ORIG_ARGV[@]}"})"
     fi
-    die "added $USER to the 'docker' group. Log out and back in (or run
+    if have newgrp; then
+      die "added $RUN_USER to the 'docker' group. Log out and back in (or run
   'newgrp docker'), then run this script again — it will pick up where it left off."
+    fi
+    die "added $RUN_USER to the 'docker' group. Log out and back in, then run this
+  script again — it will pick up where it left off."
   fi
   die "cannot talk to the Docker daemon.
-  Is it running?   sudo systemctl start docker"
+  Is it running?   ${SUDO:+sudo }systemctl start docker"
 fi
 ok "docker daemon reachable"
 ok "docker compose $(docker compose version --short 2>/dev/null || echo v2)"
+
+# Running as root (directly, or via `sudo bash install.sh`) means `docker ps`
+# above succeeded and the whole group-repair branch was skipped — so the human
+# behind the sudo never gets docker access, and afterwards has to prefix every
+# `docker compose logs` with sudo in a directory they may not even be able to
+# read. Add them here instead.
+if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$REAL_USER" != "root" ]; then
+  if ! id -nG "$REAL_USER" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+    if have usermod && usermod -aG docker "$REAL_USER" 2>/dev/null; then
+      ok "added $REAL_USER to the 'docker' group (takes effect in a new session)"
+    elif have addgroup && addgroup "$REAL_USER" docker 2>/dev/null; then
+      ok "added $REAL_USER to the 'docker' group (takes effect in a new session)"
+    else
+      warn "couldn't add $REAL_USER to the 'docker' group — they'll need sudo for docker commands"
+    fi
+  fi
+fi
 
 if have openssl; then
   gen_key() { openssl rand -hex 32; }
@@ -425,6 +540,9 @@ else
   else
     info "cloning $REPO_URL"
     git clone --quiet "$REPO_URL" "$INSTALL_DIR" || die "clone failed."
+    # Under `sudo bash install.sh` this would otherwise be root-owned, leaving the
+    # human unable to read their own .env or run the compose commands we print.
+    chown_to_invoker "$INSTALL_DIR"
     ok "cloned into $INSTALL_DIR"
   fi
 fi
@@ -587,6 +705,9 @@ EOF
   mv "$TMP_ENV" .env || die "could not write .env"
   TMP_ENV=""
   unset KEY
+  # Mode 600 and root-owned would mean the human who ran `sudo bash install.sh`
+  # cannot read the ENCRYPTION_KEY they are told to back up off the host.
+  chown_to_invoker .env
   ok "wrote .env (mode 600) with a fresh 64-hex ENCRYPTION_KEY"
   warn "back that key up OFF this host — a database backup without it restores nothing"
 fi
@@ -597,8 +718,18 @@ fi
 backup_dir="$(env_value PROXMATE_BACKUP_DIR)"
 backup_dir="${backup_dir:-./backups}"
 if [ ! -d "$backup_dir" ]; then
-  mkdir -p "$backup_dir" 2>/dev/null && ok "created $backup_dir for app-database backups" \
-    || warn "could not create $backup_dir — create it yourself before enabling backups"
+  if mkdir -p "$backup_dir" 2>/dev/null; then
+    # This directory is bind-mounted into the backend, which runs as uid 1000
+    # (`node`). Created by root it lands root-owned and every nightly app-database
+    # backup fails silently — the service warns and returns, the scheduler only
+    # logs successes, and the admin UI shows no last-run status. The container
+    # entrypoint now chowns it too, which covers hand-rolled installs; this hands
+    # it to the invoking human as well so they can read their own snapshots.
+    chown_to_invoker "$backup_dir"
+    ok "created $backup_dir for app-database backups"
+  else
+    warn "could not create $backup_dir — create it yourself before enabling backups"
+  fi
 fi
 
 # Warn on the ports actually in effect, not hardcoded ones.
