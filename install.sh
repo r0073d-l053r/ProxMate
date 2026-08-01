@@ -153,6 +153,18 @@ REAL_USER="${SUDO_USER:-$RUN_USER}"
 REAL_UID="${SUDO_UID:-$(id -u)}"
 REAL_GID="${SUDO_GID:-$(id -g)}"
 
+# usermod/addgroup live in /usr/sbin, which is NOT on a normal user's PATH on
+# several distros (and is stripped entirely by cron and `env -i`). Plain
+# `command -v usermod` therefore reports "missing" on a machine that has it, and
+# the caller then prints Alpine advice to a Fedora user. Resolve the real path.
+find_admin_tool() {
+  command -v "$1" 2>/dev/null && return 0
+  for _d in /usr/sbin /sbin /usr/local/sbin; do
+    [ -x "$_d/$1" ] && { printf '%s' "$_d/$1"; return 0; }
+  done
+  return 1
+}
+
 # Hand anything we created back to the human when we are root via sudo. Silent
 # no-op in every other case.
 chown_to_invoker() {
@@ -356,6 +368,20 @@ if [ -n "$MISSING_LABELS" ]; then
     exit 1
   fi
 
+  # `have sudo` only proves the binary exists, not that this user may use it.
+  # Without this check someone outside sudoers consents, watches a package manager
+  # start, and only then discovers they were never allowed — after we have already
+  # said "installing". Ask sudo to authenticate first so the refusal is immediate
+  # and unambiguous. This is also where a password prompt legitimately appears.
+  if [ -n "$SUDO" ]; then
+    if ! sudo -n true 2>/dev/null; then
+      info "these need administrator rights — sudo will ask for your password"
+    fi
+    $SUDO -v || die "sudo is installed, but $RUN_USER isn't authorised to use it on this
+  machine (its reason is above). Ask an administrator to install these, or run
+  this script as root."
+  fi
+
   echo
   if [ -n "$NEED_PKGS" ]; then
     step "Installing:$NEED_PKGS"
@@ -393,18 +419,18 @@ if ! docker ps >/dev/null 2>&1; then
     # busybox (Alpine) ships adduser/addgroup, not the shadow suite, so usermod
     # may not exist. Without this the script dies advising the very command that
     # just failed with "not found".
-    if have usermod; then
-      $SUDO usermod -aG docker "$RUN_USER" || die "could not add $RUN_USER to the docker group.
-  Do it yourself, start a new session, and re-run:
-      sudo usermod -aG docker \"$RUN_USER\""
-    elif have addgroup; then
-      $SUDO addgroup "$RUN_USER" docker || die "could not add $RUN_USER to the docker group.
-  Do it yourself, start a new session, and re-run:
-      sudo addgroup \"$RUN_USER\" docker"
+    if _um="$(find_admin_tool usermod)"; then
+      $SUDO "$_um" -aG docker "$RUN_USER" || die "could not add $RUN_USER to the 'docker' group — the reason is above.
+  Do it yourself, start a new session, and re-run this script:
+      sudo usermod -aG docker $RUN_USER"
+    elif _ag="$(find_admin_tool addgroup)"; then
+      $SUDO "$_ag" "$RUN_USER" docker || die "could not add $RUN_USER to the 'docker' group — the reason is above.
+  Do it yourself, start a new session, and re-run this script:
+      sudo addgroup $RUN_USER docker"
     else
-      die "no 'usermod' or 'addgroup' found, so $RUN_USER cannot be added to the
-  'docker' group automatically. On Alpine:  sudo apk add shadow
-  Then:  sudo usermod -aG docker \"$RUN_USER\"  — and re-run this script."
+      die "neither 'usermod' nor 'addgroup' was found, so $RUN_USER cannot be added
+  to the 'docker' group automatically. On Alpine:  sudo apk add shadow
+  Then:  sudo usermod -aG docker $RUN_USER  — and re-run this script."
     fi
     # Group membership only takes effect in a new session. Re-exec through `sg`
     # so this run can continue without making you log out and back in.
@@ -437,9 +463,9 @@ ok "docker compose $(docker compose version --short 2>/dev/null || echo v2)"
 # read. Add them here instead.
 if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$REAL_USER" != "root" ]; then
   if ! id -nG "$REAL_USER" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
-    if have usermod && usermod -aG docker "$REAL_USER" 2>/dev/null; then
+    if _rum="$(find_admin_tool usermod)" && "$_rum" -aG docker "$REAL_USER" 2>/dev/null; then
       ok "added $REAL_USER to the 'docker' group (takes effect in a new session)"
-    elif have addgroup && addgroup "$REAL_USER" docker 2>/dev/null; then
+    elif _rag="$(find_admin_tool addgroup)" && "$_rag" "$REAL_USER" docker 2>/dev/null; then
       ok "added $REAL_USER to the 'docker' group (takes effect in a new session)"
     else
       warn "couldn't add $REAL_USER to the 'docker' group — they'll need sudo for docker commands"
@@ -468,7 +494,14 @@ fi
 if have df; then
   free_kb=$(df -Pk . 2>/dev/null | awk 'NR==2{print $4}' || echo 0)
   if [ "${free_kb:-0}" -gt 0 ] && [ "$free_kb" -lt 5000000 ]; then
-    warn "only $((free_kb / 1024 / 1024)) GB free here — images need roughly 5 GB."
+    # Integer division to GB reports "0 GB" for anything under a gigabyte, which
+    # hides exactly the cases worth warning about. Switch units below 1 GB.
+    if [ "$free_kb" -lt 1048576 ]; then
+      warn "only $((free_kb / 1024)) MB free in $(pwd) — images need roughly 5 GB."
+    else
+      warn "only $((free_kb / 1048576)) GB free in $(pwd) — images need roughly 5 GB."
+    fi
+    info "that is this directory's filesystem; pass --dir to install somewhere else."
   fi
 fi
 
