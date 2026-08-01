@@ -348,7 +348,11 @@ BACKEND_PUBLIC_URL=$API_ORIGIN
 # The UI (:3000) and the API (:4000) are separate origins here, and the shipped
 # production CSP only allows 'self' https: wss: — which would block every API call
 # and the console WebSocket over plain HTTP. Pin connect-src to this API origin.
-CSP_CONNECT_SRC='self' $API_ORIGIN ws://$HTTP_HOST:4000
+# The value MUST be wrapped in double quotes: docker compose ends a value at the
+# closing quote it opened, so a bare  CSP_CONNECT_SRC='self' http://…  is read as
+# just  self  — silently dropping the API origin AND the quotes that make 'self'
+# the CSP keyword rather than a hostname.
+CSP_CONNECT_SRC="'self' $API_ORIGIN ws://$HTTP_HOST:4000"
 
 # Plain HTTP: Secure cookies would never be sent back, so they stay off here.
 COOKIE_SECURE=false
