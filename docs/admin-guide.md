@@ -50,7 +50,7 @@ Open the ProxMate web UI. The wizard walks you through:
 
 This is the one step that turns ProxMate's per-VM firewall rules from "configured" into "enforced". **Do it before you invite anyone.**
 
-**Admin → Settings → Tenant network isolation:**
+**Admin → Settings → Proxmox tab → Tenant network isolation:**
 
 - "Apply isolation firewall to new VMs" — **leave checked**
 - "Enable enforcement" — **click it**
@@ -75,7 +75,9 @@ Tenants can build a VM from an ISO, but it's faster and more consistent to ship 
 
 ### 3.0 Easiest: add a cloud image (recommended)
 
-**Template Store → Add a cloud image** is the one-click path — no host shell, no ISO install. Pick a curated image (Debian 12/13, Ubuntu 22.04/24.04) or paste a custom cloud-image URL (`.qcow2`/`.img`), give it a store name, and click **Add to store**. ProxMate downloads the image and builds a **cloud-init** template entirely through the Proxmox API (download → import the disk → attach a cloud-init drive → convert to a template). This takes a few minutes (the download is a few hundred MB) — leave the page open until it finishes.
+**Template Store → Add a cloud image** is the one-click path — no host shell, no ISO install. Pick a curated image (20 of them — Debian 11/12/13, Ubuntu 20.04/22.04/24.04, Fedora,
+AlmaLinux 8/9, Rocky 8/9, CentOS Stream 9/10, Oracle 9, openSUSE Leap, Arch, plus four ARM64
+builds) or paste a custom cloud-image URL (`.qcow2`/`.img`), give it a store name, and click **Add to store**. ProxMate downloads the image and builds a **cloud-init** template entirely through the Proxmox API (download → import the disk → attach a cloud-init drive → convert to a template). This takes a few minutes (the download is a few hundred MB) — leave the page open until it finishes.
 
 When a tenant deploys a cloud-init template, the wizard asks for their **SSH public key** (and optional username/password). On first boot the VM applies the user + key + DHCP and is **ready to SSH into in ~60s — no installer**. The template carries a "Cloud-init" badge in the store.
 
@@ -92,7 +94,7 @@ Both selections are also offered as a step in the first-time **setup wizard**, a
 
 **How the snippet gets onto the cluster** — the Proxmox API can't create cloud-init snippet files, so there are two modes:
 
-1. **On-demand (recommended).** Point ProxMate at a shared snippets storage with the `SNIPPET_DIR` + `SNIPPET_STORAGE` env vars (see [DEPLOYMENT.md](../DEPLOYMENT.md)) — a directory mounted into the API container and backed by a storage every node can read (an NFS export is ideal). ProxMate then **writes the exact combo a deploy needs, atomically, at deploy time** — nothing to place by hand. The card shows `automatic (<storage>)` when this is active.
+1. **On-demand (recommended).** Point ProxMate at a shared snippets storage with the `SNIPPET_DIR` + `SNIPPET_STORAGE` env vars (see [DEPLOYMENT.md](../DEPLOYMENT.md)) — a directory mounted into the API container and backed by a storage every node can read (an NFS export is ideal). **Under Docker, `SNIPPET_DIR` is a path *inside* the container**, so as well as setting the variable you must uncomment the matching bind-mount in `docker-compose.yml`; setting the variable alone leaves the path non-existent. ProxMate then **writes the exact combo a deploy needs, atomically, at deploy time** — nothing to place by hand. The card shows `automatic (<storage>)` when this is active.
 2. **Manual fallback (unset).** Without those env vars, click **Enable snippets** on the card (enables the `snippets` content type on `local`), then SSH into **each Proxmox node** and run the `cat` command the card shows for each option; **Re-check nodes** confirms which are ready. An option's checkbox appears for tenants only once its snippet is present on the template's node.
 
 Snippets are delivered as cloud-init **vendor-data**, so the SSH-key / user injection still applies. Notes: Docker's installer covers Debian/Ubuntu/Fedora/RHEL-family (Arch/openSUSE just skip it); **Install Tailscale only installs the client** — the tenant then SSHes in and runs `sudo tailscale up --ssh` to connect (see the [Tailscale guide](./tailscale-ssh.md)); web-UI tools (Cockpit, Netdata, code-server) bind a port the tenant firewall blocks, so reach them over Tailscale or an SSH tunnel.
@@ -185,7 +187,12 @@ Or in the Proxmox UI: **node → your template storage (e.g. `local`) → CT Tem
 
 - pick the resource quota for that user (CPU cores, RAM in GB, disk in GB),
 - optional label so you remember who it's for,
-- expiry (default 7 days).
+- **Invite link expires in** — how long the link stays usable before someone redeems it
+  (1/7/30/90 days, default 7 days). This is the *link's* clock.
+- **Compute access** — how long the person may use the cluster **after** they sign up
+  (a fixed term, or **never expires**). This is the *tenant's* clock, anchored at
+  redemption, and you can change it per user later under Settings → Access. When it
+  lapses the account is suspended and their VMs stop — nothing is deleted.
 
 Click **Generate** and share the invite link. The tenant signs up, picks a template (or builds from an ISO), and is bounded by their quota.
 
@@ -203,7 +210,9 @@ As an admin, the New-VM wizard shows an **Admin options** block:
   applies to ISO and container builds.
 
 A VM you deploy for a tenant is **admin-managed**: the tenant can operate it (start/stop, console,
-IDE, backups) but **cannot resize it** — only an admin can change its CPU/RAM/disk. This is also a
+IDE, backups) but **cannot resize or rebuild it** — both are admin-only, because the VM's
+resources were granted by an admin and may be quota-exempt. A tenant hitting Rebuild on an
+admin-deployed VM gets a 403. This is also a
 quota-safety rule: a tenant who could grow a quota-exempt grant would sidestep quota entirely.
 Resize it yourself from the VM's Actions ▸ Resize.
 
@@ -285,7 +294,10 @@ The in-app **Help** page in ProxMate links to all of these.
 
 A few things worth knowing day-to-day:
 
-- **MateStates (backups)** run automatically every Sunday at 03:00 server time for every VM. We keep the 2 newest per VM and prune the rest. Override the schedule with `MATESTATE_CRON` (5-field cron) in the backend env.
+- **MateStates (backups)** run automatically every Sunday at 03:00 server time for every VM. We keep the 2 newest per VM and prune the rest (both the schedule and the retention count can be set per VM). Override the default schedule with `MATESTATE_CRON` (5-field cron) in the backend env.
+- **ProxMate backs up its own database too** — nightly, via `VACUUM INTO` (consistent on a live DB) with rolling retention, configured under **Settings → Maintenance → App-database backups**. The snapshots land in the host directory you set as `PROXMATE_BACKUP_DIR`; see [DEPLOYMENT.md](../DEPLOYMENT.md) §12. **Keep a copy of `ENCRYPTION_KEY` off the host** — every secret inside those snapshots is encrypted with it, so a backup without the key restores nothing usable.
+- **Compute access windows** — tenants can be given a fixed term of cluster access (or none at all). Expiry **suspends, never deletes**: their VMs stop and sign-in is refused, and extending the window under **Settings → Access** restores everything. Warning emails at 7 days and 1 day need SMTP; the sweep runs hourly at :20 (override with `ACCESS_EXPIRY_CRON`).
+- **Kiosk mode** — a full-screen, unattended wall-panel view at `/kiosk` for a rack-mounted display, reached from **Admin → Monitor → Kiosk mode** and configured in admin Settings. It is **monitoring only**: no VM power controls, no links off the panel, and no tenant identities on screen. Leaving kiosk mode requires a passkey, the admin-set exit PIN, or the account password, so a passer-by can look but not act.
 - **Restoring a tenant VM** rewrites its config — ProxMate re-asserts the per-NIC firewall flag automatically.
 - **Migrating a VM between nodes** (admin-only). On a VM's page, **Migrate** moves it to another node — **live, with no downtime** for a running guest, offline for a stopped one. Guests on node-local storage (`local-lvm` / ZFS) migrate live too (the disk is copied during the move; the target node must have a storage of the **same name**). The picker only lists nodes the guest can **actually reach** — a VM whose disks sit on a storage no other node has (e.g. a single-node ZFS pool) shows **"No eligible nodes"** rather than a target that would fail. Cross-architecture moves (x86↔ARM) are blocked. The VM's **owner is emailed a heads-up** whenever you move their VM.
 - **Cluster Balancer** (**Admin → Balancer**) evens out node **memory** load — the binding constraint — by live-migrating ProxMate-managed guests off the busiest node. Pick a mode: **Off**, **Recommend only** (review the plan and apply by hand), or **Auto-apply** (acts every ~15 min; override with `BALANCER_CRON`). Tune the imbalance tolerance, a per-run move cap, and a never-move list. Keep specific guests on separate nodes with the tag `aa:<group>` (anti-affinity), and pin a guest in place with the tag `pin` or `no-balance`. It never proposes a move a guest **can't make** — a guest pinned to node-local storage is skipped automatically — and if a migration does fail, the audit log records Proxmox's real reason. Routine balancing never emails tenants.
