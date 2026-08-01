@@ -139,7 +139,48 @@ Proxmox admin panel.
 
 ---
 
-## Quick start
+## Install
+
+One command, from a clean Linux machine to the setup wizard in about six minutes:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/r0073d-l053r/ProxMate/main/install.sh
+less install.sh
+bash install.sh
+```
+
+That middle line is not decoration. This is deliberately **not** a `curl | sudo bash`
+one-liner: ProxMate ends up holding a Proxmox API token that is effectively root on
+your cluster, so read the script before you run it.
+
+The installer checks what your machine is missing — Docker, Compose v2, git, curl,
+openssl — and offers to install it. It generates your `ENCRYPTION_KEY`, writes a
+correct `.env` for either an HTTP trial or an HTTPS domain, builds the stack, and
+stops at the browser wizard, because that is where the Proxmox token is entered
+rather than on a command line where it would land in your shell history.
+
+| | |
+|---|---|
+| **Needs** | A Linux host and **sudo rights** — installing Docker and packages requires them, so you will be asked for your password. |
+| **Docker** | Not required up front. If it is missing you are asked before anything is installed, and declining changes nothing on the machine. |
+| **Resources** | Roughly 4 GB RAM and 5 GB disk for the build; less is warned about rather than discovered halfway through. |
+| **Distributions** | Debian, Ubuntu, Fedora, RHEL, CentOS, Rocky, openSUSE and Alpine. On Arch it prints the two commands to run rather than upgrading your system unasked. |
+
+Common flags: `--local` for an HTTP trial on your LAN address, `--domain <host>` for a
+single HTTPS origin behind your own reverse proxy, `--dir` to install elsewhere,
+`--ref` to pin a version, `--no-start` to write the configuration without building.
+Run `bash install.sh --help` for the rest.
+
+**Prefer an agent to walk it with you?** [`DEPLOY_WITH_CLAUDE.md`](./DEPLOY_WITH_CLAUDE.md)
+is a runbook written as executable instructions for a coding agent. It is a supported
+alternative, not a legacy path — point your agent at it and it handles the same deploy
+conversationally.
+
+---
+
+## Quick start (development)
+
+For working on ProxMate itself rather than running it.
 
 **Prerequisites:** Node.js 20+, a Proxmox VE cluster (tested on PVE 9.2), and a
 [Proxmox API token](https://pve.proxmox.com/wiki/User_Management#pveum_tokens).
