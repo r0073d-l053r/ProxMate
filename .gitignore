@@ -10,6 +10,13 @@ out/
 .env
 .env.local
 .env.*.local
+# install.sh writes its new .env through `mktemp .env.XXXXXX` in the checkout it
+# just cloned. On a normal exit the trap removes it, but a SIGKILL or an OOM kill
+# leaves a file holding a freshly generated ENCRYPTION_KEY sitting untracked in a
+# git tree, one `git add -A` away from being published.
+.env.*
+!.env.example
+!.env.docker.example
 
 # Database
 *.db
