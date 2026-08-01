@@ -17,6 +17,11 @@
 #   less install.sh
 #   bash install.sh
 #
+# Missing dependencies (Docker, Compose v2, git, curl, openssl) are detected and
+# — with your explicit consent — installed for you. They are not optional:
+# ProxMate is a containerised application and will not run without them, so
+# declining simply stops the install without changing anything on the machine.
+#
 # Usage:
 #   bash install.sh                            # interactive
 #   bash install.sh --local                    # HTTP on this machine's LAN address
@@ -34,14 +39,15 @@
 #                      are already standing in).
 #   --ref <git-ref>    Tag/branch to check out (default: newest vX.Y.Z tag).
 #   --no-start         Write everything but do not build or start.
-#   --yes, -y          Never prompt; requires --local or --domain.
+#   --yes, -y          Never prompt; requires --local or --domain. Also counts as
+#                      consent to install any missing dependencies listed above.
 #   --help, -h         This message.
 #
 # ── end of help text (usage() prints the block above) ────────────────────────
 set -euo pipefail
 
 REPO_URL="${PROXMATE_REPO_URL:-https://github.com/r0073d-l053r/ProxMate.git}"
-HELP_LAST_LINE=38            # keep in sync with the marker line above
+HELP_LAST_LINE=44            # keep in sync with the marker line above
 INSTALL_DIR=""
 MODE=""
 DOMAIN=""
@@ -119,23 +125,197 @@ step "Checking prerequisites"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-have docker || die "docker is not installed. See https://docs.docker.com/engine/install/"
+# ── dependency resolution ────────────────────────────────────────────────────
+# ProxMate cannot run without these. Rather than telling you to go and read three
+# other install guides, we offer to install them — but only ever after you say
+# yes, and never by piping a downloaded script straight into a root shell.
+
+SUDO=""
+if [ "$(id -u)" -ne 0 ]; then
+  if have sudo; then SUDO="sudo"; fi
+fi
+
+PKG_MGR=""
+detect_pkg_mgr() {
+  if   have apt-get; then PKG_MGR="apt"
+  elif have dnf;     then PKG_MGR="dnf"
+  elif have yum;     then PKG_MGR="yum"
+  elif have pacman;  then PKG_MGR="pacman"
+  elif have zypper;  then PKG_MGR="zypper"
+  elif have apk;     then PKG_MGR="apk"
+  fi
+}
+detect_pkg_mgr
+
+pkg_install() {
+  # $@ = package names, already translated for this distro
+  case "$PKG_MGR" in
+    apt)    $SUDO apt-get update -qq && DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq "$@" ;;
+    dnf)    $SUDO dnf install -y -q "$@" ;;
+    yum)    $SUDO yum install -y -q "$@" ;;
+    pacman) $SUDO pacman -Sy --noconfirm --needed "$@" ;;
+    zypper) $SUDO zypper --non-interactive install "$@" ;;
+    apk)    $SUDO apk add --no-cache "$@" ;;
+    *)      return 1 ;;
+  esac
+}
+
+# Docker's own installer covers Debian/Ubuntu/Fedora/RHEL/CentOS/SLES and more,
+# and is the method Docker documents. We download it to a file first so it can be
+# read before it runs — `curl | sudo bash` is the habit this project refuses to
+# teach, and it matters more here than usual because ProxMate ends up holding a
+# Proxmox token that is effectively root on your cluster.
+install_docker() {
+  local script
+  script="$(mktemp /tmp/get-docker.XXXXXX.sh)"
+  info "downloading Docker's official installer to $script"
+  if ! curl -fsSL https://get.docker.com -o "$script"; then
+    rm -f "$script"
+    die "could not download https://get.docker.com — check network/DNS, or install
+  Docker yourself: https://docs.docker.com/engine/install/"
+  fi
+  info "running it (you can read it at $script first if you'd rather)"
+  if ! $SUDO sh "$script"; then
+    rm -f "$script"
+    die "Docker's installer failed. Install it manually and re-run this script:
+  https://docs.docker.com/engine/install/"
+  fi
+  rm -f "$script"
+
+  # get.docker.com starts and enables the service on systemd distros; on others
+  # (and inside some VMs) it may not be running yet.
+  if have systemctl; then
+    $SUDO systemctl enable --now docker >/dev/null 2>&1 || true
+  elif have rc-service; then
+    $SUDO rc-service docker start >/dev/null 2>&1 || true
+  fi
+}
+
+# Work out what's actually missing before asking for anything.
+MISSING_LABELS=""
+NEED_DOCKER=0
+NEED_COMPOSE=0
+NEED_PKGS=""
+
+have docker || { NEED_DOCKER=1; MISSING_LABELS="$MISSING_LABELS
+    Docker engine        runs ProxMate's two containers"; }
+
+if have docker && ! docker compose version >/dev/null 2>&1; then
+  NEED_COMPOSE=1
+  MISSING_LABELS="$MISSING_LABELS
+    Docker Compose v2    builds and orchestrates them ('docker compose', not 'docker-compose')"
+fi
+
+have git || { NEED_PKGS="$NEED_PKGS git"; MISSING_LABELS="$MISSING_LABELS
+    git                  fetches the ProxMate source"; }
+
+have curl || { NEED_PKGS="$NEED_PKGS curl"; MISSING_LABELS="$MISSING_LABELS
+    curl                 downloads what's needed"; }
+
+# Either of these can generate the key; only ask for openssl if neither exists.
+if ! have openssl && ! { [ -r /dev/urandom ] && have od; }; then
+  NEED_PKGS="$NEED_PKGS openssl"
+  MISSING_LABELS="$MISSING_LABELS
+    openssl              generates your ENCRYPTION_KEY"
+fi
+
+if [ -n "$MISSING_LABELS" ]; then
+  echo
+  warn "ProxMate needs some things this machine doesn't have yet:"
+  printf '%s\n' "$MISSING_LABELS"
+  echo
+  info "These are required — ProxMate is a containerised application and cannot"
+  info "run without them. Nothing here is optional or cosmetic."
+  echo
+
+  if [ -z "$SUDO" ] && [ "$(id -u)" -ne 0 ]; then
+    die "installing these needs root, but 'sudo' isn't available and you aren't root.
+  Install them yourself, or re-run this script as root:
+      Docker  → https://docs.docker.com/engine/install/"
+  fi
+  if [ "$NEED_DOCKER" -eq 0 ] && [ -n "$NEED_PKGS" ] && [ -z "$PKG_MGR" ]; then
+    die "couldn't recognise this system's package manager (tried apt, dnf, yum,
+  pacman, zypper, apk). Install these yourself and re-run:$NEED_PKGS"
+  fi
+
+  _agreed=0
+  if [ "$ASSUME_YES" -eq 1 ]; then
+    _agreed=1
+    info "--yes given; installing them."
+  elif [ ! -t 0 ]; then
+    die "these need to be installed, but this isn't an interactive terminal so I
+  can't ask. Re-run with --yes to install them without prompting, or install
+  them yourself first."
+  else
+    while :; do
+      printf '  Install them now? [y/N]: '
+      read -r _ans || _ans=""
+      case "$_ans" in
+        y|Y|yes|YES) _agreed=1; break ;;
+        n|N|no|NO|"") _agreed=0; break ;;
+        *) warn "please answer y or n." ;;
+      esac
+    done
+  fi
+
+  if [ "$_agreed" -ne 1 ]; then
+    echo
+    step "Stopping here"
+    info "ProxMate can't be installed without those. Nothing has been changed on"
+    info "this machine — no files written, no packages installed."
+    echo
+    info "Install them yourself and run this script again:"
+    info "    Docker + Compose v2  → https://docs.docker.com/engine/install/"
+    [ -n "$NEED_PKGS" ] && info "   $NEED_PKGS  → your system's package manager"
+    echo
+    exit 1
+  fi
+
+  echo
+  if [ -n "$NEED_PKGS" ]; then
+    step "Installing:$NEED_PKGS"
+    # shellcheck disable=SC2086
+    pkg_install $NEED_PKGS || die "could not install:$NEED_PKGS
+  Install them yourself and re-run this script."
+    ok "installed:$NEED_PKGS"
+  fi
+  if [ "$NEED_DOCKER" -eq 1 ] || [ "$NEED_COMPOSE" -eq 1 ]; then
+    step "Installing Docker"
+    install_docker
+    have docker || die "Docker still isn't on PATH after installing. Open a new
+  shell and re-run this script."
+    docker compose version >/dev/null 2>&1 || die \
+      "Docker installed, but Compose v2 is missing. Install the compose plugin:
+  https://docs.docker.com/compose/install/linux/"
+    ok "Docker installed"
+  fi
+fi
 
 # Versions alone don't prove access: a user outside the docker group gets
-# "permission denied" here, which is the most common first-run failure.
+# "permission denied" here, which is the most common first-run failure — and it
+# is guaranteed immediately after a fresh install, because group membership only
+# applies to new sessions.
 if ! docker ps >/dev/null 2>&1; then
+  if [ "$(id -u)" -ne 0 ] && [ -n "$SUDO" ] && ! id -nG 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+    warn "your user isn't in the 'docker' group yet — adding it"
+    $SUDO usermod -aG docker "$USER" || die "could not add $USER to the docker group.
+  Do it yourself, start a new session, and re-run:
+      sudo usermod -aG docker \"\$USER\""
+    # Group membership only takes effect in a new session. Re-exec through `sg`
+    # so this run can continue without making you log out and back in.
+    if have sg && [ -z "${PROXMATE_REEXEC:-}" ]; then
+      ok "added — continuing in a shell that has the new group"
+      export PROXMATE_REEXEC=1
+      exec sg docker -c "$(printf '%q ' "$0" "$@")"
+    fi
+    die "added $USER to the 'docker' group. Log out and back in (or run
+  'newgrp docker'), then run this script again — it will pick up where it left off."
+  fi
   die "cannot talk to the Docker daemon.
-  If it is running, your user is probably not in the 'docker' group:
-      sudo usermod -aG docker \"\$USER\"   # then log out and back in"
+  Is it running?   sudo systemctl start docker"
 fi
 ok "docker daemon reachable"
-
-docker compose version >/dev/null 2>&1 || die \
-  "Docker Compose v2 is required ('docker compose', not 'docker-compose').
-  See https://docs.docker.com/compose/install/"
 ok "docker compose $(docker compose version --short 2>/dev/null || echo v2)"
-
-have git || die "git is not installed."
 
 if have openssl; then
   gen_key() { openssl rand -hex 32; }
