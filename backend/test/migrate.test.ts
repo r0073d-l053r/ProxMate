@@ -5,6 +5,9 @@ vi.mock('../src/lib/prisma.js', () => ({ prisma: {} }));
 import {
   migrateVm,
   migratableTargets,
+  migratePreflight,
+  describeMigrateRefusal,
+  getPlacementDiagnostics,
   getNodeImagesStorages,
   getVolumeStorages,
   passthroughBootReadiness,
@@ -273,5 +276,125 @@ describe('getMigrationProgress', () => {
     const p = await getMigrationProgress(108, asClient(c));
     expect(p!.percent).toBe(7.3); // matches the LATEST line, not an early one from the log's start
     expect(c.get).toHaveBeenLastCalledWith(expect.stringContaining('/log'), { params: { limit: 0 } });
+  });
+});
+
+describe('migratePreflight — surfacing WHY a node was refused', () => {
+  it('returns the per-node reason Proxmox gave, instead of discarding it', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue({
+      data: {
+        data: {
+          allowed_nodes: [],
+          not_allowed_nodes: { 'pve-1': { unavailable_storages: ['local-lvm'] } },
+          local_disks: [{ volid: 'local-lvm:vm-109-disk-0', size: 32 * GB }],
+        },
+      },
+    });
+    const pre = await migratePreflight('pve-0', 109, asClient(c));
+    expect(pre!.allowed).toEqual([]);
+    expect(pre!.blocked).toEqual([
+      { node: 'pve-1', reason: "storage not available there: local-lvm" },
+    ]);
+    expect(pre!.localDisks).toEqual([{ volid: 'local-lvm:vm-109-disk-0', size: 32 * GB }]);
+  });
+
+  it('keeps migratableTargets behaviour unchanged for existing callers', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue({ data: { data: { allowed_nodes: ['pve-2'] } } });
+    expect(await migratableTargets('pve-0', 100, asClient(c))).toEqual(['pve-2']);
+  });
+
+  it('returns null when the preflight cannot be read at all', async () => {
+    const c = fakeClient();
+    c.get.mockRejectedValue(new Error('boom'));
+    expect(await migratePreflight('pve-0', 100, asClient(c))).toBeNull();
+  });
+});
+
+describe('describeMigrateRefusal', () => {
+  it('passes a plain-string reason straight through', () => {
+    expect(describeMigrateRefusal('node is offline')).toBe('node is offline');
+  });
+  it('names the unavailable storages', () => {
+    expect(describeMigrateRefusal({ unavailable_storages: ['tank', 'local-lvm'] }))
+      .toBe('storage not available there: tank, local-lvm');
+  });
+  it('names blocking local resources', () => {
+    expect(describeMigrateRefusal({ local_resources: ['hostpci0'] }))
+      .toBe('local resources: hostpci0');
+  });
+  it('never returns an empty explanation', () => {
+    expect(describeMigrateRefusal({})).toBe('not permitted by Proxmox');
+    expect(describeMigrateRefusal(undefined)).toBe('not permitted by Proxmox');
+  });
+});
+
+describe('getPlacementDiagnostics — why new VMs keep landing on one node', () => {
+  const nodes = [
+    { type: 'node', status: 'online', node: 'pve' },
+    { type: 'node', status: 'online', node: 'pve-1' },
+    { type: 'node', status: 'online', node: 'pve-2' },
+  ];
+
+  it('flags a node-local ISO storage as the thing pinning placement', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue({
+      data: {
+        data: [
+          ...nodes,
+          // The ISO was uploaded through the UI, so it only exists on `pve`.
+          { type: 'storage', storage: 'local', node: 'pve', status: 'available', shared: 0 },
+          { type: 'storage', storage: 'ceph', node: 'pve', status: 'available', shared: 1 },
+          { type: 'storage', storage: 'ceph', node: 'pve-1', status: 'available', shared: 1 },
+          { type: 'storage', storage: 'ceph', node: 'pve-2', status: 'available', shared: 1 },
+        ],
+      },
+    });
+    const d = await getPlacementDiagnostics('local', 'ceph', asClient(c));
+    expect(d.onlineNodes).toEqual(['pve', 'pve-1', 'pve-2']);
+    // Disks are on shared Ceph and are NOT the constraint; the ISO storage is.
+    expect(d.effectiveCandidates).toEqual(['pve']);
+    expect(d.pinned).toBe(true);
+    const iso = d.constraints.find((x) => x.subject.includes('ISO'))!;
+    expect(iso.nodes).toEqual(['pve']);
+    expect(iso.shared).toBe(false);
+    expect(iso.problem).toContain('only 1 of 3 online nodes');
+    expect(iso.remedy).toContain('shared storage');
+    const disk = d.constraints.find((x) => x.subject.includes('Disk'))!;
+    expect(disk.problem).toBeUndefined();
+  });
+
+  it('reports no pin when both are on shared storage', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue({
+      data: {
+        data: [
+          ...nodes,
+          ...['pve', 'pve-1', 'pve-2'].flatMap((n) => [
+            { type: 'storage', storage: 'cephfs', node: n, status: 'available', shared: 1 },
+            { type: 'storage', storage: 'ceph', node: n, status: 'available', shared: 1 },
+          ]),
+        ],
+      },
+    });
+    const d = await getPlacementDiagnostics('cephfs', 'ceph', asClient(c));
+    expect(d.effectiveCandidates).toEqual(['pve', 'pve-1', 'pve-2']);
+    expect(d.pinned).toBe(false);
+    expect(d.constraints.every((x) => x.problem === undefined)).toBe(true);
+  });
+
+  it('does not call a single-node cluster "pinned"', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue({
+      data: {
+        data: [
+          { type: 'node', status: 'online', node: 'pve' },
+          { type: 'storage', storage: 'local', node: 'pve', status: 'available', shared: 0 },
+        ],
+      },
+    });
+    const d = await getPlacementDiagnostics('local', undefined, asClient(c));
+    expect(d.pinned).toBe(false);
   });
 });

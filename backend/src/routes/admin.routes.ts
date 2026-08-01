@@ -12,6 +12,7 @@ import {
   isClusterFirewallEnabled,
   getClusterStats,
   getNodesHealth,
+  getPlacementDiagnostics,
   getBridgeNetwork,
   ipv4NetworkCidr,
   setClusterFirewall,
@@ -565,6 +566,25 @@ router.get('/cluster-stats', async (_req: Request, res: Response) => {
 router.get('/nodes', async (_req: Request, res: Response) => {
   try {
     res.json(await getNodesHealth());
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── GET /api/admin/placement-diagnostics ─────────────────────
+// Why auto-placement keeps choosing the node it chooses. Scoring prefers FREE
+// capacity, so a busy node should lose — when it wins anyway, the candidate set
+// handed to the scorer is the culprit (an ISO or disk pool that exists on only
+// one node). This reports that plainly instead of leaving admins to guess.
+router.get('/placement-diagnostics', async (_req: Request, res: Response) => {
+  try {
+    const [isoStorage, diskStorage] = await Promise.all([
+      getConfig('iso_storage'),
+      getConfig('default_storage'),
+    ]);
+    res.json(
+      await getPlacementDiagnostics(isoStorage ?? undefined, diskStorage ?? undefined),
+    );
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }
