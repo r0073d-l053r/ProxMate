@@ -149,9 +149,11 @@ services:
       # In .env this value MUST be wrapped in double quotes, or compose stops
       # reading at the first closing single quote and you get just `self`.
       CSP_CONNECT_SRC: ${CSP_CONNECT_SRC:-}
-      # Also passed at RUNTIME (not only as a build arg) so the proxy can tell an
-      # HTTPS deployment from a plain-HTTP one and decide whether it is safe to
-      # send `upgrade-insecure-requests` — on HTTP that directive breaks the page.
+      # Also passed at runtime for parity with the build arg above. Be aware Next
+      # INLINES NEXT_PUBLIC_* at build time, so server code reads the value that
+      # was baked into the image, not this one — changing it here without a
+      # rebuild has no effect. Kept because it costs nothing and keeps `docker
+      # compose config` honest about the intended origin.
       NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
     depends_on:
       backend:

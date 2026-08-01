@@ -31,14 +31,28 @@ export function proxy(request: NextRequest) {
   // On an HTTPS deployment that is useful hardening; on a plain-HTTP one it is fatal
   // — the browser upgrades the page's OWN script/style/font URLs, nothing is
   // listening on :3000 over TLS, and every asset dies with ERR_SSL_PROTOCOL_ERROR
-  // before the app can render. So only send it when the public origin really is
-  // HTTPS. NEXT_PUBLIC_SITE_URL is set by the operator (build arg + runtime env), so
-  // it is preferred over the request headers, which a client could forge.
+  // before the app can render. So send it only when the browser is actually on HTTPS.
+  //
+  // Decided per request, from the scheme the browser used, in this order:
+  //   1. X-Forwarded-Proto — set by any sane reverse proxy, and the only signal that
+  //      is right regardless of how the image was built.
+  //   2. NEXT_PUBLIC_SITE_URL — a fallback for a direct-exposure deployment with no
+  //      proxy. Note this is INLINED AT BUILD TIME by Next, so it reflects the build
+  //      arg, not the current .env; passing it as a runtime env var does nothing.
+  //      That is exactly why it must not be the primary signal: an operator who runs
+  //      HTTPS but never set the build arg would get compose's `http://localhost:3000`
+  //      default baked in and silently lose this header.
+  //   3. The request's own scheme.
+  //
+  // Trusting a client-settable header is safe *here*: the response is per-request, so
+  // forging it only changes the forger's own page. It cannot weaken anyone else's.
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
   const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
-  const isHttps = siteUrl
-    ? siteUrl.startsWith("https://")
-    : (forwardedProto ?? request.nextUrl.protocol.replace(":", "")) === "https";
+  const isHttps = forwardedProto
+    ? forwardedProto === "https"
+    : siteUrl
+      ? siteUrl.startsWith("https://")
+      : request.nextUrl.protocol === "https:";
 
   const scriptSrc = isDev
     ? `'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval' 'unsafe-inline'`
