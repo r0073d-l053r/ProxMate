@@ -398,3 +398,51 @@ describe('getPlacementDiagnostics — why new VMs keep landing on one node', () 
     expect(d.pinned).toBe(false);
   });
 });
+
+// Regression fixture built from a real 7-node cluster (pve + pve-0..pve-5) where
+// every ProxMate-created guest was pinned to `pve`: the configured disk pool was
+// a node-local ZFS pool (`tank`) that exists only there, so pickBestNode was only
+// ever handed one candidate and scoring never ran.
+describe('getPlacementDiagnostics — real-world pinned cluster', () => {
+  const REAL = {
+    data: {
+      data: [
+        ...['pve', 'pve-0', 'pve-1', 'pve-2', 'pve-3', 'pve-4', 'pve-5'].map((n) => ({
+          type: 'node', status: 'online', node: n,
+        })),
+        // Node-local ZFS pool — only on `pve`. This is the pin.
+        { type: 'storage', storage: 'tank', node: 'pve', status: 'available', shared: 0 },
+        // Node-local dir holding the ISOs.
+        { type: 'storage', storage: 'tank-files-pve', node: 'pve', status: 'available', shared: 0 },
+        // Shared NFS + Ceph RBD that ARE on every node.
+        ...['pve', 'pve-0', 'pve-1', 'pve-2', 'pve-3', 'pve-4', 'pve-5'].flatMap((n) => [
+          { type: 'storage', storage: 'tank-files', node: n, status: 'available', shared: 1 },
+          { type: 'storage', storage: 'ceph-vm', node: n, status: 'available', shared: 1 },
+        ]),
+      ],
+    },
+  };
+
+  it('identifies the node-local disk pool as the thing pinning every build to one node', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue(REAL);
+    const d = await getPlacementDiagnostics('tank-files-pve', 'tank', asClient(c));
+    expect(d.onlineNodes).toHaveLength(7);
+    expect(d.effectiveCandidates).toEqual(['pve']);
+    expect(d.pinned).toBe(true);
+    for (const cons of d.constraints) {
+      expect(cons.nodes).toEqual(['pve']);
+      expect(cons.problem).toContain('only 1 of 7 online nodes');
+      expect(cons.remedy).toContain('shared storage');
+    }
+  });
+
+  it('clears the pin once both are pointed at the shared storage the cluster already has', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue(REAL);
+    const d = await getPlacementDiagnostics('tank-files', 'ceph-vm', asClient(c));
+    expect(d.effectiveCandidates).toHaveLength(7);
+    expect(d.pinned).toBe(false);
+    expect(d.constraints.every((x) => x.problem === undefined)).toBe(true);
+  });
+});
