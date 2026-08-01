@@ -80,6 +80,21 @@ services:
       # Opt-in: allow admin-configured webhooks / cloud-image mirrors on private
       # LAN addresses (SSRF guard escape hatch). Off by default.
       ALLOW_PRIVATE_OUTBOUND_URLS: ${ALLOW_PRIVATE_OUTBOUND_URLS:-false}
+      # Let ProxMate WRITE cloud-init "extras" snippets on demand instead of an
+      # admin pre-placing every combination. SNIPPET_DIR must ALSO be mounted in
+      # (see volumes) — it's a path inside the container, on a shared Proxmox
+      # storage's snippets/ dir; SNIPPET_STORAGE is that storage's id.
+      SNIPPET_DIR: ${SNIPPET_DIR:-}
+      SNIPPET_STORAGE: ${SNIPPET_STORAGE:-}
+      # Let tenants download a guest backup through the browser. Like the snippet
+      # dir this is a CONTAINER path and must be mounted in (see volumes).
+      BACKUP_DOWNLOAD_DIR: ${BACKUP_DOWNLOAD_DIR:-}
+      # Cap on a restore-from-upload (GB). Unset uses the built-in default.
+      RESTORE_UPLOAD_MAX_GB: ${RESTORE_UPLOAD_MAX_GB:-}
+      # Schedule overrides for the background jobs (5-field cron). Unset uses the
+      # defaults: guest backups Sundays 03:00, access-expiry sweep hourly at :20.
+      MATESTATE_CRON: ${MATESTATE_CRON:-}
+      ACCESS_EXPIRY_CRON: ${ACCESS_EXPIRY_CRON:-}
     # Report healthy only once /api/health passes (DB reachable + migrations run),
     # so the frontend can wait for a genuinely-ready backend (see depends_on below).
     healthcheck:
@@ -96,6 +111,12 @@ services:
       # path is fixed; PROXMATE_BACKUP_DIR in .env chooses where on the HOST the
       # snapshots actually land (default: ./backups next to this file).
       - ${PROXMATE_BACKUP_DIR:-./backups}:/var/backups/proxmate
+      # Uncomment to enable on-demand cloud-init snippet writing. The host side
+      # must be the snippets/ dir of a SHARED Proxmox storage; keep the container
+      # path in step with SNIPPET_DIR above.
+      # - /mnt/pve/shared/snippets:/snippets
+      # Uncomment to let tenants download guest backups (match BACKUP_DOWNLOAD_DIR):
+      # - /mnt/pve/backups/dump:/backups:ro
       # Uncomment to enable one-click updates (the host updater watches this dir):
       # - ./deploy/update-control:/control
       # Uncomment to trust a private Proxmox CA (set PROXMOX_CA_CERT_FILE=/certs/pve-ca.pem):
