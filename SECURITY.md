@@ -31,10 +31,19 @@ reach your infrastructure over the network?).
 
 This is enforced in code and is always on:
 
-- Every VM/console API call resolves the VM through `getOwnedVm()`, which returns the VM
-  only if it belongs to the caller (admins may see all). A tenant cannot view, start,
-  stop, delete, or open a console to a VM they don't own.
-- VM listings are filtered to the caller's own VMs (admins see all).
+- Every per-VM API call resolves the guest through `getVmWithCap(vmId, user, cap)`, which
+  returns it only if the caller holds the **capability** that route requires. A tenant
+  cannot view, start, stop, delete, or open a console to a VM they have no access to.
+- **Share a VM** grants another ProxMate user access at one of three preset levels:
+  **Viewer** (see the VM and its status), **Operator** (+ power actions and console), and
+  **Manager** (+ config, resize, backups, IDE). No share level of any kind can delete,
+  rebuild, migrate, re-share, or change passthrough — those stay with the owner and admins.
+- VM listings return the VMs a caller owns **or has been shared** (admins see all), each row
+  annotated with the caller's access level and capability set so the UI can gate controls.
+- **Compute access windows** bound how long an invited person may use the cluster at all.
+  The term is anchored at sign-up (or `never`); when it lapses the account is **suspended,
+  not deleted** — VMs are stopped and every auth path refuses the session, including the
+  console WebSocket, the IDE proxy, and both API-token families. Admins never expire.
 - Resource **quotas** from the invite are enforced on every create; a tenant cannot
   exceed the CPU/RAM/disk you granted.
 - The Proxmox **API token never leaves the backend** — tenants talk only to ProxMate.
@@ -50,13 +59,15 @@ By default a Proxmox VM lands on your main bridge (e.g. `vmbr0`), which is your 
 
 ### 3a. Per-VM firewall (applied automatically)
 
-When **Tenant network isolation** is enabled (Admin → Settings, on by default), every VM
+When **Tenant network isolation** is enabled (Admin → Settings ▸ Proxmox tab, on by default), every VM
 ProxMate creates is configured with:
 
 - `firewall=1` on its network device,
 - guest firewall `enable=1`, `policy_in=DROP` (nothing on the LAN can initiate to the VM),
   `policy_out=ACCEPT` (further restricted below), `macfilter=1` (the VM can't spoof
-  another machine's MAC), `dhcp=1` (so it can still lease an address). `ipfilter` is left
+  another machine's MAC), `dhcp=1` (so it can still lease an address), and `ndp=1` (IPv6
+  neighbour discovery, needed for the guest to function on an IPv6-enabled bridge).
+  `ipfilter` is left
   **off** — turning it on requires registering each VM's DHCP-assigned IP in an
   `ipfilter-net*` ipset, and without that Proxmox drops *all* of the VM's traffic.
 - outbound firewall rules, evaluated top-to-bottom:
@@ -120,8 +131,11 @@ infrastructure, because the tenant network is physically/virtually separate.
 
 ### Containers
 
-ProxMate currently provisions **QEMU VMs only** (not LXC). The same isolation model would
-apply to containers if added; LXC additionally benefits from running **unprivileged**.
+ProxMate provisions both **QEMU VMs** and **LXC containers** (containers since v0.4.0). The
+same tenant-isolation model applies to containers — the per-VM firewall, quotas, ownership
+and share capabilities all treat them the same way — and LXC additionally benefits from
+running **unprivileged**. Note that LXC has **no live migration** in the API-only model, so
+the cluster balancer pins containers and node-drain lists them as blockers.
 
 ---
 
@@ -133,17 +147,18 @@ apply to containers if added; LXC additionally benefits from running **unprivile
 | Secrets at rest | `proxmox_token_secret`, `jwt_secret`, and the SMTP/SSO secrets are encrypted with `ENCRYPTION_KEY` (AES-256-GCM, random 12-byte IV + auth tag). The key must be a **64-hex (32-byte)** string, and secret operations **fail closed** if it is missing (no static fallback). |
 | Passwords | bcrypt (cost 12). Login runs bcrypt even for unknown emails to prevent timing-based account enumeration. |
 | Sessions / JWT | 24h JWTs with a random `jti`, **verified with a pinned `HS256` algorithm**; every token is backed by a `Session` row, so logout / revocation is server-side. |
+| Personal API tokens | The second auth path, for the public REST API (see [`docs/api.md`](docs/api.md)). Tokens are `pm_` + CSPRNG random; **only an HMAC-SHA256 hash is stored**, so the plaintext is shown once and is unrecoverable. Each token carries its owner's identity and is subject to the same capability checks, quotas, and compute-access-window enforcement as a browser session; owners can revoke individual tokens. |
 | Brute-force lockout | After `AUTH_LOCKOUT_MAX` (default 10) consecutive failed passwords an account is locked for `AUTH_LOCKOUT_MINUTES` (default 15), auto-unlocking. The locked response is identical to a normal failure (no enumeration), and admins are emailed when SMTP is configured. Complements the IP rate limiter (targeted vs. noisy-source protection). |
 | Invites | 32-byte URL-safe random tokens, single-use (claimed atomically), with an expiry. |
 | Input validation | All request bodies validated with Zod; Prisma parameterizes all queries. Request bodies are capped (1 MB). |
 | Transport | Run ProxMate behind HTTPS in production (reverse proxy). Set `verifySsl=true` once Proxmox has a valid cert — or keep verification **on** against a private CA via `PROXMOX_CA_CERT_FILE`/`PROXMOX_CA_CERT` (preferred over disabling it). |
 | Browser headers | The frontend sends `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`, HSTS, and a strict **nonce-based Content-Security-Policy** (`script-src 'self' 'nonce-…' 'strict-dynamic'`) so injected inline scripts can't execute. |
 | CORS | Restricted to `FRONTEND_URL`. |
-| Console tickets | One-time, short-lived Proxmox VNC tickets; the console WebSocket verifies JWT + VM ownership + Origin before relaying. |
-| Rate limiting | Built-in `express-rate-limit` on `/auth/login`, `/auth/register`, and public token lookups (invite lookup, backup downloads); the setup wizard's mutating steps are throttled too (env-tunable). Honors `trust proxy`. |
+| Console tickets | One-time, short-lived Proxmox VNC tickets. The console WebSocket authenticates via the **httpOnly session cookie** (no token in the URL), checks `Origin` against `FRONTEND_URL`, and gates on the **`console` capability** — owner, admin, Operator and Manager shares pass; a Viewer share does not. |
+| Rate limiting | Built-in `express-rate-limit` on `/auth/login`, `/auth/register`, and public token lookups (invite lookup, backup downloads); the setup wizard's mutating steps are throttled too (env-tunable). A separate **write limiter covers all of `/api`**, skipping safe `GET`/`HEAD`/`OPTIONS`, so every mutating request is throttled (default 60 per 60 s per IP, `API_WRITE_RATE_LIMIT_MAX` / `_WINDOW_MS`). Honors `trust proxy`. |
 | Outbound requests (SSRF) | Admin-configured **notification webhooks** and **cloud-image URLs** are validated against a private-address blocklist (loopback, link-local / cloud-metadata `169.254.169.254`, RFC1918, CGNAT, IPv6 ULA / link-local, IPv4-mapped IPv6): shape-checked on save, DNS-resolved and re-checked immediately before the request, and redirects refused. Homelab installs that point at a LAN service can opt in with `ALLOW_PRIVATE_OUTBOUND_URLS=true` (scheme + no-credentials checks always stay enforced). |
-| Metrics endpoint | `GET /metrics` is token-gated; in **production** it returns 404 unless `METRICS_TOKEN` is set (scrape over localhost, or send `Authorization: Bearer <token>`). |
-| MFA-setup enforcement | Where an invite required two-step auth, the protected routers (`/api/vms`, `/api/templates`, **`/api/admin`**) block access until the user has actually enrolled a TOTP or passkey method. |
+| Metrics endpoint | `GET /metrics` is token-gated; in **production** it returns 404 unless `METRICS_TOKEN` is set — including for localhost, so there is no unauthenticated local scrape. Scrapers send `Authorization: Bearer <token>`. |
+| MFA-setup enforcement | Where an invite required two-step auth, six protected routers (`/api/vms`, `/api/templates`, `/api/admin`, `/api/proxmox`, `/api/users`, `/api/passthrough-requests`) block access until the user has actually enrolled a TOTP or passkey method. |
 | Containers | Both images run with **all Linux capabilities dropped** and `no-new-privileges`; the frontend runs as a non-root user and the backend drops to the unprivileged `node` user after fixing data-volume ownership. |
 | Audit log | VM lifecycle (create/delete/start/stop/restart/restore), auth events, and **account lockouts** are recorded with actor + client IP; admin-viewable at `/admin/audit`. |
 
@@ -155,12 +170,12 @@ than out-of-band through the Proxmox API, so it has its own guarantees (full mod
 
 | Area | Posture |
 |------|---------|
-| Editor transport | Reverse-proxied through the backend; every HTTP **and** WebSocket request is resolved through `getOwnedVm` (owner-gated, same as the console). The proxy refuses loopback/link-local/metadata targets, so a spoofed guest-reported IP can't point it at the host. |
+| Editor transport | Reverse-proxied through the backend; every HTTP **and** WebSocket request is resolved through `getVmWithCap(vmId, user, 'ide')` and re-checked against the admin IDE policy. It is capability-gated, not owner-gated: a **Manager** share also holds `ide`, while Viewer and Operator shares do not. The proxy refuses loopback/link-local/metadata targets, so a spoofed guest-reported IP can't point it at the host. |
 | Firewall pinhole | Reaching `code-server` needs one inbound hole in the guest's isolation firewall — added as a **managed, infra-scoped** ACCEPT via the Proxmox firewall API (like the isolation rules), scoped to `ide_ingress_cidr` (a wildcard `0.0.0.0/0` is rejected). The guest keeps `policy_in=DROP`, so **tenant-to-tenant isolation is unchanged** — only ProxMate's address can reach the port. |
 | LLM gateway | The in-guest AI agent authenticates with a **per-VM bearer token** (sha-256 hashed at rest) that re-checks ownership + policy live on every call. `resolveModelRoute` is the single allow-list choke point: a tenant can reach only admin-shared models, or their own BYO keys when enabled — never an un-shared model, even by editing the in-guest config. Admin upstream endpoints/keys never leave the server. |
-| BYO-key SSRF | Tenant-supplied key endpoints go through the same outbound guard as webhooks (shape-check on save, DNS re-check at forward). Admins are exempt so they can source models from a **LAN** endpoint (e.g. a local Ollama). |
+| BYO-key SSRF | Tenants may only use OpenAI or the fixed preset OpenAI-compatible bases (OpenRouter, Groq) — a free-form custom base URL is **admin-only**. Tenant-supplied endpoints additionally go through the same outbound guard as webhooks (shape-check on save, DNS re-check at forward). Admins are exempt so they can source models from a **LAN** endpoint (e.g. a local Ollama). |
 | Gateway limits | Body-capped (large chat contexts allowed but bounded) and rate-limited **per VM**, so a stolen or runaway token can't flood the upstream. |
-| Base URL | The gateway URL handed to the guest is built from the forwarded scheme and **must be https** in production (`TRUST_PROXY=1`), or the edge's http→https redirect silently downgrades the agent's POST to a GET. |
+| Base URL | The gateway URL handed to the guest comes from the operator-configured `BACKEND_PUBLIC_URL` and **must be https** — an http URL gets 301'd, which breaks the agent's POST. Since v0.8.0 the configured value wins outright; deriving the scheme from forwarded headers is only a fallback for bare dev setups, having proved unreliable behind a proxy that rewrites `X-Forwarded-Proto`. |
 
 ### Recommended: scope the Proxmox API token
 

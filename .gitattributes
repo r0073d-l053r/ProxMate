@@ -1,0 +1,31 @@
+# Normalise line endings so the blob stored in the repository is always LF,
+# whatever a contributor's local core.autocrlf happens to be set to.
+* text=auto
+
+# Anything a shell executes MUST stay LF even in a Windows checkout. A CRLF copy
+# of install.sh dies on its very first line with
+#     set: pipefail: invalid option name
+# because the option name is read as "pipefail\r" — and the \r is invisible, so
+# the failure looks unrelated to line endings. Same applies to the container
+# entrypoints, which run under sh inside the image.
+*.sh text eol=lf
+docker-entrypoint.sh text eol=lf
+Dockerfile text eol=lf
+*.Dockerfile text eol=lf
+
+# Compose/CI files are read by tools that are happier with LF and are also copied
+# into Linux images.
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Never let git rewrite bytes in binary assets.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+*.mp4 binary

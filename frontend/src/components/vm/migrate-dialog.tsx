@@ -43,6 +43,8 @@ export function MigrateDialog({
   onDone: () => void;
 }) {
   const [nodes, setNodes] = useState<string[]>([]);
+  const [blockers, setBlockers] = useState<Array<{ node: string; reason: string }>>([]);
+  const [localDisks, setLocalDisks] = useState<Array<{ volid: string }>>([]);
   const [target, setTarget] = useState("");
   const [loadingNodes, setLoadingNodes] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -53,12 +55,28 @@ export function MigrateDialog({
     setLoadingNodes(true);
     // Only the nodes THIS VM can actually migrate to (Proxmox `allowed_nodes`), so
     // the picker never offers an impossible target (e.g. node-local storage).
+    // `blockers` carries Proxmox's per-node REASON, which is the difference between
+    // "no eligible nodes" and "pve-1: storage not available there: tank".
     api
-      .get<{ current: string; targets: string[] }>(`/vms/${vmId}/migrate-targets`)
-      .then((r) => setNodes(r.data.targets))
+      .get<{
+        current: string;
+        targets: string[];
+        blockers?: Array<{ node: string; reason: string }>;
+        localDisks?: Array<{ volid: string }>;
+      }>(`/vms/${vmId}/migrate-targets`)
+      .then((r) => {
+        setNodes(r.data.targets);
+        setBlockers(r.data.blockers ?? []);
+        setLocalDisks(r.data.localDisks ?? []);
+      })
       .catch((e) => toast.error(apiError(e)))
       .finally(() => setLoadingNodes(false));
   }, [open, vmId]);
+
+  // The storages that are actually pinning this guest, deduped for a short hint.
+  const pinningStorages = [
+    ...new Set(localDisks.map((d) => d.volid.split(":")[0]).filter(Boolean)),
+  ] as string[];
 
   async function migrate() {
     setBusy(true);
@@ -101,11 +119,36 @@ export function MigrateDialog({
             </SelectContent>
           </Select>
           {!loadingNodes && nodes.length === 0 && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              This VM can&apos;t be migrated — its disks live on storage that only exists on{" "}
-              <span className="font-medium text-foreground">{currentNode}</span> (or it has a device
-              attached that pins it to this host). Move its disks to shared storage to enable migration.
-            </p>
+            <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+              <p className="font-medium text-foreground">Why this VM can&apos;t be migrated</p>
+              {blockers.length > 0 ? (
+                <ul className="mt-1.5 grid gap-1 text-muted-foreground">
+                  {blockers.map((b) => (
+                    <li key={b.node}>
+                      {b.node === "*" ? (
+                        b.reason
+                      ) : (
+                        <>
+                          <span className="font-medium text-foreground">{b.node}</span> — {b.reason}
+                        </>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1 text-muted-foreground">
+                  Proxmox reported no eligible target nodes.
+                </p>
+              )}
+              {pinningStorages.length > 0 && (
+                <p className="mt-2 text-muted-foreground">
+                  Its disks are on{" "}
+                  <span className="font-medium text-foreground">{pinningStorages.join(", ")}</span>.
+                  Moving them to storage every node can see (Hardware → Disk → Move Storage) makes
+                  this VM migratable.
+                </p>
+              )}
+            </div>
           )}
         </FormField>
         <AlertDialogFooter>
