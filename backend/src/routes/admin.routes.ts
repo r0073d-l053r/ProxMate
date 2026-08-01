@@ -511,7 +511,33 @@ router.put('/settings/defaults', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
     return;
   }
+  // Capture the old values first: these decide where every future VM is placed and
+  // whether it can ever be migrated, so "what changed, from what, and who did it"
+  // has to be answerable afterwards. This route previously wrote no audit entry at
+  // all — the only admin route that didn't.
+  const before = {
+    storage: await getConfig('default_storage'),
+    bridge: await getConfig('default_bridge'),
+    isoStorage: await getConfig('iso_storage'),
+    backupStorage: await getConfig('backup_storage'),
+  };
   await saveDefaults(parsed.data);
+
+  const changes: string[] = [];
+  const note = (label: string, from: string | null, to: string | undefined) => {
+    if (to !== undefined && (from ?? '') !== to) changes.push(`${label}: ${from ?? '(unset)'} → ${to || '(auto)'}`);
+  };
+  note('storage', before.storage, parsed.data.storage);
+  note('bridge', before.bridge, parsed.data.bridge);
+  note('isoStorage', before.isoStorage, parsed.data.isoStorage);
+  note('backupStorage', before.backupStorage, parsed.data.backupStorage);
+
+  await recordAudit({
+    action: 'admin.settings_defaults',
+    actor: (req as AuthRequest).user,
+    detail: changes.length > 0 ? changes.join('; ') : 'saved with no changes',
+    req,
+  });
   res.json({ success: true });
 });
 
