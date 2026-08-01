@@ -23,6 +23,7 @@ import {
   getPassthroughDevices,
   getNodesHealth,
   migratableTargets,
+  migratePreflight,
 } from '../services/proxmox.service.js';
 import type { RrdTimeframe } from '../services/proxmox.service.js';
 import { requestVncProxy, requestTermProxy } from '../services/vnc-proxy.service.js';
@@ -845,23 +846,51 @@ router.get('/:id/migrate-targets', async (req: Request, res: Response) => {
   if (user.role !== 'admin') { res.status(403).json({ error: 'Only an admin can migrate VMs between nodes.' }); return; }
   const vm = await getOwnedVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
-  if (kindOf(vm) === 'lxc' || vm.hasPassthrough) {
-    res.json({ current: vm.proxmoxNode, targets: [] });
+  // An empty target list is useless on its own — always say WHY.
+  if (kindOf(vm) === 'lxc') {
+    res.json({
+      current: vm.proxmoxNode,
+      targets: [],
+      blockers: [{ node: '*', reason: 'Containers (LXC) have no live migration in ProxMate. Stop it and migrate it from Proxmox, or convert it to a VM.' }],
+    });
+    return;
+  }
+  if (vm.hasPassthrough) {
+    res.json({
+      current: vm.proxmoxNode,
+      targets: [],
+      blockers: [{ node: '*', reason: 'A PCI/GPU device is attached, and that hardware only exists in this host. Detach the device first, then migrate.' }],
+    });
     return;
   }
   try {
     const current = await syncVmNode(vm);
-    const [allowed, health] = await Promise.all([
-      migratableTargets(current.proxmoxNode, current.proxmoxVmId),
+    const [pre, health] = await Promise.all([
+      migratePreflight(current.proxmoxNode, current.proxmoxVmId),
       getNodesHealth(),
     ]);
     const onlineOthers = health.nodes.filter((n) => n.online && n.name !== current.proxmoxNode).map((n) => n.name);
     // Fail open when the preflight can't be read (null): offer the online nodes and
     // let the migrate route re-validate, rather than blocking migration entirely.
-    const base = allowed ?? onlineOthers;
+    const base = pre?.allowed ?? onlineOthers;
     const onlineSet = new Set(onlineOthers);
     const targets = base.filter((n) => onlineSet.has(n));
-    res.json({ current: current.proxmoxNode, targets });
+
+    const blockers = (pre?.blocked ?? []).filter((b) => b.node !== current.proxmoxNode);
+    // Offline nodes are a refusal too, and Proxmox won't mention them.
+    for (const n of health.nodes) {
+      if (!n.online && n.name !== current.proxmoxNode) blockers.push({ node: n.name, reason: 'node is offline' });
+    }
+    if (targets.length === 0 && blockers.length === 0 && onlineOthers.length === 0) {
+      blockers.push({ node: '*', reason: 'This is the only online node in the cluster — there is nowhere to move it to.' });
+    }
+
+    res.json({
+      current: current.proxmoxNode,
+      targets,
+      blockers,
+      localDisks: pre?.localDisks ?? [],
+    });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }

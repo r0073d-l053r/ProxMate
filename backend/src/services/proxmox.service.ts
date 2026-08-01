@@ -360,6 +360,91 @@ export async function pickBestNode(
   return best.node;
 }
 
+// ─── Placement diagnostics ────────────────────────────────────
+
+export interface PlacementConstraint {
+  /** The thing being checked, e.g. "ISO storage 'local'". */
+  subject: string;
+  /** Nodes that actually have it — the candidate set placement gets. */
+  nodes: string[];
+  shared: boolean;
+  /** Set when this constraint is what's pinning placement. */
+  problem?: string;
+  remedy?: string;
+}
+
+export interface PlacementDiagnostics {
+  onlineNodes: string[];
+  constraints: PlacementConstraint[];
+  /** Nodes auto-placement can actually choose between, after every constraint. */
+  effectiveCandidates: string[];
+  /** True when scoring never gets a real choice. */
+  pinned: boolean;
+}
+
+/**
+ * Explain why auto-placement lands where it does.
+ *
+ * `pickBestNode` scores nodes by FREE capacity, so a busy node should lose. When
+ * every new guest keeps landing on the same loaded node anyway, the cause is
+ * almost always upstream of scoring: the candidate set handed to it contains only
+ * that one node, because the ISO (or the disk pool) physically lives there.
+ *
+ * `local` is Proxmox's default ISO storage and it is NODE-LOCAL — an ISO uploaded
+ * through the web UI exists only on the node that received it. That silently pins
+ * every install to that node with no error and no scoring.
+ */
+export async function getPlacementDiagnostics(
+  isoStorage: string | undefined,
+  diskStorage: string | undefined,
+  client?: AxiosInstance,
+): Promise<PlacementDiagnostics> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources');
+  const items = res.data.data;
+
+  const onlineNodes = items
+    .filter((i) => i.type === 'node' && i.status === 'online' && i.node)
+    .map((i) => i.node!);
+
+  const constraints: PlacementConstraint[] = [];
+
+  const examine = (storage: string, label: string, contentHint: string) => {
+    const entries = items.filter(
+      (i) => i.type === 'storage' && i.storage === storage && i.node && (!i.status || i.status === 'available'),
+    );
+    const nodes = [...new Set(entries.map((e) => e.node!))];
+    const shared = entries.some((e) => e.shared === 1);
+    const cons: PlacementConstraint = { subject: `${label} "${storage}"`, nodes, shared };
+    if (nodes.length > 0 && nodes.length < onlineNodes.length) {
+      cons.problem =
+        `only ${nodes.length} of ${onlineNodes.length} online nodes have it (${nodes.join(', ')}), ` +
+        `so auto-placement can never choose the others`;
+      cons.remedy = shared
+        ? `check why it isn't active on every node`
+        : `put ${contentHint} on shared storage (Ceph/CephFS, NFS) and point ProxMate at it, ` +
+          `or replicate it to every node`;
+    }
+    constraints.push(cons);
+  };
+
+  if (isoStorage) examine(isoStorage, 'ISO storage', 'your ISOs');
+  if (diskStorage) examine(diskStorage, 'Disk storage', 'VM disks');
+
+  // Placement intersects every constraint that reported any node at all.
+  let effective = onlineNodes;
+  for (const cons of constraints) {
+    if (cons.nodes.length > 0) effective = effective.filter((n) => cons.nodes.includes(n));
+  }
+
+  return {
+    onlineNodes,
+    constraints,
+    effectiveCandidates: effective,
+    pinned: effective.length <= 1 && onlineNodes.length > 1,
+  };
+}
+
 // ─── Storage / network / ISO listing ──────────────────────────
 
 export interface PveStorage {
@@ -1221,13 +1306,86 @@ export async function migratableTargets(
   vmid: number,
   client?: AxiosInstance,
 ): Promise<string[] | null> {
+  const pre = await migratePreflight(node, vmid, client);
+  return pre ? pre.allowed : null;
+}
+
+/** Why Proxmox refused a particular node, in its own words. */
+export interface MigrateBlocker {
+  node: string;
+  reason: string;
+}
+
+export interface MigratePreflight {
+  allowed: string[];
+  /**
+   * Proxmox's per-node refusals. Reading these is the difference between telling
+   * an admin "no eligible nodes" and telling them "pve-1: local storage 'local-lvm'
+   * not available on node" — which is the actual, fixable problem.
+   */
+  blocked: MigrateBlocker[];
+  /** Volumes on node-local storage; these are what usually pin a guest. */
+  localDisks: Array<{ volid: string; size?: number }>;
+}
+
+/**
+ * Proxmox's own migration preflight, reasons included.
+ *
+ * `not_allowed_nodes` is a map of node → refusal, where the value may be a plain
+ * string, or an object carrying `unavailable_storages` (the common case) and/or a
+ * list of blocking local resources. Normalise all of that into one sentence per
+ * node so callers can just print it.
+ */
+export async function migratePreflight(
+  node: string,
+  vmid: number,
+  client?: AxiosInstance,
+): Promise<MigratePreflight | null> {
   const c = client ?? (await getClient());
   try {
-    const r = await c.get<{ data: { allowed_nodes?: string[] } }>(`/nodes/${node}/qemu/${vmid}/migrate`);
-    return r.data.data.allowed_nodes ?? [];
+    const r = await c.get<{
+      data: {
+        allowed_nodes?: string[];
+        not_allowed_nodes?: Record<string, unknown>;
+        local_disks?: Array<{ volid?: string; size?: number }>;
+      };
+    }>(`/nodes/${node}/qemu/${vmid}/migrate`);
+    const d = r.data.data ?? {};
+
+    const blocked: MigrateBlocker[] = [];
+    for (const [name, raw] of Object.entries(d.not_allowed_nodes ?? {})) {
+      blocked.push({ node: name, reason: describeMigrateRefusal(raw) });
+    }
+
+    return {
+      allowed: d.allowed_nodes ?? [],
+      blocked,
+      localDisks: (d.local_disks ?? [])
+        .filter((v): v is { volid: string; size?: number } => typeof v.volid === 'string')
+        .map((v) => ({ volid: v.volid, ...(v.size !== undefined ? { size: v.size } : {}) })),
+    };
   } catch {
     return null;
   }
+}
+
+/** Turn one `not_allowed_nodes` entry into a human sentence. */
+export function describeMigrateRefusal(raw: unknown): string {
+  if (typeof raw === 'string' && raw.trim()) return raw.trim();
+  if (raw && typeof raw === 'object') {
+    const o = raw as Record<string, unknown>;
+    const parts: string[] = [];
+    const storages = o['unavailable_storages'];
+    if (Array.isArray(storages) && storages.length > 0) {
+      parts.push(`storage not available there: ${storages.join(', ')}`);
+    }
+    for (const key of ['local_resources', 'unavailable_resources', 'blocking_resources']) {
+      const v = o[key];
+      if (Array.isArray(v) && v.length > 0) parts.push(`local resources: ${v.join(', ')}`);
+    }
+    if (parts.length > 0) return parts.join('; ');
+  }
+  return 'not permitted by Proxmox';
 }
 
 /**
