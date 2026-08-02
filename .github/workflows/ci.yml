@@ -102,6 +102,20 @@ jobs:
   docker:
     name: Docker — build both images
     runs-on: ubuntu-latest
+    # Build cache is WRITTEN only from main; every other ref reads it.
+    #
+    # `mode=max` exports every intermediate layer of both images. Writing that
+    # from every branch and every PR filled the 10 GB repo cache quota (376
+    # entries / 10.59 GB), at which point buildx starts failing outright with
+    #     error writing layer blob: failed to reserve cache
+    # and the whole job goes red on code that is perfectly fine. Two runs of the
+    # same commit (the merge push and the PR) also raced each other for the same
+    # blobs, because the concurrency group is keyed on github.ref and so does not
+    # span them.
+    #
+    # Reading stays on for everyone, so PRs keep the full cache speed-up; only
+    # the writing is narrowed. main is the right writer: it is the ref every
+    # branch is cut from, so its layers are the ones most likely to hit.
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -112,7 +126,7 @@ jobs:
           push: false
           load: false
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
       - name: Build frontend image
         uses: docker/build-push-action@v6
         with:
@@ -122,4 +136,4 @@ jobs:
           build-args: |
             NEXT_PUBLIC_API_URL=/api
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
