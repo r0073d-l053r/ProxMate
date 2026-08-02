@@ -13,6 +13,7 @@ import {
   passthroughBootReadiness,
   parseMigrationProgress,
   getMigrationProgress,
+  cicustomStorages,
 } from '../src/services/proxmox.service.js';
 import { fakeClient, asClient, bodyOf, GB } from './helpers.js';
 
@@ -444,5 +445,130 @@ describe('getPlacementDiagnostics — real-world pinned cluster', () => {
     expect(d.effectiveCandidates).toHaveLength(7);
     expect(d.pinned).toBe(false);
     expect(d.constraints.every((x) => x.problem === undefined)).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Guardrails ProxMate layers on top of Proxmox's own preflight.
+//
+// Both of the migrations below are PERMITTED by Proxmox and both break the guest.
+// These came out of a live incident: two guests were live-migrated off their
+// original node and their kernels panicked mid-flight ("Fatal exception in
+// interrupt"), and a third could not be started afterwards because its cloud-init
+// snippet storage did not exist on the node it had landed on.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Route GETs by URL, since the guardrail reads config + status + cluster state. */
+function routed(routes: Record<string, unknown>, fallback: unknown = { data: { data: {} } }) {
+  const c = fakeClient();
+  c.get.mockImplementation((url: string) => {
+    for (const [k, v] of Object.entries(routes)) if (url === k || url.startsWith(k)) return Promise.resolve(v);
+    return Promise.resolve(fallback);
+  });
+  return c;
+}
+
+const XEON = 'Intel(R) Xeon(R) CPU E5-1650 v3 @ 3.50GHz';
+const I3 = 'Intel(R) Core(TM) i3-4330 CPU @ 3.50GHz';
+
+function clusterNodes(...nodes: string[]) {
+  return { data: { data: nodes.map((n) => ({ type: 'node', status: 'online', node: n })) } };
+}
+
+describe('migratePreflight — cpu=host live-migration guardrail', () => {
+  const base = (cpu: string, status: string, cpus: Record<string, string>) =>
+    routed({
+      '/nodes/pve/qemu/110/migrate': { data: { data: { allowed_nodes: ['pve-5', 'pve-0'] } } },
+      '/nodes/pve/qemu/110/config': { data: { data: { cpu, name: 'ide-test-jewell' } } },
+      '/nodes/pve/qemu/110/status/current': { data: { data: { status } } },
+      '/cluster/resources?type=storage': { data: { data: [] } },
+      '/cluster/resources': clusterNodes('pve', 'pve-5', 'pve-0'),
+      '/nodes/pve/status': { data: { data: { cpuinfo: { model: cpus['pve'] } } } },
+      '/nodes/pve-5/status': { data: { data: { cpuinfo: { model: cpus['pve-5'] } } } },
+      '/nodes/pve-0/status': { data: { data: { cpuinfo: { model: cpus['pve-0'] } } } },
+    });
+
+  it('refuses a running cpu=host guest a node whose CPU model differs', async () => {
+    const c = base('host', 'running', { pve: XEON, 'pve-5': I3, 'pve-0': XEON });
+    const pre = await migratePreflight('pve', 110, asClient(c));
+    expect(pre!.allowed).toEqual(['pve-0']); // same CPU survives, different one does not
+    const why = pre!.blocked.find((b) => b.node === 'pve-5')!;
+    expect(why.reason).toMatch(/different CPU model/);
+    expect(why.reason).toMatch(/cpu=host/);
+    expect(why.reason).toMatch(/stop the guest first/i); // the actual way out
+  });
+
+  it('allows the same move once the guest is stopped — a cold boot is fine anywhere', async () => {
+    const c = base('host', 'stopped', { pve: XEON, 'pve-5': I3, 'pve-0': XEON });
+    const pre = await migratePreflight('pve', 110, asClient(c));
+    expect(pre!.allowed).toEqual(['pve-5', 'pve-0']);
+    expect(pre!.blocked).toEqual([]);
+  });
+
+  it('does not restrict a guest pinned to an explicit CPU model', async () => {
+    const c = base('x86-64-v2-AES', 'running', { pve: XEON, 'pve-5': I3, 'pve-0': XEON });
+    const pre = await migratePreflight('pve', 110, asClient(c));
+    expect(pre!.allowed).toEqual(['pve-5', 'pve-0']);
+  });
+
+  it('fails open when a node CPU model cannot be detected', async () => {
+    const c = base('host', 'running', { pve: XEON, 'pve-5': '', 'pve-0': XEON });
+    const pre = await migratePreflight('pve', 110, asClient(c));
+    expect(pre!.allowed).toContain('pve-5'); // unknown must never pin a guest
+  });
+});
+
+describe('migratePreflight — cicustom snippet-storage guardrail', () => {
+  const withSnippet = (storage: string, availableOn: string[]) =>
+    routed({
+      '/nodes/pve/qemu/110/migrate': { data: { data: { allowed_nodes: ['pve-5', 'pve-0'] } } },
+      '/nodes/pve/qemu/110/config': {
+        data: { data: { cicustom: `vendor=${storage}:snippets/proxmate-docker.yaml` } },
+      },
+      '/nodes/pve/qemu/110/status/current': { data: { data: { status: 'stopped' } } },
+      '/cluster/resources?type=storage': {
+        data: { data: availableOn.map((n) => ({ type: 'storage', storage, node: n })) },
+      },
+      '/cluster/resources': clusterNodes('pve', 'pve-5', 'pve-0'),
+    });
+
+  it('refuses a node that lacks the snippet storage, even though Proxmox allows it', async () => {
+    // The exact live failure: musebot-backups exists everywhere except pve-5.
+    const c = withSnippet('musebot-backups', ['pve', 'pve-0']);
+    const pre = await migratePreflight('pve', 110, asClient(c));
+    expect(pre!.allowed).toEqual(['pve-0']);
+    const why = pre!.blocked.find((b) => b.node === 'pve-5')!;
+    expect(why.reason).toMatch(/musebot-backups/);
+    expect(why.reason).toMatch(/fail to start/);
+  });
+
+  it('allows nodes that do have it', async () => {
+    const c = withSnippet('musebot-backups', ['pve', 'pve-0', 'pve-5']);
+    const pre = await migratePreflight('pve', 110, asClient(c));
+    expect(pre!.allowed).toEqual(['pve-5', 'pve-0']);
+  });
+
+  it('fails open for a storage the cluster does not report at all', async () => {
+    const c = withSnippet('some-unknown-store', []);
+    const pre = await migratePreflight('pve', 110, asClient(c));
+    expect(pre!.allowed).toEqual(['pve-5', 'pve-0']);
+  });
+});
+
+describe('cicustomStorages', () => {
+  it('pulls the storage id out of each cicustom entry', () => {
+    expect(cicustomStorages({ cicustom: 'vendor=musebot-backups:snippets/v.yaml' }))
+      .toEqual(['musebot-backups']);
+  });
+  it('handles several entries and de-duplicates', () => {
+    expect(
+      cicustomStorages({
+        cicustom: 'vendor=store-a:snippets/v.yaml,user=store-b:snippets/u.yaml,network=store-a:snippets/n.yaml',
+      }),
+    ).toEqual(['store-a', 'store-b']);
+  });
+  it('returns nothing when cicustom is absent or empty', () => {
+    expect(cicustomStorages({})).toEqual([]);
+    expect(cicustomStorages({ cicustom: '   ' })).toEqual([]);
   });
 });

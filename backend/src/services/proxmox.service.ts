@@ -1293,6 +1293,88 @@ export async function removeDisk(node: string, vmid: number, slot: string, clien
   }
 }
 
+const cpuModelCache = new Map<string, string>();
+let cpuModelCacheAt = 0;
+
+/**
+ * Map of node → physical CPU model string (e.g. "Intel(R) Xeon(R) CPU E5-1650 v3").
+ *
+ * Needed because a guest configured `cpu: host` is handed the host's CPUID
+ * verbatim. Live-migrating such a guest onto a node with a *different* CPU model
+ * pulls features out from under a kernel that is already running on them, and the
+ * next instruction needing a missing feature takes a fatal exception. Mirrors
+ * {@link getNodeArchMap}: a static hardware fact, cached briefly, and a detection
+ * failure yields no entry rather than disqualifying the node.
+ */
+export async function getNodeCpuModelMap(client?: AxiosInstance): Promise<Map<string, string>> {
+  const useCache = !client;
+  if (useCache && cpuModelCache.size > 0 && Date.now() - cpuModelCacheAt < ARCH_TTL_MS) {
+    return new Map(cpuModelCache);
+  }
+
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources');
+  const nodes = res.data.data
+    .filter((i) => i.type === 'node' && i.status === 'online' && i.node)
+    .map((i) => i.node!);
+
+  const map = new Map<string, string>();
+  await Promise.all(
+    nodes.map(async (node) => {
+      try {
+        const st = await c.get<{ data: { cpuinfo?: { model?: string } } }>(`/nodes/${node}/status`);
+        const model = st.data.data?.cpuinfo?.model?.trim();
+        if (model) map.set(node, model);
+      } catch {
+        // Undetectable → leave absent, so the guardrail below fails open.
+      }
+    }),
+  );
+
+  if (useCache) {
+    cpuModelCache.clear();
+    for (const [k, v] of map) cpuModelCache.set(k, v);
+    cpuModelCacheAt = Date.now();
+  }
+  return map;
+}
+
+/**
+ * Storage ids a guest config depends on that are NOT disks — today that means the
+ * cloud-init `cicustom` snippets (`vendor=`, `user=`, `network=`, `meta=`), each
+ * written as `storage:snippets/file.yaml`.
+ *
+ * Proxmox's own migrate preflight does not consider these. A running guest never
+ * re-reads them, so a live migration onto a node without that storage *succeeds* —
+ * and the guest then fails to start there, forever, with
+ * `storage 'X' is not available on node 'Y'`. That turns a routine migration into
+ * a guest that cannot be powered back on.
+ */
+export function cicustomStorages(cfg: Record<string, unknown>): string[] {
+  const raw = cfg['cicustom'];
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  const out = new Set<string>();
+  for (const part of raw.split(',')) {
+    const value = part.includes('=') ? part.slice(part.indexOf('=') + 1) : part;
+    const storage = value.trim().split(':')[0];
+    if (storage) out.add(storage);
+  }
+  return [...out];
+}
+
+/** Nodes each storage id is usable on. Absent from the map → unknown, so fail open. */
+async function storageNodeMap(client: AxiosInstance): Promise<Map<string, Set<string>>> {
+  const res = await client.get<{ data: ClusterResource[] }>('/cluster/resources?type=storage');
+  const map = new Map<string, Set<string>>();
+  for (const s of res.data.data) {
+    if (!s.storage || !s.node) continue;
+    if (s.status && s.status !== 'available') continue;
+    if (!map.has(s.storage)) map.set(s.storage, new Set());
+    map.get(s.storage)!.add(s.node);
+  }
+  return map;
+}
+
 /**
  * Nodes a running VM may be live-migrated to, per Proxmox's own migrate preflight
  * (`GET .../migrate` → `allowed_nodes`). An empty array means nowhere — e.g. the
@@ -1357,8 +1439,76 @@ export async function migratePreflight(
       blocked.push({ node: name, reason: describeMigrateRefusal(raw) });
     }
 
+    let allowed = d.allowed_nodes ?? [];
+
+    // ── ProxMate's own guardrails, on top of Proxmox's ────────────────────────
+    // Proxmox permits both of the migrations below. Both break the guest.
+    // Every check fails OPEN: anything we cannot read leaves the node allowed,
+    // because wrongly pinning a guest is worse than a warning we didn't give.
+    try {
+      const cfg = (await c.get<{ data: Record<string, unknown> }>(`/nodes/${node}/qemu/${vmid}/config`))
+        .data.data;
+
+      // 1. cpu: host cannot survive a LIVE migration across differing CPU models.
+      //    Only applies while the guest is running — a stopped guest boots fresh
+      //    on the target and is perfectly happy there.
+      const cpu = typeof cfg['cpu'] === 'string' ? (cfg['cpu'] as string) : '';
+      if (/^host\b/.test(cpu)) {
+        let running = false;
+        try {
+          const st = await c.get<{ data: { status?: string } }>(
+            `/nodes/${node}/qemu/${vmid}/status/current`,
+          );
+          running = st.data.data?.status === 'running';
+        } catch {
+          running = false;
+        }
+        if (running) {
+          const cpuMap = await getNodeCpuModelMap(c);
+          const sourceCpu = cpuMap.get(node);
+          if (sourceCpu) {
+            allowed = allowed.filter((target) => {
+              const targetCpu = cpuMap.get(target);
+              if (!targetCpu || targetCpu === sourceCpu) return true;
+              blocked.push({
+                node: target,
+                reason:
+                  `different CPU model (${targetCpu} vs ${sourceCpu}) and this guest uses ` +
+                  `cpu=host — a live migration would crash it. Stop the guest first, ` +
+                  `then it can move here safely.`,
+              });
+              return false;
+            });
+          }
+        }
+      }
+
+      // 2. cicustom snippets. Proxmox ignores these when deciding migratability,
+      //    so the guest migrates fine and then cannot be started on the target.
+      const snippetStores = cicustomStorages(cfg);
+      if (snippetStores.length > 0) {
+        const storeNodes = await storageNodeMap(c);
+        allowed = allowed.filter((target) => {
+          const missing = snippetStores.filter((s) => {
+            const nodes = storeNodes.get(s);
+            return nodes ? !nodes.has(target) : false; // unknown storage → fail open
+          });
+          if (missing.length === 0) return true;
+          blocked.push({
+            node: target,
+            reason:
+              `cloud-init snippet storage not available there: ${missing.join(', ')} — ` +
+              `it would migrate, but then fail to start on that node.`,
+          });
+          return false;
+        });
+      }
+    } catch {
+      // Config unreadable → keep Proxmox's answer untouched.
+    }
+
     return {
-      allowed: d.allowed_nodes ?? [],
+      allowed,
       blocked,
       localDisks: (d.local_disks ?? [])
         .filter((v): v is { volid: string; size?: number } => typeof v.volid === 'string')
