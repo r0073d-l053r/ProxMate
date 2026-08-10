@@ -1,13 +1,7 @@
 import type { VirtualMachine } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
-import {
-  getClient,
-  guestAgentPing,
-  guestExecOutput,
-  scrubCloudInitPassword,
-  getVmStatus,
-} from './proxmox.service.js';
+import { getClient, guestAgentPing, guestExecOutput } from './proxmox.service.js';
 
 /**
  * Cloud-init deploy lock. A VM cloned from a cloud-init template is reported
@@ -96,83 +90,13 @@ export async function refreshDeployState(vm: VirtualMachine): Promise<DeployStat
 
   if (vm.deployStateAt && Date.now() - vm.deployStateAt.getTime() > DEPLOY_TIMEOUT_MS) {
     logger.info({ vmId: vm.id }, 'cloud-init deploy lock timed out — unlocking');
-    // The agent probe never gave an answer. The usual reason is not a stuck guest but
-    // an image with no qemu-guest-agent at all — the always-on cloud-init base defaults
-    // to empty and the agent is merely an offered extra, so this is the COMMON path,
-    // not the rare one (confirmed on the stock debian-13 template, 2026-08-10). If the
-    // scrub only ran on the confirmed branch, those guests would keep the credential on
-    // their seed forever, which is precisely the exposure this is meant to close.
-    //
-    // So scrub here too — but only once the guest is actually RUNNING. A running guest
-    // has had its first boot, so cloud-init has either applied the password or never
-    // will. A guest still stopped at this point may not have applied it yet, and
-    // removing it there would destroy the only credential before it ever reached
-    // /etc/shadow. Unlike the confirmed branch, a failure here does not hold the lock:
-    // eight minutes have already passed and keeping the guest locked is the worse harm.
-    await scrubIfBooted(vm);
     return markReady(vm);
   }
 
   const settled = await cloudInitSettled(vm);
   if (settled === true) {
-    // Cloud-init has applied the login password, so the copy Proxmox keeps in the
-    // config and on the attached seed drive is now pure liability — a root shell in
-    // the guest can read the hash off it (2026-07-18 pentest finding). Scrub it here
-    // and ONLY here: this is the one branch that has confirmed the run finished. The
-    // timeout branch above has not, and removing a password cloud-init never applied
-    // would leave a password-only tenant with no way in.
-    //
-    // Unlock only once the scrub has succeeded, so a transient Proxmox error is
-    // retried on the next poll instead of silently leaving the hash behind. This
-    // cannot wedge the guest: the timeout branch above force-unlocks regardless.
-    if (!(await scrubDeployCredential(vm))) return 'deploying';
     logger.info({ vmId: vm.id }, 'cloud-init deploy finished — unlocking');
     return markReady(vm);
   }
   return 'deploying';
-}
-
-/**
- * Remove the cloud-init password now that it has been applied. Returns false when
- * the attempt failed and is worth retrying; true when there is nothing left to do
- * (scrubbed, or never had one, or not a guest kind that carries a seed).
- */
-/**
- * Scrub on the timeout path, where nothing confirmed cloud-init ran. Gated on the
- * guest being live: a running guest has booted, so the password is applied or never
- * will be; a stopped one may still be waiting to apply it.
- *
- * Residual, stated rather than hidden: a guest that is STILL stopped when the lock
- * resolves keeps its seed credential, because the lock resolves only once and this
- * is never revisited. That is the deliberate trade — the alternative locks tenants
- * out of their own VMs — and it is the narrower of the two failure modes.
- */
-async function scrubIfBooted(vm: VirtualMachine): Promise<void> {
-  if (vm.type !== 'qemu') return;
-  try {
-    const status = await getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, undefined, 'qemu');
-    if (status.status !== 'running') {
-      logger.info(
-        { vmId: vm.id, status: status.status },
-        'deploy lock timed out on a guest that never started — leaving the cloud-init password, it may not be applied yet',
-      );
-      return;
-    }
-    await scrubDeployCredential(vm);
-  } catch (err) {
-    // Never hold the unlock over this; the guest has already waited out the timeout.
-    logger.warn({ vmId: vm.id, err }, 'could not scrub the cloud-init password on the timeout path');
-  }
-}
-
-async function scrubDeployCredential(vm: VirtualMachine): Promise<boolean> {
-  if (vm.type !== 'qemu') return true; // cloud-init seeds are a QEMU concern
-  try {
-    const scrubbed = await scrubCloudInitPassword(vm.proxmoxNode, vm.proxmoxVmId);
-    if (scrubbed) logger.info({ vmId: vm.id }, 'cloud-init password scrubbed from config + seed');
-    return true;
-  } catch (err) {
-    logger.warn({ vmId: vm.id, err }, 'could not scrub the cloud-init password — retrying on the next refresh');
-    return false;
-  }
 }
