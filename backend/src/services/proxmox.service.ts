@@ -876,43 +876,6 @@ export async function setCloudInitConfig(
   await c.put(`/nodes/${node}/qemu/${vmid}/config`, params);
 }
 
-/**
- * Remove the cloud-init password from a guest once cloud-init has applied it.
- *
- * `cipassword` is how a first boot sets the login password, but Proxmox keeps it in
- * the VM config AND bakes its hash into the cloud-init seed drive — a small ISO that
- * stays attached, is regenerated from config, and is readable by anyone who reaches
- * a root shell in that guest. An authorized pentest (2026-07-18) pulled a username
- * and a crypt hash straight off a tenant's seed. The hash is offline-crackable, and
- * where an operator reuses one password across a fleet built from a shared template,
- * one compromised guest yields the credential for all of them.
- *
- * The password itself cannot simply be dropped — it is the only credential on a
- * password-only deploy, and it must exist for the first boot to apply it. So it is
- * removed immediately AFTER that: the config key is deleted (closing the copy any
- * Proxmox-side reader could see) and the seed is regenerated so the hash leaves the
- * drive while the guest is still running. The already-applied password keeps working;
- * nothing inside the guest changes. Later password changes go through the guest agent
- * ({@link setGuestUserPassword}), which never writes to disk.
- *
- * Best-effort and idempotent: a guest that never had a password, or a repeat call,
- * is a no-op, and any failure is the caller's to log rather than fail a deploy over.
- */
-export async function scrubCloudInitPassword(node: string, vmid: number, client?: AxiosInstance): Promise<boolean> {
-  const c = client ?? (await getClient());
-  const cfg = await getVmConfig(node, vmid, c);
-  // Proxmox reports the key as a placeholder ('**********') once set, never the
-  // value — its presence is the only signal, and absence means there is nothing
-  // to scrub (SSH-key-only deploy, or already scrubbed).
-  if (!cfg['cipassword']) return false;
-
-  await c.put(`/nodes/${node}/qemu/${vmid}/config`, new URLSearchParams({ delete: 'cipassword' }));
-  // Rewrite the seed so the hash leaves the attached drive now, rather than
-  // lingering until whenever the guest next boots.
-  await c.put(`/nodes/${node}/qemu/${vmid}/cloudinit`, new URLSearchParams());
-  return true;
-}
-
 // ─── Cloud-init "extras" snippets (install Docker / Tailscale on boot) ───
 //
 // Each optional install is a cloud-init VENDOR-data snippet (merges with the
