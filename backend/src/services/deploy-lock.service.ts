@@ -1,7 +1,7 @@
 import type { VirtualMachine } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
-import { getClient, guestAgentPing, guestExecOutput } from './proxmox.service.js';
+import { getClient, guestAgentPing, guestExecOutput, scrubCloudInitPassword } from './proxmox.service.js';
 
 /**
  * Cloud-init deploy lock. A VM cloned from a cloud-init template is reported
@@ -95,8 +95,36 @@ export async function refreshDeployState(vm: VirtualMachine): Promise<DeployStat
 
   const settled = await cloudInitSettled(vm);
   if (settled === true) {
+    // Cloud-init has applied the login password, so the copy Proxmox keeps in the
+    // config and on the attached seed drive is now pure liability — a root shell in
+    // the guest can read the hash off it (2026-07-18 pentest finding). Scrub it here
+    // and ONLY here: this is the one branch that has confirmed the run finished. The
+    // timeout branch above has not, and removing a password cloud-init never applied
+    // would leave a password-only tenant with no way in.
+    //
+    // Unlock only once the scrub has succeeded, so a transient Proxmox error is
+    // retried on the next poll instead of silently leaving the hash behind. This
+    // cannot wedge the guest: the timeout branch above force-unlocks regardless.
+    if (!(await scrubDeployCredential(vm))) return 'deploying';
     logger.info({ vmId: vm.id }, 'cloud-init deploy finished — unlocking');
     return markReady(vm);
   }
   return 'deploying';
+}
+
+/**
+ * Remove the cloud-init password now that it has been applied. Returns false when
+ * the attempt failed and is worth retrying; true when there is nothing left to do
+ * (scrubbed, or never had one, or not a guest kind that carries a seed).
+ */
+async function scrubDeployCredential(vm: VirtualMachine): Promise<boolean> {
+  if (vm.type !== 'qemu') return true; // cloud-init seeds are a QEMU concern
+  try {
+    const scrubbed = await scrubCloudInitPassword(vm.proxmoxNode, vm.proxmoxVmId);
+    if (scrubbed) logger.info({ vmId: vm.id }, 'cloud-init password scrubbed from config + seed');
+    return true;
+  } catch (err) {
+    logger.warn({ vmId: vm.id, err }, 'could not scrub the cloud-init password — retrying on the next refresh');
+    return false;
+  }
 }
