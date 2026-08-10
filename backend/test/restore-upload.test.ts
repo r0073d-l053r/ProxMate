@@ -15,6 +15,7 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   waitForTask: vi.fn(),
   setVmName: vi.fn(),
   configureVmIsolation: vi.fn(),
+  readIsolationOptions: vi.fn(async () => ({ dnsServers: [] })),
   startVm: vi.fn(),
   deleteBackup: vi.fn(),
 }));

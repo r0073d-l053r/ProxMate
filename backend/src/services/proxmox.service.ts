@@ -2472,6 +2472,73 @@ export async function ensureNicFirewall(
   }
 }
 
+/**
+ * Put a guest's NICs on a VLAN, or take them off one.
+ *
+ * The per-VM firewall works at L3 and above, so it cannot stop a guest poisoning ARP,
+ * answering DHCP or spoofing IPv6 routers for anything sharing its broadcast domain —
+ * an authorized pentest (2026-07-18) confirmed that live. The only real fix is to stop
+ * the domain being shared: give each trust group its own VLAN (or SDN VNet), so the
+ * frames never reach a neighbour to begin with. That makes this the load-bearing half
+ * of tenant isolation, with the firewall as the layer above it.
+ *
+ * Why it lives here rather than at create time: a guest deployed from a template is a
+ * CLONE, so its `net0` is inherited verbatim from the template and none of the
+ * `createVm` / `createLxc` paths that build a netN string ever run for it. This
+ * read-modify-write, beside {@link ensureNicFirewall} on the post-clone path, is the
+ * single point every guest actually passes through.
+ *
+ * Idempotent, and safe on a running guest — Proxmox applies a NIC change live where it
+ * can and stages it for next boot otherwise. Pass `null` to strip the tag.
+ */
+export async function setVmVlanTag(
+  node: string,
+  vmid: number,
+  tag: number | null,
+  client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
+): Promise<void> {
+  if (tag !== null && (!Number.isInteger(tag) || tag < 1 || tag > 4094)) {
+    // 0 and 4095 are reserved; anything outside 1..4094 is not a VLAN id. Refusing
+    // beats silently writing a config Proxmox will reject at start time.
+    throw new Error(`Invalid VLAN tag ${tag} — must be an integer between 1 and 4094.`);
+  }
+  const c = client ?? (await getClient());
+  const cfg = await getVmConfig(node, vmid, c, kind);
+  for (const k of Object.keys(cfg).filter((key) => /^net\d+$/.test(key))) {
+    const val = cfg[k]!;
+    const current = /\btag=(\d+)\b/.exec(val);
+    if (tag === null) {
+      if (!current) continue;
+      await c.put(
+        `/nodes/${node}/${kind}/${vmid}/config`,
+        new URLSearchParams({ [k]: val.replace(/,?\btag=\d+\b/, '') }),
+      );
+      continue;
+    }
+    if (current && Number(current[1]) === tag) continue;
+    const updated = current ? val.replace(/\btag=\d+\b/, `tag=${tag}`) : `${val},tag=${tag}`;
+    await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams({ [k]: updated }));
+  }
+}
+
+/** The VLAN tag currently on a guest's first NIC, or null when it is untagged. */
+export async function getVmVlanTag(
+  node: string,
+  vmid: number,
+  client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
+): Promise<number | null> {
+  const c = client ?? (await getClient());
+  const cfg = await getVmConfig(node, vmid, c, kind);
+  const first = Object.keys(cfg)
+    .filter((key) => /^net\d+$/.test(key))
+    .sort()[0];
+  if (!first) return null;
+  const m = /\btag=(\d+)\b/.exec(cfg[first]!);
+  return m ? Number(m[1]) : null;
+}
+
 // ─── Firewall / tenant isolation ──────────────────────────────
 
 /** Get the configured gateway IP for a bridge, if any. */
@@ -2716,15 +2783,41 @@ export async function getNodesHealth(client?: AxiosInstance): Promise<ClusterHea
  *
  * NOTE: guest firewalls only take effect once the cluster firewall is enabled.
  */
+/**
+ * Read the admin's isolation settings once, so every call site configures a guest the
+ * same way. This exists because the settings used to be re-read inline at each of the
+ * six `configureVmIsolation` callers, and a seventh (`duplicateVm`) quietly drifted out
+ * of step — the exact failure mode that produces one unsegmented guest in a fleet.
+ */
+export async function readIsolationOptions(): Promise<{ dnsServers: string[]; vlanTag?: number }> {
+  const dnsServers = ((await getConfig('isolation_dns_servers')) ?? '').split(/[,\s]+/).filter(Boolean);
+  const raw = (await getConfig('isolation_vlan_tag')) ?? '';
+  const parsed = Number(raw);
+  // Deliberately `undefined`, not `null`, when unconfigured: undefined means "do not
+  // touch the NIC", whereas null is an explicit instruction to STRIP an existing tag.
+  // Returning null here would have every deploy rewrite NICs on installs that use no
+  // VLAN at all.
+  const vlanTag = raw && Number.isInteger(parsed) && parsed >= 1 && parsed <= 4094 ? parsed : undefined;
+  return { dnsServers, ...(vlanTag !== undefined ? { vlanTag } : {}) };
+}
+
 export async function configureVmIsolation(
   node: string,
   vmid: number,
-  opts: { dnsServers?: string[] } = {},
+  opts: { dnsServers?: string[]; vlanTag?: number | null } = {},
   client?: AxiosInstance,
   kind: GuestKind = 'qemu',
 ): Promise<void> {
   const c = client ?? (await getClient());
   const base = `/nodes/${node}/${kind}/${vmid}/firewall`;
+
+  // Segmentation first: it is the layer that actually contains L2 attacks, and it is
+  // applied here — inside the one function every isolation path already calls — rather
+  // than at each call site, so a new path cannot forget it. `undefined` means "leave the
+  // NIC alone" (nothing configured); an explicit null strips a tag.
+  if (opts.vlanTag !== undefined) {
+    await setVmVlanTag(node, vmid, opts.vlanTag, c, kind);
+  }
 
   // Default-deny inbound, allow outbound (further restricted by rules below),
   // permit DHCP, and block MAC/IP spoofing.
