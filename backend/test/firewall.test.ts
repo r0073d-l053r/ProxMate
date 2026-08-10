@@ -62,11 +62,11 @@ describe('configureVmIsolation (per-VM firewall rule builder)', () => {
     await configureVmIsolation(NODE, VMID, {}, asClient(c));
 
     const posts = c.post.mock.calls.map((call) => ({ url: call[0], body: bodyOf(call) }));
-    // 3 RFC1918 drops + 2 DNS allows (udp + tcp), all to the rules endpoint.
-    expect(posts).toHaveLength(5);
+    // rogue-DHCP drop + IPv6-RA drop + 3 RFC1918 drops + 2 DNS allows.
+    expect(posts).toHaveLength(7);
     expect(posts.every((p) => p.url === RULES_URL)).toBe(true);
 
-    const drops = posts.filter((p) => p.body.action === 'DROP');
+    const drops = posts.filter((p) => p.body.action === 'DROP' && p.body.dest);
     expect(drops.map((p) => p.body.dest)).toEqual([
       '192.168.0.0/16',
       '172.16.0.0/12',
@@ -99,6 +99,71 @@ describe('configureVmIsolation (per-VM firewall rule builder)', () => {
     // wins. So the LAST-inserted rules (DNS) sit on top of the drops.
     expect(c.post.mock.calls.every((call) => bodyOf(call).pos === '0')).toBe(true);
     const actions = c.post.mock.calls.map((call) => bodyOf(call).action);
-    expect(actions).toEqual(['DROP', 'DROP', 'DROP', 'ACCEPT', 'ACCEPT']);
+    expect(actions).toEqual(['DROP', 'DROP', 'DROP', 'DROP', 'DROP', 'ACCEPT', 'ACCEPT']);
+  });
+
+  it('blocks the guest from SERVING dhcp without blocking its own client requests', async () => {
+    const c = fakeClient();
+    await configureVmIsolation(NODE, VMID, {}, asClient(c));
+
+    const bodies = c.post.mock.calls.map((call) => bodyOf(call));
+    const dhcp = bodies.filter((b) => b.proto === 'udp' && b.action === 'DROP');
+    expect(dhcp).toHaveLength(1);
+
+    // A DHCP server answers FROM 67 TO 68, so dport 68 is what silences a rogue
+    // server. dport 67 is the guest's own REQUEST — dropping that would cost it its
+    // lease and its network, which is the mistake this test exists to prevent.
+    expect(dhcp[0]).toMatchObject({ type: 'out', action: 'DROP', proto: 'udp', dport: '68' });
+    expect(bodies.some((b) => b.proto === 'udp' && b.dport === '67')).toBe(false);
+  });
+
+  it('blocks outbound IPv6 router advertisements but not inbound', async () => {
+    const c = fakeClient();
+    await configureVmIsolation(NODE, VMID, {}, asClient(c));
+
+    const ra = c.post.mock.calls.map((call) => bodyOf(call)).filter((b) => b.proto === 'icmpv6');
+    expect(ra).toHaveLength(1);
+    expect(ra[0]).toMatchObject({
+      type: 'out', // outbound only — the guest must still RECEIVE RAs to autoconfigure
+      action: 'DROP',
+      'icmp-type': 'router-advertisement',
+    });
+  });
+
+  it('replaces its own rules on a re-run instead of stacking a second set', async () => {
+    // duplicateVm and the backup restore both re-run isolation on a guest that already
+    // has it, because Proxmox copies firewall config on clone. Before reconciliation
+    // that produced two complete rule sets, then three.
+    const c = fakeClient();
+    c.get.mockResolvedValue({
+      data: {
+        data: [
+          { pos: 0, comment: 'ProxMate isolation: DNS (any resolver)' },
+          { pos: 1, comment: 'ProxMate isolation: block local/private networks' },
+          { pos: 2, comment: 'operator rule — do not touch' },
+        ],
+      },
+    });
+
+    await configureVmIsolation(NODE, VMID, {}, asClient(c));
+
+    // Ours are deleted highest-position-first (each delete renumbers those above).
+    const deleted = c.delete.mock.calls.map((call) => call[0]);
+    expect(deleted).toEqual([`${RULES_URL}/1`, `${RULES_URL}/0`]);
+    // The operator's rule at pos 2 is never touched.
+    expect(deleted).not.toContain(`${RULES_URL}/2`);
+    expect(c.post).toHaveBeenCalledTimes(7);
+  });
+
+  it('still writes its rules when the existing-rule read fails', async () => {
+    // A GET failure must not leave the guest unisolated — better a possible duplicate
+    // than an open VM.
+    const c = fakeClient();
+    c.get.mockRejectedValue(new Error('proxmox 500'));
+
+    await configureVmIsolation(NODE, VMID, {}, asClient(c));
+
+    expect(c.delete).not.toHaveBeenCalled();
+    expect(c.post).toHaveBeenCalledTimes(7);
   });
 });
