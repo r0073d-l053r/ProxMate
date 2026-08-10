@@ -17,8 +17,7 @@ import { isMfaSetupRequired } from '../services/mfa.service.js';
 import {
   isAccessExpired,
   accessExpiryFrom,
-  accessExpiredMessage,
-  ACCESS_EXPIRED_CODE,
+  loginRefusal,
 } from '../services/access.service.js';
 import {
   setAuthCookies,
@@ -110,6 +109,9 @@ router.post('/register', authLimiter, async (req: Request, res: Response) => {
     return;
   }
 
+  // no-access-gate: registration is the moment the window is CREATED, anchored at
+  // redemption via accessExpiryFrom(invite.accessDuration, now) — so it is always
+  // in the future here. There is no lapsed state to refuse.
   const { token, csrfToken, expiresAt } = await createSession(user.id);
   setAuthCookies(res, token, csrfToken, expiresAt);
 
@@ -165,12 +167,10 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
   // away holding either. Deliberately a distinct, honest message — this is an
   // entitlement problem, not a wrong password, and the account is not a secret
   // to its own owner at this point (they just proved the password).
-  if (isAccessExpired(user)) {
+  const passwordRefusal = loginRefusal(user);
+  if (passwordRefusal) {
     await recordAudit({ action: 'auth.login_blocked', actor: user, detail: 'compute access expired', req });
-    res.status(403).json({
-      code: ACCESS_EXPIRED_CODE,
-      error: accessExpiredMessage(user.accessExpiresAt),
-    });
+    res.status(403).json(passwordRefusal);
     return;
   }
 
@@ -236,6 +236,15 @@ router.post('/2fa/verify', authLimiter, async (req: Request, res: Response) => {
     res.status(401).json({ error: 'Account not found.' });
     return;
   }
+  // Re-check entitlement rather than trusting the challenge. /login gates before
+  // issuing one, but the challenge lives ~5 minutes, and an admin who suspends an
+  // account in that gap should not have a session minted afterwards.
+  const refusal = loginRefusal(user);
+  if (refusal) {
+    await recordAudit({ action: 'auth.login_blocked', actor: user, detail: 'compute access expired (2fa)', req });
+    res.status(403).json(refusal);
+    return;
+  }
   const { token, csrfToken, expiresAt } = await createSession(user.id);
   setAuthCookies(res, token, csrfToken, expiresAt);
   await recordAudit({ action: 'auth.login', actor: user, detail: '2fa', req });
@@ -261,6 +270,9 @@ router.post('/logout', allowExpiredAccess, requireAuth, async (req: Request, res
 // second, and in-flight requests still carrying the old cookie would 401, which
 // the frontend treats as "logged out" (see retireSessionWithGrace). Grants no
 // new privileges — it only re-ups the caller's own already-valid session.
+// no-access-gate: sits behind requireAuth, which already 403s a lapsed window
+// (chokepoint 3). Re-checking here would be dead code, and this mints no new
+// privilege — it re-ups the caller's own already-validated session.
 router.post('/session/refresh', requireAuth, async (req: Request, res: Response) => {
   const ar = req as AuthRequest;
   const { token, csrfToken, expiresAt } = await createSession(ar.user.id);
@@ -475,6 +487,16 @@ router.post('/passkeys/auth/verify', authLimiter, async (req: Request, res: Resp
       res.status(401).json({ error: 'Account not found.' });
       return;
     }
+    // Compute-access window (admins exempt). The passwordless passkey path mints a
+    // real session directly, so it needs the same gate the password login applies
+    // — otherwise a suspended tenant signs in cleanly and is only stopped on their
+    // next API call. Chokepoint 1 covers every login path, not just /login.
+    const refusal = loginRefusal(user);
+    if (refusal) {
+      await recordAudit({ action: 'auth.login_blocked', actor: user, detail: 'compute access expired (passkey)', req });
+      res.status(403).json(refusal);
+      return;
+    }
     const { token, csrfToken, expiresAt } = await createSession(user.id);
     setAuthCookies(res, token, csrfToken, expiresAt);
     await recordAudit({ action: 'auth.login', actor: user, detail: 'passkey', req });
@@ -560,6 +582,16 @@ router.get('/sso/callback', async (req: Request, res: Response) => {
   try {
     const qs = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
     const user = await sso.completeLogin(`${sso.callbackUrl()}${qs}`, cookieValue);
+    // Compute-access window (admins exempt), same gate as the password and passkey
+    // logins. The IdP authenticated them; entitlement is ours to decide. Rendered as
+    // an sso_error redirect rather than JSON because this endpoint is a browser
+    // navigation, and the tenant needs to land somewhere that explains itself.
+    const refusal = loginRefusal(user);
+    if (refusal) {
+      await recordAudit({ action: 'auth.login_blocked', actor: user, detail: 'compute access expired (sso)', req });
+      res.redirect(`${FRONTEND()}/login?sso_error=${encodeURIComponent(refusal.error)}`);
+      return;
+    }
     const { token, csrfToken, expiresAt } = await createSession(user.id);
     setAuthCookies(res, token, csrfToken, expiresAt);
     await recordAudit({ action: 'auth.login', actor: user, detail: 'sso', req });

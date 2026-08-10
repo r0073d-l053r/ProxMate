@@ -87,3 +87,28 @@ export function accessExpiredMessage(at: Date | null): string {
     ? `Your compute access ended on ${at.toUTCString()}. Your machines and data are safe — contact your administrator to restore access.`
     : ACCESS_EXPIRED_MESSAGE;
 }
+
+/** The 403 body handed back when a login is refused on entitlement grounds. */
+export interface AccessRefusal {
+  code: typeof ACCESS_EXPIRED_CODE;
+  error: string;
+}
+
+/**
+ * The entitlement gate every session-minting login path must pass through.
+ *
+ * Returns a ready-to-send refusal when this account may not be granted a session,
+ * or null when it may. Exists as one function — rather than the same three lines
+ * copied into each login handler — because the number of login paths only ever
+ * grows (password, passkey, SSO today; SAML and LDAP are planned), and each new
+ * one is an opportunity to forget the check. `login-access-gate.test.ts` asserts
+ * that every `createSession` call site in the auth router is guarded by it.
+ *
+ * Authentication is not entitlement: the IdP or the passkey proves *who* they are,
+ * this decides whether that identity may currently use the cluster. Admins are
+ * exempt, per the standing invariant that an expiry can never lock out an admin.
+ */
+export function loginRefusal(user: AccessSubject & { accessExpiresAt: Date | null }, now: Date = new Date()): AccessRefusal | null {
+  if (!isAccessExpired(user, now)) return null;
+  return { code: ACCESS_EXPIRED_CODE, error: accessExpiredMessage(user.accessExpiresAt) };
+}
