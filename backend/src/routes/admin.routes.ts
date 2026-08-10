@@ -650,12 +650,20 @@ router.get('/isolation', async (_req: Request, res: Response) => {
     reachable,
     suggestedMgmtCidr: reachable ? await suggestMgmtCidr() : null,
     dnsServers: (await getConfig('isolation_dns_servers')) ?? '',
+    vlanTag: (await getConfig('isolation_vlan_tag')) ?? '',
   });
 });
 
 // ─── PUT /api/admin/isolation ─────────────────────────────────
 
-const IsolationSchema = z.object({ enabled: z.boolean(), dnsServers: z.string().optional() });
+const IsolationSchema = z.object({
+  enabled: z.boolean(),
+  dnsServers: z.string().optional(),
+  // Empty string clears it. 0 and 4095 are reserved, so the usable range is 1–4094.
+  vlanTag: z
+    .union([z.literal(''), z.coerce.number().int().min(1).max(4094)])
+    .optional(),
+});
 
 router.put('/isolation', async (req: Request, res: Response) => {
   const parsed = IsolationSchema.safeParse(req.body);
@@ -668,6 +676,14 @@ router.put('/isolation', async (req: Request, res: Response) => {
   // any resolver (so tenant VMs always resolve names); set = restrict to these IPs.
   if (parsed.data.dnsServers !== undefined) {
     await setConfig('isolation_dns_servers', parsed.data.dnsServers.trim());
+  }
+  // VLAN tag for tenant NICs. This is the control that actually contains L2 attacks —
+  // ARP/DHCP/IPv6-RA poisoning reach every guest sharing a broadcast domain, and no
+  // L3 firewall rule can stop them. Applied on the next isolation run for a guest
+  // (deploy, rebuild, duplicate, restore); existing guests keep their current tag
+  // until then. Empty clears it.
+  if (parsed.data.vlanTag !== undefined) {
+    await setConfig('isolation_vlan_tag', parsed.data.vlanTag === '' ? '' : String(parsed.data.vlanTag));
   }
   res.json({ success: true });
 });
