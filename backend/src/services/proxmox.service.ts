@@ -2745,18 +2745,60 @@ export async function configureVmIsolation(
     }),
   );
 
+  // Reconcile rather than blind-append. Every rule we own carries ISOLATION_TAG in
+  // its comment; those are deleted and the full set re-posted. Without this, any path
+  // that re-runs isolation on an already-isolated guest — `duplicateVm` and the backup
+  // restore both do, because Proxmox copies a guest's firewall config on clone — stacks
+  // a second complete set of rules, and the list grows every time. Deletion descends by
+  // position because removing one renumbers those above it.
+  let existing: Array<{ pos: number; comment?: string }> = [];
+  try {
+    const res = await c.get<{ data: Array<{ pos: number; comment?: string }> }>(`${base}/rules`);
+    existing = res.data.data ?? [];
+  } catch {
+    // Couldn't read the current rules. Fall through and write ours anyway: a possible
+    // duplicate is far better than leaving the guest unisolated.
+  }
+  const ourPositions = existing
+    .filter((r) => r.comment?.includes(ISOLATION_TAG))
+    .map((r) => r.pos)
+    .sort((a, b) => b - a);
+  for (const pos of ourPositions) await c.delete(`${base}/rules/${pos}`);
+
   // Rules are evaluated top-to-bottom; first match wins, else the default policy.
   // The DNS allow must sit above the broad RFC1918 drops, so we POST the drops
   // first and the DNS allow(s) last (each insert prepends at pos=0).
   const post = (params: Record<string, string>) =>
     c.post(`${base}/rules`, new URLSearchParams({ enable: '1', pos: '0', ...params }));
 
+  // Stop the guest SERVING DHCP to its neighbours. A DHCP server answers from port 67
+  // *to* port 68, so blocking outbound dport 68 is what silences a rogue server.
+  // Blocking dport 67 — the naive reading of "block DHCP" — would instead block the
+  // guest's own client REQUESTS and cost it its lease and its network.
+  await post({
+    type: 'out',
+    action: 'DROP',
+    proto: 'udp',
+    dport: '68',
+    comment: `${ISOLATION_TAG}: block rogue DHCP server replies`,
+  });
+  // Same idea for IPv6: a guest advertising itself as a router redirects its
+  // neighbours' traffic. Router Advertisement is ICMPv6 type 134. Only the OUTBOUND
+  // direction is dropped — the guest must still RECEIVE RAs to autoconfigure itself.
+  await post({
+    type: 'out',
+    action: 'DROP',
+    proto: 'icmpv6',
+    'icmp-type': 'router-advertisement',
+    comment: `${ISOLATION_TAG}: block IPv6 router advertisement`,
+  });
+
   for (const dest of ['192.168.0.0/16', '172.16.0.0/12', '10.0.0.0/8']) {
     await post({
       type: 'out',
       action: 'DROP',
       dest,
-      comment: 'ProxMate isolation: block local/private networks',
+      comment: `${ISOLATION_TAG}: block local/private networks`,
     });
   }
   // DNS must keep working for the tenant to reach the internet. Allow it to the
@@ -2773,11 +2815,19 @@ export async function configureVmIsolation(
         proto,
         dport: '53',
         ...(dest ? { dest } : {}),
-        comment: dest ? `ProxMate: DNS to ${dest}` : 'ProxMate: DNS (any resolver)',
+        comment: dest ? `${ISOLATION_TAG}: DNS to ${dest}` : `${ISOLATION_TAG}: DNS (any resolver)`,
       });
     }
   }
 }
+
+/**
+ * Marker every isolation rule carries in its comment, so `configureVmIsolation` can
+ * find and replace exactly its own rules on a re-run without touching an operator's
+ * hand-written ones. Changing this string orphans the rules already deployed under
+ * the old value — they would be left in place and a fresh set added alongside.
+ */
+const ISOLATION_TAG = 'ProxMate isolation';
 
 /** Marker comment identifying the managed ProxMate IDE firewall pinhole. */
 const IDE_PINHOLE_COMMENT = 'ProxMate IDE: reverse-proxy pinhole';
