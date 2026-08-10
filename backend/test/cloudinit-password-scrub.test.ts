@@ -32,6 +32,7 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
     guestAgentPing: vi.fn(async () => true),
     guestExecOutput: vi.fn(async () => ({ stdout: 'status: done', stderr: '', exitcode: 0 })),
     scrubCloudInitPassword: vi.fn(async () => true),
+    getVmStatus: vi.fn(async () => ({ status: 'running' })),
   };
 });
 
@@ -40,6 +41,10 @@ import { refreshDeployState } from '../src/services/deploy-lock.service.js';
 
 const scrub = vi.mocked(pve.scrubCloudInitPassword);
 const guestExec = vi.mocked(pve.guestExecOutput);
+const vmStatus = vi.mocked(pve.getVmStatus);
+
+/** Deploy started long enough ago that the lock resolves via the timeout branch. */
+const TIMED_OUT = { deployStateAt: new Date(Date.now() - 9 * 60 * 1000) };
 
 const DEPLOYING = {
   id: 'vm1',
@@ -54,6 +59,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   guestExec.mockResolvedValue({ stdout: 'status: done', stderr: '', exitcode: 0 } as never);
   scrub.mockResolvedValue(true);
+  vmStatus.mockResolvedValue({ status: 'running' } as never);
 });
 
 describe('scrubbing the cloud-init password when the deploy lock clears', () => {
@@ -76,11 +82,39 @@ describe('scrubbing the cloud-init password when the deploy lock clears', () => 
     expect(state).toBe('deploying');
   });
 
-  it('does NOT scrub when the lock is released by TIMEOUT — cloud-init was never confirmed', async () => {
-    // The lock-out hazard: the timeout fires precisely when we could not confirm the
-    // run finished (no agent, stuck guest). Removing the password here could delete a
-    // credential that was never applied, leaving a password-only tenant with no way in.
-    const timedOut = { ...(DEPLOYING as object), deployStateAt: new Date(Date.now() - 9 * 60 * 1000) } as never;
+  it('DOES scrub on the timeout path when the guest is running — the agentless case', async () => {
+    // Found live 2026-08-10: the stock debian-13 template has no qemu-guest-agent, so
+    // the cloud-init probe never answers and the lock ALWAYS resolves by timeout. If the
+    // scrub only ran on the confirmed branch, those guests — most of them — would keep
+    // the credential on their seed forever, which is the whole exposure.
+    guestExec.mockRejectedValue(new Error('QEMU guest agent is not running'));
+    const timedOut = { ...(DEPLOYING as object), ...TIMED_OUT } as never;
+
+    const state = await refreshDeployState(timedOut);
+
+    expect(vmStatus).toHaveBeenCalledWith('pve-0', 100, undefined, 'qemu');
+    expect(scrub).toHaveBeenCalledWith('pve-0', 100);
+    expect(state).toBe('ready');
+  });
+
+  it('does NOT scrub on the timeout path when the guest never started', async () => {
+    // The lock-out hazard, now precisely scoped: a guest that is still stopped may not
+    // have applied the password yet, so removing it would destroy the only credential
+    // before it ever reached /etc/shadow.
+    guestExec.mockRejectedValue(new Error('QEMU guest agent is not running'));
+    vmStatus.mockResolvedValue({ status: 'stopped' } as never);
+    const timedOut = { ...(DEPLOYING as object), ...TIMED_OUT } as never;
+
+    const state = await refreshDeployState(timedOut);
+
+    expect(scrub).not.toHaveBeenCalled();
+    expect(state).toBe('ready'); // still unlocks — never hold a guest over this
+  });
+
+  it('unlocks even if the timeout-path status probe fails', async () => {
+    guestExec.mockRejectedValue(new Error('QEMU guest agent is not running'));
+    vmStatus.mockRejectedValue(new Error('proxmox unreachable'));
+    const timedOut = { ...(DEPLOYING as object), ...TIMED_OUT } as never;
 
     const state = await refreshDeployState(timedOut);
 
