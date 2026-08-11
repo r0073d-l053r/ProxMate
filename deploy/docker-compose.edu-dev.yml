@@ -1,0 +1,92 @@
+# ProxMate EDU dev instance — a SECOND, isolated ProxMate on a host that already
+# runs a production one. Used to exercise unreleased code against a real Proxmox
+# cluster without touching the live deployment.
+#
+#   docker compose -f deploy/docker-compose.edu-dev.yml --env-file .env.edu-dev up -d --build
+#
+# THE THREE THINGS THAT KEEP IT SEPARATE — do not "simplify" any of them:
+#
+#   1. `name: proxmate-edu` (below). Compose derives volume names from the project
+#      name, so production's `proxmate_proxmate-data` becomes `proxmate-edu_proxmate-data`.
+#      Reuse the name `proxmate` and this container attaches the PRODUCTION VOLUME and
+#      runs against the LIVE DATABASE. That is the single most destructive mistake
+#      available here, and it fails silently — it looks like it is working.
+#   2. Different host ports (3200/4100 vs production's 3100/4000).
+#   3. A different ENCRYPTION_KEY, so the two instances cannot read each other's
+#      stored secrets even by accident.
+#
+# NOT FOR PRODUCTION USE. No public ingress: both ports bind to 127.0.0.1 and are
+# reached over Tailscale or an SSH tunnel. It runs unreleased code by definition.
+
+name: proxmate-edu
+
+services:
+  backend:
+    build:
+      context: ../backend
+    image: proxmate-backend-edu-dev
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PORT: "4000"
+      NODE_ENV: production
+      DATABASE_URL: file:/data/proxmate.db
+      FRONTEND_URL: ${FRONTEND_URL:-http://127.0.0.1:3200}
+      BACKEND_PUBLIC_URL: ${BACKEND_PUBLIC_URL:-http://127.0.0.1:4100}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env.edu-dev — MUST differ from production}
+      # Plain HTTP over a tunnel, so Secure cookies would never be sent back.
+      COOKIE_SECURE: "false"
+      # Nothing in front of it — trust no forwarding headers, and read the real
+      # socket IP rather than a header a proxy would have set.
+      TRUST_PROXY: "0"
+      REAL_IP_HEADER: ""
+      # ── Scheduler neutered ────────────────────────────────────────────────
+      # Belt and braces. This instance starts with an EMPTY database, so every
+      # job that iterates "my VMs" is already a no-op — but an empty DB is a
+      # property of the moment, not a guarantee, and the cluster balancer reads
+      # cluster-wide state. February 31st never arrives, so these never fire.
+      # Remove them deliberately if a scheduled path is what you are testing.
+      MATESTATE_CRON: "0 0 31 2 *"
+      ACCESS_EXPIRY_CRON: "0 0 31 2 *"
+      APPDB_BACKUP_CRON: "0 0 31 2 *"
+      BALANCER_CRON: "0 0 31 2 *"
+      TEMPLATE_REFRESH_CRON: "0 0 31 2 *"
+    volumes:
+      - proxmate-data:/data
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-4100}:4000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:4100/api}
+    image: proxmate-frontend-edu-dev
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:4100/api}
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3200}:3000"
+    depends_on:
+      - backend
+
+volumes:
+  # Becomes `proxmate-edu_proxmate-data` because of the project name above.
+  proxmate-data:
