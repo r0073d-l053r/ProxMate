@@ -442,6 +442,34 @@ async function bakeGuestAgent(
       await pve
         .guestExecOutput(node, vmid, ['/usr/bin/cloud-init', 'clean', '--logs', '--seed'], client)
         .catch(() => undefined);
+      // ...and `cloud-init clean` does NOT touch the systemd journal, so without this the
+      // image also carries THIS boot's journal — the build VM's DHCP lease, hostname and
+      // package installs — into every clone. Observed live on 2026-08-11: a freshly deployed
+      // guest's journal held the bake VM's address from two hours earlier. Nothing secret is
+      // in it today (the bake runs with no password and no SSH key), so this is hygiene
+      // rather than a security fix — done because build detail should not reach tenants, and
+      // because the bake may later do more than install one package.
+      //
+      // machine-id is truncated rather than deleted: systemd regenerates a truncated one on
+      // next boot, whereas a MISSING /etc/machine-id makes some images fail early boot. A
+      // shared machine-id across clones also breaks DHCP on networks that key leases off it.
+      await pve
+        .guestExecOutput(
+          node,
+          vmid,
+          [
+            '/bin/sh',
+            '-c',
+            'journalctl --rotate >/dev/null 2>&1; journalctl --vacuum-time=1s >/dev/null 2>&1; ' +
+              'rm -rf /var/log/journal/* /run/log/journal/* 2>/dev/null; ' +
+              'find /var/log -type f -name "*.log" -exec truncate -s 0 {} + 2>/dev/null; ' +
+              ': > /var/log/wtmp 2>/dev/null; : > /var/log/btmp 2>/dev/null; ' +
+              ': > /etc/machine-id 2>/dev/null; ' +
+              'sync',
+          ],
+          client,
+        )
+        .catch(() => undefined);
     } else {
       console.warn(
         `[template] the guest agent never answered while baking template ${vmid} — the image ` +
