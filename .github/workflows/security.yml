@@ -26,7 +26,45 @@ jobs:
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-config.yml
+      # Uploading results needs GitHub code scanning. That is free on a PUBLIC repo
+      # and, on a PRIVATE one, requires GitHub Advanced Security — without it the
+      # upload fails with "Code scanning is not enabled for this repository" and the
+      # job goes red for a BILLING reason rather than a code one.
+      #
+      # So: upload where it works, and where it does not, still run the full analysis
+      # and gate on the SARIF locally. Skipping the scan entirely on the private repo
+      # would be the wrong trade — that is the repo carrying the code the public one
+      # never sees.
       - uses: github/codeql-action/analyze@v3
+        with:
+          upload: ${{ github.event.repository.private && 'never' || 'always' }}
+          output: codeql-sarif
+      - name: Gate on CodeQL findings (private repos, where upload is unavailable)
+        if: ${{ github.event.repository.private }}
+        run: |
+          set -euo pipefail
+          # Fail on anything CodeQL would have raised as an alert: an error-level
+          # result, or a security finding of high/critical severity (>= 7.0).
+          findings=$(jq '[ .runs[].results[]
+                           | select(.level == "error"
+                                    or ((.properties["security-severity"] // "0") | tonumber) >= 7.0) ]
+                         | length' codeql-sarif/*.sarif | paste -sd+ | bc)
+          echo "CodeQL error/high findings: ${findings}"
+          if [ "${findings}" -gt 0 ]; then
+            echo "::error::CodeQL found ${findings} error-level or high-severity issue(s). Results are not uploaded on this repository (code scanning requires GitHub Advanced Security on private repos), so inspect the SARIF artifact below."
+            jq -r '.runs[].results[]
+                   | select(.level == "error"
+                            or ((.properties["security-severity"] // "0") | tonumber) >= 7.0)
+                   | "\(.ruleId)	\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)	\(.message.text)"'               codeql-sarif/*.sarif
+            exit 1
+          fi
+      - name: Upload CodeQL SARIF as an artifact (private repos)
+        if: ${{ always() && github.event.repository.private }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-sarif
+          path: codeql-sarif
+          if-no-files-found: warn
 
   npm-audit:
     name: npm audit
