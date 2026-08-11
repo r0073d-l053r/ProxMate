@@ -1620,3 +1620,117 @@ export async function exitRescue(vm: VirtualMachine): Promise<VirtualMachine> {
   await pve.startVm(current.proxmoxNode, current.proxmoxVmId, client);
   return updated;
 }
+
+// ─── Storage pinning report (B-40) ────────────────────────────
+
+export interface PinnedGuest {
+  id: string;
+  name: string;
+  proxmoxVmId: number;
+  proxmoxNode: string;
+  /** Distinct storages this guest's volumes live on. */
+  storages: string[];
+  /** Of those, the ones that are NOT shared across the cluster. */
+  localStorages: string[];
+  /** Volume ids Proxmox itself calls node-local — its answer, not our inference. */
+  localDisks: string[];
+  /** How many other nodes Proxmox will accept a migration to. */
+  migrationTargets: number;
+  /** True when the guest sits entirely off the admin's configured default pool. */
+  offDefaultStorage: boolean;
+}
+
+export interface StoragePinningReport {
+  defaultStorage: string | null;
+  /** Storages the cluster reports as shared — the ones that don't pin a guest. */
+  sharedStorages: string[];
+  /** Guests with at least one node-local volume, worst (fewest targets) first. */
+  pinned: PinnedGuest[];
+  /** Guests whose migratability could not be determined, with the reason. */
+  unknown: Array<{ id: string; name: string; proxmoxVmId: number; reason: string }>;
+  checked: number;
+}
+
+/**
+ * Which ProxMate-managed guests cannot migrate, and why.
+ *
+ * The B-38 fix is forward-looking: it stops NEW guests inheriting a template's
+ * node-local storage, but every guest deployed before it is still where it landed —
+ * pinned to one node, unmigratable, and invisible until someone tries to drain that
+ * node. This is the report that finds them.
+ *
+ * Migratability comes from **Proxmox's own preflight**, not from our own reasoning
+ * about which storage is shared. Re-deriving it would mean maintaining a second
+ * opinion that can disagree with the one that actually governs the migration — and
+ * the storage flags here exist to explain the verdict, never to replace it.
+ *
+ * Read-only by design. Moving a disk is a deliberate human act with real cost; a
+ * report that quietly relocated volumes would be a far worse surprise than the
+ * pinning it reports.
+ */
+export async function getStoragePinningReport(): Promise<StoragePinningReport> {
+  const client = await pve.getClient();
+  const [vms, storages, defaultStorage] = await Promise.all([
+    prisma.virtualMachine.findMany({
+      where: { status: { not: 'error' } },
+      select: { id: true, name: true, proxmoxVmId: true, proxmoxNode: true, type: true },
+      orderBy: { name: 'asc' },
+    }),
+    pve.getStorages(client),
+    getConfig('default_storage'),
+  ]);
+
+  // `shared` is not on PveStorage (the /storage list carries it as 0/1), so read it
+  // off the raw rows rather than adding a second source of truth.
+  const shared = new Set(
+    storages.filter((s) => (s as unknown as { shared?: number }).shared === 1).map((s) => s.storage),
+  );
+
+  const pinned: PinnedGuest[] = [];
+  const unknown: StoragePinningReport['unknown'] = [];
+
+  // Two Proxmox calls per guest; run in small batches so a 200-guest cluster doesn't
+  // open 400 sockets at once against pveproxy's fixed worker pool.
+  const BATCH = 8;
+  for (let i = 0; i < vms.length; i += BATCH) {
+    await Promise.all(
+      vms.slice(i, i + BATCH).map(async (vm) => {
+        const kind = kindOf(vm);
+        // LXC has no live migration and a different preflight; report the storage
+        // facts and let the target count stand at 0 rather than guess.
+        try {
+          const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
+          const vmStorages = pve.getVolumeStorages(cfg);
+          const localStorages = vmStorages.filter((s) => !shared.has(s));
+          const pre = kind === 'qemu'
+            ? await pve.migratePreflight(vm.proxmoxNode, vm.proxmoxVmId, client).catch(() => null)
+            : null;
+
+          // Proxmox's verdict wins; the storage flags are the explanation.
+          const localDisks = pre ? pre.localDisks.map((d) => d.volid) : [];
+          if (localDisks.length === 0 && localStorages.length === 0) return;
+          if (kind === 'qemu' && !pre) {
+            unknown.push({ id: vm.id, name: vm.name, proxmoxVmId: vm.proxmoxVmId, reason: 'migration preflight unavailable' });
+            return;
+          }
+          pinned.push({
+            id: vm.id,
+            name: vm.name,
+            proxmoxVmId: vm.proxmoxVmId,
+            proxmoxNode: vm.proxmoxNode,
+            storages: vmStorages,
+            localStorages,
+            localDisks,
+            migrationTargets: pre ? pre.allowed.length : 0,
+            offDefaultStorage: Boolean(defaultStorage) && !vmStorages.includes(defaultStorage!),
+          });
+        } catch (err) {
+          unknown.push({ id: vm.id, name: vm.name, proxmoxVmId: vm.proxmoxVmId, reason: pve.pveMessage(err) });
+        }
+      }),
+    );
+  }
+
+  pinned.sort((a, b) => a.migrationTargets - b.migrationTargets || a.name.localeCompare(b.name));
+  return { defaultStorage, sharedStorages: [...shared].sort(), pinned, unknown, checked: vms.length };
+}
