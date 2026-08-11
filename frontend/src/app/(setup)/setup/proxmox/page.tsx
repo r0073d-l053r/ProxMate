@@ -38,7 +38,13 @@ export default function SetupProxmoxPage() {
     setTested(false);
     try {
       await api.post("/setup/proxmox", { host, tokenId, tokenSecret, verifySsl });
-      const res = await api.post<{ version: string; nodeCount: number }>("/setup/proxmox/test");
+      const res = await api.post<{
+        version: string;
+        nodeCount: number;
+        vmCount: number;
+        storageCount: number;
+        warnings?: string[];
+      }>("/setup/proxmox/test");
       setSetup({
         proxmoxHost: host,
         proxmoxTokenId: tokenId,
@@ -46,7 +52,10 @@ export default function SetupProxmoxPage() {
         nodeCount: res.data.nodeCount,
       });
       setTested(true);
-      toast.success(`Connected to Proxmox VE ${res.data.version} (${res.data.nodeCount} node${res.data.nodeCount === 1 ? "" : "s"})`);
+      toast.success(`Connected to Proxmox VE ${res.data.version} (${res.data.nodeCount} node${res.data.nodeCount === 1 ? "" : "s"}, ${res.data.storageCount} storages)`);
+      // Missing privileges are surfaced HERE, at setup, rather than as an empty
+      // dropdown three screens later — that misdirection is the whole point of B-34.
+      for (const w of res.data.warnings ?? []) toast.warning(w, { duration: 12000 });
     } catch (err) {
       toast.error(apiError(err));
     } finally {

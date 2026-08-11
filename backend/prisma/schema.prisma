@@ -504,6 +504,16 @@ model Template {
   sourceUrl     String?                       // the cloud image URL it was built from
   refreshedAt   DateTime?                     // last successful refresh (null = never refreshed)
 
+  // Whether qemu-guest-agent is baked into this template's image. ProxMate applies a
+  // cloud-init login password IN-GUEST through the agent (never as `cipassword`, which
+  // would leave the crypt hash where the tenant can read it), so a template without the
+  // agent cannot serve a password-only deploy. The builder proves this by booting the
+  // image once and waiting for the agent to answer.
+  //   null  = never determined (registered by hand, or built before this existed)
+  //   true  = the agent answered during the build
+  //   false = the bake ran and the agent never came up (e.g. no egress to install it)
+  guestAgent    Boolean?
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 

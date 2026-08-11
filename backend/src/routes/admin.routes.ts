@@ -72,7 +72,7 @@ import { isKioskPinSet, setKioskPin, isValidKioskPin } from '../services/kiosk.s
 import { listLlmKeys, getLlmKeyEndpoint } from '../services/tenant-llm-key.service.js';
 import { probeModels } from '../services/ide-gateway.service.js';
 import { listResetRequests, adminResetPassword } from '../services/password-reset.service.js';
-import { refreshVmIps } from '../services/vm.service.js';
+import { refreshVmIps, getStoragePinningReport } from '../services/vm.service.js';
 import type { AuthRequest } from '../types/index.js';
 import { prisma } from '../lib/prisma.js';
 
@@ -592,6 +592,21 @@ router.get('/cluster-stats', async (_req: Request, res: Response) => {
 router.get('/nodes', async (_req: Request, res: Response) => {
   try {
     res.json(await getNodesHealth());
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── GET /api/admin/storage-pinning ───────────────────────────
+// Which managed guests cannot migrate, and why. The B-38 fix stops NEW guests
+// inheriting a template's node-local storage; every guest deployed before it is
+// still where it landed, pinned to one node and invisible until someone tries to
+// drain that node. Migratability comes from Proxmox's own preflight, so this cannot
+// disagree with the verdict that actually governs a migration. Read-only: moving a
+// disk is a deliberate human act.
+router.get('/storage-pinning', async (_req: Request, res: Response) => {
+  try {
+    res.json(await getStoragePinningReport());
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }
