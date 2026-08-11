@@ -3,12 +3,16 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // Unit-test the cloud-init deploy-lock state machine against a mocked guest agent
 // and prisma — the same seam-mocking strategy as the other service tests.
 vi.mock('../src/lib/prisma.js', () => ({
-  prisma: { virtualMachine: { update: vi.fn() } },
+  // findUnique backs the end-of-window check that drops an unapplied login password
+  // instead of storing it indefinitely — see abandonPendingCiPassword.
+  prisma: { virtualMachine: { update: vi.fn(), findUnique: vi.fn(async () => null) } },
 }));
 vi.mock('../src/services/proxmox.service.js', () => ({
   getClient: vi.fn(async () => ({})),
   guestAgentPing: vi.fn(),
   guestExecOutput: vi.fn(),
+  getVmConfig: vi.fn(async () => ({})),
+  setGuestUserPassword: vi.fn(async () => undefined),
 }));
 
 import { prisma } from '../src/lib/prisma.js';

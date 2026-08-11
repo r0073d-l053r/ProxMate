@@ -857,17 +857,30 @@ export function isCloudInitTemplate(config: Record<string, string>): boolean {
  * Set per-VM cloud-init parameters (applied on next boot). NOTE: Proxmox expects
  * `sshkeys` to be URL-encoded by the caller (it un-escapes it when generating the
  * cloud-init config), so we encode it explicitly on top of normal form-encoding.
+ *
+ * `cipassword` IS DELIBERATELY NOT ACCEPTED HERE, and must not be added back.
+ * Proxmox writes it as a crypt hash into the cloud-init seed drive (`/dev/sr0`,
+ * label `cidata`) AND cloud-init caches the same user-data at
+ * `/var/lib/cloud/instances/<id>/user-data.txt` on the guest's own root disk. Both
+ * are readable by any tenant with root in their own VM, for the life of the guest.
+ * The seed copy is the 2026-07-18 pentest finding; the on-disk cache was confirmed
+ * live on 2026-08-11, and it is why "eject the seed drive" is NOT a sufficient fix.
+ *
+ * Login passwords are instead applied after boot through the guest agent's
+ * set-user-password, which writes only to /etc/shadow — see
+ * `applyPendingCiPassword` in deploy-lock.service.ts. Keeping the parameter out of
+ * this signature is what makes the insecure path unrepresentable rather than merely
+ * untested.
  */
 export async function setCloudInitConfig(
   node: string,
   vmid: number,
-  opts: { ciuser?: string; cipassword?: string; sshKeys?: string; ipConfig?: string; vendorSnippet?: string },
+  opts: { ciuser?: string; sshKeys?: string; ipConfig?: string; vendorSnippet?: string },
   client?: AxiosInstance,
 ): Promise<void> {
   const c = client ?? (await getClient());
   const params = new URLSearchParams();
   if (opts.ciuser) params.set('ciuser', opts.ciuser);
-  if (opts.cipassword) params.set('cipassword', opts.cipassword);
   if (opts.sshKeys) params.set('sshkeys', encodeURIComponent(opts.sshKeys));
   // vendor-data MERGES with the generated user-data (ciuser/sshkeys still apply),
   // unlike a `user=` snippet which would replace it — that's why we use vendor.

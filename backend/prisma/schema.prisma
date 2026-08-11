@@ -270,6 +270,22 @@ model VirtualMachine {
   deployState   String?
   deployStateAt DateTime?
 
+  // The tenant's chosen login password, held ENCRYPTED (AES-256-GCM, same key as
+  // every other stored secret) only until cloud-init finishes and the guest agent
+  // can set it in-guest — then immediately nulled.
+  //
+  // Why it exists: passing the password to cloud-init as `cipassword` writes its
+  // crypt hash to the cloud-init seed AND to /var/lib/cloud/instances/<id>/ on the
+  // guest's own root disk, where the tenant can read it forever (verified live
+  // 2026-08-11; the 2026-07-18 pentest found the seed copy). So the password never
+  // goes to cloud-init at all — it is applied post-boot via the guest agent, which
+  // writes only to /etc/shadow.
+  //
+  // The trade is deliberate: a few minutes of reversibly-encrypted storage in the
+  // app DB, versus a crypt hash readable by the tenant for the life of the guest.
+  // Null for SSH-key-only deploys, and null again the moment it is applied.
+  pendingCiPassword String?
+
   // True when an ADMIN deployed this VM into the owner's account as a grant that
   // does NOT count toward their quota (unchecked "count against their quota" at
   // deploy). Exempt VMs are excluded from every usage aggregation and stay

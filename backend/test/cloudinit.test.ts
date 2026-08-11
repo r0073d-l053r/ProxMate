@@ -34,18 +34,38 @@ describe('primaryDiskSizeGb', () => {
 });
 
 describe('setCloudInitConfig', () => {
-  it('sets ciuser/cipassword/ipconfig and URL-encodes sshkeys (the Proxmox quirk)', async () => {
+  it('sets ciuser/ipconfig and URL-encodes sshkeys (the Proxmox quirk)', async () => {
     const c = fakeClient();
     const keys = 'ssh-ed25519 AAAAC3NzaC1 test@laptop';
-    await setCloudInitConfig('pve-0', 100, { ciuser: 'matey', cipassword: 'pw', sshKeys: keys, ipConfig: 'ip=dhcp' }, asClient(c));
+    await setCloudInitConfig('pve-0', 100, { ciuser: 'matey', sshKeys: keys, ipConfig: 'ip=dhcp' }, asClient(c));
 
     expect(c.put).toHaveBeenCalledWith('/nodes/pve-0/qemu/100/config', expect.any(URLSearchParams));
     const body = bodyOf(c.put.mock.calls[0]!);
     expect(body.ciuser).toBe('matey');
-    expect(body.cipassword).toBe('pw');
     expect(body.ipconfig0).toBe('ip=dhcp');
     // sshkeys must be URL-encoded by us (Proxmox un-escapes it) — spaces become %20.
     expect(body.sshkeys).toBe(encodeURIComponent(keys));
+  });
+
+  it('NEVER sends cipassword, whatever a caller passes', async () => {
+    // Regression guard for the 2026-07-18 pentest finding. Proxmox writes cipassword
+    // as a crypt hash onto the cloud-init seed, AND cloud-init caches the same
+    // user-data at /var/lib/cloud/instances/<id>/user-data.txt on the guest's own
+    // root disk — both readable by a tenant with root in their own VM, for the life
+    // of the guest (confirmed live 2026-08-11). Passwords are applied via the guest
+    // agent instead. The option is gone from the type; this proves it cannot be
+    // smuggled through at runtime either.
+    const c = fakeClient();
+    await setCloudInitConfig(
+      'pve-0',
+      100,
+      { ciuser: 'matey', cipassword: 'hunter2' } as Parameters<typeof setCloudInitConfig>[2],
+      asClient(c),
+    );
+
+    const body = bodyOf(c.put.mock.calls[0]!);
+    expect(body.cipassword).toBeUndefined();
+    expect(Object.values(body)).not.toContain('hunter2');
   });
 
   it('defaults ipconfig0 to dhcp and omits unset fields', async () => {
