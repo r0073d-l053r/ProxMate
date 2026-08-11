@@ -1868,6 +1868,42 @@ export function findPrimaryDisk(config: Record<string, string>): string | undefi
 }
 
 /**
+ * The storage pool holding a guest's primary disk (`tank`, for
+ * `scsi0: tank:vm-104-disk-0,size=5G`), or null when it has no disk or the volume
+ * isn't storage-backed. Used to tell whether a template already lives on the
+ * admin's configured pool — see `planTemplateClone` in vm.service.
+ */
+export function diskStorageOf(config: Record<string, string>): string | null {
+  const key = findPrimaryDisk(config);
+  if (!key) return null;
+  const m = /^([^:,\s]+):/.exec(config[key]!);
+  return m ? m[1]! : null;
+}
+
+/**
+ * Whether `storage` is enabled, active and image-capable on `node`.
+ *
+ * Checked before redirecting a clone onto the admin's default pool: a clone runs on
+ * the node that already holds the source, so naming a pool that node cannot see
+ * turns a working deploy into a hard failure. A probe that tells us nothing (empty
+ * list, no permission, transport error) returns true — letting Proxmox be the judge
+ * beats having a failed probe silently re-ignore the admin's setting.
+ */
+export async function storageAvailableOn(
+  node: string,
+  storage: string,
+  client?: AxiosInstance,
+): Promise<boolean> {
+  try {
+    const list = await getNodeImagesStorages(node, client);
+    if (list.length === 0) return true;
+    return list.some((s) => s.storage === storage);
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Whether a VM config exposes a serial port (e.g. `serial0`), which is required
  * for the xterm.js text console (Proxmox `termproxy`). ProxMate's cloud-init VMs
  * are built with `serial0: 'socket'`; ISO VMs typically have none.
@@ -2550,6 +2586,87 @@ export async function getVmVlanTag(
   if (!first) return null;
   const m = /\btag=(\d+)\b/.exec(cfg[first]!);
   return m ? Number(m[1]) : null;
+}
+
+/**
+ * Put a guest's NICs on a bridge, leaving everything else on the NIC line alone —
+ * MAC, model, `firewall=1`, VLAN tag, MTU, rate limit.
+ *
+ * Here for the same reason as {@link setVmVlanTag}: a guest deployed from a template
+ * is a CLONE, so its `net0` — bridge included — is inherited verbatim from the
+ * template, and none of the `createVm` / `createLxc` paths that assemble a netN
+ * string ever run for it. The admin's "Default network bridge" was therefore
+ * accepted, saved, and then silently ignored on every template deploy, duplicate and
+ * restore; the only guests that honoured it were the ones built from an ISO.
+ *
+ * Idempotent: a NIC already on `bridge` is skipped, so re-running writes nothing and
+ * never re-plugs a live NIC.
+ */
+export async function setVmBridge(
+  node: string,
+  vmid: number,
+  bridge: string,
+  client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
+): Promise<void> {
+  // A netN value is comma-separated `key=value` pairs, so a name containing a comma,
+  // an equals sign or whitespace would corrupt the line rather than move the NIC.
+  if (!/^[A-Za-z][A-Za-z0-9_.-]{0,31}$/.test(bridge)) {
+    throw new Error(`Invalid bridge name "${bridge}" — expected something like "vmbr0".`);
+  }
+  const c = client ?? (await getClient());
+  const cfg = await getVmConfig(node, vmid, c, kind);
+  for (const k of Object.keys(cfg).filter((key) => /^net\d+$/.test(key))) {
+    const val = cfg[k]!;
+    const current = /\bbridge=([^,]+)/.exec(val);
+    if (current && current[1] === bridge) continue;
+    const updated = current
+      ? val.replace(/\bbridge=[^,]+/, `bridge=${bridge}`)
+      : `${val},bridge=${bridge}`;
+    await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams({ [k]: updated }));
+  }
+}
+
+/** The bridge on a guest's first NIC, or null when it has no NIC / names no bridge. */
+export async function getVmBridge(
+  node: string,
+  vmid: number,
+  client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
+): Promise<string | null> {
+  const c = client ?? (await getClient());
+  const cfg = await getVmConfig(node, vmid, c, kind);
+  const first = Object.keys(cfg)
+    .filter((key) => /^net\d+$/.test(key))
+    .sort()[0];
+  if (!first) return null;
+  const m = /\bbridge=([^,]+)/.exec(cfg[first]!);
+  return m ? m[1]! : null;
+}
+
+/**
+ * Apply the admin's "Default network bridge" to a guest that came into existence by
+ * cloning or restoring rather than through `createVm`. No-op when no default is set.
+ *
+ * Kept beside {@link readIsolationOptions} so every post-clone path reads the setting
+ * the same way instead of each re-deriving it — that drift is what produced one
+ * unsegmented guest in a fleet the last time (see readIsolationOptions' note).
+ *
+ * This deliberately OVERRIDES whatever the source had, on duplicates and restores as
+ * well as template deploys. Network placement is the load-bearing half of tenant
+ * isolation ({@link setVmVlanTag}), and a copy that inherits its way onto a different
+ * bridge is a guest outside the segment the admin configured. It matches what the
+ * VLAN tag already does on these same paths.
+ */
+export async function applyDefaultBridge(
+  node: string,
+  vmid: number,
+  client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
+): Promise<void> {
+  const bridge = await getConfig('default_bridge');
+  if (!bridge) return;
+  await setVmBridge(node, vmid, bridge, client, kind);
 }
 
 // ─── Firewall / tenant isolation ──────────────────────────────

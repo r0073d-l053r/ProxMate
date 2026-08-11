@@ -211,6 +211,10 @@ export async function restoreFromUpload(
       // The restored config carries the OLD guest's name — apply the chosen one.
       await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
 
+      // ...and the OLD guest's bridge, which may not exist on this cluster at all.
+      // `storage` above remaps the volumes; this is the network half of the same job.
+      await pve.applyDefaultBridge(node, vmid, client, kind);
+
       // Tenant isolation BEFORE first boot, built from the regenerated MACs.
       if (isolate) {
         await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, kind);
