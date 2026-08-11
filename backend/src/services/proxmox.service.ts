@@ -133,6 +133,49 @@ export async function getVersion(client?: AxiosInstance): Promise<string> {
   return res.data.data.version;
 }
 
+/** `{ '/': { 'VM.Audit': 1, … }, '/vms/100': { … } }` — path → privilege → 1. */
+export type PvePermissions = Record<string, Record<string, number>>;
+
+/**
+ * The permissions the AUTHENTICATED entity actually holds, as Proxmox itself computes
+ * them — privilege separation, the token∩user intersection and pool expansion already
+ * collapsed into one answer.
+ *
+ * This is the only honest way to tell a token that legitimately sees an empty cluster
+ * from one that is simply blind. Both of this project's historical token failures —
+ * `--privsep` defaulting to 1, and a least-privilege role that omitted `VM.Audit` —
+ * showed up as empty lists while `/version` and `/nodes` answered happily.
+ */
+export async function getEffectivePermissions(client?: AxiosInstance): Promise<PvePermissions> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: PvePermissions }>('/access/permissions');
+  return res.data.data ?? {};
+}
+
+/**
+ * How many guests the token can actually SEE. Distinct from "how many exist": that gap
+ * IS the diagnosis when a token holds a grant scoped to a path containing nothing.
+ */
+export async function getClusterVmCount(client?: AxiosInstance): Promise<number> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources?type=vm');
+  return (res.data.data ?? []).filter((r) => r.type === 'qemu' || r.type === 'lxc').length;
+}
+
+/**
+ * Every privilege held ANYWHERE in the permission tree. Deliberately path-agnostic:
+ * a grant on `/pool/students` is a real grant, and refusing to see it would reject a
+ * correctly scoped least-privilege token. Whether the grant covers the right objects
+ * is what the functional checks alongside it are for.
+ */
+export function heldPrivileges(perms: PvePermissions): Set<string> {
+  const out = new Set<string>();
+  for (const privs of Object.values(perms ?? {})) {
+    for (const [priv, on] of Object.entries(privs ?? {})) if (on) out.add(priv);
+  }
+  return out;
+}
+
 export interface PveNode {
   node: string;
   status: string;
