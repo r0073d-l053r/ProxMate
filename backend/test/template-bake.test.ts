@@ -105,6 +105,27 @@ describe('a bake that works', () => {
     expect(exec.mock.invocationCallOrder[0]!).toBeLessThan(convert.mock.invocationCallOrder[0]!);
   });
 
+  it('scrubs the build boot out of the image — journal, logs and machine-id', async () => {
+    // B-42, found live: `cloud-init clean` does NOT touch /var/log/journal, so a freshly
+    // deployed guest's journal held the BAKE VM's DHCP lease from hours earlier. Build
+    // detail must not ride along into every tenant's VM.
+    await build();
+    const scrub = exec.mock.calls.map((c) => JSON.stringify(c[2])).find((s) => s.includes('journalctl'));
+    expect(scrub).toBeTruthy();
+    expect(scrub).toContain('--vacuum-time');
+    expect(scrub).toContain('/var/log/journal');
+    // Truncated, never deleted: a MISSING machine-id breaks early boot on some images,
+    // while a SHARED one across clones breaks DHCP on networks that key leases off it.
+    expect(scrub).toContain('/etc/machine-id');
+    expect(scrub).not.toMatch(/rm -f [^;]*machine-id/);
+  });
+
+  it('scrubs before the image is frozen into a template', async () => {
+    await build();
+    const scrubOrder = exec.mock.invocationCallOrder[exec.mock.calls.length - 1]!;
+    expect(scrubOrder).toBeLessThan(convert.mock.invocationCallOrder[0]!);
+  });
+
   it('strips the bake-only config, and does so BEFORE converting', async () => {
     // convertToTemplate is irreversible — anything left on the VM is permanent.
     await build();
