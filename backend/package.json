@@ -1,7 +1,7 @@
 {
   "name": "proxmate-backend",
   "version": "0.9.1",
-  "description": "ProxMate — Express API backend for Proxmox VE cloud dashboard",
+  "description": "ProxMate \u2014 Express API backend for Proxmox VE cloud dashboard",
   "private": true,
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -16,7 +16,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "db:migrate:modules": "tsx src/scripts/migrate-modules.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.9.0",

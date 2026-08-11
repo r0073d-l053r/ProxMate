@@ -35,5 +35,18 @@ fi
 echo "Applying database migrations…"
 npx prisma migrate deploy
 
+# Optional compiled-in modules (see src/modules/). A named module may own its own
+# Prisma schema + migrations under prisma/modules/<name>/, applied to the SAME
+# database, always AFTER core. No-op when PROXMATE_MODULES is unset.
+#
+# No `|| true` here on purpose: `set -e` above is kept, so a failed module migration
+# aborts the boot rather than serving module routes against missing tables. That is the
+# same contract CE already has for its own migrations. Recovery is config-only —
+# unset PROXMATE_MODULES and both this and the router mount become no-ops.
+if [ -n "${PROXMATE_MODULES:-}" ]; then
+  echo "Applying module migrations…"
+  node dist/scripts/migrate-modules.js
+fi
+
 echo "Starting ProxMate API…"
 exec node dist/index.js
