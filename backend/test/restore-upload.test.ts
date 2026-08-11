@@ -14,6 +14,7 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   restoreNewGuest: vi.fn(),
   waitForTask: vi.fn(),
   setVmName: vi.fn(),
+  applyDefaultBridge: vi.fn(),
   configureVmIsolation: vi.fn(),
   readIsolationOptions: vi.fn(async () => ({ dnsServers: [] })),
   startVm: vi.fn(),
@@ -183,10 +184,15 @@ describe('restoreFromUpload', () => {
       expect.anything(),
       'qemu',
     );
+    // B-37: the archive carries the OLD guest's bridge, which may not exist on this
+    // cluster at all. `storage` above remaps the volumes; this is the network half.
+    expect(pve.applyDefaultBridge).toHaveBeenCalledWith('pve-0', 200, expect.anything(), 'qemu');
     // The tenant-isolation invariant: firewall configured before first boot.
     const isolationOrder = vi.mocked(pve.configureVmIsolation).mock.invocationCallOrder[0]!;
     const startOrder = vi.mocked(pve.startVm).mock.invocationCallOrder[0]!;
     expect(isolationOrder).toBeLessThan(startOrder);
+    // ...and placement before policy: the rules are written on the final bridge.
+    expect(vi.mocked(pve.applyDefaultBridge).mock.invocationCallOrder[0]!).toBeLessThan(isolationOrder);
     // The uploaded archive is a transient carrier — removed after success.
     expect(pve.deleteBackup).toHaveBeenCalledWith('pve-0', 'backups', VOLID);
   });

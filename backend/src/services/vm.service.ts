@@ -430,8 +430,7 @@ async function configureClonedVm(
     // requirement rather than a tenant preference.
     //
     // Belt, not braces: installing it here needs working apt on first boot. An
-    // isolated or air-gapped deployment must have the agent BAKED INTO the template
-    // — see the EDU template prerequisites.
+    // isolated or air-gapped deployment must have the agent BAKED INTO the template.
     if (cloud.password) selected.add('guest-agent');
 
     // The admin-configured always-on base rides on EVERY cloud-init VM — but only
@@ -487,11 +486,68 @@ async function configureClonedVm(
     await client.put(`/nodes/${node}/qemu/${vmid}/config`, new URLSearchParams({ vga: 'std' }));
   }
 
+  // Network placement: the clone inherited the template's bridge, so the admin's
+  // default is applied here or not at all. Before isolation, because placement is
+  // what the firewall and VLAN rules are then written on top of.
+  await pve.applyDefaultBridge(node, vmid, client);
+
   // Tenant isolation (cloned NICs may lack the per-NIC firewall flag).
   if (isolate) {
     await pve.ensureNicFirewall(node, vmid, client);
     await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client);
   }
+}
+
+/**
+ * Decide how to clone a template so the admin's "Default storage" is actually
+ * honoured, rather than accepted, saved and ignored.
+ *
+ * Proxmox can only place a FULL clone. A linked clone shares the template's base
+ * image, so it is pinned to the template's storage and, through it, to the
+ * template's node — `storage=` on that request is not supported. Three cases:
+ *
+ * - **Cloud-image template** — already full-cloned (lvmthin can't linked-clone an
+ *   imported disk), so the pool just needs passing through.
+ * - **Regular template already on the configured pool** — the link is free and the
+ *   setting is honoured anyway. Stay linked.
+ * - **Regular template somewhere else** — the link is what gives way. Keeping it
+ *   would mean ignoring the setting *and* re-pinning the guest to node-local
+ *   storage, which is the migratability regression the 2026-08-01 fix removed.
+ *   Full-cloning costs disk and deploy time; failing the deploy outright would
+ *   break installs that work today, so it is not the trade made here.
+ */
+async function planTemplateClone(
+  node: string,
+  template: Template,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<{ full: boolean; storage?: string }> {
+  const configured = (await getConfig('default_storage')) ?? undefined;
+  // The clone runs on the node holding the template, so a pool that node can't see
+  // would fail the request. Don't trade a silently-ignored setting for a hard error.
+  const storage = configured && (await pve.storageAvailableOn(node, configured, client))
+    ? configured
+    : undefined;
+  if (configured && !storage) {
+    console.warn(
+      `[vm] default storage "${configured}" is not available on node "${node}" — ` +
+        `cloning template ${template.proxmoxVmId} onto the template's own storage instead`,
+    );
+  }
+
+  if (template.cloudInit) return { full: true, ...(storage ? { storage } : {}) };
+  if (!storage) return { full: false };
+
+  const cfg = await pve.getVmConfig(node, template.proxmoxVmId, client).catch(() => null);
+  const on = cfg ? pve.diskStorageOf(cfg) : null;
+  // Couldn't read where the template lives — keep the historical behaviour rather
+  // than promoting a working linked clone to a full one on a guess.
+  if (!on || on === storage) return { full: false };
+  console.warn(
+    `[vm] template ${template.proxmoxVmId} lives on "${on}" but the default storage is ` +
+      `"${storage}" — full-cloning so the guest lands on the configured pool ` +
+      '(a linked clone cannot be placed off its base image)',
+  );
+  return { full: true, storage };
 }
 
 /**
@@ -539,10 +595,17 @@ export async function deployFromTemplate(
   });
 
   try {
-    // Cloud images are imported disks on which lvmthin doesn't support linked
-    // clones, so full-clone them (small + fast). Regular templates stay linked.
+    // Full-vs-linked and the target pool are decided together — see planTemplateClone.
+    const plan = await planTemplateClone(node, template, client);
     const upid = await pve.cloneVm(
-      { node, templateVmid: template.proxmoxVmId, newVmid: vmid, name: input.name, full: template.cloudInit },
+      {
+        node,
+        templateVmid: template.proxmoxVmId,
+        newVmid: vmid,
+        name: input.name,
+        full: plan.full,
+        storage: plan.storage,
+      },
       client,
     );
     await pve.waitForTask(node, upid, client, 600_000);
@@ -627,12 +690,21 @@ export async function duplicateVm(source: VirtualMachine, newName: string): Prom
 
   try {
     // Full clone (not linked): storage-agnostic and self-contained, so the copy
-    // survives the original being deleted.
+    // survives the original being deleted — and, being full, it can be placed on
+    // the admin's default pool instead of inheriting wherever the source sits.
+    const configured = (await getConfig('default_storage')) ?? undefined;
+    const storage = configured && (await pve.storageAvailableOn(node, configured, client))
+      ? configured
+      : undefined;
     const upid = await pve.cloneVm(
-      { node, templateVmid: current.proxmoxVmId, newVmid: vmid, name: newName, full: true },
+      { node, templateVmid: current.proxmoxVmId, newVmid: vmid, name: newName, full: true, storage },
       client,
     );
     await pve.waitForTask(node, upid, client, 600_000);
+
+    // Same as every other clone path: the copy inherited the source's bridge, so the
+    // admin's default is applied here (see pve.applyDefaultBridge for why it wins).
+    await pve.applyDefaultBridge(node, vmid, client);
 
     if (isolate) {
       await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client);
@@ -1278,8 +1350,16 @@ export async function rebuildVm(
       }
     } else {
       const { template } = source;
+      const plan = await planTemplateClone(targetNode, template, client);
       const upid = await pve.cloneVm(
-        { node: targetNode, templateVmid: template.proxmoxVmId, newVmid: vmid, name: current.name, full: template.cloudInit },
+        {
+          node: targetNode,
+          templateVmid: template.proxmoxVmId,
+          newVmid: vmid,
+          name: current.name,
+          full: plan.full,
+          storage: plan.storage,
+        },
         client,
       );
       await pve.waitForTask(targetNode, upid, client, 600_000);
