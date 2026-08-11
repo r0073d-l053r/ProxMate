@@ -28,9 +28,9 @@ import { fakeClient, asClient, bodyOf } from './helpers.js';
  * deploy with `vmbr9` + `ceph-vm` configured landed on `vmbr0` with a `tank:` disk.
  *
  * B-38 is the more serious half: it re-pins new guests to node-local storage, which
- * silently undoes the 2026-08-01 migratability fix. B-37 matters for EDU because
- * network placement is the load-bearing half of tenant isolation — a guest on the
- * wrong bridge is a guest outside the segment, whatever the firewall says.
+ * silently undoes the 2026-08-01 migratability fix. B-37 matters because network
+ * placement is the load-bearing half of tenant isolation — a guest on the wrong
+ * bridge is a guest outside the segment, whatever the firewall says.
  */
 
 const NODE = 'pve-1';
@@ -245,7 +245,7 @@ const template = (over: Record<string, unknown> = {}) =>
     ...over,
   }) as never;
 
-const input = { name: 'student-a', cpu: 2, ram: 2048, storage: 5 };
+const input = { name: 'app-01', cpu: 2, ram: 2048, storage: 5 };
 
 /**
  * A cluster where template 9000 lives on `templateStorage` and node pve-1 offers
