@@ -47,6 +47,15 @@ export interface RegisterTemplateInput {
   cloudInit?: boolean;
   arch?: pve.Arch;
   sourceUrl?: string; // cloud image URL, so the store can rebuild a fresh template
+  /**
+   * Whether `qemu-guest-agent` is baked into the image. Only the cloud-image builder
+   * knows this, because it proves it by booting the image and waiting for a ping.
+   * Left `undefined` by every other path (a hand-registered cluster template could
+   * have it or not, and `agent: enabled=1` in the config proves only that the virtio
+   * port exists, not that the package is installed) — undefined means "unknown", and
+   * an update never overwrites a known value with it.
+   */
+  guestAgent?: boolean | null;
 }
 
 /** Register a Proxmox template into the store (or update an existing registration). */
@@ -88,6 +97,9 @@ export async function register(input: RegisterTemplateInput): Promise<Template> 
       // Only touch notes when the caller supplied them, so re-registering
       // doesn't silently wipe an admin's saved credentials.
       ...(input.notes !== undefined ? { notes: input.notes || null } : {}),
+      // Same rule: re-registering from a path that cannot know must not erase a
+      // measurement the builder made.
+      ...(input.guestAgent !== undefined ? { guestAgent: input.guestAgent } : {}),
     },
     create: {
       name: input.name,
@@ -100,6 +112,7 @@ export async function register(input: RegisterTemplateInput): Promise<Template> 
       cloudInit,
       notes: input.notes ?? null,
       sourceUrl: input.sourceUrl ?? null,
+      guestAgent: input.guestAgent ?? null,
     },
   });
 }
@@ -362,6 +375,110 @@ export interface AddCloudImageInput {
   arch?: pve.Arch;
 }
 
+/** How long to wait for the guest agent to answer during a bake before giving up. */
+const BAKE_AGENT_TIMEOUT_MS = 6 * 60 * 1000;
+
+/**
+ * Install `qemu-guest-agent` INTO a freshly-imported cloud image, by booting it once.
+ *
+ * Why this has to exist: ProxMate applies a cloud-init login password in-guest through
+ * the agent, never as `cipassword` — which would leave the crypt hash on the seed drive
+ * and in `/var/lib/cloud`, both readable by the tenant for the life of the VM. So a
+ * template without the agent cannot serve a password-only deploy. And the importer
+ * converts a downloaded image straight to a template **without ever booting it**, so
+ * there was no point at which a package could be installed: every template built
+ * through the UI shipped agentless.
+ *
+ * Returns `true` when the agent answered (proof it installed AND runs), `false` when
+ * the bake ran and it never did, `null` when the bake could not be attempted at all.
+ *
+ * **It never throws, and never fails the build.** A cluster with no egress cannot
+ * install anything on first boot, and that is precisely the deployment most likely to
+ * need a working template. Refusing to build one would repeat, one layer down, the
+ * mistake of letting an optional extra kill a working operation. The outcome is
+ * recorded on the template instead, so an admin can see which of their templates will
+ * support password deploys before a tenant discovers it the hard way.
+ */
+async function bakeGuestAgent(
+  node: string,
+  vmid: number,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<boolean | null> {
+  // The bake needs to run a command in the guest, which means cloud-init user-data,
+  // which means a writable snippet storage. Without one there is nothing to attempt.
+  const snippet = await pve.ensureCloudInitSnippet(['guest-agent']).catch(() => null);
+  if (!snippet) {
+    console.warn(
+      `[template] no writable snippet storage (SNIPPET_DIR / SNIPPET_STORAGE) — cannot bake ` +
+        `qemu-guest-agent into template ${vmid}. Password-only deploys from it will not work ` +
+        'unless the image already ships the agent.',
+    );
+    return null;
+  }
+
+  let answered = false;
+  try {
+    // DHCP on the admin's configured bridge, deliberately: baking on some other network
+    // would make the template's provenance a lie and could cross an isolation boundary.
+    // If that bridge has no egress the bake fails, which is the honest answer.
+    await client.put(
+      `/nodes/${node}/qemu/${vmid}/config`,
+      new URLSearchParams({ cicustom: `user=${snippet}`, ipconfig0: 'ip=dhcp', agent: 'enabled=1' }),
+    );
+    await pve.waitForTask(node, await pve.startVm(node, vmid, client), client);
+
+    const deadline = Date.now() + BAKE_AGENT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10_000));
+      if (await pve.guestAgentPing(node, vmid, client).catch(() => false)) {
+        answered = true;
+        break;
+      }
+    }
+
+    if (answered) {
+      // Non-optional. Without it the image carries THIS boot's cached user-data and
+      // instance state into every clone ever made from it.
+      await pve
+        .guestExecOutput(node, vmid, ['/usr/bin/cloud-init', 'clean', '--logs', '--seed'], client)
+        .catch(() => undefined);
+    } else {
+      console.warn(
+        `[template] the guest agent never answered while baking template ${vmid} — the image ` +
+          'could not install it (usually no egress from the configured bridge). The template is ' +
+          'still usable, but a password-only deploy from it will leave the tenant unable to log in.',
+      );
+    }
+  } catch (err) {
+    console.warn(`[template] guest-agent bake for ${vmid} failed: ${pve.pveMessage(err)}`);
+  } finally {
+    // Always leave a clean, stopped VM behind, whatever happened above — this runs
+    // immediately before convertToTemplate, so anything left here is permanent.
+    await pve.shutdownVm(node, vmid, client).catch(() => undefined);
+    if (!(await waitForStopped(node, vmid, client))) {
+      await pve.stopVm(node, vmid, client).catch(() => undefined);
+      await waitForStopped(node, vmid, client);
+    }
+    // Strip the bake-only config so clones are configured by the deploy path alone.
+    await pve.deleteVmConfigKeys(node, vmid, ['cicustom', 'ipconfig0'], client).catch(() => undefined);
+  }
+  return answered;
+}
+
+/** Poll until the guest reports stopped. False if it hasn't within ~2 minutes. */
+async function waitForStopped(
+  node: string,
+  vmid: number,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<boolean> {
+  for (let i = 0; i < 24; i++) {
+    const st = await pve.getVmStatus(node, vmid, client).catch(() => null);
+    if (st?.status === 'stopped') return true;
+    await new Promise((r) => setTimeout(r, 5_000));
+  }
+  return false;
+}
+
 /**
  * Core cloud-image import, shared by {@link addCloudImage} and
  * {@link refreshTemplate}: download the image → import it as a VM disk + attach a
@@ -375,7 +492,7 @@ async function buildCloudTemplateVm(opts: {
   imageUrl: string;
   node?: string;
   arch?: pve.Arch;
-}): Promise<{ node: string; vmid: number; diskGb: number; arch: pve.Arch }> {
+}): Promise<{ node: string; vmid: number; diskGb: number; arch: pve.Arch; guestAgent: boolean | null }> {
   const client = await pve.getClient();
   const diskStorage = await getConfig('default_storage');
   const bridge = await getConfig('default_bridge');
@@ -408,9 +525,12 @@ async function buildCloudTemplateVm(opts: {
     const createUpid = await pve.createCloudInitVm({ node, vmid, name: safeName, importFrom, diskStorage, bridge }, client);
     await pve.waitForTask(node, createUpid, client, 600_000);
     const diskGb = pve.primaryDiskSizeGb(await pve.getVmConfig(node, vmid, client));
+    // Bake the agent in BEFORE converting: a template cannot be booted, and the Proxmox
+    // API offers no other way to get a package inside an image.
+    const guestAgent = await bakeGuestAgent(node, vmid, client);
     await pve.convertToTemplate(node, vmid, client);
     await pve.deleteStorageVolume(node, importFrom, client).catch(() => {}); // image no longer needed
-    return { node, vmid, diskGb, arch };
+    return { node, vmid, diskGb, arch, guestAgent };
   } catch (err) {
     await pve.deleteStorageVolume(node, importFrom, client).catch(() => {});
     await pve.deleteVm(node, vmid, client).catch(() => {});
@@ -434,6 +554,7 @@ export async function addCloudImage(input: AddCloudImageInput): Promise<Template
     cloudInit: true,
     arch: built.arch,
     sourceUrl: input.imageUrl,
+    guestAgent: built.guestAgent,
   });
 }
 
@@ -469,6 +590,8 @@ export async function refreshTemplate(id: string): Promise<Template> {
       proxmoxNode: built.node,
       diskGb: built.diskGb,
       arch: built.arch,
+      // Re-measured on every refresh: a rebuild from a newer image can gain or lose it.
+      guestAgent: built.guestAgent,
       refreshedAt: new Date(),
     },
   });

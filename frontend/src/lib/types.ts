@@ -582,6 +582,13 @@ export interface Template {
   sourceUrl: string | null;
   /** Last successful refresh, or null if never refreshed. */
   refreshedAt: string | null;
+  /**
+   * Whether qemu-guest-agent is baked into the image. ProxMate sets a cloud-init
+   * login password in-guest THROUGH the agent, so a template without it cannot serve
+   * a password-only deploy. null = never determined (registered by hand, or built
+   * before the builder measured this).
+   */
+  guestAgent: boolean | null;
   createdAt: string;
 }
 
