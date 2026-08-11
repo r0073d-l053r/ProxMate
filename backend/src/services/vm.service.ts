@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { User, VirtualMachine, Template } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { encrypt } from '../lib/crypto.js';
 import { isAccessExpired } from './access.service.js';
 import { getConfig } from './config.service.js';
 import { notify } from './notify.service.js';
@@ -421,6 +422,18 @@ async function configureClonedVm(
     if (cloud.installGuestAgent && offered.has('guest-agent')) selected.add('guest-agent');
     if (cloud.installSuperfile && offered.has('superfile')) selected.add('superfile');
 
+    // A requested password is applied post-boot through the guest agent (the whole
+    // point of not putting it on the seed), so the agent stops being optional the
+    // moment one is asked for — without it the tenant gets a VM they cannot log
+    // into, which is a worse failure than the leak this design removes. Forced in
+    // regardless of the admin's "offered" list, because this is a functional
+    // requirement rather than a tenant preference.
+    //
+    // Belt, not braces: installing it here needs working apt on first boot. An
+    // isolated or air-gapped deployment must have the agent BAKED INTO the template
+    // — see the EDU template prerequisites.
+    if (cloud.password) selected.add('guest-agent');
+
     // The admin-configured always-on base rides on EVERY cloud-init VM — but only
     // when on-demand snippet writing is set up, since that's what makes a mandatory
     // base practical without exponential manual placement.
@@ -448,12 +461,19 @@ async function configureClonedVm(
         vendorSnippet = `${snippetStorage}:snippets/${file}`;
       }
     }
+    // NOTE the absent `cipassword`. Handing the password to cloud-init writes its
+    // crypt hash to two places the tenant can read for the life of the guest: the
+    // cloud-init seed drive (/dev/sr0, the 2026-07-18 pentest finding) AND the
+    // guest's own /var/lib/cloud/instances/<id>/user-data.txt cache — both verified
+    // live on 2026-08-11. Ejecting the seed does not fix it, because the on-disk
+    // cache survives. So the password is never given to cloud-init at all; it is
+    // applied post-boot through the guest agent, which writes only to /etc/shadow.
+    // See applyPendingCiPassword in deploy-lock.service.ts.
     await pve.setCloudInitConfig(
       node,
       vmid,
       {
         ciuser: cloud.username || 'debian',
-        cipassword: cloud.password,
         sshKeys: cloud.sshKey,
         ipConfig: 'ip=dhcp',
         vendorSnippet,
@@ -544,6 +564,9 @@ export async function deployFromTemplate(
         // Cloud-init keeps provisioning inside the guest after boot — lock the VM
         // (no stop/restart/delete) until a `cloud-init status` probe says it's done.
         ...(template.cloudInit ? { deployState: 'deploying', deployStateAt: new Date() } : {}),
+        // Held encrypted only until the guest agent can set it in-guest, then nulled.
+        // Deliberately NOT given to cloud-init — see configureClonedVm.
+        ...(template.cloudInit && input.password ? { pendingCiPassword: encrypt(input.password) } : {}),
       },
     });
   } catch (err) {
@@ -1281,6 +1304,13 @@ export async function rebuildVm(
         ideStateAt: null,
         deployState: deploying ? 'deploying' : null,
         deployStateAt: deploying ? new Date() : null,
+        // A rebuild re-runs cloud-init on a fresh disk, so the password has to be
+        // re-applied the same way — via the agent, never through the seed. Cleared
+        // on an ISO rebuild, where there is no cloud-init to wait for.
+        pendingCiPassword:
+          deploying && source.kind === 'template' && source.cloud.password
+            ? encrypt(source.cloud.password)
+            : null,
       },
     });
   } catch (err) {
