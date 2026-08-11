@@ -195,8 +195,7 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
 
     // Lock the VM's firewall down for tenant isolation before it ever boots.
     if (isolate) {
-      const dnsServers = ((await getConfig('isolation_dns_servers')) ?? '').split(/[,\s]+/).filter(Boolean);
-      await pve.configureVmIsolation(node, vmid, { dnsServers }, client);
+      await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client);
     }
 
     await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
@@ -330,8 +329,7 @@ export async function createContainer(user: User, input: CreateContainerInput): 
 
     // Lock the container's firewall down for tenant isolation before it boots.
     if (isolate) {
-      const dnsServers = ((await getConfig('isolation_dns_servers')) ?? '').split(/[,\s]+/).filter(Boolean);
-      await pve.configureVmIsolation(node, vmid, { dnsServers }, client, 'lxc');
+      await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, 'lxc');
     }
 
     await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
@@ -472,8 +470,7 @@ async function configureClonedVm(
   // Tenant isolation (cloned NICs may lack the per-NIC firewall flag).
   if (isolate) {
     await pve.ensureNicFirewall(node, vmid, client);
-    const dnsServers = ((await getConfig('isolation_dns_servers')) ?? '').split(/[,\s]+/).filter(Boolean);
-    await pve.configureVmIsolation(node, vmid, { dnsServers }, client);
+    await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client);
   }
 }
 
@@ -615,8 +612,7 @@ export async function duplicateVm(source: VirtualMachine, newName: string): Prom
     await pve.waitForTask(node, upid, client, 600_000);
 
     if (isolate) {
-      const dnsServers = ((await getConfig('isolation_dns_servers')) ?? '').split(/[,\s]+/).filter(Boolean);
-      await pve.configureVmIsolation(node, vmid, { dnsServers }, client);
+      await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client);
     }
 
     await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
@@ -1255,8 +1251,7 @@ export async function rebuildVm(
       );
       await pve.waitForTask(targetNode, createUpid, client);
       if (isolate) {
-        const dnsServers = ((await getConfig('isolation_dns_servers')) ?? '').split(/[,\s]+/).filter(Boolean);
-        await pve.configureVmIsolation(targetNode, vmid, { dnsServers }, client);
+        await pve.configureVmIsolation(targetNode, vmid, await pve.readIsolationOptions(), client);
       }
     } else {
       const { template } = source;
