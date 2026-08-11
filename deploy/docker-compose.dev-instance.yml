@@ -1,13 +1,13 @@
-# ProxMate EDU dev instance — a SECOND, isolated ProxMate on a host that already
+# ProxMate dev instance — a SECOND, isolated ProxMate on a host that already
 # runs a production one. Used to exercise unreleased code against a real Proxmox
 # cluster without touching the live deployment.
 #
-#   docker compose -f deploy/docker-compose.edu-dev.yml --env-file .env.edu-dev up -d --build
+#   docker compose -f deploy/docker-compose.dev-instance.yml --env-file .env.dev-instance up -d --build
 #
 # THE THREE THINGS THAT KEEP IT SEPARATE — do not "simplify" any of them:
 #
-#   1. `name: proxmate-edu` (below). Compose derives volume names from the project
-#      name, so production's `proxmate_proxmate-data` becomes `proxmate-edu_proxmate-data`.
+#   1. `name: proxmate-dev` (below). Compose derives volume names from the project
+#      name, so production's `proxmate_proxmate-data` becomes `proxmate-dev_proxmate-data`.
 #      Reuse the name `proxmate` and this container attaches the PRODUCTION VOLUME and
 #      runs against the LIVE DATABASE. That is the single most destructive mistake
 #      available here, and it fails silently — it looks like it is working.
@@ -18,13 +18,13 @@
 # NOT FOR PRODUCTION USE. No public ingress: both ports bind to 127.0.0.1 and are
 # reached over Tailscale or an SSH tunnel. It runs unreleased code by definition.
 
-name: proxmate-edu
+name: proxmate-dev
 
 services:
   backend:
     build:
       context: ../backend
-    image: proxmate-backend-edu-dev
+    image: proxmate-backend-dev
     restart: unless-stopped
     cap_drop:
       - ALL
@@ -41,7 +41,7 @@ services:
       DATABASE_URL: file:/data/proxmate.db
       FRONTEND_URL: ${FRONTEND_URL:-http://127.0.0.1:3200}
       BACKEND_PUBLIC_URL: ${BACKEND_PUBLIC_URL:-http://127.0.0.1:4100}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env.edu-dev — MUST differ from production}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env.dev-instance — MUST differ from production}
       # Plain HTTP over a tunnel, so Secure cookies would never be sent back.
       COOKIE_SECURE: "false"
       # Nothing in front of it — trust no forwarding headers, and read the real
@@ -82,7 +82,7 @@ services:
       context: ../frontend
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:4100/api}
-    image: proxmate-frontend-edu-dev
+    image: proxmate-frontend-dev
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -105,5 +105,5 @@ services:
       - backend
 
 volumes:
-  # Becomes `proxmate-edu_proxmate-data` because of the project name above.
+  # Becomes `proxmate-dev_proxmate-data` because of the project name above.
   proxmate-data:
