@@ -1,0 +1,7 @@
+-- CreateTable
+CREATE TABLE "ModuleExample" (
+    "key" TEXT NOT NULL PRIMARY KEY,
+    "hits" INTEGER NOT NULL DEFAULT 0,
+    "seenAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
