@@ -48,17 +48,24 @@ services:
       # socket IP rather than a header a proxy would have set.
       TRUST_PROXY: "0"
       REAL_IP_HEADER: ""
-      # ── Scheduler neutered ────────────────────────────────────────────────
+      # ── Scheduler quietened ───────────────────────────────────────────────
       # Belt and braces. This instance starts with an EMPTY database, so every
       # job that iterates "my VMs" is already a no-op — but an empty DB is a
       # property of the moment, not a guarantee, and the cluster balancer reads
-      # cluster-wide state. February 31st never arrives, so these never fire.
-      # Remove them deliberately if a scheduled path is what you are testing.
-      MATESTATE_CRON: "0 0 31 2 *"
-      ACCESS_EXPIRY_CRON: "0 0 31 2 *"
-      APPDB_BACKUP_CRON: "0 0 31 2 *"
-      BALANCER_CRON: "0 0 31 2 *"
-      TEMPLATE_REFRESH_CRON: "0 0 31 2 *"
+      # cluster-wide state. Annual at midnight on 1 January: effectively never
+      # for a disposable testbed. Remove deliberately if a scheduled path is
+      # what you are testing.
+      #
+      # DO NOT express "never" as an unreachable date like "0 0 31 2 *".
+      # node-cron resolves the next occurrence at schedule() time and THROWS
+      # "Could not find next matching date within reasonable time range", which
+      # crash-loops the backend at startup — while the frontend comes up fine,
+      # so the stack looks half-alive rather than broken. Learned the hard way.
+      MATESTATE_CRON: "0 0 1 1 *"
+      ACCESS_EXPIRY_CRON: "0 0 1 1 *"
+      APPDB_BACKUP_CRON: "0 0 1 1 *"
+      BALANCER_CRON: "0 0 1 1 *"
+      TEMPLATE_REFRESH_CRON: "0 0 1 1 *"
     volumes:
       - proxmate-data:/data
     ports:
