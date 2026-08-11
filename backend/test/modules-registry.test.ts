@@ -127,6 +127,21 @@ describe('mounting a module', () => {
     expect(warned).toMatch(/without authentication/i);
   });
 
+  it('rate-limits module routes, including reads', async () => {
+    // CodeQL js/missing-rate-limiting, answered rather than suppressed: module code is
+    // the one part of the API surface ProxMate did not write, so the seam does not
+    // assume a module's read path is cheap. Asserted through observable behaviour — the
+    // draft-7 RateLimit headers — rather than by reading Express's router internals,
+    // which are private and change between majors.
+    const r = Router();
+    mountModules(r, [fixture({ auth: 'session' })]);
+    const s = await serve((app) => app.use(MODULE_MOUNT_ROOT, r));
+
+    const res = await s.get('/api/ext/fixture/ping');
+    expect(res.headers.get('ratelimit-policy') ?? res.headers.get('ratelimit')).toBeTruthy();
+    await s.close();
+  });
+
   it('refuses two modules with the same name', () => {
     expect(() => mountModules(Router(), [fixture(), fixture()])).toThrow(/both call themselves/i);
   });
