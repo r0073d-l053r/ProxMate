@@ -26,6 +26,7 @@ import { prisma } from './lib/prisma.js';
 import { registry } from './lib/metrics.js';
 import { getVersion } from './services/proxmox.service.js';
 import { mountIdeProxy } from './services/ide-proxy.service.js';
+import { MODULE_MOUNT_ROOT, moduleRouter } from './modules/registry.js';
 
 const app = express();
 
@@ -140,6 +141,15 @@ app.use('/api/downloads', downloadRoutes);
 // Public (HMAC-token) broadcast-email unsubscribe — clicked from email, no session.
 app.use('/api/broadcast', broadcastRoutes);
 // console.routes (VNC WebSocket proxy) is attached to the HTTP upgrade event in index.ts
+
+// ─── Optional modules ─────────────────────────────────────────
+// Module routers (see src/modules/) attach INSIDE this one at /api/ext/<name>.
+// Mounted HERE and nowhere else: AFTER every core route above, so a module can never
+// shadow a ProxMate endpoint; and BEFORE errorHandler below, so module errors —
+// including Express 5's auto-forwarded async rejections — are handled exactly like
+// core ones. Reserving the /api/ext segment is what makes shadowing structurally
+// impossible rather than merely unlikely. Empty unless PROXMATE_MODULES names a module.
+app.use(MODULE_MOUNT_ROOT, moduleRouter);
 
 // ─── Global Error Handler ─────────────────────────────────────
 app.use(errorHandler);
