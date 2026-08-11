@@ -64,7 +64,97 @@ export function buildClient(
     timeout: TIMEOUT_MS,
   });
   attachRetry(client);
+  redactCredentials(client);
   return client;
+}
+
+/**
+ * Strip the Proxmox API token out of every failed request before anything can log it.
+ *
+ * An axios error carries the request that produced it, and that request carries the
+ * `Authorization: PVEAPIToken=<user>!<id>=<secret>` header. So ANY code doing
+ * `console.error('...', err)` — of which there are eighteen call sites, and there will
+ * be more — prints working cluster-root credentials into the log. Found in the wild:
+ * one failed scheduled backup put the live token in plain text in the container log,
+ * where log shipping, a support bundle or a screenshot would carry it straight out.
+ *
+ * Fixed HERE, at the one place every client is built, rather than at each logger.
+ * A rule that every future `catch` block must remember is a rule that will be
+ * forgotten; scrubbing the object means the credential is not there to leak.
+ *
+ * Two places hold it, and both are cleared:
+ *   - `err.config.headers.Authorization` — what axios re-exposes on the error
+ *   - `err.request._header` — Node's raw request line, which repeats the header verbatim
+ *
+ * `pveMessage()` remains the right thing to log; this makes the careless path safe too.
+ */
+interface Redactable {
+  config?: Record<string, unknown>;
+  request?: { _header?: string };
+  response?: Redactable;
+}
+
+/**
+ * Keep only the fields worth logging, and drop every reference that can reach the
+ * credential.
+ *
+ * Replacing these objects wholesale is deliberate. The token is not in one place: it is
+ * in `config.headers`, in Node's verbatim `request._header`, in follow-redirects'
+ * `request._redirectable._options.headers`, and — reachable from `config.httpsAgent` —
+ * in the live socket pool at `sockets[key][0]._pendingData`. Scrubbing known fields is
+ * a race against the next property Node adds. Severing the references is not.
+ */
+function sanitize(target: Redactable): void {
+  if (target.config) {
+    const c = target.config;
+    target.config = {
+      method: c['method'],
+      baseURL: c['baseURL'],
+      url: c['url'],
+      timeout: c['timeout'],
+      headers: { Authorization: 'PVEAPIToken=[redacted]' },
+    };
+  }
+  if (target.request) {
+    // Kept as an object so `if (err.request)` — axios's "the request went out but no
+    // response came back" signal — still means what it meant.
+    const raw = target.request._header;
+    target.request = {
+      _header:
+        typeof raw === 'string'
+          ? raw.replace(/^(Authorization:).*$/im, '$1 PVEAPIToken=[redacted]')
+          : undefined,
+    };
+  }
+}
+
+/**
+ * Strip the Proxmox API token out of every failed request before anything can log it.
+ *
+ * An axios error carries the request that produced it, and that request carries the
+ * `Authorization: PVEAPIToken=<user>!<id>=<secret>` header. So ANY code doing
+ * `console.error('...', err)` — of which there are eighteen call sites, and there will
+ * be more — prints working cluster-root credentials into the log. Found in the wild:
+ * one failed scheduled backup put the live token in plain text in the container log,
+ * where log shipping, a support bundle or a screenshot carries it straight out.
+ *
+ * Fixed HERE, at the one place every client is built, rather than at each logger. A
+ * rule that every future `catch` block must remember is a rule that will be forgotten;
+ * scrubbing the object means the credential is not there to leak.
+ *
+ * Both the error AND `err.response` are sanitised: the response holds its own copies of
+ * config and request, which is where the second half of this leak was hiding.
+ * `pveMessage()` remains the right thing to log; this makes the careless path safe too.
+ */
+function redactCredentials(client: AxiosInstance): void {
+  client.interceptors.response.use(undefined, (err: unknown) => {
+    const e = err as Redactable;
+    if (e && typeof e === 'object') {
+      sanitize(e);
+      if (e.response) sanitize(e.response);
+    }
+    return Promise.reject(err);
+  });
 }
 
 /**
