@@ -73,6 +73,10 @@ services:
       # cloud-image builder then skips the guest-agent bake instead of failing.
       SNIPPET_DIR: ${SNIPPET_DIR:-}
       SNIPPET_STORAGE: ${SNIPPET_STORAGE:-}
+      # Comma-separated module names to enable (see backend/src/modules/README.md).
+      # The seam reads this at boot and the entrypoint gates module migrations on it.
+      # Unset = no modules, which is the stock behaviour.
+      PROXMATE_MODULES: ${PROXMATE_MODULES:-}
     volumes:
       - proxmate-data:/data
       # The host side of that directory. Compose cannot make a mount conditional, so
