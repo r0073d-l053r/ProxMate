@@ -89,6 +89,16 @@ services:
     environment:
       NODE_ENV: production
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:4100/api}
+      # The API is a DIFFERENT ORIGIN over PLAIN HTTP in this stack (3200 → 4100),
+      # and the production CSP default is `'self' https: wss:` — which blocks
+      # precisely that. Without this the browser silently refuses every API call
+      # and the UI reports "Cannot reach the ProxMate API. Is the backend running?"
+      # while the backend is perfectly healthy. The console WebSocket needs the
+      # `ws://` entry for the same reason.
+      #
+      # Production does not need this because it serves the app and the API from
+      # ONE origin behind a merge-proxy, so everything is 'self'.
+      CSP_CONNECT_SRC: "'self' http://127.0.0.1:${BACKEND_PORT:-4100} ws://127.0.0.1:${BACKEND_PORT:-4100} https: wss:"
     ports:
       - "127.0.0.1:${FRONTEND_PORT:-3200}:3000"
     depends_on:
