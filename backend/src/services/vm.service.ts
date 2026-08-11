@@ -430,8 +430,7 @@ async function configureClonedVm(
     // requirement rather than a tenant preference.
     //
     // Belt, not braces: installing it here needs working apt on first boot. An
-    // isolated or air-gapped deployment must have the agent BAKED INTO the template
-    // — see the EDU template prerequisites.
+    // isolated or air-gapped deployment must have the agent BAKED INTO the template.
     if (cloud.password) selected.add('guest-agent');
 
     // The admin-configured always-on base rides on EVERY cloud-init VM — but only
@@ -508,7 +507,7 @@ async function configureClonedVm(
  * template's node — `storage=` on that request is not supported. Three cases:
  *
  * - **Cloud-image template** — already full-cloned (lvmthin can't linked-clone an
- *   imported disk), so the pool just needs passing through. This is the EDU path.
+ *   imported disk), so the pool just needs passing through.
  * - **Regular template already on the configured pool** — the link is free and the
  *   setting is honoured anyway. Stay linked.
  * - **Regular template somewhere else** — the link is what gives way. Keeping it
