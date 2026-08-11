@@ -1,5 +1,6 @@
 import { Router, type IRouter } from 'express';
 import { requireAuth } from '../middleware/auth.js';
+import { moduleLimiter } from '../middleware/rate-limit.js';
 import { logger } from '../lib/logger.js';
 import {
   MODULE_API_VERSION,
@@ -78,6 +79,10 @@ export function mountModules(target: IRouter, list: readonly ProxMateModule[]): 
     if (seen.has(m.name)) throw new Error(`Two modules both call themselves "${m.name}"; module names must be unique.`);
     seen.add(m.name);
 
+    // Rate-limited ahead of everything else, including the auth check. Module code is
+    // the one part of the API surface ProxMate did not write, so the seam does not
+    // assume a module's read path is cheap — and putting the limiter in FRONT of
+    // requireAuth means the session lookup is protected rather than protecting.
     if (m.auth === 'none') {
       // Never silent. An unauthenticated surface is exactly the thing an operator
       // should be able to find by reading their own startup log.
@@ -85,11 +90,11 @@ export function mountModules(target: IRouter, list: readonly ProxMateModule[]): 
         { module: m.name, path: `${MODULE_MOUNT_ROOT}/${m.name}` },
         'module mounted WITHOUT authentication (auth: none) — every route it exposes is reachable by anyone who can reach the API',
       );
-      target.use(`/${m.name}`, m.router);
+      target.use(`/${m.name}`, moduleLimiter, m.router);
     } else {
       // Default is fail-closed: forgetting the field cannot expose a module's routes.
       // requireAuth also carries CSRF enforcement for mutating cookie-authed requests.
-      target.use(`/${m.name}`, requireAuth, m.router);
+      target.use(`/${m.name}`, moduleLimiter, requireAuth, m.router);
     }
     mounted.push(`${MODULE_MOUNT_ROOT}/${m.name}`);
   }
