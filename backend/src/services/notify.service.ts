@@ -11,7 +11,13 @@ import { assertSafeOutboundUrl } from '../lib/url-safety.js';
  * Each event type can be toggled. All sends are best-effort: a failing channel is
  * logged and never propagates into the operation that triggered the notification.
  */
-export const NOTIFY_EVENTS = ['backup.failed', 'vm.error', 'auth.lockout', 'access.expired'] as const;
+export const NOTIFY_EVENTS = [
+  'backup.failed',
+  'vm.error',
+  'auth.lockout',
+  'access.expired',
+  'deploy.agent_missing',
+] as const;
 export type NotifyEvent = (typeof NOTIFY_EVENTS)[number];
 
 export const NOTIFY_EVENT_LABEL: Record<NotifyEvent, string> = {
@@ -19,6 +25,7 @@ export const NOTIFY_EVENT_LABEL: Record<NotifyEvent, string> = {
   'vm.error': 'VM error',
   'auth.lockout': 'Account locked',
   'access.expired': 'Tenant access expired',
+  'deploy.agent_missing': 'Guest agent missing on deploy',
 };
 
 export interface NotifyConfig {
@@ -42,10 +49,10 @@ export interface NotifyPayload {
  * unless the admin has saved settings SINCE the event existed (detected by the
  * marker below).
  */
-const EVENTS_ADDED_LATER: NotifyEvent[] = ['access.expired'];
+const EVENTS_ADDED_LATER: NotifyEvent[] = ['access.expired', 'deploy.agent_missing'];
 
 /** Bumped whenever EVENTS_ADDED_LATER grows; stored in `notify_events_version`. */
-const EVENTS_VERSION = '2';
+const EVENTS_VERSION = '3';
 
 function parseEvents(csv: string | null, version: string | null): NotifyEvent[] {
   if (csv == null) return [...NOTIFY_EVENTS]; // default: everything on
