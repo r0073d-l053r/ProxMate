@@ -95,4 +95,56 @@ describe('duplicateVm', () => {
     await expect(duplicateVm(source(), 'web-copy')).rejects.toBeInstanceOf(QuotaError);
     expect(c.post.mock.calls.some((x) => String(x[0]).includes('/clone'))).toBe(false);
   });
+
+  /**
+   * B-37 / B-38: a duplicate is a clone, so without this it inherits the source's
+   * bridge and storage and the admin's defaults are ignored — the same hole the
+   * template-deploy path had. It matters most for the case the settings exist for:
+   * an admin changed the default and the source is a stale guest still on the old one.
+   */
+  describe('applies the admin defaults to the copy', () => {
+    /** Answer the storage probe and the copy's config on top of the base fake. */
+    function withDefaults(bridgeOnCopy = 'vmbr0') {
+      const c = fakePve('stopped');
+      const base = c.get.getMockImplementation()!;
+      const ok = (data: unknown) => Promise.resolve({ data: { data } });
+      c.get.mockImplementation((url: string) => {
+        if (/\/nodes\/[^/]+\/storage$/.test(url)) {
+          return ok([{ storage: 'ceph-vm', type: 'rbd', active: 1 }]);
+        }
+        if (/\/qemu\/130\/config$/.test(url)) {
+          return ok({ net0: `virtio=AA:BB:CC:DD:EE:FF,bridge=${bridgeOnCopy},firewall=1` });
+        }
+        return base(url);
+      });
+      findConfig.mockImplementation((args: { where: { key: string } }) => {
+        const v = ({ default_bridge: 'vmbr9', default_storage: 'ceph-vm' } as Record<string, string>)[
+          args.where.key
+        ];
+        return (v === undefined ? null : { key: args.where.key, value: v, sensitive: false }) as never;
+      });
+      getClient.mockResolvedValue(asClient(c));
+      return c;
+    }
+
+    it('full-clones onto the configured default storage', async () => {
+      const c = withDefaults();
+      await duplicateVm(source(), 'web-copy');
+      const clone = c.post.mock.calls.find((x) => /\/qemu\/120\/clone$/.test(String(x[0])))!;
+      expect(bodyOf(clone)).toMatchObject({ full: '1', storage: 'ceph-vm' });
+    });
+
+    it('moves the copy onto the configured bridge, keeping its fresh MAC and firewall flag', async () => {
+      const c = withDefaults();
+      await duplicateVm(source(), 'web-copy');
+      const nic = c.put.mock.calls.map(bodyOf).find((b) => b['net0'] !== undefined);
+      expect(nic!['net0']).toBe('virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr9,firewall=1');
+    });
+
+    it('leaves a copy that is already on the default bridge untouched', async () => {
+      const c = withDefaults('vmbr9');
+      await duplicateVm(source(), 'web-copy');
+      expect(c.put.mock.calls.map(bodyOf).some((b) => b['net0'] !== undefined)).toBe(false);
+    });
+  });
 });
