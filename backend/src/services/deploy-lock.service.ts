@@ -9,6 +9,7 @@ import {
   setGuestUserPassword,
 } from './proxmox.service.js';
 import { decrypt } from '../lib/crypto.js';
+import { notify } from './notify.service.js';
 
 /**
  * Cloud-init deploy lock. A VM cloned from a cloud-init template is reported
@@ -111,17 +112,26 @@ async function clearPendingCiPassword(id: string): Promise<void> {
  * because the guest agent never came up (the template does not ship it and apt could
  * not install it on first boot).
  *
- * Two things must happen, and neither is optional. Drop the stored secret: it is now
+ * Three things must happen, and none is optional. Drop the stored secret: it is now
  * useless and holding a reversibly-encrypted password indefinitely is exactly the
- * kind of quiet accumulation this change exists to stop. And log at ERROR, because
- * the tenant may have no way into their VM at all — an SSH-key deploy is fine, but a
- * password-only one is not, and that must not be discoverable only by the tenant
- * failing to log in. Recovery is the existing reset-password flow (same agent call),
- * which will also fail until the agent exists — so the real fix is a template that
- * ships qemu-guest-agent.
+ * kind of quiet accumulation this change exists to stop. Log at ERROR. And tell an
+ * ADMIN — because the tenant may have no way into their VM at all, and the only
+ * other signal is that tenant failing to log in and filing a ticket. A server-side
+ * log is not a signal anybody is watching; the notification is the one an operator
+ * has already configured to reach them.
+ *
+ * The message names the template deliberately. This failure is never really about
+ * one VM: it means a template does not ship `qemu-guest-agent`, so EVERY
+ * password-only deploy from it is broken the same way. Fixing the template is the
+ * action, so the notification has to carry enough to identify it. Recovery for the
+ * guest already deployed is the existing reset-password flow (same agent call),
+ * which will also fail until the agent exists.
  */
 async function abandonPendingCiPassword(id: string): Promise<void> {
-  const vm = await prisma.virtualMachine.findUnique({ where: { id }, select: { pendingCiPassword: true, name: true } });
+  const vm = await prisma.virtualMachine.findUnique({
+    where: { id },
+    select: { pendingCiPassword: true, name: true, description: true, os: true, proxmoxVmId: true },
+  });
   if (!vm?.pendingCiPassword) return;
   await clearPendingCiPassword(id);
   logger.error(
@@ -129,6 +139,23 @@ async function abandonPendingCiPassword(id: string): Promise<void> {
     'could not set the login password in-guest before the deploy window closed — the guest agent never responded. ' +
       'If this VM has no SSH key the tenant cannot log in; the template needs qemu-guest-agent baked in.',
   );
+  // `description` is written as "From template: <name>" by deployFromTemplate; `os`
+  // carries the template's OS label. Either one points an admin at the template to
+  // fix, so send whichever is present rather than nothing.
+  const source = vm.description?.trim() || vm.os;
+  await notify({
+    event: 'deploy.agent_missing',
+    title: `${vm.name} (VMID ${vm.proxmoxVmId}) — login password could not be set`,
+    message:
+      `The QEMU guest agent never responded during the deploy window, so the requested login ` +
+      `password was never applied in-guest. If this VM was deployed without an SSH key, its owner ` +
+      `cannot log in at all.\n\n` +
+      `Source: ${source}\n\n` +
+      `Fix the template, not the VM: ProxMate sets cloud-init passwords through the guest agent ` +
+      `(never on the cloud-init seed, where any tenant could read them), so a template without ` +
+      `qemu-guest-agent pre-installed breaks every password-only deploy made from it. Install and ` +
+      `enable qemu-guest-agent in the template, then re-publish it.`,
+  }).catch(() => undefined);
 }
 
 /**
