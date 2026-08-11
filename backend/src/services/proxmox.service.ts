@@ -2472,6 +2472,73 @@ export async function ensureNicFirewall(
   }
 }
 
+/**
+ * Put a guest's NICs on a VLAN, or take them off one.
+ *
+ * The per-VM firewall works at L3 and above, so it cannot stop a guest poisoning ARP,
+ * answering DHCP or spoofing IPv6 routers for anything sharing its broadcast domain —
+ * an authorized pentest (2026-07-18) confirmed that live. The only real fix is to stop
+ * the domain being shared: give each trust group its own VLAN (or SDN VNet), so the
+ * frames never reach a neighbour to begin with. That makes this the load-bearing half
+ * of tenant isolation, with the firewall as the layer above it.
+ *
+ * Why it lives here rather than at create time: a guest deployed from a template is a
+ * CLONE, so its `net0` is inherited verbatim from the template and none of the
+ * `createVm` / `createLxc` paths that build a netN string ever run for it. This
+ * read-modify-write, beside {@link ensureNicFirewall} on the post-clone path, is the
+ * single point every guest actually passes through.
+ *
+ * Idempotent, and safe on a running guest — Proxmox applies a NIC change live where it
+ * can and stages it for next boot otherwise. Pass `null` to strip the tag.
+ */
+export async function setVmVlanTag(
+  node: string,
+  vmid: number,
+  tag: number | null,
+  client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
+): Promise<void> {
+  if (tag !== null && (!Number.isInteger(tag) || tag < 1 || tag > 4094)) {
+    // 0 and 4095 are reserved; anything outside 1..4094 is not a VLAN id. Refusing
+    // beats silently writing a config Proxmox will reject at start time.
+    throw new Error(`Invalid VLAN tag ${tag} — must be an integer between 1 and 4094.`);
+  }
+  const c = client ?? (await getClient());
+  const cfg = await getVmConfig(node, vmid, c, kind);
+  for (const k of Object.keys(cfg).filter((key) => /^net\d+$/.test(key))) {
+    const val = cfg[k]!;
+    const current = /\btag=(\d+)\b/.exec(val);
+    if (tag === null) {
+      if (!current) continue;
+      await c.put(
+        `/nodes/${node}/${kind}/${vmid}/config`,
+        new URLSearchParams({ [k]: val.replace(/,?\btag=\d+\b/, '') }),
+      );
+      continue;
+    }
+    if (current && Number(current[1]) === tag) continue;
+    const updated = current ? val.replace(/\btag=\d+\b/, `tag=${tag}`) : `${val},tag=${tag}`;
+    await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams({ [k]: updated }));
+  }
+}
+
+/** The VLAN tag currently on a guest's first NIC, or null when it is untagged. */
+export async function getVmVlanTag(
+  node: string,
+  vmid: number,
+  client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
+): Promise<number | null> {
+  const c = client ?? (await getClient());
+  const cfg = await getVmConfig(node, vmid, c, kind);
+  const first = Object.keys(cfg)
+    .filter((key) => /^net\d+$/.test(key))
+    .sort()[0];
+  if (!first) return null;
+  const m = /\btag=(\d+)\b/.exec(cfg[first]!);
+  return m ? Number(m[1]) : null;
+}
+
 // ─── Firewall / tenant isolation ──────────────────────────────
 
 /** Get the configured gateway IP for a bridge, if any. */
@@ -2716,15 +2783,41 @@ export async function getNodesHealth(client?: AxiosInstance): Promise<ClusterHea
  *
  * NOTE: guest firewalls only take effect once the cluster firewall is enabled.
  */
+/**
+ * Read the admin's isolation settings once, so every call site configures a guest the
+ * same way. This exists because the settings used to be re-read inline at each of the
+ * six `configureVmIsolation` callers, and a seventh (`duplicateVm`) quietly drifted out
+ * of step — the exact failure mode that produces one unsegmented guest in a fleet.
+ */
+export async function readIsolationOptions(): Promise<{ dnsServers: string[]; vlanTag?: number }> {
+  const dnsServers = ((await getConfig('isolation_dns_servers')) ?? '').split(/[,\s]+/).filter(Boolean);
+  const raw = (await getConfig('isolation_vlan_tag')) ?? '';
+  const parsed = Number(raw);
+  // Deliberately `undefined`, not `null`, when unconfigured: undefined means "do not
+  // touch the NIC", whereas null is an explicit instruction to STRIP an existing tag.
+  // Returning null here would have every deploy rewrite NICs on installs that use no
+  // VLAN at all.
+  const vlanTag = raw && Number.isInteger(parsed) && parsed >= 1 && parsed <= 4094 ? parsed : undefined;
+  return { dnsServers, ...(vlanTag !== undefined ? { vlanTag } : {}) };
+}
+
 export async function configureVmIsolation(
   node: string,
   vmid: number,
-  opts: { dnsServers?: string[] } = {},
+  opts: { dnsServers?: string[]; vlanTag?: number | null } = {},
   client?: AxiosInstance,
   kind: GuestKind = 'qemu',
 ): Promise<void> {
   const c = client ?? (await getClient());
   const base = `/nodes/${node}/${kind}/${vmid}/firewall`;
+
+  // Segmentation first: it is the layer that actually contains L2 attacks, and it is
+  // applied here — inside the one function every isolation path already calls — rather
+  // than at each call site, so a new path cannot forget it. `undefined` means "leave the
+  // NIC alone" (nothing configured); an explicit null strips a tag.
+  if (opts.vlanTag !== undefined) {
+    await setVmVlanTag(node, vmid, opts.vlanTag, c, kind);
+  }
 
   // Default-deny inbound, allow outbound (further restricted by rules below),
   // permit DHCP, and block MAC/IP spoofing.
@@ -2745,18 +2838,60 @@ export async function configureVmIsolation(
     }),
   );
 
+  // Reconcile rather than blind-append. Every rule we own carries ISOLATION_TAG in
+  // its comment; those are deleted and the full set re-posted. Without this, any path
+  // that re-runs isolation on an already-isolated guest — `duplicateVm` and the backup
+  // restore both do, because Proxmox copies a guest's firewall config on clone — stacks
+  // a second complete set of rules, and the list grows every time. Deletion descends by
+  // position because removing one renumbers those above it.
+  let existing: Array<{ pos: number; comment?: string }> = [];
+  try {
+    const res = await c.get<{ data: Array<{ pos: number; comment?: string }> }>(`${base}/rules`);
+    existing = res.data.data ?? [];
+  } catch {
+    // Couldn't read the current rules. Fall through and write ours anyway: a possible
+    // duplicate is far better than leaving the guest unisolated.
+  }
+  const ourPositions = existing
+    .filter((r) => r.comment?.includes(ISOLATION_TAG))
+    .map((r) => r.pos)
+    .sort((a, b) => b - a);
+  for (const pos of ourPositions) await c.delete(`${base}/rules/${pos}`);
+
   // Rules are evaluated top-to-bottom; first match wins, else the default policy.
   // The DNS allow must sit above the broad RFC1918 drops, so we POST the drops
   // first and the DNS allow(s) last (each insert prepends at pos=0).
   const post = (params: Record<string, string>) =>
     c.post(`${base}/rules`, new URLSearchParams({ enable: '1', pos: '0', ...params }));
 
+  // Stop the guest SERVING DHCP to its neighbours. A DHCP server answers from port 67
+  // *to* port 68, so blocking outbound dport 68 is what silences a rogue server.
+  // Blocking dport 67 — the naive reading of "block DHCP" — would instead block the
+  // guest's own client REQUESTS and cost it its lease and its network.
+  await post({
+    type: 'out',
+    action: 'DROP',
+    proto: 'udp',
+    dport: '68',
+    comment: `${ISOLATION_TAG}: block rogue DHCP server replies`,
+  });
+  // Same idea for IPv6: a guest advertising itself as a router redirects its
+  // neighbours' traffic. Router Advertisement is ICMPv6 type 134. Only the OUTBOUND
+  // direction is dropped — the guest must still RECEIVE RAs to autoconfigure itself.
+  await post({
+    type: 'out',
+    action: 'DROP',
+    proto: 'icmpv6',
+    'icmp-type': 'router-advertisement',
+    comment: `${ISOLATION_TAG}: block IPv6 router advertisement`,
+  });
+
   for (const dest of ['192.168.0.0/16', '172.16.0.0/12', '10.0.0.0/8']) {
     await post({
       type: 'out',
       action: 'DROP',
       dest,
-      comment: 'ProxMate isolation: block local/private networks',
+      comment: `${ISOLATION_TAG}: block local/private networks`,
     });
   }
   // DNS must keep working for the tenant to reach the internet. Allow it to the
@@ -2773,11 +2908,19 @@ export async function configureVmIsolation(
         proto,
         dport: '53',
         ...(dest ? { dest } : {}),
-        comment: dest ? `ProxMate: DNS to ${dest}` : 'ProxMate: DNS (any resolver)',
+        comment: dest ? `${ISOLATION_TAG}: DNS to ${dest}` : `${ISOLATION_TAG}: DNS (any resolver)`,
       });
     }
   }
 }
+
+/**
+ * Marker every isolation rule carries in its comment, so `configureVmIsolation` can
+ * find and replace exactly its own rules on a re-run without touching an operator's
+ * hand-written ones. Changing this string orphans the rules already deployed under
+ * the old value — they would be left in place and a fresh set added alongside.
+ */
+const ISOLATION_TAG = 'ProxMate isolation';
 
 /** Marker comment identifying the managed ProxMate IDE firewall pinhole. */
 const IDE_PINHOLE_COMMENT = 'ProxMate IDE: reverse-proxy pinhole';

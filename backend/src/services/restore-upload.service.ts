@@ -213,8 +213,7 @@ export async function restoreFromUpload(
 
       // Tenant isolation BEFORE first boot, built from the regenerated MACs.
       if (isolate) {
-        const dnsServers = ((await getConfig('isolation_dns_servers')) ?? '').split(/[,\s]+/).filter(Boolean);
-        await pve.configureVmIsolation(node, vmid, { dnsServers }, client, kind);
+        await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, kind);
       }
 
       await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });

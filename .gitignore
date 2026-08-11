@@ -17,6 +17,10 @@ out/
 .env.*
 !.env.example
 !.env.docker.example
+# Templates are documentation, never secrets. Generalized so a new one does not
+# get silently swallowed by the rule above — `mktemp .env.XXXXXX` cannot produce
+# a `.example` suffix, so this does not reopen the hole the comment describes.
+!.env.*.example
 
 # Database
 *.db
