@@ -293,10 +293,20 @@ export default function SettingsPage() {
   async function testConnection() {
     setTesting(true);
     try {
-      const res = await api.post<{ version: string; nodeCount: number }>(
-        "/admin/settings/proxmox/test",
+      const res = await api.post<{
+        version: string;
+        nodeCount: number;
+        vmCount: number;
+        storageCount: number;
+        warnings?: string[];
+      }>("/admin/settings/proxmox/test");
+      toast.success(
+        `Connected to Proxmox VE ${res.data.version} — ${res.data.nodeCount} nodes, ` +
+          `${res.data.vmCount} guests, ${res.data.storageCount} storages visible`,
       );
-      toast.success(`Connected to Proxmox VE ${res.data.version} (${res.data.nodeCount} nodes)`);
+      // Privileges the token lacks: it works today, but a named feature will fail later.
+      // One toast each, so none of them scrolls out of a single truncated line.
+      for (const w of res.data.warnings ?? []) toast.warning(w, { duration: 12000 });
     } catch (err) {
       toast.error(apiError(err));
     } finally {
