@@ -45,6 +45,24 @@ export const apiWriteLimiter = rateLimit({
 });
 
 /**
+ * Throttle for optional module routes (`/api/ext/<name>/…`).
+ *
+ * Unlike {@link apiWriteLimiter} this covers **reads too**, and that asymmetry is
+ * deliberate: module code is the one part of the API surface ProxMate did not write, so
+ * the seam does not assume a module's read path is cheap, paginated, or free of an
+ * expensive query. It is mounted AHEAD of `requireAuth` so the session lookup itself is
+ * behind the limit rather than in front of it.
+ *
+ * Generous by default — far above any legitimate UI polling rate — because this is
+ * abuse protection, not a per-tenant API budget.
+ */
+export const moduleLimiter = createRateLimiter({
+  windowMs: Number(process.env.MODULE_RATE_LIMIT_WINDOW_MS ?? 60 * 1000),
+  max: Number(process.env.MODULE_RATE_LIMIT_MAX ?? 300),
+  message: 'Too many requests to this module — please slow down and try again later.',
+});
+
+/**
  * Dedicated throttle for public token-bearing GETs that are cheap to probe
  * (invite lookup, download tokens). Complements authLimiter (which only covers
  * credential POSTs) so a scanner can't hammer these as a free oracle.

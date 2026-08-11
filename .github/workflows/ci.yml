@@ -40,6 +40,19 @@ jobs:
         run: npx tsc --noEmit
       - name: Unit + integration tests
         run: npm test
+      # Proves the module seam's data half for real: core migrations, then the sample
+      # module's own migrations, into the SAME database. `migrate status` exits non-zero
+      # unless each set is recorded as applied, so a module migration silently skipped by
+      # a name collision with a core one fails here instead of in production.
+      - name: Module seam - sample module migrates into the same database
+        env:
+          DATABASE_URL: "file:/tmp/proxmate-module-smoke.db"
+          PROXMATE_MODULES: example
+        run: |
+          npx prisma migrate deploy
+          npm run db:migrate:modules
+          npx prisma migrate status --schema prisma/modules/example/schema.prisma
+          npx prisma migrate status
 
   frontend:
     name: Frontend — lint + build

@@ -21,6 +21,7 @@ if (!process.env.ENCRYPTION_KEY) {
 import http from 'node:http';
 import { app } from './app.js';
 import { logger } from './lib/logger.js';
+import { loadModules } from './modules/registry.js';
 import { handleConsoleUpgrade } from './routes/console.routes.js';
 import { handleIdeUpgrade } from './services/ide-proxy.service.js';
 import { startScheduler } from './services/scheduler.service.js';
@@ -53,6 +54,17 @@ server.on('upgrade', (req, socket, head) => {
   if (handleIdeUpgrade(req, socket, head)) return;
   socket.destroy();
 });
+
+// Optional module routers (see src/modules/). A no-op unless PROXMATE_MODULES names
+// one. Runs BEFORE listen on purpose: a named-but-broken module must stop the boot
+// rather than 404 on an already-open port, where the container looks healthy and a
+// paid-for feature is simply absent. Recovery is config-only — unset PROXMATE_MODULES.
+try {
+  await loadModules();
+} catch (err) {
+  logger.error({ err }, 'module loading failed - refusing to start (unset PROXMATE_MODULES to boot without modules)');
+  process.exit(1);
+}
 
 server.listen(PORT, BIND_ADDR, () => {
   logger.info({ port: PORT, bind: BIND_ADDR, env: process.env.NODE_ENV || 'development' }, `ProxMate API running on http://${BIND_ADDR}:${PORT}`);

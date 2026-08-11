@@ -1,0 +1,24 @@
+// The example module's independent Prisma unit.
+//
+// Deliberately NO `generator` block. A module must never produce a second Prisma
+// client, because a second client means a second connection pool against the
+// single-writer SQLite file. Modules read their own tables through CE's singleton
+// (src/lib/prisma.ts) using $queryRaw / $executeRaw.
+//
+// Migrations live in ./migrations and are applied by `npm run db:migrate:modules`
+// (and by docker-entrypoint.sh when PROXMATE_MODULES names this module), always
+// AFTER core migrations, against the SAME database.
+//
+// No @relation to any CE model: a one-sided relation fails Prisma validation, and
+// adding the back-relation to CE's schema.prisma would put module model names in the
+// core schema. Module tables reference CE rows by plain scalar id columns only.
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model ModuleExample {
+  key    String   @id
+  hits   Int      @default(0)
+  seenAt DateTime @default(now())
+}
