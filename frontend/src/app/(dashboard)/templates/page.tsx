@@ -21,6 +21,7 @@ import {
   Search,
   ChevronsUpDown,
   Cpu,
+  TriangleAlert,
 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
@@ -160,6 +161,18 @@ function TemplateCard({
           {t.arch && (
             <Badge variant="outline" className="gap-1 text-[10px]">
               <Cpu className="size-3" /> {t.arch === "arm64" ? "ARM64" : "x86-64"}
+            </Badge>
+          )}
+          {/*
+            A cloud-init template with no guest agent cannot serve a password-only
+            deploy: ProxMate sets the login password in-guest through the agent rather
+            than on the seed drive, where the tenant could read it back. Surfaced here
+            so an admin learns it from the store, not from a locked-out user. Only
+            shown for the case that actually breaks, and only to admins.
+          */}
+          {isAdmin && t.cloudInit && t.guestAgent === false && (
+            <Badge variant="destructive" className="gap-1 text-[10px]" title="ProxMate applies a cloud-init login password in-guest via qemu-guest-agent. This image does not have it, so a password-only deploy will leave the owner unable to log in. Deploys with an SSH key are unaffected.">
+              <TriangleAlert className="size-3" /> No guest agent
             </Badge>
           )}
         </CardTitle>

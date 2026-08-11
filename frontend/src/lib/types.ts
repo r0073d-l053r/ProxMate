@@ -515,7 +515,12 @@ export interface IdeLlmKey {
   lastUsedAt: string | null;
 }
 
-export type NotifyEvent = "backup.failed" | "vm.error" | "auth.lockout" | "access.expired";
+export type NotifyEvent =
+  | "backup.failed"
+  | "vm.error"
+  | "auth.lockout"
+  | "access.expired"
+  | "deploy.agent_missing";
 
 export interface NotifyConfig {
   webhookUrl: string;
@@ -529,6 +534,7 @@ export const NOTIFY_EVENT_LABELS: Record<NotifyEvent, string> = {
   "vm.error": "VM provisioning error",
   "auth.lockout": "Account locked (brute-force)",
   "access.expired": "Tenant compute access expired",
+  "deploy.agent_missing": "Guest agent missing (login password not set)",
 };
 
 export interface IsolationStatus {
@@ -576,6 +582,13 @@ export interface Template {
   sourceUrl: string | null;
   /** Last successful refresh, or null if never refreshed. */
   refreshedAt: string | null;
+  /**
+   * Whether qemu-guest-agent is baked into the image. ProxMate sets a cloud-init
+   * login password in-guest THROUGH the agent, so a template without it cannot serve
+   * a password-only deploy. null = never determined (registered by hand, or built
+   * before the builder measured this).
+   */
+  guestAgent: boolean | null;
   createdAt: string;
 }
 

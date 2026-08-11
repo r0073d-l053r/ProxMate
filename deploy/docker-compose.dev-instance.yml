@@ -66,8 +66,19 @@ services:
       APPDB_BACKUP_CRON: "0 0 1 1 *"
       BALANCER_CRON: "0 0 1 1 *"
       TEMPLATE_REFRESH_CRON: "0 0 1 1 *"
+      # On-demand cloud-init snippet writing. SNIPPET_DIR is the path INSIDE this
+      # container; SNIPPET_STORAGE is the Proxmox storage that serves the same
+      # directory — they must be two views of one place, or ProxMate will write a
+      # snippet Proxmox cannot see. Both unset = the feature is simply off, and the
+      # cloud-image builder then skips the guest-agent bake instead of failing.
+      SNIPPET_DIR: ${SNIPPET_DIR:-}
+      SNIPPET_STORAGE: ${SNIPPET_STORAGE:-}
     volumes:
       - proxmate-data:/data
+      # The host side of that directory. Compose cannot make a mount conditional, so
+      # when SNIPPET_DIR is unset both sides fall back to paths that exist and are
+      # never read: an inert mount, not a broken one.
+      - ${SNIPPET_HOST_DIR:-/var/tmp}:${SNIPPET_DIR:-/mnt/unused-snippets}
     ports:
       - "127.0.0.1:${BACKEND_PORT:-4100}:4000"
     healthcheck:

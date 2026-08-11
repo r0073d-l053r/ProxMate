@@ -379,6 +379,30 @@ type CloudInitInput = Pick<
 >;
 
 /**
+ * Resolve a cloud-init vendor snippet covering exactly `ids`, or null when this node
+ * cannot be given one. **Never throws** — the caller decides whether a given set of
+ * ids is worth failing a deploy over.
+ *
+ * Preferred: write the exact combo on-demand to the shared, container-mounted snippet
+ * storage (no manual placement, no 2ⁿ pre-placed files). When that isn't configured,
+ * fall back to the historical model where the matching snippet must already be on
+ * this node — admins place those by hand, since the Proxmox API cannot write snippets.
+ */
+async function snippetFor(
+  ids: string[],
+  node: string,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<string | null> {
+  if (ids.length === 0) return null;
+  const onDemand = await pve.ensureCloudInitSnippet(ids);
+  if (onDemand) return onDemand;
+  const snippetStorage = (await getConfig('iso_storage')) ?? 'local';
+  const file = pve.cloudInitSnippetFile(ids);
+  const ready = await pve.nodesWithSnippet(snippetStorage, file, client);
+  return ready.includes(node) ? `${snippetStorage}:snippets/${file}` : null;
+}
+
+/**
  * Configure a freshly-cloned VM in place: autoscale cores/memory, grow the primary
  * disk if needed, inject cloud-init (login user + SSH key + DHCP, optional first-boot
  * extras), and apply tenant firewall isolation. Shared by deployFromTemplate and
@@ -422,43 +446,48 @@ async function configureClonedVm(
     if (cloud.installGuestAgent && offered.has('guest-agent')) selected.add('guest-agent');
     if (cloud.installSuperfile && offered.has('superfile')) selected.add('superfile');
 
-    // A requested password is applied post-boot through the guest agent (the whole
-    // point of not putting it on the seed), so the agent stops being optional the
-    // moment one is asked for — without it the tenant gets a VM they cannot log
-    // into, which is a worse failure than the leak this design removes. Forced in
-    // regardless of the admin's "offered" list, because this is a functional
-    // requirement rather than a tenant preference.
-    //
-    // Belt, not braces: installing it here needs working apt on first boot. An
-    // isolated or air-gapped deployment must have the agent BAKED INTO the template.
-    if (cloud.password) selected.add('guest-agent');
-
     // The admin-configured always-on base rides on EVERY cloud-init VM — but only
     // when on-demand snippet writing is set up, since that's what makes a mandatory
     // base practical without exponential manual placement.
     const baseIds = pve.snippetWriteConfig() ? await getBaseFeatureIds() : [];
-    const features = [...new Set([...baseIds, ...selected])];
-    if (features.length > 0) {
-      // Preferred: write the exact combo on-demand to the shared, container-mounted
-      // snippet storage (no manual placement, no 2ⁿ pre-placed files). Returns null
-      // when that isn't configured — then fall back to the historical model where
-      // the matching snippet must already be on this node (admins place it; the API
-      // can't write snippets), failing clearly rather than referencing a missing file.
-      const onDemand = await pve.ensureCloudInitSnippet(features);
-      if (onDemand) {
-        vendorSnippet = onDemand;
-      } else {
-        const snippetStorage = (await getConfig('iso_storage')) ?? 'local';
-        const file = pve.cloudInitSnippetFile(features);
-        const ready = await pve.nodesWithSnippet(snippetStorage, file, client);
-        if (!ready.includes(node)) {
-          throw new Error(
-            `The selected setup (${features.join(' + ')}) isn't installed on node "${node}" — ` +
-              `an admin needs to add its snippet (Template Store → Cloud-init extras).`,
-          );
-        }
-        vendorSnippet = `${snippetStorage}:snippets/${file}`;
+    // What was actually ASKED for: the admin's base plus the tenant's selections.
+    // A missing snippet for any of these is a hard error — the tenant would silently
+    // get a box without the software they chose.
+    const chosen = [...new Set([...baseIds, ...selected])];
+
+    // A requested password is applied post-boot through the guest agent (the whole
+    // point of not putting it on the seed), so the agent stops being optional the
+    // moment one is asked for. Added regardless of the admin's "offered" list,
+    // because it is a functional requirement rather than a tenant preference.
+    //
+    // Belt, not braces — and the belt must never break the trousers. Installing the
+    // agent here needs working apt on first boot, which an isolated or air-gapped
+    // deployment deliberately does not have; those must bake the agent INTO the
+    // template, and a template that already ships it needs nothing from us. So when
+    // no snippet can be produced for the belt, drop it and carry on rather than
+    // failing a deploy that would have worked. If the agent genuinely turns out to
+    // be absent, `deploy.agent_missing` tells an admin once the window closes.
+    const agentBelt = Boolean(cloud.password) && !chosen.includes('guest-agent');
+
+    vendorSnippet = (await snippetFor(agentBelt ? [...chosen, 'guest-agent'] : chosen, node, client)) ?? undefined;
+    const beltFastened = agentBelt && vendorSnippet !== undefined;
+    if (!vendorSnippet && chosen.length > 0) {
+      // Retry without the belt before giving up, so a missing guest-agent snippet
+      // can't mask — or be mistaken for — a missing snippet for a chosen feature.
+      vendorSnippet = agentBelt ? ((await snippetFor(chosen, node, client)) ?? undefined) : undefined;
+      if (!vendorSnippet) {
+        throw new Error(
+          `The selected setup (${chosen.join(' + ')}) isn't installed on node "${node}" — ` +
+            `an admin needs to add its snippet (Template Store → Cloud-init extras).`,
+        );
       }
+    }
+    if (agentBelt && !beltFastened) {
+      console.warn(
+        `[vm] no cloud-init snippet available to install qemu-guest-agent on node "${node}" — ` +
+          'proceeding without it. The login password can only be set in-guest through the agent, ' +
+          'so the template must ship qemu-guest-agent pre-installed.',
+      );
     }
     // NOTE the absent `cipassword`. Handing the password to cloud-init writes its
     // crypt hash to two places the tenant can read for the life of the guest: the
@@ -1590,4 +1619,118 @@ export async function exitRescue(vm: VirtualMachine): Promise<VirtualMachine> {
   await assertOwnerAccessActive(vm); // booting the guest — gate on the owner's window
   await pve.startVm(current.proxmoxNode, current.proxmoxVmId, client);
   return updated;
+}
+
+// ─── Storage pinning report (B-40) ────────────────────────────
+
+export interface PinnedGuest {
+  id: string;
+  name: string;
+  proxmoxVmId: number;
+  proxmoxNode: string;
+  /** Distinct storages this guest's volumes live on. */
+  storages: string[];
+  /** Of those, the ones that are NOT shared across the cluster. */
+  localStorages: string[];
+  /** Volume ids Proxmox itself calls node-local — its answer, not our inference. */
+  localDisks: string[];
+  /** How many other nodes Proxmox will accept a migration to. */
+  migrationTargets: number;
+  /** True when the guest sits entirely off the admin's configured default pool. */
+  offDefaultStorage: boolean;
+}
+
+export interface StoragePinningReport {
+  defaultStorage: string | null;
+  /** Storages the cluster reports as shared — the ones that don't pin a guest. */
+  sharedStorages: string[];
+  /** Guests with at least one node-local volume, worst (fewest targets) first. */
+  pinned: PinnedGuest[];
+  /** Guests whose migratability could not be determined, with the reason. */
+  unknown: Array<{ id: string; name: string; proxmoxVmId: number; reason: string }>;
+  checked: number;
+}
+
+/**
+ * Which ProxMate-managed guests cannot migrate, and why.
+ *
+ * The B-38 fix is forward-looking: it stops NEW guests inheriting a template's
+ * node-local storage, but every guest deployed before it is still where it landed —
+ * pinned to one node, unmigratable, and invisible until someone tries to drain that
+ * node. This is the report that finds them.
+ *
+ * Migratability comes from **Proxmox's own preflight**, not from our own reasoning
+ * about which storage is shared. Re-deriving it would mean maintaining a second
+ * opinion that can disagree with the one that actually governs the migration — and
+ * the storage flags here exist to explain the verdict, never to replace it.
+ *
+ * Read-only by design. Moving a disk is a deliberate human act with real cost; a
+ * report that quietly relocated volumes would be a far worse surprise than the
+ * pinning it reports.
+ */
+export async function getStoragePinningReport(): Promise<StoragePinningReport> {
+  const client = await pve.getClient();
+  const [vms, storages, defaultStorage] = await Promise.all([
+    prisma.virtualMachine.findMany({
+      where: { status: { not: 'error' } },
+      select: { id: true, name: true, proxmoxVmId: true, proxmoxNode: true, type: true },
+      orderBy: { name: 'asc' },
+    }),
+    pve.getStorages(client),
+    getConfig('default_storage'),
+  ]);
+
+  // `shared` is not on PveStorage (the /storage list carries it as 0/1), so read it
+  // off the raw rows rather than adding a second source of truth.
+  const shared = new Set(
+    storages.filter((s) => (s as unknown as { shared?: number }).shared === 1).map((s) => s.storage),
+  );
+
+  const pinned: PinnedGuest[] = [];
+  const unknown: StoragePinningReport['unknown'] = [];
+
+  // Two Proxmox calls per guest; run in small batches so a 200-guest cluster doesn't
+  // open 400 sockets at once against pveproxy's fixed worker pool.
+  const BATCH = 8;
+  for (let i = 0; i < vms.length; i += BATCH) {
+    await Promise.all(
+      vms.slice(i, i + BATCH).map(async (vm) => {
+        const kind = kindOf(vm);
+        // LXC has no live migration and a different preflight; report the storage
+        // facts and let the target count stand at 0 rather than guess.
+        try {
+          const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
+          const vmStorages = pve.getVolumeStorages(cfg);
+          const localStorages = vmStorages.filter((s) => !shared.has(s));
+          const pre = kind === 'qemu'
+            ? await pve.migratePreflight(vm.proxmoxNode, vm.proxmoxVmId, client).catch(() => null)
+            : null;
+
+          // Proxmox's verdict wins; the storage flags are the explanation.
+          const localDisks = pre ? pre.localDisks.map((d) => d.volid) : [];
+          if (localDisks.length === 0 && localStorages.length === 0) return;
+          if (kind === 'qemu' && !pre) {
+            unknown.push({ id: vm.id, name: vm.name, proxmoxVmId: vm.proxmoxVmId, reason: 'migration preflight unavailable' });
+            return;
+          }
+          pinned.push({
+            id: vm.id,
+            name: vm.name,
+            proxmoxVmId: vm.proxmoxVmId,
+            proxmoxNode: vm.proxmoxNode,
+            storages: vmStorages,
+            localStorages,
+            localDisks,
+            migrationTargets: pre ? pre.allowed.length : 0,
+            offDefaultStorage: Boolean(defaultStorage) && !vmStorages.includes(defaultStorage!),
+          });
+        } catch (err) {
+          unknown.push({ id: vm.id, name: vm.name, proxmoxVmId: vm.proxmoxVmId, reason: pve.pveMessage(err) });
+        }
+      }),
+    );
+  }
+
+  pinned.sort((a, b) => a.migrationTargets - b.migrationTargets || a.name.localeCompare(b.name));
+  return { defaultStorage, sharedStorages: [...shared].sort(), pinned, unknown, checked: vms.length };
 }
