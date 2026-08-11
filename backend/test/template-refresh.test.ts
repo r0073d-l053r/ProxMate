@@ -21,6 +21,17 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   waitForTask: vi.fn(async () => undefined),
   pveMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
   archFromImageUrl: vi.fn(() => 'amd64'),
+  // No writable snippet storage in this fixture, so the guest-agent bake is skipped
+  // (guestAgent stays null) and the build proceeds. Covered directly in
+  // test/template-bake.test.ts.
+  ensureCloudInitSnippet: vi.fn(async () => null),
+  startVm: vi.fn(async () => 'UPID:start'),
+  shutdownVm: vi.fn(async () => 'UPID:shutdown'),
+  stopVm: vi.fn(async () => 'UPID:stop'),
+  getVmStatus: vi.fn(async () => ({ status: 'stopped' })),
+  guestAgentPing: vi.fn(async () => false),
+  guestExecOutput: vi.fn(async () => ({ exitcode: 0, stdout: '', stderr: '' })),
+  deleteVmConfigKeys: vi.fn(async () => undefined),
 }));
 
 import { prisma } from '../src/lib/prisma.js';
