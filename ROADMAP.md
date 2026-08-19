@@ -1,10 +1,9 @@
 # ProxMate Roadmap
 
 A living, prioritized list. ProxMate is a mature, production-ready multi-tenant Proxmox dashboard
-(live at proxmate.example) — this roadmap is about **closing cloud-provider parity gaps,
-hardening for scale, and the EDU/commercial layer**, not fixing breakage. Tiers are rough priority
-bands, not commitments. Have an idea? Open a
-[discussion](https://github.com/r0073d-l053r/ProxMate/discussions/categories/ideas).
+running in production — this roadmap is about **closing cloud-provider parity gaps and
+hardening for scale**, not fixing breakage. Tiers are rough priority bands, not commitments. Have an
+idea? Open a [discussion](https://github.com/r0073d-l053r/ProxMate/discussions/categories/ideas).
 
 The detailed, dated log of everything already built lives in [`completed-tasks.md`](completed-tasks.md).
 This file leads with **what's still open**, then **new ideas**, then a condensed **shipped** index.
@@ -13,69 +12,79 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 ## 🔜 Open — up next (pulled to the top)
 
-### In flight
+### Found while verifying v1.0.0
 
-- **Tenant controls & admin management pack (v0.8.0, in testing).** Built + on branch
-  `feat/tenant-admin-controls`, deployed to the lab host for live testing; not yet released. Adds:
-  share **permission presets** (Viewer / Operator / Manager), **admin deploy-for-tenant** (into a
-  chosen tenant's account, optional node pin, optional quota-exempt grant), **admin-managed VMs are
-  resize-locked to admins**, tenant **activity feeds hide admin actions**, **IDE one-click relocate**
-  to an AVX-capable node, and **custom AI-key endpoints restricted to admins**. Breaking: share
-  `access` values renamed; tenants lose raw-API node pinning + shared-VM rebuild/passthrough.
+- **Expired-access API tokens return the wrong status.** A `pm_…` token whose account's compute
+  access window has lapsed gets a generic `401`, not the `403 access_expired` the session paths
+  return — API callers can't distinguish "bad token" from "access lapsed."
+- **Rescue-mode guard fires too late.** The owner-window check on entering rescue mode runs *after*
+  the guest is force-stopped and its boot config mutated — a refusal should leave the VM untouched.
+- **Access-expiry sweep has no test coverage.** `suspendLapsed` and the graceful→force stop
+  escalation are untested, which blocks refactoring the scheduler with confidence.
+- **Connection test should assert visibility, not just permissions.** v1.0.0 made
+  `testProxmoxConnection` reject a privilege-separated token with an empty permission set; it still
+  doesn't assert the token can actually *see* a non-empty VM + storage list, which would have caught
+  both historical token misconfigurations.
+- **A genuine least-privilege Proxmox role.** Document (and ideally automate) a scoped token instead
+  of `root@pam`. Prior investigation suggests the earlier pool-scoping failure was an ACL naming
+  `users=` where a privilege-separated token needs `tokens=`; needs a working recipe incl. `VM.Audit`.
 
-### IDE follow-ups (v0.7.0 deferred)
+### Placement & reliability
 
-- ✅ **Admin Settings field for `ide_ingress_cidr` + reachability test — BUILT (in testing).**
-  Validated CIDR field in Admin → Settings → ProxMate IDE, plus a "Test reachability" button that
-  dials a running VM's IDE port from the backend (the proxy's exact path) and names the likely
-  cause on failure.
-- ✅ **Pin code-server / OpenCode installer versions — BUILT (in testing).** The bootstrap installs
-  exactly the live-verified pair (code-server 4.128.0 / OpenCode 1.17.18), overridable via
-  `IDE_CODE_SERVER_VERSION` / `IDE_OPENCODE_VERSION`.
-- **Wire the gateway as a provider for code-server's built-in Chat view** (inert today; OpenCode
-  runs as a terminal TUI instead).
-- **Surface the in-guest provision log** — an `ideState: failed` today means shelling into the guest
-  to read `/var/log/pmide-provision.log`; add a "view install log" action (owner/admin, via the guest
-  agent) on the failed state so installs are debuggable from the browser.
+- **Template deploys ignore the scheduler — spread full clones across nodes.** `deployFromTemplate`
+  clones onto whichever node holds the template; `pickBestNode` is never consulted on this path, so
+  template deploys pile onto one node. When the clone is full (cloud-init templates) and both the
+  base disk and `default_storage` are shared, pick a node and pass `target`. Linked clones must stay
+  with their base volume and are exempt.
+- **Background reconciler for Proxmox tasks.** Async UPIDs are reconciled opportunistically on read;
+  a backend restart mid-operation can leave rows stuck in `creating`/`restoring`. A worker that polls
+  tasks to completion and sweeps stuck rows at startup would make state authoritative.
+- **Node-drain migratability guard.** The balancer's planner reads Proxmox's `allowed_nodes`
+  preflight and pins un-migratable guests; apply the same guard to the **node-drain** planner so it
+  can't propose an impossible evacuation.
+- **First-class Postgres support.** The Prisma schema is portable but the shipped migration history
+  is SQLite-locked (`migration_lock.toml`), and the built-in app-DB backup uses SQLite's
+  `VACUUM INTO`. Postgres today means `db push` + `pg_dump`; proper support wants a migration
+  history and a backup path of its own. SQLite stays the default.
+- **Forward the documented tuning vars in Docker Compose.** `BALANCER_CRON`,
+  `TEMPLATE_REFRESH_CRON`, `ALERT_COOLDOWN_MIN` and `PUBLIC_TOKEN_RATE_LIMIT_*` are read by the
+  backend but not passed through by the shipped `docker-compose.yml`, so setting them in `.env`
+  silently does nothing under Compose.
 
 ### Production hardening & ops
 
-- ✅ **Scheduled app-DB backup — BUILT (in testing).** Nightly `VACUUM INTO` snapshot of ProxMate's
-  own database to an admin-configured directory (point it at an off-host mount), rolling retention,
-  "Back up now" verification button in Admin → Settings.
-- **`ENCRYPTION_KEY` loss-safety** — losing the key means losing the Proxmox token, SMTP creds,
-  tenant AI keys, and TOTP secrets in one stroke. The docs runbook now pairs key backup with DB
-  backups explicitly; still open: an admin Settings warning that persists until the key is
-  confirmed backed up.
-- **Production validation passes** — the shipped OIDC SSO flow and the full 2FA/passkey matrix
+- **`ENCRYPTION_KEY` loss-safety.** Losing the key means losing the Proxmox token, SMTP creds,
+  tenant AI keys, and TOTP secrets in one stroke. The docs runbook pairs key backup with DB backups
+  explicitly; still open: an admin Settings warning that persists until the key is confirmed backed
+  up.
+- **Production validation passes.** The shipped OIDC SSO flow and the full 2FA/passkey matrix
   (TOTP, recovery codes, passkeys, invite-enforced 2FA) each need a documented end-to-end QA pass
   on a live deployment.
 
-### v0.8 pack follow-ups
+### Tenant-experience follow-ups
 
-- ✅ **Size-lock extended to rebuild — BUILT (in testing).** A tenant rebuild of an admin-managed /
-  quota-exempt VM is 403'd (it wipes the admin's deployment, and template disk growth would bypass
-  quota on exempt grants); both Rebuild UI surfaces hidden for non-admins.
-- ✅ **Resize/rebuild quota billed to the OWNER — BUILT (in testing).** A Manager-share resize is
-  now checked against the owner's caps + usage (`quotaAccountFor`), not the caller's; admin bypass
-  unchanged; data disks already resolved the owner.
 - **Notify the tenant on admin deploy-for-tenant** — a granted VM just appears in their account
   today; send the branded "you've been granted a VM" email + in-app note.
 - **Share notifications** — email the recipient when a VM is shared with them or their preset level
   (Viewer / Operator / Manager) changes.
 - **Surface admin-managed / quota-exempt to the owner** — a badge + one-line explainer on the VM
   detail ("set up by your admin — only an admin can resize it") instead of just the 403 on attempt.
-
-### Recorded follow-ups
-
 - **Read-only console (input-blocked viewing)** — a Viewer share gets no console today; the noted
   follow-up is a view-only, input-blocked console stream.
-- **Node-drain migratability guard** — the balancer's migrate planner reads Proxmox's `allowed_nodes`
-  preflight and pins un-migratable guests; apply the *same* guard to the **node-drain** planner so it
-  can't propose an impossible evacuation (its apply error is already legible).
-- **Resize/rebuild quota vs owner** — a Manager-share resize is checked against the *caller's* quota
-  while the footprint counts against the *owner*. Load the owner's account for the quota check when
-  caller ≠ owner.
+
+### IDE follow-ups
+
+- **Wire the gateway as a provider for code-server's built-in Chat view** (inert today; OpenCode
+  runs as a terminal TUI instead).
+- **Surface the in-guest provision log** — an `ideState: failed` today means shelling into the guest
+  to read `/var/log/pmide-provision.log`; add a "view install log" action (owner/admin, via the guest
+  agent) on the failed state so installs are debuggable from the browser.
+
+### Deferred pending hardware
+
+- **ARM guest builds (Phase 2).** The arch-aware *placement* guardrail shipped; the aarch64 VM-build
+  path (`arch=aarch64`, `machine=virt`, OVMF + EFI disk) and an arch selector need a real ARM
+  (Pimox) node to validate.
 - **The GPU on pve-4 (host project)** — the host is vfio/IOMMU-ready and the card is bound; running it
   needs a fresh **q35 + OVMF + EFI-disk** VM (108 was installed under SeaBIOS). Owner's call when wanted.
 
@@ -125,6 +134,32 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 
 Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
 
+- **v1.0.0 (2026-08-11) — isolation milestone.** Per-tenant **VLAN placement** (network-layer
+  isolation beyond the per-VM firewall) + rogue-DHCP and IPv6-RA egress drops + firewall rule
+  reconciliation; **cloud-init passwords applied in-guest** via the QEMU guest agent (never written
+  to the seed drive); compute-access windows enforced on **passkey and SSO** login, not only
+  password; template deploys honour the admin default bridge/storage; built cloud-image templates
+  ship `qemu-guest-agent` (agentless builds recorded and flagged); the connection test rejects a
+  privilege-separated token that can authenticate but do nothing; axios client error objects are
+  sanitized before logging; a minimal **module seam** (`PROXMATE_MODULES`) for mounting optional API
+  routers; `deploy.agent_missing` notification; an admin storage-pinning/migratability report.
+- **v0.9.0 / v0.9.1 (2026-08-01/02) — the installer arc.** One-command `install.sh` (dependency
+  bootstrap incl. Docker with explicit consent, LAN-IP autodetect, `--domain` mode, safe re-run over
+  an existing install), verified end-to-end on clean hardware; plain-HTTP CSP fix (+ scheme
+  detection behind proxies); **migration guardrails** in preflight (`cpu=host` across heterogeneous
+  CPU models, missing `cicustom` snippet storage on the target); placement/migration diagnostics;
+  app-DB backups fixed for `sudo` installs (backup dir ownership); `.gitattributes` pins LF so a
+  CRLF commit can't ship a dead installer.
+- **v0.8.x (2026-07-16 → 07-29) — tenant controls + admin management + kiosk.** Share **permission
+  presets** (Viewer / Operator / Manager), **admin deploy-for-tenant** (node pin, optional
+  quota-exempt), admin-managed VMs **resize/rebuild-locked** to admins, Manager-share resizes billed
+  to the **owner's** quota, tenant activity feeds hide admin actions, IDE one-click **relocate** to
+  an AVX-capable node, custom AI-key endpoints admin-only; **compute access windows**
+  (invite-granted terms, suspend-never-delete, warning emails, enforcement across every auth path);
+  tabbed admin Settings; kiosk mode locked to **monitoring-only** with exit-gate hardening;
+  **scheduled app-DB backups** (nightly `VACUUM INTO`, rolling retention, host-directory support via
+  `PROXMATE_BACKUP_DIR`); `ide_ingress_cidr` admin field + reachability test; pinned
+  code-server/OpenCode installer versions.
 - **v0.7.0 — ProxMate IDE (beta).** In-browser code-server + OpenCode AI agent installed natively in
   each tenant VM; per-VM LLM gateway (allow-list, per-VM tokens, streaming, two-layer rate limiting);
   managed isolation-consistent `:8080` firewall pinhole; min-spec guardrails (RAM floor, `cpu:host`/AVX);
