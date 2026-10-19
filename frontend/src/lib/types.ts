@@ -105,9 +105,10 @@ export interface VmDisk {
 
 export interface VmShare {
   id: string;
+  /** The address the owner shared with (the sharee's other account details are not exposed). */
+  email: string;
   role: "viewer" | "operator" | "manager";
   createdAt: string;
-  user: { id: string; email: string; displayName: string };
 }
 
 export interface VmLiveStatus {

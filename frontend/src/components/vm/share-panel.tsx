@@ -131,8 +131,7 @@ export function SharePanel({ vmId }: { vmId: string }) {
             {shares.map((s) => (
               <li key={s.id} className="flex items-center justify-between gap-2 rounded-md border p-2">
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-medium">{s.user.displayName}</div>
-                  <div className="truncate text-xs text-muted-foreground">{s.user.email}</div>
+                  <div className="truncate text-sm font-medium">{s.email}</div>
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge variant={s.role === "manager" ? "default" : s.role === "operator" ? "outline" : "secondary"}>

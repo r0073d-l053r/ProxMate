@@ -10,6 +10,14 @@ vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
     user: { findUnique: vi.fn() },
     vmShare: {
+      findMany: vi.fn(async () => [
+        {
+          id: 's1',
+          role: 'operator',
+          createdAt: new Date('2026-10-01T00:00:00Z'),
+          user: { id: 'u2', email: 'exists@example.com', displayName: 'Exists Person' },
+        },
+      ]),
       upsert: vi.fn(async () => ({
         id: 's1',
         role: 'viewer',
@@ -79,5 +87,15 @@ describe('POST /api/vms/:id/shares', () => {
     vi.mocked(prisma.user.findUnique).mockResolvedValueOnce(null);
     await share('nobody@example.com');
     expect(recordAudit).toHaveBeenCalledWith(expect.objectContaining({ action: 'vm.share', detail: 'nobody@example.com as viewer' }));
+  });
+});
+
+describe('GET /api/vms/:id/shares', () => {
+  it('lists each share by the address and access level only — no account id or display name', async () => {
+    const res = await fetch(`${base}/vms/vm1/shares`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([
+      { id: 's1', email: 'exists@example.com', role: 'operator', createdAt: '2026-10-01T00:00:00.000Z' },
+    ]);
   });
 });

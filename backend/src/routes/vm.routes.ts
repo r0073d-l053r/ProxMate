@@ -969,8 +969,8 @@ router.post('/:id/shares', shareLimiter, async (req: Request, res: Response) => 
   if (!parsed.success) { res.status(400).json({ error: 'Enter a valid email and role.' }); return; }
   try {
     // Same response and same audit detail whether or not the address has an
-    // account (the VM activity feed is visible to the tenant), so this endpoint
-    // never confirms that an account exists.
+    // account (the VM activity feed is visible to the tenant), so the POST response
+    // itself does not confirm whether an account exists.
     await addShare(vm, parsed.data.email, parsed.data.role);
     await recordAudit({
       action: 'vm.share', actor: user, targetType: 'vm', targetId: vm.id,
