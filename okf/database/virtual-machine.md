@@ -77,7 +77,7 @@ Maps a ProxMate VM id to a Proxmox guest (`proxmoxVmId` on `proxmoxNode`) and ow
 
 - Belongs to [User](/database/user.md), `onDelete: Cascade`.
 - Has many [MateState](/database/mate-state.md), [VmShare](/database/vm-share.md), [PassthroughRequest](/database/passthrough-request.md), [AlertRule](/database/alert-rule.md), all cascade-deleted with the VM.[^schema]
-- Referenced without FK by [IdeGatewayToken](/database/ide-gateway-token.md).`vmId` and [ResourceSample](/database/resource-sample.md).`vmId`; no link to the [Template](/database/template.md) it was cloned from.[^schema]
+- Referenced without FK by [IdeGatewayToken](/database/ide-gateway-token.md).`vmId`, [IdeGuestSecret](/database/ide-guest-secret.md).`vmId` and [ResourceSample](/database/resource-sample.md).`vmId`; no link to the [Template](/database/template.md) it was cloned from.[^schema]
 
 # Invariants
 
@@ -90,7 +90,7 @@ Maps a ProxMate VM id to a Proxmox guest (`proxmoxVmId` on `proxmoxNode`) and ow
 
 # Gotchas
 
-- `destroyVm` deletes the Proxmox guest first (treating "does not exist" as success), then the row. Converting a VM to a template also deletes its row.[^vm-svc] [^template-svc]
+- `destroyVm` deletes the Proxmox guest first (treating "does not exist" as success), then the row together with its IdeGuestSecret and IdeGatewayToken rows (one transaction). Converting a VM to a template also deletes its row, the same way.[^vm-svc] [^template-svc]
 - The password is never passed as cloud-init `cipassword`, because that would leave its crypt hash readable on the guest disk. That's why `pendingCiPassword` exists.[^schema]
 
 [^schema]: backend/prisma/schema.prisma

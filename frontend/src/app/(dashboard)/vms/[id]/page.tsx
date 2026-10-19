@@ -36,6 +36,7 @@ import { SiTailscale } from "react-icons/si";
 import { TemplateIcon } from "@/components/template-icon";
 import { api, apiBaseUrl, apiError } from "@/lib/api";
 import type { IdeCapability, IdeStatus, VmDetail } from "@/lib/types";
+import { openReadyIde } from "@/lib/ide-open";
 import { copyText } from "@/lib/clipboard";
 import { openPopup, pollUntil } from "@/lib/ide-launch";
 import { formatRam, formatBytes, formatUptime, formatDate } from "@/lib/format";
@@ -185,8 +186,11 @@ export default function VmDetailPage() {
   async function openIde() {
     if (!vm) return;
     const vmId = vm.id;
-    const popup = () =>
-      openPopup(`${apiBaseUrl}/ide/${vmId}/proxy/`, `proxmate-ide-${vmId}`, "popup,width=1500,height=940");
+    const proxyUrl = `${apiBaseUrl}/ide/${vmId}/proxy/`;
+    const windowName = `proxmate-ide-${vmId}`;
+    const features = "popup,width=1500,height=940";
+    const openWindow = (url: string) => window.open(url, windowName, features);
+    const popup = () => openPopup(proxyUrl, windowName, features);
     // The browser only allows a pop-up shortly after a click, so after a long wait
     // (or if a blocker refused it) hand the user a button that opens it from a fresh click.
     const popupOrOffer = (message: string) => {
@@ -197,8 +201,21 @@ export default function VmDetailPage() {
       });
     };
     if (vm.ideState === "ready") {
-      popupOrOffer("ProxMate IDE is ready.");
-      return;
+      // An install from an older ProxMate has no per-VM guest credential and the
+      // proxy won't open it, so reinstall it (the same flow as a first install).
+      // The window opens before the check so the click still allows the popup.
+      const result = await openReadyIde({
+        open: openWindow,
+        proxyUrl,
+        checkReinstall: () =>
+          api.get<IdeStatus>(`/ide/${vmId}/status`).then((r) => !!r.data.reinstallRequired),
+      });
+      if (result === "opened") return;
+      if (result === "blocked") {
+        popupOrOffer("ProxMate IDE is ready.");
+        return;
+      }
+      toast.info("This IDE was installed by an older ProxMate version and needs a reinstall before it can open. Reinstalling now…");
     }
     setIdeInstalling(true);
     try {
@@ -615,7 +632,15 @@ export default function VmDetailPage() {
                   <SquareTerminal />
                   Text — links, copy/paste
                 </DropdownMenuItem>
-                {ideCap?.available && canIde && vm.type !== "lxc" && isDesktop && (
+                {/* The IDE opens only for the VM's owner (the server refuses
+                    admins and sharees), so say so instead of offering a dead end. */}
+                {ideCap?.available && canIde && vm.type !== "lxc" && isDesktop && vm.access !== "owner" && (
+                  <DropdownMenuItem disabled>
+                    <Code2 />
+                    ProxMate IDE — owner only
+                  </DropdownMenuItem>
+                )}
+                {ideCap?.available && canIde && vm.type !== "lxc" && isDesktop && vm.access === "owner" && (
                   <DropdownMenuItem
                     disabled={!running || ideBusy}
                     onClick={() => {

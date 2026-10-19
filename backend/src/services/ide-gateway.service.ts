@@ -3,7 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { decrypt } from '../lib/crypto.js';
 import { getConfig } from './config.service.js';
 import { getVmWithCap } from './vm.service.js';
-import { getIdeCapability, getIdeConfig } from './ide.service.js';
+import { getIdeCapability, getIdeConfig, isIdeOwner } from './ide.service.js';
 import { isAccessExpired } from './access.service.js';
 import { getLlmKeyEndpointById } from './tenant-llm-key.service.js';
 import { assertSafeOutboundUrl } from '../lib/url-safety.js';
@@ -51,7 +51,9 @@ export interface IssuedGatewayToken {
  * Mint (or rotate) the per-VM gateway token for a user+VM. Returns the raw token
  * once. Re-provisioning a VM's IDE calls this again and rotates the secret
  * (the `@@unique([userId, vmId])` row is upserted). Returns null if the user may
- * not use the IDE on this VM (ownership or admin policy).
+ * not use the IDE on this VM (ownership or admin policy). Only the VM's owner is
+ * ever issued one: the token lands inside the owner's guest, so a token for any
+ * other principal would hand the owner that principal's models and keys.
  */
 export async function issueGatewayToken(
   user: { id: string; role: string },
@@ -59,7 +61,7 @@ export async function issueGatewayToken(
   publicApiBaseUrl: string,
 ): Promise<IssuedGatewayToken | null> {
   const vm = await getVmWithCap(vmId, user, 'ide');
-  if (!vm) return null;
+  if (!vm || !isIdeOwner(vm, user)) return null;
   const cap = await getIdeCapability({ role: user.role });
   if (!cap.available) return null;
 
@@ -117,8 +119,10 @@ export async function verifyGatewayToken(raw: string | undefined, pathVmId: stri
   if (isAccessExpired(user)) return null;
 
   // Live re-authorization: the mint-time checks are not enough on their own.
+  // Owner only, so a token minted for anyone else (or a VM that changed hands)
+  // stops working.
   const vm = await getVmWithCap(row.vmId, user, 'ide');
-  if (!vm) return null;
+  if (!vm || !isIdeOwner(vm, user)) return null;
   const cap = await getIdeCapability({ role: user.role });
   if (!cap.available) return null;
 
