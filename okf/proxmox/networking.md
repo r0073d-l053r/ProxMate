@@ -92,7 +92,7 @@ flag a network that is missing from some nodes.[^setup]
 - **VNets must be applied** (Proxmox VE behaviour, not checked by ProxMate). `/cluster/sdn/vnets`
   returns the configured VNets, which can include pending ones. A VNet that hasn't been applied
   (Datacenter → SDN → Apply) does not exist on the nodes yet, and guests attached to it fail to
-  start. ProxMate does not filter pending VNets out; the picker's empty-list hint only reminds the
+  start. ProxMate does not check whether a listed VNet has been applied; the picker's empty-list hint only reminds the
   admin to apply the SDN configuration.[^picker]
 - **Node coverage.** A Linux bridge is defined per node. The picker warns when the chosen
   network is on fewer nodes than `nodeCount`, because a guest placed on a node without it
