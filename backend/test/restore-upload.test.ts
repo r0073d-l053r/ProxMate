@@ -15,6 +15,7 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   waitForTask: vi.fn(),
   setVmName: vi.fn(),
   applyDefaultBridge: vi.fn(),
+  getVmConfig: vi.fn(),
   configureVmIsolation: vi.fn(),
   readIsolationOptions: vi.fn(async () => ({ dnsServers: [] })),
   startVm: vi.fn(),
@@ -36,6 +37,7 @@ import * as pve from '../src/services/proxmox.service.js';
 import { getConfig } from '../src/services/config.service.js';
 import { backupDir } from '../src/services/download.service.js';
 import { getBackupStorage } from '../src/services/matestate.service.js';
+import { fakeClient, asClient, bodyOf } from './helpers.js';
 import { assertWithinQuota, markClonedGuest, settleFailedCreate, syncRestoredGuest } from '../src/services/vm.service.js';
 import {
   assertRestorableConfig,
@@ -158,16 +160,25 @@ describe('restoreFromUpload', () => {
   const FILENAME = 'vzdump-qemu-104-2026_07_03-03_00_00.vma.zst';
   const VOLID = `backups:backup/${FILENAME}`;
 
+  let client: ReturnType<typeof fakeClient>;
   beforeEach(() => {
     vi.clearAllMocks();
+    client = fakeClient();
     vi.mocked(backupDir).mockReturnValue('/nonexistent-test-mount');
     vi.mocked(getBackupStorage).mockResolvedValue('backups');
-    vi.mocked(pve.getClient).mockResolvedValue({} as never);
+    vi.mocked(pve.getClient).mockResolvedValue(asClient(client));
+    vi.mocked(pve.getVmConfig).mockResolvedValue({
+      name: 'web-01',
+      onboot: '1',
+      net0: 'e1000=AA:BB:CC:DD:EE:FF,bridge=vmbr9,firewall=0,trunks=1-4094,rate=5',
+      net1: 'bogus=11:22:33:44:55:66,bridge=vmbr9',
+    });
+    vi.mocked(pve.readIsolationOptions).mockResolvedValue({ dnsServers: [], vlanTag: 42 });
     vi.mocked(pve.getBackupNodes).mockResolvedValue(['pve-0']);
     vi.mocked(pve.extractBackupConfig).mockResolvedValue(QEMU_CFG);
     vi.mocked(assertWithinQuota).mockResolvedValue(undefined);
     vi.mocked(getConfig).mockImplementation(async (key: string) =>
-      key === 'default_storage' ? 'local-lvm' : key === 'isolation_enabled' ? 'true' : '',
+      key === 'default_storage' ? 'local-lvm' : key === 'isolation_enabled' ? 'true' : key === 'default_bridge' ? 'vmbr0' : '',
     );
     vi.mocked(pve.pickBestNode).mockResolvedValue('pve-0');
     vi.mocked(pve.getNextVmId).mockResolvedValue(200);
@@ -206,15 +217,21 @@ describe('restoreFromUpload', () => {
       expect.anything(),
       'qemu',
     );
-    // B-37: the archive carries the OLD guest's bridge, which may not exist on this
-    // cluster at all. `storage` above remaps the volumes; this is the network half.
-    expect(pve.applyDefaultBridge).toHaveBeenCalledWith('pve-0', 200, expect.anything(), 'qemu');
+    // The archive's NICs are rebuilt from scratch (audit minor): model kept (unknown
+    // models become virtio), no MAC (Proxmox generates a fresh one), the default
+    // bridge, the isolation VLAN and the firewall flag — nothing else from the archive.
+    const nicPut = client.put.mock.calls.find((x) => String(x[0]) === '/nodes/pve-0/qemu/200/config');
+    expect(bodyOf(nicPut!)).toEqual({
+      net0: 'e1000,bridge=vmbr0,firewall=1,tag=42',
+      net1: 'virtio,bridge=vmbr0,firewall=1,tag=42',
+      delete: 'onboot',
+    });
     // The tenant-isolation invariant: firewall configured before first boot.
     const isolationOrder = vi.mocked(pve.configureVmIsolation).mock.invocationCallOrder[0]!;
     const startOrder = vi.mocked(pve.startVm).mock.invocationCallOrder[0]!;
     expect(isolationOrder).toBeLessThan(startOrder);
     // ...and placement before policy: the rules are written on the final bridge.
-    expect(vi.mocked(pve.applyDefaultBridge).mock.invocationCallOrder[0]!).toBeLessThan(isolationOrder);
+    expect(client.put.mock.invocationCallOrder[client.put.mock.calls.indexOf(nicPut!)]!).toBeLessThan(isolationOrder);
     // The uploaded archive is a transient carrier — removed after success.
     expect(pve.deleteBackup).toHaveBeenCalledWith('pve-0', 'backups', VOLID);
   });
@@ -318,6 +335,26 @@ describe('archive config keys an upload may not carry (BUG-027)', () => {
 
   it('refuses a privileged container', () => {
     expect(() => assertRestorableConfig(LXC_CFG.replace('unprivileged: 1\n', ''), 'lxc')).toThrow(/privileged/);
+  });
+
+  it('refuses anything outside the allowlist, and disallowed values of allowed keys (audit minor)', () => {
+    const live = QEMU_CFG.split('[')[0];
+    for (const extra of [
+      'virtiofs0: share1',
+      'scsi5: /dev/sdb,size=10G',
+      'scsi5: local-lvm:0,import-from=/root/disk.qcow2,size=10G',
+      'cicustom: user=local:snippets/u.yaml',
+      'numa0: cpus=0-3,hostnodes=0,memory=1024',
+      'numa: 2',
+      'affinity: 0-3',
+      'rng0: source=/dev/hwrng',
+      'template: 1',
+      'something-new: 1',
+    ]) {
+      expect(() => assertRestorableConfig(`${live}${extra}\n`, 'qemu'), extra).toThrow(RestoreUploadError);
+    }
+    expect(() => assertRestorableConfig(`${LXC_CFG}features: nesting=1,keyctl=1\n`, 'lxc')).toThrow(RestoreUploadError);
+    expect(() => assertRestorableConfig(`${LXC_CFG}features: nesting=1\n`, 'lxc')).not.toThrow();
   });
 
   it('accepts an ordinary guest (a serial socket console is fine)', () => {

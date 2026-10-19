@@ -118,31 +118,109 @@ export function parseBackupConfig(text: string, kind: pve.GuestKind = 'qemu'): P
   };
 }
 
+// ─── Archive config allowlist ─────────────────────────────────
+//
+// The archive is built by the tenant, and a restore applies every key in it. So
+// only keys that describe the guest itself are accepted; anything else — host
+// devices (PCI, USB, serial/parallel ports, container device nodes, virtiofs),
+// host paths, raw QEMU arguments, hook scripts, custom cloud-init snippets, NUMA
+// host pinning, CPU affinity, RNG sources, raw LXC keys, container features
+// beyond nesting, a template flag or a privileged container — refuses the
+// archive. Keys a restore must not keep (autostart, start order, protection) are
+// accepted but stripped afterwards, and every NIC is rebuilt from scratch.
+
+const COMMON_KEYS = new Set([
+  'name', 'hostname', 'description', 'tags', 'ostype', 'arch', 'cores', 'memory', 'cpulimit', 'cpuunits',
+  'onboot', 'startup', 'protection', 'template', 'digest', 'parent', 'nameserver', 'searchdomain',
+]);
+const QEMU_KEYS = new Set([
+  'agent', 'acpi', 'balloon', 'shares', 'bios', 'boot', 'bootdisk', 'cpu', 'hotplug', 'kvm', 'localtime',
+  'machine', 'numa', 'scsihw', 'smbios1', 'sockets', 'vcpus', 'tablet', 'vga', 'vmgenid', 'keyboard', 'meta',
+  'citype', 'ciuser', 'cipassword', 'ciupgrade', 'sshkeys',
+]);
+const QEMU_KEY_PATTERNS = [/^(ide|sata|scsi|virtio)\d+$/, /^efidisk0$/, /^tpmstate0$/, /^net\d+$/, /^ipconfig\d+$/, /^serial\d+$/, /^unused\d+$/];
+const LXC_KEYS = new Set(['swap', 'unprivileged', 'features', 'timezone', 'console', 'tty', 'cmode', 'rootfs']);
+const LXC_KEY_PATTERNS = [/^mp\d+$/, /^net\d+$/, /^unused\d+$/];
+const DISK_KEY = /^(ide|sata|scsi|virtio)\d+$|^efidisk0$|^tpmstate0$|^rootfs$|^mp\d+$|^unused\d+$/;
+
+/** Config keys a restore may carry, but that are removed from the restored guest. */
+export const STRIPPED_AFTER_RESTORE = ['onboot', 'startup', 'protection'];
+
+/** Why one allowed key's value is still refused, or null. */
+function valueProblem(key: string, value: string): string | null {
+  const v = value.trim();
+  if (DISK_KEY.test(key)) {
+    const volume = v.split(',')[0] ?? '';
+    // A storage volume (`pool:name`), `none`, or a cdrom ISO — never a host path or an import.
+    if (volume.startsWith('/') || /(^|,)import-from=/.test(v) || (volume !== 'none' && !volume.includes(':'))) {
+      return 'a disk that is not a storage volume';
+    }
+  }
+  if (/^serial\d+$/.test(key) && v !== 'socket') return 'a host serial port';
+  if (key === 'numa' && v !== '0' && v !== '1') return 'NUMA host pinning';
+  if (key === 'template' && v !== '0') return 'the template flag';
+  if (key === 'features' && v.split(',').some((f) => !/^nesting=[01]$/.test(f.trim()))) return 'container features beyond nesting';
+  return null;
+}
+
 /**
- * Refuse an archive whose config reaches past the guest itself. The archive is
- * built by the tenant, and a restore applies every key in it — so host devices
- * (PCI, USB, serial/parallel ports, container device nodes), host-path mounts,
- * raw QEMU arguments, hook scripts, raw LXC settings and a privileged container
- * are all things only an admin may grant, never something an upload carries in.
- * Throws RestoreUploadError naming the first offending key.
+ * Refuse an archive whose config reaches past the guest itself (see the allowlist
+ * above). Throws RestoreUploadError naming the first offending key.
  */
 export function assertRestorableConfig(text: string, kind: pve.GuestKind): void {
   const cfg = parseGuestConfigText(text);
+  const [keys, patterns] = kind === 'lxc' ? [LXC_KEYS, LXC_KEY_PATTERNS] : [QEMU_KEYS, QEMU_KEY_PATTERNS];
   for (const [key, value] of Object.entries(cfg)) {
-    const hostDevice =
-      /^(hostpci|usb)\d+$/.test(key) ||
-      (/^(serial|parallel)\d+$/.test(key) && value.trim().startsWith('/dev/')) ||
-      (kind === 'lxc' && /^dev\d+$/.test(key));
-    const hostPath = kind === 'lxc' && /^(rootfs|mp\d+)$/.test(key) && value.trim().startsWith('/');
-    if (hostDevice || hostPath || key === 'args' || key === 'hookscript' || key.startsWith('lxc.')) {
+    const allowed = COMMON_KEYS.has(key) || keys.has(key) || patterns.some((re) => re.test(key));
+    const problem = allowed ? valueProblem(key, value) : null;
+    if (!allowed || problem) {
       throw new RestoreUploadError(
-        `This backup can't be restored here: its configuration sets "${key}", which only an admin can set.`,
+        `This backup can't be restored here: its configuration sets "${key}"${problem ? ` (${problem})` : ''}, which an uploaded backup may not carry.`,
       );
     }
   }
   if (kind === 'lxc' && cfg['unprivileged']?.trim() !== '1') {
     throw new RestoreUploadError("This backup can't be restored here: it is a privileged container.");
   }
+}
+
+const NIC_MODELS = new Set(['virtio', 'e1000', 'e1000e', 'rtl8139', 'vmxnet3']);
+
+/**
+ * Replace every NIC the archive brought with one built from scratch: the same NIC
+ * model (QEMU) or interface name (LXC), a fresh MAC, the admin's default bridge,
+ * the isolation VLAN tag when one is configured, and the firewall flag. Nothing
+ * else on the archive's NIC line (MAC, trunks, rate, static addresses, …) survives.
+ * Also removes the keys a restore must not keep (STRIPPED_AFTER_RESTORE).
+ */
+async function rebuildRestoredGuestConfig(
+  node: string,
+  vmid: number,
+  isolate: boolean,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+  kind: pve.GuestKind,
+): Promise<void> {
+  const bridge = await getConfig('default_bridge');
+  if (!bridge) throw new RestoreUploadError('Server defaults are not configured — finish setup first');
+  const vlanTag = isolate ? (await pve.readIsolationOptions()).vlanTag : undefined;
+  const tag = vlanTag !== undefined ? `,tag=${vlanTag}` : '';
+  const cfg = await pve.getVmConfig(node, vmid, client, kind);
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(cfg)) {
+    const m = /^net(\d+)$/.exec(key);
+    if (!m) continue;
+    if (kind === 'lxc') {
+      const name = /(?:^|,)name=([a-z0-9]{1,15})(?:,|$)/.exec(value)?.[1] ?? `eth${m[1]}`;
+      params.set(key, `name=${name},bridge=${bridge},firewall=1,ip=dhcp${tag}`);
+    } else {
+      const first = (value.split(',')[0] ?? '').split('=');
+      const model = first[0] === 'model' ? first[1] ?? '' : first[0] ?? '';
+      params.set(key, `${NIC_MODELS.has(model) ? model : 'virtio'},bridge=${bridge},firewall=1${tag}`);
+    }
+  }
+  const strip = STRIPPED_AFTER_RESTORE.filter((k) => k in cfg);
+  if (strip.length > 0) params.set('delete', strip.join(','));
+  if ([...params.keys()].length > 0) await client.put(`/nodes/${node}/${kind}/${vmid}/config`, params);
 }
 
 /** Best-effort removal of the uploaded archive (Proxmox API first, then the mount). */
@@ -276,9 +354,9 @@ async function restoreFromUploadLocked(
       // The restored config carries the OLD guest's name — apply the chosen one.
       await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
 
-      // ...and the OLD guest's bridge, which may not exist on this cluster at all.
-      // `storage` above remaps the volumes; this is the network half of the same job.
-      await pve.applyDefaultBridge(node, vmid, client, kind);
+      // ...and the OLD guest's NICs, whose bridge may not exist on this cluster at
+      // all. `storage` above remaps the volumes; this is the network half of the same job.
+      await rebuildRestoredGuestConfig(node, vmid, isolate, client, kind);
 
       // Tenant isolation BEFORE first boot, built from the regenerated MACs.
       if (isolate) {

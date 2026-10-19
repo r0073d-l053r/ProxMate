@@ -32,11 +32,18 @@ The migration path between clusters / ProxMate instances: a tenant uploads an ar
 
 1. Validate filename; infer `lxc`/`qemu` from the `vzdump-lxc-` prefix.[^ru]
 2. Volid `<backup_storage>:backup/<filename>`; `getBackupNodes` must see it, else delete and fail ("check BACKUP_DOWNLOAD_DIR is mounted from that storage's directory").
-3. Extract embedded config; `assertRestorableConfig` refuses (and drops) an archive that sets `hostpciN`, `usbN`, a `/dev/` serial/parallel port, `args`, `hookscript`, any `lxc.*` key, a container `devN` or host-path `rootfs`/`mpN`, or a container without `unprivileged: 1`; then `assertWithinQuota` for cores/memory/disk.
+3. Extract embedded config; `assertRestorableConfig` refuses (and drops) an archive with any key outside the allowlist (see below), a disk that is not a storage volume (host path, `import-from`), a serial port other than `socket`, `numa` other than 0/1, `template: 1`, container `features` beyond `nesting`, or a container without `unprivileged: 1`; then `assertWithinQuota` for cores/memory/disk.
 4. Require `default_storage`; `pickBestNode` among nodes that see the file, arch `amd64`; `getNextVmId`.
 5. Create the `VirtualMachine` row (`status: 'creating'`), `restoreNewGuest` onto `default_storage` (unique=1, fresh MACs, containers always `unprivileged=1`), wait up to 30 min, tag the guest, then `syncRestoredGuest` with no approved PCI devices (re-reads the row's sizes from the restored guest).
-6. Rename to chosen name, `applyDefaultBridge`, configure isolation if `isolation_enabled !== 'false'` — all before `syncRestoredGuest` and the first boot. Any failure once the restore landed leaves the row `error`; a restore task still running when the wait gave up keeps the archive, which its follower removes when the task ends.
+6. Rename to chosen name, rebuild every `netN` from scratch (QEMU: the archive's NIC model if it is virtio/e1000/e1000e/rtl8139/vmxnet3, else virtio; LXC: its interface name, `ip=dhcp`; then no MAC so Proxmox generates a fresh one, `bridge=<default_bridge>`, `firewall=1`, `tag=<isolation_vlan_tag>` when isolation is on and a tag is set) and remove `onboot`/`startup`/`protection`, configure isolation if `isolation_enabled !== 'false'` — all before `syncRestoredGuest` and the first boot. Any failure once the restore landed leaves the row `error`; a restore task still running when the wait gave up keeps the archive, which its follower removes when the task ends.
 7. Start, mark `running`, delete the archive.
+
+# Archive config allowlist
+
+- Both kinds: `name`, `hostname`, `description`, `tags`, `ostype`, `arch`, `cores`, `memory`, `cpulimit`, `cpuunits`, `onboot`, `startup`, `protection` (the last three are stripped after the restore), `template` (only `0`), `digest`, `parent`, `nameserver`, `searchdomain`.
+- QEMU: `agent`, `acpi`, `balloon`, `shares`, `bios`, `boot`, `bootdisk`, `cpu`, `hotplug`, `kvm`, `localtime`, `machine`, `numa` (0/1), `scsihw`, `smbios1`, `sockets`, `vcpus`, `tablet`, `vga`, `vmgenid`, `keyboard`, `meta`, `citype`, `ciuser`, `cipassword`, `ciupgrade`, `sshkeys`, `ideN`/`sataN`/`scsiN`/`virtioN`, `efidisk0`, `tpmstate0`, `netN`, `ipconfigN`, `serialN` (`socket` only), `unusedN`.
+- LXC: `swap`, `unprivileged` (must be 1), `features` (`nesting` only), `timezone`, `console`, `tty`, `cmode`, `rootfs`, `mpN`, `netN`, `unusedN`.
+- Everything else is refused — e.g. `hostpciN`, `usbN`, `parallelN`, `virtiofsN`, `args`, `hookscript`, `cicustom`, `numaN`, `affinity`, `rngN`, `devN`, `lxc.*`.[^ru]
 
 # Data
 
