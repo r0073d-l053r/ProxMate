@@ -67,6 +67,12 @@ async function runWeeklyBackups(reason: string): Promise<void> {
     const result = await runScheduledBackups();
     await setConfig(LAST_RUN_KEY, new Date().toISOString());
     console.log(`[scheduler] done: ${result.ran} ok, ${result.failed} failed in ${Math.round((Date.now() - t0) / 1000)}s`);
+  } catch (err) {
+    // The cron callback can't await this, so an error escaping here (the VM query
+    // or the marker write — per-VM failures are already caught) would be an
+    // unhandled rejection and take the whole process down. The marker stays old,
+    // so the next boot's catch-up retries the window.
+    console.error('[scheduler] weekly MateState backups failed:', err);
   } finally {
     running = false;
   }
