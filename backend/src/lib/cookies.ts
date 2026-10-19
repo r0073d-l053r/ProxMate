@@ -41,11 +41,15 @@ export function clearAuthCookies(res: Response): void {
   res.clearCookie(CSRF_COOKIE, base);
 }
 
-/** Short-lived httpOnly cookie holding a WebAuthn challenge between options + verify. */
+/**
+ * Short-lived httpOnly cookie carrying the opaque handle of a WebAuthn challenge
+ * between options + verify. The challenge itself is kept server-side (see
+ * lib/webauthn-challenges.ts); the cookie never holds it.
+ */
 export const WEBAUTHN_COOKIE = 'proxmate_webauthn';
 
-export function setChallengeCookie(res: Response, challenge: string): void {
-  res.cookie(WEBAUTHN_COOKIE, challenge, {
+export function setChallengeCookie(res: Response, handle: string): void {
+  res.cookie(WEBAUTHN_COOKIE, handle, {
     httpOnly: true,
     secure: secure(),
     sameSite: 'lax',

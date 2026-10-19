@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma.js';
 import { getConfig } from './config.service.js';
 import { isAccessExpired } from './access.service.js';
+import { EphemeralStore } from '../lib/ephemeral-store.js';
 import type { AuthUser } from '../types/index.js';
 
 export async function hashPassword(password: string): Promise<string> {
@@ -131,6 +132,17 @@ export async function verifyToken(token: string): Promise<AuthUser | null> {
   return !s || s.accessExpired ? null : s.user;
 }
 
+/** Codes a single 2FA login challenge may be checked against before it stops working. */
+const CHALLENGE_MAX_ATTEMPTS = 5;
+const CHALLENGE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Server-side record of every outstanding 2FA challenge (keyed by its `jti`), so
+ * a challenge can be retired: after a successful exchange (single-use) or after
+ * CHALLENGE_MAX_ATTEMPTS wrong codes. The signed JWT alone cannot express either.
+ */
+const challenges = new EphemeralStore<{ userId: string; attempts: number; busy: boolean }>(CHALLENGE_TTL_MS);
+
 /**
  * Sign a short-lived "2FA pending" token issued after a correct password, to be
  * exchanged (with a TOTP/recovery code) for a real session. Proves the password
@@ -138,18 +150,61 @@ export async function verifyToken(token: string): Promise<AuthUser | null> {
  */
 export async function signChallenge(userId: string): Promise<string> {
   const secret = await getJwtSecret();
-  return jwt.sign({ sub: userId, twofa: true }, secret, { expiresIn: '5m' });
+  const jti = randomBytes(16).toString('hex');
+  challenges.set(jti, { userId, attempts: 0, busy: false });
+  return jwt.sign({ sub: userId, twofa: true }, secret, { expiresIn: '5m', jwtid: jti });
 }
 
-/** Verify a 2FA challenge token; returns the userId or null. */
-export async function verifyChallenge(token: string): Promise<string | null> {
+/**
+ * Verify a 2FA challenge token. Returns the userId and the challenge's id, or
+ * null when the token is invalid, expired, already used or exhausted.
+ */
+export async function verifyChallenge(token: string): Promise<{ userId: string; challengeId: string } | null> {
   try {
     const secret = await getJwtSecret();
-    const payload = jwt.verify(token, secret, { algorithms: ['HS256'] }) as { sub: string; twofa?: boolean };
-    return payload.twofa ? payload.sub : null;
+    const payload = jwt.verify(token, secret, { algorithms: ['HS256'] }) as {
+      sub: string;
+      twofa?: boolean;
+      jti?: string;
+    };
+    if (!payload.twofa || !payload.jti) return null;
+    const entry = challenges.get(payload.jti);
+    if (!entry || entry.userId !== payload.sub) return null;
+    return { userId: payload.sub, challengeId: payload.jti };
   } catch {
     return null;
   }
+}
+
+/**
+ * Start checking a code against a challenge. Synchronous, and it both counts the
+ * attempt and marks the challenge busy BEFORE any code is verified, so requests
+ * racing on one challenge are evaluated one at a time and never more than
+ * CHALLENGE_MAX_ATTEMPTS in total. Serialising also means a recovery code is
+ * never spent by a request that was bound to lose to a concurrent one. Returns
+ * false when the challenge is unknown, spent, exhausted or already being checked.
+ */
+export function beginChallengeAttempt(challengeId: string): boolean {
+  const entry = challenges.get(challengeId);
+  if (!entry || entry.busy || entry.attempts >= CHALLENGE_MAX_ATTEMPTS) return false;
+  entry.busy = true;
+  entry.attempts += 1;
+  return true;
+}
+
+/**
+ * Finish a check started with beginChallengeAttempt. A correct code spends the
+ * challenge (single-use); a wrong one frees it for another try, or retires it at
+ * the cap.
+ */
+export function endChallengeAttempt(challengeId: string, ok: boolean): void {
+  const entry = challenges.get(challengeId);
+  if (!entry) return;
+  if (ok || entry.attempts >= CHALLENGE_MAX_ATTEMPTS) {
+    challenges.delete(challengeId);
+    return;
+  }
+  entry.busy = false;
 }
 
 /**

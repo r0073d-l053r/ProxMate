@@ -4,6 +4,7 @@ import { encrypt, decrypt } from '../lib/crypto.js';
 import { logger } from '../lib/logger.js';
 import { isLoopbackOrLinkLocal } from '../lib/url-safety.js';
 import { getClient, getVmIps } from './proxmox.service.js';
+import { envNumber } from '../lib/env-number.js';
 
 /**
  * Per-VM guest credential for the ProxMate IDE.
@@ -141,7 +142,8 @@ export function resolveIdeTargetUrl(
   const override = env['IDE_TARGET_OVERRIDE'];
   if (override) return override;
   if (!vm.ipAddress || isLoopbackOrLinkLocal(vm.ipAddress)) return null;
-  const port = env['IDE_GUEST_PORT'] || '8080';
+  // Parsed exactly as ide-provision parses it, so the proxy and the guest agree.
+  const port = envNumber('IDE_GUEST_PORT', 8080, 1, env);
   return `http://${vm.ipAddress}:${port}`;
 }
 

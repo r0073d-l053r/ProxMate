@@ -23,12 +23,12 @@ api.interceptors.request.use((config) => {
 });
 
 // When the session is gone (401), clear auth so guards bounce the user to /login.
-// A rejected re-auth (e.g. a wrong kiosk-exit PIN) is also a 401 but leaves the
-// session intact, so it is surfaced to the caller without signing out.
+// A rejected re-auth (e.g. a wrong kiosk-exit PIN) is a 403 `reauth_failed`, which
+// leaves the session intact and is surfaced to the caller without signing out.
 api.interceptors.response.use(
   (res) => res,
   (error: AxiosError) => {
-    if (isSessionLoss(error.response?.status, error.config?.url, error.response?.data)) {
+    if (isSessionLoss(error.response?.status)) {
       useAuthStore.getState().clear();
     }
     return Promise.reject(error);

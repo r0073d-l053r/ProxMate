@@ -19,6 +19,8 @@ export default function ResetPasswordPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
+  // Passkeys still on the account after the reset (they are not removed by it).
+  const [passkeys, setPasskeys] = useState<string[]>([]);
 
   // Read the token from the URL (client-only → no Suspense boundary needed).
   useEffect(() => {
@@ -35,7 +37,8 @@ export default function ResetPasswordPage() {
 
     setSubmitting(true);
     try {
-      await api.post("/auth/reset-password", { token, password });
+      const r = await api.post<{ remainingPasskeys?: string[] }>("/auth/reset-password", { token, password });
+      setPasskeys(r.data.remainingPasskeys ?? []);
       setDone(true);
     } catch (err) {
       toast.error(apiError(err));
@@ -78,7 +81,13 @@ export default function ResetPasswordPage() {
           </CardTitle>
           <CardDescription>You can now sign in with your new password.</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="grid gap-4">
+          {passkeys.length > 0 && (
+            <p className="text-sm text-muted-foreground">
+              These passkeys can still sign in to your account: {passkeys.join(", ")}. If you
+              don&apos;t recognise one, remove it under Security after you sign in.
+            </p>
+          )}
           <Button onClick={() => router.replace("/login")} className="w-full">
             Go to sign in
           </Button>

@@ -6,6 +6,7 @@ import { isMailConfigured, sendMail } from './mail.service.js';
 import { alertEmail } from '../lib/email-templates.js';
 import { notifyWebhook } from './notify.service.js';
 import * as pve from './proxmox.service.js';
+import { envNumber } from '../lib/env-number.js';
 import { tagsMarkRow } from './vm.service.js';
 
 /**
@@ -28,7 +29,7 @@ export const ALERT_METRIC_LABEL: Record<AlertMetric, string> = {
 };
 
 /** Don't re-fire the same rule more often than this (minutes). */
-const COOLDOWN_MIN = Math.max(5, Number(process.env['ALERT_COOLDOWN_MIN'] ?? 60));
+const COOLDOWN_MIN = envNumber('ALERT_COOLDOWN_MIN', 60, 5);
 
 /** One VM's live signals, as seen this tick. `diskPct` is null when unknown (no agent). */
 export interface VmSignals {

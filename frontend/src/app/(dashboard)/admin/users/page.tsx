@@ -604,6 +604,7 @@ function EditQuotaDialog({ user, onDone }: { user: ManagedUser; onDone: () => vo
 function ResetPasswordButton({ user, onDone }: { user: ManagedUser; onDone: () => void }) {
   const [open, setOpen] = useState(false);
   const [pw, setPw] = useState("");
+  const [removePasskeys, setRemovePasskeys] = useState(false);
   const [busy, setBusy] = useState(false);
 
   function generate() {
@@ -642,10 +643,11 @@ function ResetPasswordButton({ user, onDone }: { user: ManagedUser; onDone: () =
     }
     setBusy(true);
     try {
-      await api.post(`/admin/users/${user.id}/reset-password`, { password: pw });
+      await api.post(`/admin/users/${user.id}/reset-password`, { password: pw, removePasskeys });
       toast.success(`Password reset for ${user.email}. Share it with them securely.`);
       setOpen(false);
       setPw("");
+      setRemovePasskeys(false);
       onDone();
     } catch (err) {
       toast.error(apiError(err));
@@ -675,6 +677,15 @@ function ResetPasswordButton({ user, onDone }: { user: ManagedUser; onDone: () =
           <button type="button" onClick={generate} className="text-left text-xs text-primary hover:underline">
             Generate a random password
           </button>
+          <label className="flex items-center gap-2 text-sm select-none">
+            <input
+              type="checkbox"
+              checked={removePasskeys}
+              onChange={(e) => setRemovePasskeys(e.target.checked)}
+              className="size-4 rounded border-input accent-primary"
+            />
+            Also remove their passkeys
+          </label>
         </div>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>

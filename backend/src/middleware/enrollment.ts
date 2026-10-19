@@ -24,8 +24,10 @@ async function authenticateEnrollment(req: Request): Promise<AuthUserResult | nu
   const userId = await verifyEnrollment(bearer);
   if (!userId) return null;
 
-  // The token only authorizes enrollment, and only until a factor exists.
-  if (!(await isMfaSetupRequired(userId))) return null;
+  // The token only authorizes enrollment, and only until a factor exists. It is
+  // issued by the password login, which applies required 2FA to SSO-linked
+  // accounts too, so it must not go inert for them here.
+  if (!(await isMfaSetupRequired(userId, { ssoExempt: false }))) return null;
 
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) return null;

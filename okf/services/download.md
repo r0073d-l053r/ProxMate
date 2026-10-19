@@ -24,7 +24,7 @@ The Proxmox API cannot stream vzdump bytes, so downloads work only when the admi
 | `filenameFromVolid` | `(volid) => string \| null` | Last path segment, validated against `VZDUMP_RE`. |
 | `resolveBackupFile` | `(filename) => string \| null` | Looks in `<dir>` and `<dir>/dump`; verifies the resolved path stays under the root and is a regular file. |
 | `requestBackupDownload` | `(mateStateId, vmId, requester, appUrl) => { emailedTo }` | Checks the MateState belongs to the VM and is `ready`, file exists; creates a token (TTL 1 h); emails `<appUrl>/api/downloads/<raw>`. |
-| `consumeDownloadToken` | `(raw) => { fullPath, filename }` | Validates hash, unused, unexpired, file present; marks `usedAt` before streaming. |
+| `consumeDownloadToken` | `(raw) => { fullPath, filename }` | Validates hash, unused, unexpired, file present; claims the token (`usedAt`) with a write conditional on it still being unused, before streaming. |
 | `pruneDownloadTokens` | `(now?) => number` | Deletes expired or used tokens (opportunistic). |
 | `DownloadError` | class | Thrown for every failure. |
 
@@ -37,7 +37,7 @@ The Proxmox API cannot stream vzdump bytes, so downloads work only when the admi
 # Gotchas
 
 - `VZDUMP_RE` = `^vzdump-(qemu|lxc)-\d+-[\w.-]+\.(vma|tar)(\.(zst|gz|lzo))?$`; input is reduced to a basename and must equal it, so nothing path-like passes.[^download]
-- Tokens are single-use even if the stream is interrupted (marked used up-front).[^download]
+- Tokens are single-use even if the stream is interrupted (marked used up-front), and under concurrency: only the request whose conditional claim lands gets the file.[^download]
 - The route answers any `DownloadError` from consume with a generic 404 so there is no oracle for token guessing.[^download]
 
 # Relationships

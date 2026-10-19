@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 vi.mock('../src/lib/prisma.js', () => ({
-  prisma: { downloadToken: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn(), deleteMany: vi.fn() } },
+  prisma: {
+    downloadToken: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn(), create: vi.fn(), deleteMany: vi.fn() },
+  },
 }));
 vi.mock('../src/services/mail.service.js', () => ({ isMailConfigured: vi.fn(async () => true), sendMail: vi.fn() }));
 
@@ -81,13 +83,37 @@ describe('consumeDownloadToken (single-use + expiry)', () => {
   const raw = 'a'.repeat(64);
   const baseToken = () => ({ id: 'tok1', tokenHash: sha256(raw), filename: VALID, usedAt: null, expiresAt: new Date(Date.now() + 60_000) });
 
+  /** The conditional claim behaves like the DB: only the first `usedAt: null` match wins. */
+  function claimOnce() {
+    let claimed = false;
+    vi.mocked(prisma.downloadToken.updateMany).mockImplementation((async () => {
+      await Promise.resolve();
+      if (claimed) return { count: 0 };
+      claimed = true;
+      return { count: 1 };
+    }) as never);
+  }
+
   it('returns the file and marks the token used', async () => {
     vi.mocked(prisma.downloadToken.findUnique).mockResolvedValue(baseToken() as never);
+    claimOnce();
     const r = await consumeDownloadToken(raw);
     expect(r.filename).toBe(VALID);
-    expect(prisma.downloadToken.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'tok1' }, data: expect.objectContaining({ usedAt: expect.any(Date) }) }),
+    expect(prisma.downloadToken.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'tok1', usedAt: null },
+        data: expect.objectContaining({ usedAt: expect.any(Date) }),
+      }),
     );
+  });
+
+  it('serves a token once even when two requests present it at the same moment', async () => {
+    vi.mocked(prisma.downloadToken.findUnique).mockResolvedValue(baseToken() as never);
+    claimOnce();
+    const results = await Promise.allSettled([consumeDownloadToken(raw), consumeDownloadToken(raw)]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(rejected.reason).toBeInstanceOf(DownloadError);
   });
 
   it('rejects an unknown token', async () => {
@@ -98,7 +124,7 @@ describe('consumeDownloadToken (single-use + expiry)', () => {
   it('rejects an already-used token', async () => {
     vi.mocked(prisma.downloadToken.findUnique).mockResolvedValue({ ...baseToken(), usedAt: new Date() } as never);
     await expect(consumeDownloadToken(raw)).rejects.toThrow(/used/);
-    expect(prisma.downloadToken.update).not.toHaveBeenCalled();
+    expect(prisma.downloadToken.updateMany).not.toHaveBeenCalled();
   });
 
   it('rejects an expired token', async () => {
