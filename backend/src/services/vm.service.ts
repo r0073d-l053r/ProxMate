@@ -504,7 +504,18 @@ export async function settleFailedCreate(
 /** How long a create/clone task that outlived its wait is still followed. */
 const LATE_TASK_FOLLOW_MS = 6 * 60 * 60 * 1000;
 
-type CreateTask = { node: string; upid: string; afterTask?: () => Promise<void> };
+type CreateTask = {
+  node: string;
+  upid: string;
+  /**
+   * Make the finished guest safe before it is tagged as the row's (an upload
+   * restore: rebuild its NICs, check its volumes, apply isolation, re-sync its
+   * sizes). If it throws, the guest is never tagged.
+   */
+  beforeTag?: () => Promise<void>;
+  /** Runs once the task has ended either way (e.g. remove an uploaded archive). */
+  afterTask?: () => Promise<void>;
+};
 
 /**
  * Whether the create task behind a failed create produced (or is still producing)
@@ -525,7 +536,12 @@ async function settleCreateTask(vm: VirtualMachine, task: CreateTask): Promise<'
   }
   if (st.status === 'stopped') {
     if (st.exitstatus && st.exitstatus !== 'OK' && !st.exitstatus.startsWith('WARNINGS')) return null;
-    await markClonedGuest(vm, client).catch(() => undefined);
+    try {
+      await task.beforeTag?.();
+      await markClonedGuest(vm, client);
+    } catch (e) {
+      console.warn(`[vm] guest of failed create "${vm.name}" left untagged: ${pve.pveMessage(e)}`);
+    }
     return 'done';
   }
   void pve
@@ -535,6 +551,7 @@ async function settleCreateTask(vm: VirtualMachine, task: CreateTask): Promise<'
       // been deleted, the VMID is nobody's and the guest must not be claimed.
       const row = await prisma.virtualMachine.findUnique({ where: { id: vm.id } });
       if (!row || row.proxmoxVmId !== vm.proxmoxVmId || row.proxmoxNode !== task.node) return;
+      await task.beforeTag?.();
       await markClonedGuest(row, client);
     })
     .catch((e) => console.warn(`[vm] late create task for "${vm.name}" did not complete: ${pve.pveMessage(e)}`))
@@ -1402,6 +1419,8 @@ async function duplicateVmLocked(
     // Same as every other clone path: the copy inherited the source's bridge, so the
     // admin's default is applied here (see pve.applyDefaultBridge for why it wins).
     await pve.applyDefaultBridge(node, vmid, client);
+    // The copy inherited the source's NIC lines: firewall flag on, no trunks.
+    await pve.ensureNicFirewall(node, vmid, client);
 
     if (isolate) {
       await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client);

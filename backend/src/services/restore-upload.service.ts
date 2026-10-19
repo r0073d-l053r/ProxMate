@@ -357,12 +357,28 @@ async function restoreFromUploadLocked(
     release(); // usage now includes this row
 
     let created = false;
-    let restoreTask: { node: string; upid: string; afterTask: () => Promise<void> } | undefined;
+    let restoreTask:
+      | { node: string; upid: string; beforeTag: () => Promise<void>; afterTask: () => Promise<void> }
+      | undefined;
     try {
       // Remap all volumes onto our default pool: cross-cluster archives name
       // storages this cluster may not have. unique=1 → fresh MACs.
       const upid = await pve.restoreNewGuest({ node, vmid, volid, storage: defaultStorage }, client, kind);
-      restoreTask = { node, upid, afterTask: () => cleanupArchive(filename, node, storage, volid) };
+      restoreTask = {
+        node,
+        upid,
+        // A restore that finishes after we stopped waiting gets the same treatment
+        // as one that finished in time before it is ever tied to the row (the row
+        // stays held either way).
+        beforeTag: async () => {
+          await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
+          await rebuildRestoredGuestConfig(node, vmid, isolate, client, kind);
+          await assertOwnVolumes(vm, client);
+          if (isolate) await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, kind);
+          await syncRestoredGuest(vm, { approvedPci: [], client });
+        },
+        afterTask: () => cleanupArchive(filename, node, storage, volid),
+      };
       await pve.waitForTask(node, upid, client, 30 * 60 * 1000);
       created = true;
       // The archive's config carries the OLD guest's tags; tie the guest to this row.

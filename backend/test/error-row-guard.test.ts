@@ -91,6 +91,37 @@ describe('late create-task follower (audit MAJOR 1)', () => {
     expect(c.put.mock.calls.some((x) => bodyOf(x)['tags'] !== undefined)).toBe(false);
   });
 
+  it('makes the late guest safe before tagging it, and never tags it when that fails (audit round 2)', async () => {
+    const { c, state } = pve1(templateMarker('t1'), { status: 'running' });
+    const order: string[] = [];
+    const beforeTag = vi.fn(async () => {
+      order.push('beforeTag');
+      throw new Error('volume check failed');
+    });
+    const afterTask = vi.fn(async () => {
+      order.push('afterTask');
+    });
+    await settleFailedCreate(row({ status: 'creating' }), new Error('timed out'), false, {
+      task: { node: 'pve1', upid: 'UPID:x', beforeTag, afterTask },
+    });
+    vi.mocked(prisma.virtualMachine.findUnique).mockResolvedValue(row());
+    state.task = { status: 'stopped', exitstatus: 'OK' };
+    await vi.waitFor(() => expect(afterTask).toHaveBeenCalled(), { timeout: 5000 });
+    expect(order).toEqual(['beforeTag', 'afterTask']);
+    expect(c.put.mock.calls.some((x) => bodyOf(x)['tags'] !== undefined)).toBe(false);
+  });
+
+  it('runs the safety step before tagging when the task had already finished', async () => {
+    const { c } = pve1(templateMarker('t1'), { status: 'stopped', exitstatus: 'OK' });
+    const beforeTag = vi.fn(async () => undefined);
+    await settleFailedCreate(row({ status: 'creating' }), new Error('timed out'), false, {
+      task: { node: 'pve1', upid: 'UPID:x', beforeTag },
+    });
+    const tagPut = c.put.mock.calls.findIndex((x) => bodyOf(x)['tags'] === guestMarker('rowa'));
+    expect(beforeTag).toHaveBeenCalled();
+    expect(beforeTag.mock.invocationCallOrder[0]!).toBeLessThan(c.put.mock.invocationCallOrder[tagPut]!);
+  });
+
   it('tags the guest only while the row still points at that VMID', async () => {
     const { c, state } = pve1(templateMarker('t1'), { status: 'running' });
     await settleFailedCreate(row({ status: 'creating' }), new Error('timed out'), false, { task: { node: 'pve1', upid: 'UPID:x' } });

@@ -279,8 +279,19 @@ describe('restoreFromUpload', () => {
     vi.mocked(settleFailedCreate).mockResolvedValueOnce({ following: true });
     await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(/timed out/);
     expect(pve.deleteBackup).not.toHaveBeenCalled();
+    // Before the late guest is tied to the row, it gets the same rebuild, volume
+    // check, isolation and re-sync as an on-time restore (audit round 2).
+    const task = vi.mocked(settleFailedCreate).mock.calls[0]![3]!.task as {
+      beforeTag: () => Promise<void>;
+      afterTask: () => Promise<void>;
+    };
+    const { assertOwnVolumes } = await import('../src/services/vm.service.js');
+    await task.beforeTag();
+    expect(client.put).toHaveBeenCalledWith('/nodes/pve-0/qemu/200/config', expect.any(URLSearchParams));
+    expect(assertOwnVolumes).toHaveBeenCalled();
+    expect(pve.configureVmIsolation).toHaveBeenCalled();
+    expect(syncRestoredGuest).toHaveBeenCalledWith({ id: 'vm1' }, { approvedPci: [], client: expect.anything() });
     // The follower's cleanup is the archive removal.
-    const task = vi.mocked(settleFailedCreate).mock.calls[0]![3]!.task as { afterTask: () => Promise<void> };
     await task.afterTask();
     expect(pve.deleteBackup).toHaveBeenCalledWith('pve-0', 'backups', VOLID);
   });

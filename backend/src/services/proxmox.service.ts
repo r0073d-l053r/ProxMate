@@ -2835,11 +2835,24 @@ export async function ensureNicFirewall(
   const c = client ?? (await getClient());
   const cfg = await getVmConfig(node, vmid, c, kind);
   for (const k of Object.keys(cfg).filter((key) => /^net\d+$/.test(key))) {
-    const val = cfg[k]!;
-    if (/\bfirewall=1\b/.test(val)) continue;
-    const updated = /\bfirewall=0\b/.test(val) ? val.replace(/\bfirewall=0\b/, 'firewall=1') : `${val},firewall=1`;
+    const val = withoutTrunks(cfg[k]!);
+    const updated = /\bfirewall=1\b/.test(val)
+      ? val
+      : /\bfirewall=0\b/.test(val)
+        ? val.replace(/\bfirewall=0\b/, 'firewall=1')
+        : `${val},firewall=1`;
+    if (updated === cfg[k]) continue;
     await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams({ [k]: updated }));
   }
+}
+
+/**
+ * A NIC line without `trunks=`. Trunks let a guest's NIC carry several VLANs, i.e.
+ * reach segments other than the one tenant isolation puts it on — a tenant guest
+ * never gets them, whatever its config (a restored archive or snapshot) says.
+ */
+export function withoutTrunks(nic: string): string {
+  return nic.replace(/,?\btrunks=[^,]*/g, '').replace(/^,/, '');
 }
 
 /**
@@ -2876,17 +2889,21 @@ export async function setVmVlanTag(
   const c = client ?? (await getClient());
   const cfg = await getVmConfig(node, vmid, c, kind);
   for (const k of Object.keys(cfg).filter((key) => /^net\d+$/.test(key))) {
-    const val = cfg[k]!;
+    // Never leave trunks on a tenant NIC (see withoutTrunks).
+    const val = withoutTrunks(cfg[k]!);
     const current = /\btag=(\d+)\b/.exec(val);
     if (tag === null) {
-      if (!current) continue;
+      if (!current && val === cfg[k]) continue;
       await c.put(
         `/nodes/${node}/${kind}/${vmid}/config`,
         new URLSearchParams({ [k]: val.replace(/,?\btag=\d+\b/, '') }),
       );
       continue;
     }
-    if (current && Number(current[1]) === tag) continue;
+    if (current && Number(current[1]) === tag) {
+      if (val !== cfg[k]) await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams({ [k]: val }));
+      continue;
+    }
     const updated = current ? val.replace(/\btag=\d+\b/, `tag=${tag}`) : `${val},tag=${tag}`;
     await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams({ [k]: updated }));
   }
