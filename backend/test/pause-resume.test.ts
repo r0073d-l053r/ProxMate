@@ -38,7 +38,15 @@ describe('pauseVm / resumeVm (service gating)', () => {
   it('pauses a running QEMU VM on its node', async () => {
     const c = fakeClient();
     // syncVmNode reads /cluster/resources to confirm the node.
-    c.get.mockResolvedValue({ data: { data: [{ type: 'qemu', vmid: 120, node: 'pve1' }] } });
+    c.get.mockImplementation((url: string) =>
+      Promise.resolve({
+        data: {
+          data: /\/config$/.test(url)
+            ? { tags: 'proxmate-db-1' } // the row's own guest
+            : [{ type: 'qemu', vmid: 120, node: 'pve1' }],
+        },
+      }),
+    );
     getClient.mockResolvedValue(asClient(c));
 
     await pauseVm(vm());

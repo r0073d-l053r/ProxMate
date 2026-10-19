@@ -20,6 +20,8 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   deleteVm: vi.fn().mockResolvedValue(undefined),
   convertToTemplate: vi.fn().mockResolvedValue(undefined),
   pveMessage: vi.fn(() => ''),
+  // The guest at the VMID carries this row's ownership tag.
+  getVmConfig: vi.fn().mockResolvedValue({ tags: 'proxmate-vm1' }),
 }));
 
 import { prisma } from '../src/lib/prisma.js';

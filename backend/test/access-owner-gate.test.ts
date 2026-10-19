@@ -29,6 +29,8 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
     resumeVm: vi.fn(async () => 'UPID:resume'),
     rebootVm: vi.fn(async () => 'UPID:reboot'),
     getVmStatus: vi.fn(async () => ({ status: 'stopped' })),
+    // The guest at the VMID is the row's own (ownership marker present).
+    getVmConfig: vi.fn(async () => ({ name: 'web-01', tags: 'proxmate-vm1' })),
   };
 });
 

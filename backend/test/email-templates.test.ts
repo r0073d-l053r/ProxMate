@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  vmRebuildFailedEmail,
   passwordResetEmail,
   notificationEmail,
   accountLockedEmail,
@@ -198,5 +199,18 @@ describe('inviteEmail', () => {
     };
     expect(inviteEmail({ ...base, require2fa: true }).html).toContain('Two-step auth');
     expect(inviteEmail({ ...base, require2fa: false }).html).not.toContain('Two-step auth');
+  });
+});
+
+describe('vmRebuildFailedEmail', () => {
+  it('tells the owner a backup can be restored into the empty VM slot when the machine was kept', () => {
+    const m = vmRebuildFailedEmail({ vmName: 'web', kept: true, reason: 'storage full' });
+    expect(m.text).toMatch(/restored while the VM slot is empty/);
+    expect(m.html).toMatch(/restored while the VM slot is empty/);
+    expect(m.text).toContain('storage full');
+  });
+
+  it('says the machine was removed when nothing was kept', () => {
+    expect(vmRebuildFailedEmail({ vmName: 'web', kept: false, reason: 'x' }).text).toMatch(/removed from your list/);
   });
 });

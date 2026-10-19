@@ -49,8 +49,8 @@ describe('computeClusterPlan (balancer) skips LXC containers', () => {
     c.get.mockResolvedValue({
       data: {
         data: [
-          { type: 'qemu', vmid: 100, node: 'pve-a', status: 'running', mem: 30 * GB },
-          { type: 'lxc', vmid: 200, node: 'pve-a', status: 'running', mem: 30 * GB },
+          { type: 'qemu', vmid: 100, node: 'pve-a', status: 'running', mem: 30 * GB, tags: 'proxmate-vm1' },
+          { type: 'lxc', vmid: 200, node: 'pve-a', status: 'running', mem: 30 * GB, tags: 'proxmate-ct1' },
         ],
       },
     });
@@ -74,7 +74,7 @@ describe('planNodeDrain flags LXC containers on the drained node', () => {
     getNodesHealth.mockResolvedValue(nodesHealth(0.1, 0.1));
     const c = fakeClient();
     c.get.mockResolvedValue({
-      data: { data: [{ type: 'lxc', vmid: 200, node: 'pve-a', status: 'running', mem: 2 * GB }] },
+      data: { data: [{ type: 'lxc', vmid: 200, node: 'pve-a', status: 'running', mem: 2 * GB, tags: 'proxmate-ct1' }] },
     });
     findMany.mockResolvedValue([
       { id: 'ct1', proxmoxVmId: 200, name: 'ct-web', proxmoxNode: 'pve-a', tags: null, type: 'lxc' },

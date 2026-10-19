@@ -6,7 +6,7 @@ import { requireAdmin } from '../middleware/admin.js';
 import { enforceMfaSetup } from '../middleware/mfa.js';
 import { pveMessage } from '../services/proxmox.service.js';
 import { assertPublicHttpUrlShape } from '../lib/url-safety.js';
-import { deployFromTemplate, QuotaError, CreateOptionError, resolveCreateTarget } from '../services/vm.service.js';
+import { deployFromTemplate, QuotaError, CreateOptionError, resolveCreateTarget, MIN_RAM_MB } from '../services/vm.service.js';
 import {
   listPublished,
   listAll,
@@ -56,7 +56,7 @@ const DeploySchema = z.object({
   templateId: z.string().min(1),
   name: z.string().min(1).max(63).regex(/^[a-zA-Z0-9-]+$/, 'Use letters, numbers and hyphens only'),
   cpu: z.number().int().positive().max(64),
-  ram: z.number().int().positive(),
+  ram: z.number().int().min(MIN_RAM_MB, `RAM must be at least ${MIN_RAM_MB} MB`),
   storage: z.number().int().positive(),
   // Cloud-init templates only:
   sshKey: z

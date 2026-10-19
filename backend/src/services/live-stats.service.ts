@@ -12,6 +12,8 @@ export interface LiveStat {
   uptime: number;
   netin: number;
   netout: number;
+  /** Proxmox tags (carries ProxMate's ownership marker). */
+  tags?: string;
 }
 
 interface PveResource {
@@ -27,6 +29,7 @@ interface PveResource {
   uptime?: number;
   netin?: number;
   netout?: number;
+  tags?: string;
 }
 
 // Tiny in-process cache so a fast UI cadence shares one `/cluster/resources` call
@@ -52,6 +55,7 @@ async function fetchLiveStats(): Promise<Record<number, LiveStat>> {
         uptime: item.uptime ?? 0,
         netin: item.netin ?? 0,
         netout: item.netout ?? 0,
+        tags: item.tags,
       };
     }
   }

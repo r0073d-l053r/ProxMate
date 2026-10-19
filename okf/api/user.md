@@ -28,7 +28,7 @@ Admin user directory. Mounted at `/api/users`.[^app]
 |---|---|---|---|
 | GET | `/api/users` | admin | All users (newest first) with `vmCount`, quota `{ used, max }` for cpu/ram/storage, `accessExpiresAt`, `accessSuspendedAt`, `createdAt`. |
 | PATCH | `/api/users/:id` | admin | Set `{ maxCpu, maxRam, maxStorage, accessDuration? }`. Audited `admin.update_quota`, plus `admin.update_access` when `accessDuration` is given. |
-| DELETE | `/api/users/:id` | admin | Best-effort destroy every VM of the user on Proxmox, then delete the user row. |
+| DELETE | `/api/users/:id` | admin | Destroy every VM of the user (guest and row), then delete the user row. 409 `{ error, vms }` (account kept) when any machine's guest can't be deleted with it. |
 
 # Gotchas
 
@@ -37,7 +37,7 @@ Admin user directory. Mounted at `/api/users`.[^app]
 - Setting a non-`never` duration on an admin returns 400 (admins never expire).[^routes]
 - Quotas are enforced at create/resize time only; lowering below usage leaves existing VMs untouched.[^routes]
 - "used" in GET sums all the user's VMs (this list does not exclude `quotaExempt` VMs, unlike `GET /api/auth/me`).[^routes]
-- DELETE: refuses self-deletion (400); VM destroy failures are only logged with `console.warn`; remaining rows are removed by Prisma cascade. No audit entry is written for user deletion.[^routes]
+- DELETE: refuses self-deletion (400). Every VM is first checked (`destroyBlocker`): a guest without a ProxMate tag, or one whose location can't be confirmed, refuses the deletion up front with 409 and nothing is destroyed — adopt or remove those rows first. A guest that then fails to destroy also returns 409 and keeps the account. No audit entry is written for user deletion.[^routes]
 
 # Relationships
 

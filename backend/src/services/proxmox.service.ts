@@ -861,6 +861,8 @@ export interface CreateVmConfig {
   bridge: string;
   isoStorage: string;
   iso: string; // ISO filename
+  /** Proxmox tags (`;`-separated) — carries ProxMate's ownership marker. */
+  tags?: string;
 }
 
 /** Create a QEMU VM. Returns the Proxmox task UPID. */
@@ -881,6 +883,7 @@ export async function createVm(config: CreateVmConfig, client?: AxiosInstance): 
     ostype: 'l26',
     agent: '1',
   });
+  if (config.tags) params.set('tags', config.tags);
   const res = await c.post<{ data: string }>(`/nodes/${config.node}/qemu`, params);
   return res.data.data;
 }
@@ -901,6 +904,8 @@ export interface CreateLxcConfig {
   password?: string;
   sshPublicKeys?: string; // OpenSSH public key(s)
   unprivileged?: boolean; // default true
+  /** Proxmox tags (`;`-separated) — carries ProxMate's ownership marker. */
+  tags?: string;
 }
 
 /**
@@ -926,6 +931,7 @@ export async function createLxc(config: CreateLxcConfig, client?: AxiosInstance)
   });
   if (config.password) params.set('password', config.password);
   if (config.sshPublicKeys) params.set('ssh-public-keys', config.sshPublicKeys);
+  if (config.tags) params.set('tags', config.tags);
   const res = await c.post<{ data: string }>(`/nodes/${config.node}/lxc`, params);
   return res.data.data;
 }

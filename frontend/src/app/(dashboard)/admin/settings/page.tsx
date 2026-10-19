@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { UpdatesCard } from "@/components/admin/updates-card";
 import { RescueIsoCard } from "@/components/admin/rescue-iso-card";
+import { UnmatchedVmsCard } from "@/components/admin/unmatched-vms-card";
 import { TemplateRefreshCard } from "@/components/admin/template-refresh-card";
 import { IdeSettingsCard } from "@/components/admin/ide-settings-card";
 import { AppDbBackupCard } from "@/components/admin/appdb-backup-card";
@@ -1094,6 +1095,7 @@ export default function SettingsPage() {
           <AppDbBackupCard />
           <RescueIsoCard />
           <TemplateRefreshCard />
+          <UnmatchedVmsCard />
         </TabsContent>
       </Tabs>
     </div>

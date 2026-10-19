@@ -27,6 +27,8 @@ vi.mock('../src/services/vm.service.js', () => ({
   migrateVmToNode: vi.fn(),
   startVm: vi.fn(),
   getVmWithLiveStatus: vi.fn(),
+  // The guest at the VMID is the row's own unless a test says otherwise.
+  requireOurGuest: vi.fn(async (v: unknown) => v),
 }));
 vi.mock('../src/services/ide-gateway.service.js', () => ({
   issueGatewayToken: vi.fn(),
@@ -109,6 +111,15 @@ async function provisionErr(v: VirtualMachine): Promise<IdeProvisionError> {
     return e as IdeProvisionError;
   }
 }
+
+describe('startIdeProvision — guest identity', () => {
+  it('installs nothing when the VMID does not hold the row\'s own guest', async () => {
+    const { requireOurGuest } = await import('../src/services/vm.service.js');
+    vi.mocked(requireOurGuest).mockRejectedValueOnce(new Error('not the one ProxMate created'));
+    await expect(startIdeProvision(vm(), { id: 'u1', role: 'user' }, 'https://x/api')).rejects.toThrow(/not the one/);
+    expect(ping).not.toHaveBeenCalled();
+  });
+});
 
 describe('startIdeProvision — AVX guardrail codes', () => {
   it("codes 'node_no_avx' when the guest lacks AVX and the node's silicon confirmed lacks it", async () => {

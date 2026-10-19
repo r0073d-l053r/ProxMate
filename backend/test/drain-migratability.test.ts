@@ -50,7 +50,7 @@ describe('planNodeDrain honors the migrate preflight (storage locality)', () => 
     getNodesHealth.mockResolvedValue(threeNodesHealth());
     const c = fakeClient();
     c.get.mockResolvedValue({
-      data: { data: [{ type: 'qemu', vmid: 100, node: 'pve-a', status: 'running', mem: 4 * GB }] },
+      data: { data: [{ type: 'qemu', vmid: 100, node: 'pve-a', status: 'running', mem: 4 * GB, tags: 'proxmate-vm1' }] },
     });
     findMany.mockResolvedValue([
       { id: 'vm1', proxmoxVmId: 100, name: 'zfs-local', proxmoxNode: 'pve-a', tags: null, type: 'qemu', hasPassthrough: false },
@@ -71,7 +71,7 @@ describe('planNodeDrain honors the migrate preflight (storage locality)', () => 
     getNodesHealth.mockResolvedValue(threeNodesHealth());
     const c = fakeClient();
     c.get.mockResolvedValue({
-      data: { data: [{ type: 'qemu', vmid: 101, node: 'pve-a', status: 'running', mem: 4 * GB }] },
+      data: { data: [{ type: 'qemu', vmid: 101, node: 'pve-a', status: 'running', mem: 4 * GB, tags: 'proxmate-vm2' }] },
     });
     findMany.mockResolvedValue([
       { id: 'vm2', proxmoxVmId: 101, name: 'shared', proxmoxNode: 'pve-a', tags: null, type: 'qemu', hasPassthrough: false },
@@ -90,7 +90,7 @@ describe('planNodeDrain honors the migrate preflight (storage locality)', () => 
     getNodesHealth.mockResolvedValue(threeNodesHealth());
     const c = fakeClient();
     c.get.mockResolvedValue({
-      data: { data: [{ type: 'qemu', vmid: 102, node: 'pve-a', status: 'running', mem: 4 * GB }] },
+      data: { data: [{ type: 'qemu', vmid: 102, node: 'pve-a', status: 'running', mem: 4 * GB, tags: 'proxmate-vm3' }] },
     });
     findMany.mockResolvedValue([
       { id: 'vm3', proxmoxVmId: 102, name: 'unknown', proxmoxNode: 'pve-a', tags: null, type: 'qemu', hasPassthrough: false },

@@ -1,7 +1,7 @@
 import type { VirtualMachine, User } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import * as pve from './proxmox.service.js';
-import { QuotaError } from './vm.service.js';
+import { QuotaError, withQuotaLock, requireOurGuest, ourGuestOrNull } from './vm.service.js';
 
 /**
  * Extra-data-disk management. A VM's `storage` column tracks **total** provisioned
@@ -74,13 +74,25 @@ async function ownerOf(vm: VirtualMachine): Promise<User> {
   return owner;
 }
 
-/** List a VM's disks (live from Proxmox). */
-export async function listDisks(vm: VirtualMachine): Promise<VmDisk[]> {
+/** List a VM's disks (live from Proxmox) — none when its VMID doesn't hold its own guest. */
+export async function listDisks(row: VirtualMachine): Promise<VmDisk[]> {
+  const vm = await ourGuestOrNull(row);
+  if (!vm) return [];
   return parseDisks(await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId));
 }
 
-/** Attach a new data disk (allocated on the root disk's storage). Quota-checked. */
-export async function addDataDisk(vm: VirtualMachine, sizeGb: number): Promise<VmDisk> {
+/**
+ * Attach a new data disk (allocated on the root disk's storage). Quota-checked.
+ * Check, slot choice, attach and the usage write run under the owner's quota lock
+ * (see vm.service acquireQuotaLock), and usage is incremented rather than written
+ * from the possibly stale `vm.storage`.
+ */
+export function addDataDisk(vm: VirtualMachine, sizeGb: number): Promise<VmDisk> {
+  return withQuotaLock(vm.userId, () => addDataDiskLocked(vm, sizeGb));
+}
+
+async function addDataDiskLocked(row: VirtualMachine, sizeGb: number): Promise<VmDisk> {
+  const vm = await requireOurGuest(row);
   const owner = await ownerOf(vm);
   await assertStorageDelta(owner, sizeGb);
 
@@ -93,12 +105,17 @@ export async function addDataDisk(vm: VirtualMachine, sizeGb: number): Promise<V
   if (!storage) throw new Error('Could not determine the VM storage pool.');
 
   await pve.attachDisk(vm.proxmoxNode, vm.proxmoxVmId, slot, storage, sizeGb);
-  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { storage: vm.storage + sizeGb } });
+  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { storage: { increment: sizeGb } } });
   return { slot, storage, sizeGb, isRoot: false };
 }
 
-/** Grow a data disk to `sizeGb` (grow-only). Cannot target the root disk. Quota-checked. */
-export async function resizeDataDisk(vm: VirtualMachine, slot: string, sizeGb: number): Promise<void> {
+/** Grow a data disk to `sizeGb` (grow-only). Cannot target the root disk. Quota-checked (under the owner's lock). */
+export function resizeDataDisk(vm: VirtualMachine, slot: string, sizeGb: number): Promise<void> {
+  return withQuotaLock(vm.userId, () => resizeDataDiskLocked(vm, slot, sizeGb));
+}
+
+async function resizeDataDiskLocked(row: VirtualMachine, slot: string, sizeGb: number): Promise<void> {
+  const vm = await requireOurGuest(row);
   const config = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId);
   if (!(slot in config)) throw new Error('Disk not found.');
   if (slot === pve.findPrimaryDisk(config)) throw new Error('Resize the root disk from the VM resize controls.');
@@ -107,19 +124,26 @@ export async function resizeDataDisk(vm: VirtualMachine, slot: string, sizeGb: n
 
   await assertStorageDelta(await ownerOf(vm), sizeGb - current);
   await pve.resizeDisk(vm.proxmoxNode, vm.proxmoxVmId, slot, sizeGb);
-  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { storage: vm.storage + (sizeGb - current) } });
+  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { storage: { increment: sizeGb - current } } });
 }
 
-/** Detach + destroy a data disk. Refuses the root disk. Frees the quota it used. */
-export async function removeDataDisk(vm: VirtualMachine, slot: string): Promise<void> {
+/** Detach + destroy a data disk. Refuses the root disk. Frees the quota it used (under the owner's lock). */
+export function removeDataDisk(vm: VirtualMachine, slot: string): Promise<void> {
+  return withQuotaLock(vm.userId, () => removeDataDiskLocked(vm, slot));
+}
+
+async function removeDataDiskLocked(row: VirtualMachine, slot: string): Promise<void> {
+  const vm = await requireOurGuest(row);
   const config = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId);
   if (!(slot in config)) throw new Error('Disk not found.');
   if (slot === pve.findPrimaryDisk(config)) throw new Error('The root disk cannot be removed.');
   const freed = diskSizeGb(String(config[slot]));
 
   await pve.removeDisk(vm.proxmoxNode, vm.proxmoxVmId, slot);
+  // Re-read under the lock (the caller's copy may be stale) and never go below 0.
+  const fresh = await prisma.virtualMachine.findUnique({ where: { id: vm.id }, select: { storage: true } });
   await prisma.virtualMachine.update({
     where: { id: vm.id },
-    data: { storage: Math.max(0, vm.storage - freed) },
+    data: { storage: Math.max(0, (fresh?.storage ?? vm.storage) - freed) },
   });
 }

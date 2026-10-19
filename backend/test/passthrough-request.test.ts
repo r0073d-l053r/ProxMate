@@ -37,13 +37,15 @@ vi.mock('../src/services/vm.service.js', () => ({
   syncVmNode: vi.fn(),
   migrateVmToNode: vi.fn(),
   startVm: vi.fn(),
+  requireOurGuest: vi.fn(),
+  guestIdentity: vi.fn(async () => 'ours'),
 }));
 vi.mock('../src/services/config.service.js', () => ({ getConfig: vi.fn() }));
 vi.mock('../src/services/audit.service.js', () => ({ recordAudit: vi.fn().mockResolvedValue(undefined) }));
 
 import { prisma } from '../src/lib/prisma.js';
 import * as pve from '../src/services/proxmox.service.js';
-import { syncVmNode, migrateVmToNode, startVm } from '../src/services/vm.service.js';
+import { syncVmNode, migrateVmToNode, startVm, requireOurGuest } from '../src/services/vm.service.js';
 import { getConfig } from '../src/services/config.service.js';
 import { recordAudit } from '../src/services/audit.service.js';
 import {
@@ -108,6 +110,8 @@ beforeEach(() => {
   vmUpdate.mockResolvedValue({} as never);
   userFind.mockResolvedValue({ id: 'admin', email: 'admin@x' } as never);
   syncNode.mockImplementation(async (vm: never) => vm);
+  // The guest at the VMID is the row's own unless a test says otherwise.
+  vi.mocked(requireOurGuest).mockImplementation(async (vm) => syncNode(vm));
   getNodes.mockResolvedValue([
     { node: 'pve-0', status: 'online' },
     { node: 'pve-4', status: 'online' },
@@ -208,6 +212,13 @@ describe('createPassthroughRequest', () => {
   it('rejects a second pending request for the same VM', async () => {
     prFindFirst.mockResolvedValue({ id: 'x' } as never);
     await expect(createPassthroughRequest('u1', qemuVm())).rejects.toMatchObject({ status: 409 });
+    expect(prCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a request for a row whose VMID does not hold its own guest', async () => {
+    prFindFirst.mockResolvedValue(null as never);
+    vi.mocked(requireOurGuest).mockRejectedValueOnce(new Error('not the one ProxMate created'));
+    await expect(createPassthroughRequest('u1', qemuVm())).rejects.toThrow(/not the one/);
     expect(prCreate).not.toHaveBeenCalled();
   });
 
@@ -402,6 +413,18 @@ describe('applyPassthroughApproval (background worker)', () => {
       vm: qemuVm(vmOver),
       ...rowOver,
     }) as never;
+
+  it('marks the apply failed and attaches nothing when the VMID does not hold the row\'s own guest', async () => {
+    prFindUnique.mockResolvedValue(queuedRow());
+    vi.mocked(requireOurGuest).mockRejectedValueOnce(new Error('not the one ProxMate created'));
+    await applyPassthroughApproval('q1', 'admin');
+    expect(attachPci).not.toHaveBeenCalled();
+    expect(migrateVmToNode).not.toHaveBeenCalled();
+    expect(prUpdate).toHaveBeenCalledWith({
+      where: { id: 'q1' },
+      data: { applyState: 'failed', applyError: 'not the one ProxMate created' },
+    });
+  });
 
   it('does nothing unless the row is queued', async () => {
     prFindUnique.mockResolvedValue(queuedRow({}, { applyState: 'failed' }));
@@ -633,6 +656,13 @@ describe('denyPassthroughRequest', () => {
 });
 
 describe('detachPassthrough', () => {
+  it('refuses (stops and detaches nothing) when the VMID does not hold the row\'s own guest', async () => {
+    vi.mocked(requireOurGuest).mockRejectedValueOnce(new Error('not the one ProxMate created'));
+    await expect(detachPassthrough(qemuVm(), 0)).rejects.toThrow(/not the one/);
+    expect(stopVm).not.toHaveBeenCalled();
+    expect(detachPci).not.toHaveBeenCalled();
+  });
+
   it('detaches and clears hasPassthrough when no devices remain', async () => {
     getVmStatus.mockResolvedValue({ status: 'stopped' } as never);
     getVmConfig.mockResolvedValue({} as never);

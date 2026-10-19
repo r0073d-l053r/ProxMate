@@ -22,7 +22,7 @@ Answers "who consumed what last week", complementing the live-only admin monitor
 
 | Function | Signature summary | What it does |
 |---|---|---|
-| `sampleResourceUsage` | `() => { sampled }` | One `/cluster/resources` call (15 s timeout); `createMany` rows for VMs whose live status is `running`. |
+| `sampleResourceUsage` | `() => { sampled }` | One `/cluster/resources` call (15 s timeout); `createMany` rows for VMs whose live status is `running` and whose guest carries the row's ProxMate tag. |
 | `pruneResourceSamples` | `(now?) => number` | Deletes samples older than `RESOURCE_HISTORY_DAYS`. |
 | `aggregateUsage` | `(samples, users) => UserUsage[]` | Pure fold: `samples, avgCpuPct, avgMemBytes, peakMemBytes` per user; unknown ids → `(deleted user)`; sorted by avg CPU desc. |
 | `getUsageByUser` | `(days = 7, now?)` | Window clamped 1..90 days. |

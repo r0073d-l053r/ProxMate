@@ -13,7 +13,7 @@ sources:
 
 # Purpose
 
-A VM cloned from a cloud-init template is "running" the instant it boots, but cloud-init keeps working for minutes (disk grow, guest agent, docker/tailscale extras, base config). Stopping, restarting or deleting it in that window leaves a half-built box. `deployFromTemplate`/`rebuildVm` set `deployState='deploying'`; the VM routes turn that into a 409 on destructive actions.[^lock]
+A VM cloned from a cloud-init template is "running" the instant it boots, but cloud-init keeps working for minutes (disk grow, guest agent, docker/tailscale extras, base config). Stopping, restarting or deleting it in that window leaves a half-built box. `deployFromTemplate`/`rebuildVm` set `deployState='deploying'`; the VM routes turn that into a 409 on destructive actions. The pending password is only ever set in the row's own tagged guest (`requireOurGuest`); otherwise it is kept for a later retry.[^lock]
 
 # Key functions
 

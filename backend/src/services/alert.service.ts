@@ -6,6 +6,7 @@ import { isMailConfigured, sendMail } from './mail.service.js';
 import { alertEmail } from '../lib/email-templates.js';
 import { notifyWebhook } from './notify.service.js';
 import * as pve from './proxmox.service.js';
+import { tagsMarkRow } from './vm.service.js';
 
 /**
  * Per-VM resource alerts. Tenants set thresholds on their own machines; the
@@ -132,6 +133,7 @@ interface LiveResource {
   cpu?: number;
   mem?: number;
   maxmem?: number;
+  tags?: string;
 }
 
 /**
@@ -163,6 +165,8 @@ export async function evaluateAlerts(now: Date = new Date()): Promise<{ fired: n
   for (const rule of rules) {
     const vm = rule.vm;
     const live = byVmid.get(vm.proxmoxVmId);
+    // A guest at this VMID that isn't the row's own says nothing about this machine.
+    if (live && !tagsMarkRow(live.tags, vm.id)) continue;
     const running = live?.status === 'running';
 
     let diskPct: number | null = null;

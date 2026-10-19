@@ -28,6 +28,8 @@ vi.mock('../src/services/vm.service.js', () => ({
   migrateVmToNode: vi.fn(),
   startVm: vi.fn(),
   getVmWithLiveStatus: vi.fn(),
+  // The guest at the VMID is the row's own.
+  requireOurGuest: vi.fn(async (v: unknown) => v),
 }));
 vi.mock('../src/services/ide-gateway.service.js', () => ({
   issueGatewayToken: vi.fn().mockResolvedValue({ token: 'pmide_tok', baseUrl: 'https://x/api/ide/vm-1/llm/v1' }),

@@ -45,7 +45,7 @@ Creates [VirtualMachine](/database/virtual-machine.md); reads [User](/database/u
 # Gotchas
 
 - The archive is ALWAYS removed afterwards (Proxmox API delete first, then direct unlink); leaving it would clutter backup listings under the old foreign VMID. Any pre-restore failure (quota, placement, extract) also drops it.[^ru]
-- A failure after the row is created marks the VM `error` (the row is not deleted).[^ru]
+- The restored guest is tagged with the new row's marker (`markClonedGuest`). A failure after the row is created goes through `settleFailedCreate`: the row stays as `error` only when the guest was restored (or demonstrably ours); otherwise it is deleted.[^ru]
 - ARM guest builds are not shipped, so uploaded backups are placed as x86 (`amd64`).[^ru]
 
 # Relationships

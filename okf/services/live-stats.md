@@ -19,7 +19,7 @@ Lets a fast UI cadence share one Proxmox `/cluster/resources` call per 750 ms wi
 
 | Function | Signature summary | What it does |
 |---|---|---|
-| `getLiveStats` | `() => Promise<Record<number, LiveStat>>` | Keyed by `proxmoxVmId`; returns cache if younger than 750 ms, otherwise joins or starts a single in-flight fetch. |
+| `getLiveStats` | `() => Promise<Record<number, LiveStat>>` | Keyed by `proxmoxVmId` (each entry carries the guest's Proxmox `tags`, so the per-VM route only shows stats for the row's own tagged guest); returns cache if younger than 750 ms, otherwise joins or starts a single in-flight fetch. |
 | `addLiveFeedSubscriber` | `(res: Response) => () => void` | Adds an SSE response; starts the interval timer if needed; returns an unsubscribe function. |
 
 `LiveStat` fields: `status, cpu, maxcpu, mem, maxmem, disk, maxdisk, uptime, netin, netout`.[^live]

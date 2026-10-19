@@ -10,6 +10,7 @@ import {
 } from './proxmox.service.js';
 import { decrypt } from '../lib/crypto.js';
 import { notify } from './notify.service.js';
+import { requireOurGuest } from './vm.service.js';
 
 /**
  * Cloud-init deploy lock. A VM cloned from a cloud-init template is reported
@@ -81,8 +82,10 @@ async function applyPendingCiPassword(vm: VirtualMachine): Promise<void> {
     return;
   }
   try {
+    // The credential goes into whatever guest holds the VMID — only ever this row's own.
+    const guest = await requireOurGuest(vm);
     const password = decrypt(vm.pendingCiPassword);
-    await setGuestUserPassword(vm.proxmoxNode, vm.proxmoxVmId, username, password);
+    await setGuestUserPassword(guest.proxmoxNode, guest.proxmoxVmId, username, password);
     await clearPendingCiPassword(vm.id);
     logger.info({ vmId: vm.id, username }, 'login password set in-guest via the guest agent');
   } catch (err) {

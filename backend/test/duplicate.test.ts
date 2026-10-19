@@ -37,6 +37,7 @@ function fakePve(status = 'stopped') {
     if (url === '/cluster/resources') return ok([{ type: 'qemu', vmid: 120, node: 'pve1' }]);
     if (/\/qemu\/120\/status\/current$/.test(url)) return ok({ status });
     if (url === '/cluster/nextid') return ok('130');
+    if (/\/qemu\/(120|130)\/config$/.test(url)) return ok({ name: 'web', tags: 'proxmate-src' });
     if (/\/tasks\/.*\/status$/.test(url)) return ok({ status: 'stopped', exitstatus: 'OK' });
     return ok(null);
   });
@@ -79,6 +80,28 @@ describe('duplicateVm', () => {
     const c = fakePve('running');
     getClient.mockResolvedValue(asClient(c));
     await expect(duplicateVm(source(), 'web-copy')).rejects.toThrow(/stop the machine/i);
+    expect(c.post.mock.calls.some((x) => String(x[0]).includes('/clone'))).toBe(false);
+    expect(createVm).not.toHaveBeenCalled();
+  });
+
+  it('refuses a source flagged with PCI/GPU passthrough (no clone, no row)', async () => {
+    const c = fakePve('stopped');
+    getClient.mockResolvedValue(asClient(c));
+    await expect(duplicateVm(source({ hasPassthrough: true }), 'web-copy')).rejects.toThrow(/passthrough/i);
+    expect(c.post.mock.calls.some((x) => String(x[0]).includes('/clone'))).toBe(false);
+    expect(createVm).not.toHaveBeenCalled();
+  });
+
+  it('refuses a source whose config carries a hostpci device even if the flag is unset', async () => {
+    const c = fakePve('stopped');
+    const base = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) =>
+      /\/qemu\/120\/config$/.test(url)
+        ? Promise.resolve({ data: { data: { name: 'web', tags: 'proxmate-src', hostpci0: 'mapping=gpu,pcie=1' } } })
+        : base(url),
+    );
+    getClient.mockResolvedValue(asClient(c));
+    await expect(duplicateVm(source(), 'web-copy')).rejects.toThrow(/passthrough/i);
     expect(c.post.mock.calls.some((x) => String(x[0]).includes('/clone'))).toBe(false);
     expect(createVm).not.toHaveBeenCalled();
   });

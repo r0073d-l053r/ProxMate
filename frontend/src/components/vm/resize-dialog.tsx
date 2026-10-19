@@ -18,6 +18,12 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
+/** Smallest guest memory the backend accepts (MB). */
+const MIN_RAM_MB = 64;
+
+/** MB shown as GB, rounded to two decimals for display only. */
+const gbLabel = (mb: number) => String(Math.round((mb / 1024) * 100) / 100);
+
 /** One-click "T-shirt" sizes for the resize dialog (mirror the create wizard). */
 const SIZE_PRESETS = [
   { key: "s", label: "Small", cpu: 1, ramGb: 2, diskGb: 20 },
@@ -49,7 +55,11 @@ export function ResizeDialog({
 }) {
   const [quota, setQuota] = useState<Quota | null>(null);
   const [cpu, setCpu] = useState(vm.cpu);
-  const [ramGb, setRamGb] = useState(Math.round(vm.ram / 1024));
+  // Memory is edited in GB but kept exact in MB: the field shows a rounded GB value
+  // (a VM with 1000 MB opens as "0.98"), while an untouched field stays exactly
+  // vm.ram and is never sent (or quota-checked) as a change nobody asked for.
+  const [ramMb, setRamMb] = useState(vm.ram);
+  const [ramInput, setRamInput] = useState(gbLabel(vm.ram));
   const [storageGb, setStorageGb] = useState(vm.storage);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -59,7 +69,8 @@ export function ResizeDialog({
   useEffect(() => {
     if (!open) return;
     setCpu(vm.cpu);
-    setRamGb(Math.round(vm.ram / 1024));
+    setRamMb(vm.ram);
+    setRamInput(gbLabel(vm.ram));
     setStorageGb(vm.storage);
     setError(null);
     if (!isAdmin) {
@@ -73,18 +84,18 @@ export function ResizeDialog({
   // Per-field ceilings from remaining quota — the VM's own current size is freed
   // first, so a resize is judged on the delta (matches the backend).
   const cpuMax = !isAdmin && quota ? quota.cpu.max - quota.cpu.used + vm.cpu : Infinity;
-  const ramMaxGb = !isAdmin && quota ? Math.floor((quota.ram.max - quota.ram.used + vm.ram) / 1024) : Infinity;
+  const ramMaxMb = !isAdmin && quota ? quota.ram.max - quota.ram.used + vm.ram : Infinity;
+  const ramMaxGb = Math.floor((ramMaxMb / 1024) * 100) / 100;
   const storageMax = !isAdmin && quota ? quota.storage.max - quota.storage.used + vm.storage : Infinity;
 
-  const ramMb = ramGb * 1024;
   const changed = cpu !== vm.cpu || ramMb !== vm.ram || storageGb !== vm.storage;
-  const activePreset = SIZE_PRESETS.find((p) => p.cpu === cpu && p.ramGb === ramGb && p.diskGb === storageGb)?.key;
+  const activePreset = SIZE_PRESETS.find((p) => p.cpu === cpu && p.ramGb * 1024 === ramMb && p.diskGb === storageGb)?.key;
 
   function validate(): string | null {
     if (cpu < 1) return "At least 1 vCPU.";
     if (cpu > cpuMax) return `Exceeds your remaining quota — up to ${cpuMax} vCPU.`;
-    if (ramGb < 1) return "At least 1 GB of memory.";
-    if (ramGb > ramMaxGb) return `Exceeds your remaining quota — up to ${ramMaxGb} GB memory.`;
+    if (ramMb < MIN_RAM_MB) return `At least ${MIN_RAM_MB} MB of memory.`;
+    if (ramMb > ramMaxMb) return `Exceeds your remaining quota — up to ${ramMaxGb} GB memory.`;
     if (storageGb < vm.storage) return `Disks can only grow — minimum ${vm.storage} GB.`;
     if (storageGb > storageMax) return `Exceeds your remaining quota — up to ${storageMax} GB disk.`;
     if (!changed) return "Nothing to change.";
@@ -114,6 +125,7 @@ export function ResizeDialog({
   }
 
   const num = (v: string, min: number) => Math.max(min, Math.floor(Number(v) || 0));
+  const gb = (v: string) => Math.max(0, Number(v) || 0);
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -137,7 +149,8 @@ export function ResizeDialog({
                 aria-pressed={activePreset === p.key}
                 onClick={() => {
                   setCpu(p.cpu);
-                  setRamGb(p.ramGb);
+                  setRamMb(p.ramGb * 1024);
+                  setRamInput(String(p.ramGb));
                   setStorageGb(Math.max(p.diskGb, vm.storage));
                   setError(null);
                 }}
@@ -167,9 +180,14 @@ export function ResizeDialog({
             <Input
               id="rs-ram"
               type="number"
-              min={1}
-              value={ramGb}
-              onChange={(e) => { setRamGb(num(e.target.value, 1)); setError(null); }}
+              min={MIN_RAM_MB / 1024}
+              step="any"
+              value={ramInput}
+              onChange={(e) => {
+                setRamInput(e.target.value);
+                setRamMb(Math.round(gb(e.target.value) * 1024));
+                setError(null);
+              }}
             />
           </FormField>
           <FormField label="Disk (GB)" htmlFor="rs-disk">

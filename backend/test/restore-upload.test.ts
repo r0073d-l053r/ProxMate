@@ -23,14 +23,19 @@ vi.mock('../src/services/proxmox.service.js', () => ({
 vi.mock('../src/services/config.service.js', () => ({ getConfig: vi.fn() }));
 vi.mock('../src/services/download.service.js', () => ({ backupDir: vi.fn() }));
 vi.mock('../src/services/matestate.service.js', () => ({ getBackupStorage: vi.fn() }));
-vi.mock('../src/services/vm.service.js', () => ({ assertWithinQuota: vi.fn() }));
+vi.mock('../src/services/vm.service.js', () => ({
+  assertWithinQuota: vi.fn(),
+  acquireQuotaLock: vi.fn(async () => () => undefined),
+  markClonedGuest: vi.fn(async () => undefined),
+  settleFailedCreate: vi.fn(async () => undefined),
+}));
 
 import { prisma } from '../src/lib/prisma.js';
 import * as pve from '../src/services/proxmox.service.js';
 import { getConfig } from '../src/services/config.service.js';
 import { backupDir } from '../src/services/download.service.js';
 import { getBackupStorage } from '../src/services/matestate.service.js';
-import { assertWithinQuota } from '../src/services/vm.service.js';
+import { assertWithinQuota, markClonedGuest, settleFailedCreate } from '../src/services/vm.service.js';
 import {
   parseBackupConfig,
   restoreFromUpload,
@@ -222,14 +227,20 @@ describe('restoreFromUpload', () => {
     expect(pve.restoreNewGuest).not.toHaveBeenCalled();
   });
 
-  it('marks the DB row as error when the restore task fails', async () => {
-    vi.mocked(pve.waitForTask).mockRejectedValue(new Error('restore failed on node'));
+  it('settles a failed restore task as "no guest created" (the row is then dropped or kept by identity)', async () => {
+    const err = new Error('restore failed on node');
+    vi.mocked(pve.waitForTask).mockRejectedValue(err);
     await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(
       'restore failed on node',
     );
-    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({
-      where: { id: 'vm1' },
-      data: { status: 'error' },
-    });
+    expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, err, false);
+  });
+
+  it('settles a failure after the restore landed as "guest created", and tags the guest first', async () => {
+    const err = new Error('start failed');
+    vi.mocked(pve.startVm).mockRejectedValue(err);
+    await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow('start failed');
+    expect(markClonedGuest).toHaveBeenCalledWith({ id: 'vm1' }, expect.anything());
+    expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, err, true);
   });
 });

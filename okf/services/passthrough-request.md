@@ -22,7 +22,7 @@ A tenant asks for a PCI device on a QEMU VM; an admin approves with a Proxmox re
 
 | Function | Signature summary | What it does |
 |---|---|---|
-| `createPassthroughRequest` | `(userId, vm, reason?)` | QEMU only (400), not already attached (409), one pending per VM (409). |
+| `createPassthroughRequest` | `(userId, vm, reason?)` | QEMU only (400), not already attached (409), guest must be the row's own (`requireOurGuest`), one pending per VM (409). Approval, the background apply (marks the request `failed` instead) and detach are gated the same way. |
 | `listMyPassthroughRequests` | `(userId)` | Newest first with VM name. |
 | `listPendingPassthroughRequests` | `() => PendingPassthroughRequest[]` | Admin queue with best-effort q35/OVMF `bootWarnings` and live migration progress while `applyState === 'migrating'`. |
 | `beginPassthroughApproval` | `(id, mapping) => PassthroughPlan & { vmName, sourceNode }` | Phase 1 (sync): validate request and mapping, `syncVmNode`, plan placement, host pre-flight (`checkPassthroughHostReadiness`; blockers → 409), set `applyState: 'queued'`. Route then returns 202. |

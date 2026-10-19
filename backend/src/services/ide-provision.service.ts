@@ -16,7 +16,7 @@ import {
   shutdownVm,
   waitForTask,
 } from './proxmox.service.js';
-import { migrateVmToNode, startVm as startVmService, getVmWithLiveStatus } from './vm.service.js';
+import { migrateVmToNode, startVm as startVmService, getVmWithLiveStatus, requireOurGuest } from './vm.service.js';
 import { issueGatewayToken, listModelPickerEntries } from './ide-gateway.service.js';
 import { getConfig } from './config.service.js';
 import {
@@ -207,6 +207,7 @@ export async function startIdeProvision(
   ) {
     throw new IdeProvisionError('The IDE is already being installed on this VM — wait for it to finish.', 'install_in_progress');
   }
+  vm = await requireOurGuest(vm); // installs into the guest — only ever this row's own
   if (vm.type === 'lxc') throw new IdeProvisionError('The IDE needs a QEMU VM — containers are not supported.');
   if (vm.status !== 'running') throw new IdeProvisionError('Start the VM before installing the IDE.');
 
@@ -447,6 +448,7 @@ export async function planIdeRelocate(vm: VirtualMachine): Promise<string> {
  * target immediately; progress is polled via {@link getIdeRelocateStatus}.
  */
 export async function startIdeRelocate(vm: VirtualMachine, actorId: string): Promise<string> {
+  vm = await requireOurGuest(vm); // stops and moves the guest — only ever this row's own
   const target = await planIdeRelocate(vm);
   relocations.set(vm.id, { state: 'running', startedAt: Date.now(), target });
 

@@ -81,7 +81,7 @@ describe('generateGuestPassword', () => {
 
 describe('resetGuestPassword', () => {
   it('POSTs username + a generated password to agent/set-user-password', async () => {
-    const c = fakePve({});
+    const c = fakePve({ tags: 'proxmate-db-1' });
     getClient.mockResolvedValue(asClient(c));
 
     const password = await resetGuestPassword(vm({ status: 'running' }), 'ubuntu');
@@ -104,7 +104,7 @@ describe('resetGuestPassword', () => {
 describe('enterRescue', () => {
   it('snapshots boot config, attaches the ISO on ide3, pins boot, and starts', async () => {
     configFind.mockResolvedValue({ key: 'rescue_iso', value: 'local:iso/systemrescue.iso', sensitive: false } as never);
-    const c = fakePve({ boot: 'order=scsi0;ide2', scsi0: 'ceph:vm-120-disk-0' });
+    const c = fakePve({ tags: 'proxmate-db-1', boot: 'order=scsi0;ide2', scsi0: 'ceph:vm-120-disk-0' });
     getClient.mockResolvedValue(asClient(c));
 
     await enterRescue(vm());
@@ -140,7 +140,7 @@ describe('enterRescue', () => {
 
 describe('exitRescue', () => {
   it('restores the snapshotted boot line, deletes the rescue ide3, and starts', async () => {
-    const c = fakePve({ boot: 'order=ide3', ide3: 'local:iso/systemrescue.iso,media=cdrom' });
+    const c = fakePve({ tags: 'proxmate-db-1', boot: 'order=ide3', ide3: 'local:iso/systemrescue.iso,media=cdrom' });
     getClient.mockResolvedValue(asClient(c));
 
     await exitRescue(vm({ rescueBoot: JSON.stringify({ boot: 'order=scsi0;ide2', ide3: null }) }));
@@ -157,5 +157,45 @@ describe('exitRescue', () => {
 
   it('refuses when not in rescue mode', async () => {
     await expect(exitRescue(vm())).rejects.toThrow(/not in rescue/i);
+  });
+});
+
+describe('rescue checks come before any change', () => {
+  const expiredOwner = () =>
+    vi.mocked(prisma.user.findUnique).mockResolvedValueOnce({ role: 'user', accessExpiresAt: new Date(Date.now() - 86_400_000) } as never);
+
+  it('enterRescue for an owner past their access window stops, rewrites and records nothing', async () => {
+    configFind.mockResolvedValue({ key: 'rescue_iso', value: 'local:iso/systemrescue.iso', sensitive: false } as never);
+    const c = fakePve({ name: 'web', boot: 'order=scsi0' }, 'running');
+    getClient.mockResolvedValue(asClient(c));
+    expiredOwner();
+
+    await expect(enterRescue(vm())).rejects.toThrow(/compute access window/i);
+    expect(c.post).not.toHaveBeenCalled();
+    expect(c.put).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('exitRescue for an owner past their access window stops, rewrites and records nothing', async () => {
+    const c = fakePve({ name: 'web', boot: 'order=ide3' }, 'running');
+    getClient.mockResolvedValue(asClient(c));
+    expiredOwner();
+
+    await expect(exitRescue(vm({ rescueBoot: JSON.stringify({ boot: 'order=scsi0', ide3: null }) }))).rejects.toThrow(
+      /compute access window/i,
+    );
+    expect(c.post).not.toHaveBeenCalled();
+    expect(c.put).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('enterRescue refuses a guest that is not the row\'s own', async () => {
+    configFind.mockResolvedValue({ key: 'rescue_iso', value: 'local:iso/systemrescue.iso', sensitive: false } as never);
+    const c = fakePve({ name: 'web', tags: 'proxmate-otherrow' }, 'running');
+    getClient.mockResolvedValue(asClient(c));
+
+    await expect(enterRescue(vm())).rejects.toThrow(/not the one ProxMate created/);
+    expect(c.post).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
   });
 });

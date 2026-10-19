@@ -1,7 +1,7 @@
 import type { AxiosInstance } from 'axios';
 import { prisma } from '../lib/prisma.js';
 import * as pve from './proxmox.service.js';
-import { migrateVmToNode } from './vm.service.js';
+import { migrateVmToNode, tagsMarkRow } from './vm.service.js';
 import { getConfig, setConfig } from './config.service.js';
 import { recordAudit, type AuditActor } from './audit.service.js';
 
@@ -312,6 +312,7 @@ interface VmResource {
   status?: string;
   mem?: number;
   template?: number;
+  tags?: string;
 }
 
 const PIN_TAGS = new Set(['pin', 'no-balance']);
@@ -362,8 +363,11 @@ export async function computeClusterPlan(
       antiAffinity: antiAffinityGroups(tags),
       // Treated as pinned (the planner never moves them): containers (LXC has no
       // live migration) and VMs with a PCI/GPU device attached (passthrough
-      // pins a guest to its host). Plus admin excludes and pin tags.
+      // pins a guest to its host). Plus admin excludes and pin tags, and any row
+      // whose VMID doesn't hold its own (ProxMate-tagged) guest.
       excluded:
+        !r ||
+        !tagsMarkRow(r.tags, v.id) ||
         v.type === 'lxc' ||
         v.hasPassthrough ||
         exclude.has(v.proxmoxVmId) ||
@@ -691,6 +695,15 @@ export async function planNodeDrain(
         proxmoxVmId: r.vmid!,
         name: r.name ?? `VM ${r.vmid}`,
         reason: 'Not managed by ProxMate — migrate or power it off manually.',
+      });
+      continue;
+    }
+    // A guest that doesn't carry its row's ProxMate tag isn't confirmed as that machine.
+    if (!tagsMarkRow(r.tags, db.id)) {
+      unmanaged.push({
+        proxmoxVmId: r.vmid!,
+        name: r.name ?? `VM ${r.vmid}`,
+        reason: 'Not confirmed as a ProxMate machine (no ownership tag) — check it, then migrate or power it off manually.',
       });
       continue;
     }
