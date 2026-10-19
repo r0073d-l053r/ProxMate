@@ -134,6 +134,14 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 
 Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
 
+- **v1.1.0 — security and reliability release.** A full code review, every finding closed:
+  **guest ownership tags** gate every guest action (existing guests adopted on upgrade, admin
+  **Unconfirmed machines** card for the rest); **owner-only IDE** with per-machine guest proof;
+  hardened sign-in (concurrent-safe lockout, per-account 2FA limits, server-side passkey
+  challenges, single-use links and codes); session-only account-security routes; verified-email SSO
+  linking; allowlisted upload restores with disk-ownership checks; quota-safe concurrent changes;
+  **SDN VNet and OVS bridge discovery** (#126); stop waits for Proxmox's verdict; delta resize; a
+  safer host updater with compose overrides; Node 22 images.
 - **v1.0.0 (2026-08-11) — isolation milestone.** Per-tenant **VLAN placement** (network-layer
   isolation beyond the per-VM firewall) + rogue-DHCP and IPv6-RA egress drops + firewall rule
   reconciliation; **cloud-init passwords applied in-guest** via the QEMU guest agent (never written

@@ -1,27 +1,32 @@
+ProxMate 1.1.0 is a security and reliability release. It follows a full review of the codebase and closes every issue that review found, and it fixes the setup wizard on SDN-only clusters (#126). Every 1.0.x install should upgrade. Read **Upgrading** below first: a few changes need a step from the admin, and some behaviour changes on purpose.
+
 ## Security
 
-- Cloud-init login passwords are no longer given to cloud-init. The crypt hash was written to the seed drive (`/dev/sr0`) and to the guest's `/var/lib/cloud` cache, both readable by the VM's own user for its lifetime. The password is now held encrypted until first boot, applied in-guest via the QEMU guest agent, then discarded. `cipassword` was removed from `setCloudInitConfig`'s signature.
-- Axios client error objects are sanitized before logging. An axios error carries the request that produced it, including the `Authorization` header, so `config` and `request` are now replaced with sanitized copies at the client, on both the error and its response, keeping only method, url, baseURL, timeout and a redacted header.
-- Guests can be placed on a per-tenant VLAN. The per-VM firewall operates at L3 and above and could not prevent ARP poisoning, rogue DHCP, or IPv6 router advertisement between tenants sharing a bridge. Verified on a live cluster: cross-VLAN blocked at ARP resolution, same-VLAN control passes.
-- Outbound DHCP server replies (`udp dport 68`) and IPv6 router advertisements are dropped per guest. Clients still obtain leases.
-- The compute-access window is enforced on passkey and SSO login, not only password. All three paths share one refusal; a source-scan test fails if a new login path skips it.
-- `testProxmoxConnection` rejects a token that authenticates but holds no permissions. A `--privsep 1` token answers `/version` and returns every node, so the previous check reported success. It now reads `/access/permissions` and names the missing privilege and the command that grants it.
+- **Guest ownership.** Every guest ProxMate manages now carries a Proxmox tag naming its machine. Start, stop, console, IDE, backups, restores, resize and delete act only on a guest carrying its own machine's tag, so a stale or reused VMID can never point an action at someone else's guest. Existing guests are tagged on first start; see **Upgrading**.
+- **ProxMate IDE.** The IDE opens only for the machine's owner. Before connecting, ProxMate confirms it is talking to that machine's own guest using a per-machine secret, and ProxMate's cookies are never passed to the guest or accepted back from it.
+- **Setup wizard.** Once the admin account exists, every remaining setup step requires that admin's session.
+- **Sign-in and account security.** Failed logins and 2FA codes are counted reliably under concurrent attempts, and 2FA codes are limited per account and per challenge. Passkey challenges are kept on the server and are single-use. Download links, password-reset links and recovery codes work exactly once. A password reset revokes the account's API tokens and signs it out everywhere. Replacing an existing authenticator needs a current code. Required 2FA also applies to password logins on SSO-linked accounts.
+- **API tokens** (`pm_…`) are refused on routes that change how an account signs in or is secured; those need a browser session.
+- **SSO and invites.** SSO links to an existing local account only when the identity provider marks the email verified and the account's email was confirmed by an invite. An invite sent to an address can be used only with that address.
+- **Backups and restores.** Restoring an uploaded backup accepts only a guest's own configuration (no host devices or paths, raw arguments, hook scripts or privileged containers; containers always restore unprivileged). Restores, rollbacks and backups check that every disk belongs to that guest. Restores and rollbacks re-apply the guest's network isolation before it starts, and count against the owner's quota.
+- **Quotas** are enforced when several creates or resizes for the same owner run at once.
+- **Sharing.** Sharing a machine by email answers the same whether or not the address has an account, and is rate-limited per user. The share list shows only the address and access level.
+- **Admin settings and the audit log.** Settings changes are audited without recording secret values, the notification webhook URL is shown only masked, and the audit log trusts a client-IP header only behind a configured proxy.
+- **Deployment.** App-database snapshots are created readable by their owner only. The host updater no longer leaves root-owned files in the checkout and keeps its control files out of the app's reach. The backend refuses to start in production without a saved `ENCRYPTION_KEY`, and images move to Node 22.
 
 ## Fixes
 
-- The default network bridge and default storage are applied to guests deployed from a template. A template deploy is a clone, so both were inherited from the template and the configured defaults never applied. Storage additionally reverted the migratability fix from 0.9.0 — new guests kept landing on node-local storage. Applied on deploy, duplicate and restore, preserving MAC, firewall flag and VLAN tag.
-- A linked-clone template that is not on the configured storage is now full-cloned. Proxmox cannot place a linked clone on a different storage; the link is dropped rather than the setting, and the reason is logged.
-- Cloud-image templates built by ProxMate now include `qemu-guest-agent`. The importer converted the downloaded image to a template without booting it, so no package could be installed — and since login passwords are applied through the agent, those templates could not serve a password-only deploy. The build boots the image once, installs and verifies the agent, clears the cloud-init cache and build logs, then converts. A build without network access still produces a usable template, recorded as agentless and flagged in Template Store.
-- `deploy.agent_missing` notification when a deploy's guest agent never responds. Previously the only signals were a log line and a tenant unable to log in.
-- `GET /api/admin/storage-pinning` lists guests that cannot migrate, using Proxmox's own migration preflight.
-
-## Modules
-
-Self-hosted installs can add API routes and database tables without patching `app.ts`. A module is a directory exporting an Express router, enabled by name in `PROXMATE_MODULES` and served under `/api/ext/<name>`.
-
-Modules supply a router rather than the application, so they cannot reorder middleware or replace the error handler. All modules mount under one reserved path segment and cannot shadow a built-in route. `requireAuth` is applied by default; opting out is logged by name at boot. Modules may own a Prisma schema and migrations, applied after core migrations.
-
-With no module configured no import is attempted and no route is added. See `backend/src/modules/README.md`.
+- **SDN and OVS networks (#126).** The setup wizard and network settings list SDN VNets and Open vSwitch bridges, not only Linux bridges. A network name can be typed in when discovery finds nothing, and the connection test warns when the token lacks `SDN.Use` or `SDN.Audit`.
+- **Stop reports what Proxmox did.** Stop waits for Proxmox to confirm the guest is down (up to 45 seconds). A guest that ignores a shutdown now returns an error asking you to wait or force-stop, instead of being marked stopped while it keeps running. Bulk and scheduled stops run side by side, so several slow guests don't add up.
+- **Migration** no longer reports every possible target node as blocked.
+- **Resize** grows the root disk by the requested change, not to the requested total, so data disks are no longer counted twice. Machines need at least 64 MB of RAM.
+- **Failed creates** no longer leave orphaned rows or untagged guests behind. A machine that didn't finish creating, rebuilding or restoring is held, and its page says why.
+- **Locked machines.** Bulk actions, migrations, the Cluster Balancer and node drains skip a machine while its IDE installs or its cloud-init deploy finishes, and report it.
+- **Schedules.** Invalid stored power and backup schedules are reported to admins at startup. Per-VM backups missed while the backend was down run after it restarts.
+- **Alerts** are capped at 20 rules per machine, duplicates are refused, and simultaneous firings are delivered once.
+- **Dashboard.** While the API is unreachable the dashboard retries with a clear retry state instead of bouncing between pages. Bulk actions apply only to the selected machines visible under the active filter. Resize and quota dialogs keep RAM sizes exact. A rejected kiosk-exit PIN keeps the kiosk signed in.
+- **Settings.** Numeric settings that aren't numbers fall back to their defaults instead of breaking. The Docker backend receives every setting documented in `.env`. code-server listens on `IDE_GUEST_PORT`.
+- **Updater.** Local `docker-compose.yml` changes now live in `docker-compose.override.yml`, and the updater refuses to run over local edits instead of discarding them.
 
 ## Upgrading
 
@@ -82,7 +87,3 @@ Read DEPLOYMENT.md §14.4 before updating. In short:
 
 - Rebuild cloud-image templates to pick up the guest agent. Password-only deploys from templates built before this release produce machines their owner cannot log into. Template Store flags them.
 - Guests created before this release keep their existing storage. `GET /api/admin/storage-pinning` lists any that cannot migrate as a result.
-
-### Development databases
-
-- The migration `20261019140000_vm_status_message` was renamed to `20261019140000_vm_hold_reason` (it adds `VirtualMachine.holdReason`) before any release shipped it. A development database that already applied the old name keeps a stale `statusMessage` column and migration record, and `prisma migrate dev` reports drift; reset it (`npx prisma migrate reset`). Release installs are unaffected.
