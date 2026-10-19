@@ -4,7 +4,7 @@ title: Admin router
 description: Admin-only platform settings, cluster health and isolation, audit log, quota and passthrough approvals, broadcasts, balancer and self-update endpoints, mounted at /api/admin.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/admin.routes.ts
 tags: [proxmate, api, admin, settings, cluster]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/admin.routes.ts
@@ -67,8 +67,8 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 | GET | `/api/admin/passthrough-requests` | admin | Pending passthrough requests. |
 | POST | `/api/admin/passthrough-requests/:id/approve` | admin | `{ mapping }`; plans then applies in background; 202 `{ started, targetNode, willMigrate, targetstorage, bootWarnings }`. Audited `passthrough.approve_started`. |
 | POST | `/api/admin/passthrough-requests/:id/deny` | admin | Deny. Audited `passthrough.deny`. |
-| GET | `/api/admin/vms/unmatched` | admin | Machines whose VMID has no guest carrying their ProxMate tag (`listUnmatchedVms`), shown in Settings → Maintenance with Adopt / Remove row. |
-| POST | `/api/admin/vms/:id/adopt` | admin | Tag the guest at the row's VMID as this row's (`adoptGuest`); 409 when refused. Audited `vm.adopt`. |
+| GET | `/api/admin/vms/unmatched` | admin | Machines whose VMID has no guest carrying their ProxMate tag (`listUnmatchedVms`), with what is at the VMID; shown in Settings → Maintenance → Unconfirmed machines with Adopt / Remove row (Remove row is `DELETE /api/vms/:id?rowOnly=true`). 502 when Proxmox can't be read. |
+| POST | `/api/admin/vms/:id/adopt` | admin | Tag the guest at the row's VMID as this row's (`adoptGuest`); a held or `error` row is then made safe and its hold cleared (disks over quota keep it held). 409 when refused (another machine's tag, a template, a VMID shared with another row, no guest, or a volume that isn't its own). Audited `vm.adopt`. |
 | POST | `/api/admin/vms/:id/passthrough/detach` | admin | `{ index? (0..15, default 0) }` detach `hostpci<index>`. Audited `passthrough.detach`. |
 | POST | `/api/admin/broadcast` | admin | `{ subject (1..200), message (1..5000) }`; email every non-opted-out user with an unsubscribe link. Audited `admin.broadcast`. |
 | GET | `/api/admin/balancer` | admin | Balancer settings + computed plan. |

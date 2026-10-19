@@ -4,7 +4,7 @@ title: Provisioning defaults
 description: SystemConfig keys choosing the disk pool, network, ISO/snippet storage, backup storage and rescue ISO that guest creation, cloning, restores and rescue boot use.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/setup.service.ts
 tags: [proxmate, config, storage, networking, provisioning]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: setup-svc
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/setup.service.ts
@@ -54,7 +54,7 @@ Cluster-wide defaults that decide where new guests are placed and stored. The se
 
 # Invariants
 
-- `PUT /api/admin/settings/defaults` records an `admin.settings_defaults` audit entry with a `from → to` diff for each changed key. `PUT /settings/rescue` writes no audit entry.[^admin-routes]
+- `PUT /api/admin/settings/defaults` records an `admin.settings_defaults` audit entry with a `from → to` diff for each changed key. `PUT /settings/rescue` records `admin.rescue_config` with the ISO (or `rescue ISO cleared`).[^admin-routes]
 - Changing `default_storage` or `default_bridge` affects only future operations. Existing guests keep their disks and NICs, apart from the bridge rewrite on later duplicate, restore and deploy runs.
 
 # Relationships

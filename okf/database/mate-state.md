@@ -4,7 +4,7 @@ title: MateState
 description: A point-in-time Proxmox vzdump backup of a VM ("MateState"), with rolling per-VM retention.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/schema.prisma
 tags: [proxmate, database, prisma, backup, vzdump]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: schema
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/schema.prisma
@@ -50,7 +50,7 @@ ProxMate's name for a VM backup (always "MateState", never "droplet"). Each row 
 
 # Invariants
 
-- Creation inserts a `creating` placeholder, runs vzdump in `snapshot` mode (waits up to 30 min), finds the new volid by diffing the storage listing, then sets `ready` with the real volid and size. Any failure sets `error`.[^svc]
+- Creation inserts a `creating` placeholder, runs vzdump in `snapshot` mode (waits up to 30 min), records the volid the task's own log names (a lone new volume for the VMID only when the log names none), then sets `ready` with the real volid and size. Any failure sets `error`; when the wait timed out or the archive could not be identified, the task is stopped and the archive it wrote is removed.[^svc]
 - After each successful backup, `pruneOldMateStates` keeps only the newest N `ready` rows. N is the VM's `backupKeep`, or `MATESTATE_RETENTION` = 2. It deletes the Proxmox file best-effort, then the row.[^svc]
 - Backup storage comes from the `backup_storage` [SystemConfig](/database/system-config.md) key; if unset, the first storage with `backup` content is picked and saved there.[^svc]
 - Restore requires `status === 'ready'` and a matching `vmId`. The row is `restoring` during the operation and returns to `ready` afterwards.[^svc]

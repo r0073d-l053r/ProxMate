@@ -21,11 +21,12 @@ maintainer adds a `verified` entry. Facts are cited to source files with footnot
 * [HTTP API](api/) - Every Express router and endpoint, with auth and gotchas
 * [Backend services](services/) - The service layer under backend/src/services
 * [Proxmox VE integration](proxmox/) - API surface, privilege matrix, storage, networking, guest lifecycle
-* [Playbooks](playbooks/) - Procedures, including setting up an SDN-only cluster
+* [Playbooks](playbooks/) - Procedures, including setting up an SDN-only cluster, settling unconfirmed machines and upgrading from 1.0.x
 
 # Common entry points
 
 * [All SystemConfig keys](config/system-config-keys.md) - Alphabetical index of every key with its group
 * [Proxmox privilege matrix](proxmox/privileges.md) - What the API token needs and what breaks without each privilege
 * [Guest networking](proxmox/networking.md) - Bridge/OVS/SDN VNet discovery and the default network
+* [Upgrading from 1.0.x](playbooks/upgrading-from-1-0.md) - Compose override, updater units, token privileges and unconfirmed machines
 * [Maintaining this bundle](playbooks/maintaining-this-bundle.md) - Rules the conformance test enforces

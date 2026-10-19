@@ -4,7 +4,7 @@ title: Guest lifecycle on Proxmox
 description: How ProxMate creates, clones, templates, powers, migrates, backs up, restores, deletes and consoles QEMU VMs and LXC containers on Proxmox VE, including VMID allocation, bridge/VLAN application and tenant firewall isolation.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/vm.service.ts
 tags: [proxmate, proxmox, vm, lxc, isolation]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: pve
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts
@@ -76,6 +76,24 @@ take a trailing `kind` defaulting to `qemu`; the path segment is the kind itself
 - Template deploys and duplicates run on the template's / source's node; `pickBestNode` is not
   consulted.[^vm]
 
+# Ownership tags and holds
+
+- Every guest ProxMate creates carries the Proxmox tag `proxmate-<row id>`: ISO and LXC creates pass
+  it as `tags` in the create call; clones, upload restores, MateState restores and snapshot
+  rollbacks write it right after the task, replacing any ProxMate tag inherited from the source.
+  Template Store templates carry `proxmate-template-<id>`. Setting tags needs `VM.Config.Options`
+  (see [privileges](/proxmox/privileges.md)).[^vm]
+- Every action that changes a guest or hands over control of it (power, console, IDE, backups,
+  restores, resize, rebuild, migrate, delete) first checks that the guest at the row's VMID carries
+  the row's own tag; read views show nothing for a guest that doesn't. Guests created before tags
+  existed are tagged by a backfill at boot and every 15 minutes until a clean pass; rows it cannot
+  match are listed for an admin to adopt or remove (`/api/admin/vms/unmatched`).[^vm][^adminroutes]
+- A row is **held** (`holdReason` set, `status: 'error'`) while its guest may not run: provisioning,
+  a rebuild or a restore didn't finish, a restore left it over quota, or a restored config
+  referenced another guest's volumes. A held row can be stopped, deleted or repaired (restore,
+  rollback, rebuild, admin adoption) but not started, consoled or given the IDE. See
+  [VirtualMachine](/database/virtual-machine.md).[^vm]
+
 # Steps: create from ISO (QEMU)
 
 `createVm(user, input)`:[^vm][^pve]
@@ -88,8 +106,9 @@ take a trailing `kind` defaulting to `qemu`; the path segment is the kind itself
    `ide2=<iso_storage>:iso/<iso>,media=cdrom`, `boot=order=scsi0;ide2`, `ostype=l26`, `agent=1`;
    `waitForTask`.
 4. If isolating: `configureVmIsolation(node, vmid, readIsolationOptions())` before first boot.
-5. Row → `stopped`; `startVm` + `waitForTask`; row → `running`. Any failure → row `error` and a
-   `vm.error` notification (`markVmError`).
+5. Row → `stopped`; `startVm` + `waitForTask`; row → `running`. Any failure → `settleFailedCreate`:
+   the row is held as `error` when a guest that isn't another machine's sits at the VMID, otherwise
+   deleted; either way a `vm.error` notification.
 
 # Steps: create LXC
 
@@ -159,7 +178,9 @@ See [cloud-init config](/config/cloud-init.md).
 # Power and console
 
 - Start/shutdown/stop/reboot: `POST /nodes/{node}/{kind}/{vmid}/status/<action>`. ProxMate `stopVm`
-  with `force=false` calls `shutdown`; `force=true` calls `stop`. Pause/resume are QEMU-only
+  with `force=false` calls `shutdown`; `force=true` calls `stop`; either way it waits up to 45 s for
+  the returned task and records `stopped` only when the task succeeds (a graceful stop still running
+  at the deadline is reported to the user with a hint to force it). Pause/resume are QEMU-only
   (`suspend`/`resume`). Every power-on path (start, reboot, resume, rescue enter/exit) calls
   `assertOwnerAccessActive` before powering on (the owner's compute access window, not the caller's). All power actions run `syncVmNode` first, which re-reads
   `/cluster/resources` and updates `proxmoxNode` if the guest moved.[^vm]
@@ -183,7 +204,8 @@ currently running unless `offline`. `POST .../qemu/{vmid}/migrate` with `target`
 (default 30 min), then sets `proxmoxNode`.[^vm][^pve]
 
 `migratePreflight` wraps `GET .../migrate` (`allowed_nodes`, `not_allowed_nodes` normalised into
-sentences, `local_disks`) and adds two ProxMate blocks, both fail-open: a running guest with
+sentences, `local_disks`; Proxmox mentions every other node in `not_allowed_nodes`, so an entry with
+no cause for a node that is also in `allowed_nodes` is not reported as a blocker) and adds two ProxMate blocks, both fail-open: a running guest with
 `cpu=host` may not live-migrate to a node with a different `cpuinfo.model`; a target lacking a
 `cicustom` snippet storage is refused. It returns `null` if the preflight cannot be read.[^pve]
 The balancer and drain plans use `migratableTargets`; containers are pinned.[^balancer][^security]
@@ -193,17 +215,25 @@ Progress for the admin bar: find the running `qmigrate` task in `/cluster/tasks`
 # Backup, restore, snapshots
 
 - MateState backup: vzdump `mode=snapshot`, `compress=zstd`, `remove=0`; see [storage](/proxmox/storage.md).[^matestate]
-- In-place restore (`restoreFromMateState`): stop (wait ≤30 s) → QEMU `POST /qemu` with
-  `archive`, `force=1` or LXC `POST /lxc` with `ostemplate`, `restore=1`, `force=1` and a rootfs
-  `storage` → wait 30 min → `ensureNicFirewall` only (not `configureVmIsolation`) → start.[^matestate][^pve]
-- Restore as new guest (uploaded archive): `restoreNewGuest` with a new VMID, `unique=1` (fresh MACs)
-  and `storage=default_storage` → `setVmName` → `applyDefaultBridge` → `configureVmIsolation` → start.[^restore]
+- In-place restore (`restoreFromMateState`): reserve the archive's sizes against the owner's quota →
+  stop (wait ≤30 s) → QEMU `POST /qemu` with `archive`, `force=1` or LXC `POST /lxc` with
+  `ostemplate`, `restore=1`, `force=1` and a rootfs `storage` → wait 30 min → re-tag →
+  `applyDefaultBridge`, `configureVmIsolation`, `ensureNicFirewall`, IDE pinhole → own-volume check →
+  re-sync sizes → start (only while the owner's access window is open). Snapshot rollback follows
+  the same settle steps.[^matestate][^pve]
+- Restore as new guest (uploaded archive): config allowlist and quota check → `restoreNewGuest` with a
+  new VMID, `unique=1` (fresh MACs) and `storage=default_storage` → tag → strip autostart/protection
+  → own-volume check → rename, rebuild every NIC on the default bridge → isolation → re-sync sizes →
+  start. See [restore-upload](/services/restore-upload.md).[^restore]
 - Snapshots (QEMU only; for LXC the list route returns `[]` and create/delete/rollback answer 400): list/create (`vmstate` optional)/delete/rollback under
   `.../qemu/{vmid}/snapshot`; a per-VM cap `MAX_SNAPSHOTS_PER_VM = 12` is enforced in the route.[^vmroutes]
 
 # Delete
 
-`destroyVm`: `syncVmNode` → `stopAndDeleteProxmoxVm` → delete the DB row.[^vm]
+`destroyVm`: `syncVmNode` → when the guest carries the row's tag, `stopAndDeleteProxmoxVm` → delete
+the DB row (with its IDE credential rows). A guest without any ProxMate tag is refused; an empty
+VMID or another machine's guest removes only the row. Admins can remove just the row of an
+unconfirmed machine (`?rowOnly=true`).[^vm]
 
 # Guest agent
 
@@ -236,7 +266,7 @@ Network discovery is in [networking](/proxmox/networking.md); config keys are in
      (rogue DHCP server), OUT DROP icmpv6 `router-advertisement`, OUT DROP to `192.168.0.0/16`,
      `172.16.0.0/12`, `10.0.0.0/8`, then OUT ACCEPT udp+tcp dport 53 to each configured DNS server,
      or to any destination when none are set.
-- `ensureNicFirewall`: adds/flips `firewall=1` on every `netN` (clones and in-place restores).[^pve]
+- `ensureNicFirewall`: adds/flips `firewall=1` on every `netN` and drops any `trunks=` (clones and in-place restores).[^pve]
 - Cluster firewall: guest rules only take effect once it is on. `setClusterFirewall(true, cidrs)`
   first adds IN ACCEPT tcp 8006 and 22 from each CIDR with comment `ProxMate: management access`
   (skipped entirely if any rule with that comment already exists), then `enable=1`; disabling leaves
@@ -251,12 +281,13 @@ Network discovery is in [networking](/proxmox/networking.md); config keys are in
 
 - When isolation is enabled, it is applied before a guest's first boot on every create/deploy/duplicate/rebuild/upload-restore path.[^vm][^restore]
 - POST/PUT/DELETE to Proxmox are never retried by the client.[^pve]
-- A create that fails at any Proxmox step leaves the DB row in `error`; the Proxmox guest may remain.[^vm]
+- A create that fails at any Proxmox step keeps its row (held, `error`) only while a guest that isn't another machine's is at its VMID; otherwise the row is deleted so it cannot point at a guest Proxmox later gives that VMID.[^vm]
+- ProxMate acts only on a guest carrying its row's `proxmate-<id>` tag.[^vm]
 
 # Gotchas
 
 - Concurrent creates can read the same `/cluster/nextid` (no reservation); the later Proxmox create
-  then fails and its row goes to `error`. Inferred from the code, not observed.[^vm]
+  then fails and its row is settled like any failed create. Inferred from the code, not observed.[^vm]
 - Changing `isolation_vlan_tag` or `default_bridge` does not touch existing guests until their next
   isolation/configuration run.[^adminroutes]
 - DEPLOYMENT.md §2 says "mac/ip-filter on, DNS to the gateway allowed", but the code sets

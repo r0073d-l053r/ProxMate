@@ -4,7 +4,7 @@ title: Setup service
 description: First-run wizard logic, covering the admin account, Proxmox connection and privilege test, resource discovery, defaults and completion.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/setup.service.ts
 tags: [proxmate, service, setup, proxmox]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: setup
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/setup.service.ts
@@ -24,7 +24,7 @@ the admin settings page, which reuses the connection test, the resource discover
 
 | Function | Signature summary | What it does |
 |----------|-------------------|--------------|
-| `createAdmin` | `({ email, password, displayName })` | Creates the only first-run admin: email lowercased, bcrypt cost 12, `role: 'admin'`. Throws if an admin exists. Generates `jwt_secret` (64 random bytes, hex, stored encrypted) if absent, then opens a session. |
+| `createAdmin` | `({ email, password, displayName })` | Creates the only first-run admin: email lowercased, bcrypt cost 12, `role: 'admin'`, `emailBound: true`. Throws if an admin exists. Generates `jwt_secret` (64 random bytes, hex, stored encrypted) if absent, then opens a session. |
 | `hasAdmin` | `()` | Whether any `role: 'admin'` user exists. |
 | `saveProxmoxConfig` | `({ host, tokenId, tokenSecret, verifySsl })` | Writes the [Proxmox connection](/config/proxmox-connection.md) keys; `proxmox_token_secret` is stored encrypted. |
 | `testProxmoxConnection` | `()` → `{ connected, version, nodeCount, vmCount, storageCount, warnings }` | Checks that the token can actually *do* things, not just authenticate (see below). |

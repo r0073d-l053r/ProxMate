@@ -1,10 +1,10 @@
 ---
 type: Database
 title: ProxMate database
-description: The single Prisma-managed SQLite database behind the ProxMate backend, with its 22 core models, migration history and the module schema seam.
+description: The single Prisma-managed SQLite database behind the ProxMate backend, with its 23 core models, migration history and the module schema seam.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/schema.prisma
 tags: [proxmate, database, prisma, sqlite, migrations]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: schema
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/schema.prisma
@@ -61,7 +61,8 @@ ProxMate keeps all of its own state in one relational database: accounts, VM own
 
 # Migrations
 
-- Core migrations live in `backend/prisma/migrations/` (45 directories, from `20260623035652_init` to `20260811172427_add_template_guest_agent`).[^migrations]
+- Core migrations live in `backend/prisma/migrations/` (51 directories, from `20260623035652_init` to `20261019140000_vm_hold_reason`).[^migrations]
+- The 1.1.0 migrations (`20261019*`) add `User.emailBound` (backfilled for accounts that registered through an invite addressed to their email, and for the setup-wizard admin), the `IdeGuestSecret` table, `User.twoFactorFailedAttempts` and `User.twoFactorPendingSecret`, make `InviteToken.createdById` nullable with `ON DELETE SET NULL`, and add `VirtualMachine.holdReason`.[^migrations]
 - The container entrypoint runs `npx prisma migrate deploy` on every boot, then the module migration step when `PROXMATE_MODULES` is set.[^entrypoint]
 - npm scripts: `db:generate` (`prisma generate`), `db:migrate` (`prisma migrate dev`), `db:push`, `db:studio`, `db:migrate:modules` (`tsx src/scripts/migrate-modules.ts`).[^package]
 - App-DB snapshots are taken with SQLite `VACUUM INTO` by the app-DB backup service (see [app-DB backup config](/config/appdb-backup.md)).[^appdb-backup]
@@ -84,6 +85,7 @@ Optional compiled-in modules (`backend/src/modules/<name>/`, enabled by `PROXMAT
 | Session | [session](/database/session.md) | Server side of the 24h session JWT + CSRF token |
 | ApiToken | [api-token](/database/api-token.md) | `pm_` personal tokens (HMAC-hashed) |
 | IdeGatewayToken | [ide-gateway-token](/database/ide-gateway-token.md) | `pmide_` per-VM LLM gateway tokens |
+| IdeGuestSecret | [ide-guest-secret](/database/ide-guest-secret.md) | Per-VM IDE guest credential, encrypted |
 | TenantLlmKey | [tenant-llm-key](/database/tenant-llm-key.md) | BYO LLM keys, encrypted |
 | SshKey | [ssh-key](/database/ssh-key.md) | Saved public keys |
 | InviteToken | [invite-token](/database/invite-token.md) | Registration invites with quotas |

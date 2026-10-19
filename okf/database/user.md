@@ -4,7 +4,7 @@ title: User
 description: A ProxMate account (admin or tenant) holding credentials, 2FA state, lockout counters, resource quotas and the compute access window.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/schema.prisma
 tags: [proxmate, database, prisma, auth, quota]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: schema
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/schema.prisma
@@ -90,16 +90,16 @@ The central identity row. Every tenant and admin is a `User`; `role` decides adm
 
 # Invariants
 
-- Lockout: after `AUTH_LOCKOUT_MAX` (default 10) consecutive failures the account is locked for `AUTH_LOCKOUT_MINUTES` (default 15) and the counter is reset to 0 at the moment of locking; a correct password clears both fields. Locks always auto-expire.[^lockout]
+- Lockout: after `AUTH_LOCKOUT_MAX` (default 10) consecutive failed passwords, or as many wrong 2FA codes (`twoFactorFailedAttempts`), the account is locked for `AUTH_LOCKOUT_MINUTES` (default 15). The counter stays spent until the lock runs out; a correct password resets `failedLoginAttempts` but never lifts a lock in force or resets the 2FA count. Locks always auto-expire.[^lockout]
 - `isAccessExpired` is false for admins and for null `accessExpiresAt`; otherwise true once `accessExpiresAt <= now`.[^access]
 - Warning dedupe compares `accessWarned7For` / `accessWarned1For` against the *current* `accessExpiresAt`, so extending the window re-arms warnings automatically.[^sweep]
 - Quota enforcement sums `cpu`/`ram`/`storage` over the user's VMs with `quotaExempt: false`; admins are never quota-checked.[^vm-svc]
-- `isMfaSetupRequired` is true only when `require2fa` is set, there is no `ssoSubject`, TOTP is off and the user has zero passkeys.[^mfa]
+- `isMfaSetupRequired` is true only when `require2fa` is set, TOTP is off and the user has zero passkeys. An SSO-linked account (`ssoSubject`) is exempt for SSO sessions only; its local password login still requires the factor.[^mfa]
 - SSO login looks up by `ssoSubject`, otherwise links an existing account with the same email (only when `emailBound` and the IdP asserts `email_verified: true`) by writing `ssoSubject` onto it, and otherwise JIT-provisions a new user when that is allowed.[^sso]
 
 # Gotchas
 
-- Deleting a user cascades VMs, sessions, keys, tokens and shares, but leaves the non-FK rows listed above (passkeys, recovery codes, reset tokens, audit, samples) as orphans. The admin delete route destroys the user's VMs on Proxmox best-effort first.[^user-routes]
+- Deleting a user cascades VMs, sessions, keys, tokens and shares, but leaves the non-FK rows listed above (passkeys, recovery codes, reset tokens, audit, samples) as orphans. The admin delete route first checks that every one of the user's machines can be deleted with its guest; if any cannot (a guest without its ownership tag, an unconfirmed location, or a failed destroy) the account is kept and the route answers 409 with the blocked `vms`.[^user-routes]
 - `InviteToken.createdById` is `ON DELETE SET NULL`: deleting an admin who created invites keeps the redeemed ones with no creator; the delete route revokes the unredeemed ones in the same transaction.[^creator-mig] [^user-routes]
 - `InviteToken.usedById` is `SET NULL` on delete: deleting a tenant makes the invite they redeemed look unused again, and it is redeemable if its `expiresAt` has not passed.[^init-mig] [^auth-routes]
 - Registration creates the user first, then atomically claims the invite with `updateMany where usedById: null`; on a lost race the new user row is deleted.[^auth-routes]
