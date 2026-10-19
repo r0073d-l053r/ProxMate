@@ -1301,6 +1301,23 @@ async function planTemplateClone(
 }
 
 /**
+ * Nodes that can serve the cloud-init vendor snippet, or undefined when there is no
+ * restriction to apply. A deploy writes `cicustom` pointing at the snippet storage,
+ * and Proxmox only resolves that volid on nodes where the storage is available: a
+ * guest placed anywhere else clones and configures fine, then fails to start with
+ * `storage '<id>' is not available on node '<node>'` and is left held as a failed
+ * provision. Placement therefore has to respect the snippet storage the same way it
+ * respects the disk pool.
+ */
+async function snippetCapableNodes(
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<string[] | undefined> {
+  const storage = process.env['SNIPPET_STORAGE'] ?? (await getConfig('iso_storage')) ?? undefined;
+  if (!storage) return undefined;
+  return (await pve.storageNodes(storage, client)) ?? undefined;
+}
+
+/**
  * The node a template deploy lands on.
  *
  * A linked clone shares the template's base image, so it stays on the template's
@@ -1331,7 +1348,7 @@ async function pickTemplateDeployNode(
       return home;
     }
     const arch = template.arch === 'amd64' || template.arch === 'arm64' ? template.arch : undefined;
-    return await pve.pickBestNode(want, dest, client, undefined, arch);
+    return await pve.pickBestNode(want, dest, client, await snippetCapableNodes(client), arch);
   } catch (err) {
     console.warn(
       `[vm] could not place a deploy of template ${template.proxmoxVmId} across the cluster ` +

@@ -50,7 +50,13 @@ const GB = 1024 ** 3;
  * Two online nodes; HOME is nearly full, IDLE nearly empty. `storages` maps each pool
  * to whether it is shared. The template's disks live on `templateDisks`.
  */
-function fakeCluster(opts: { templateDisks: string[]; storages: Record<string, boolean>; resourcesFail?: boolean }) {
+function fakeCluster(opts: {
+  templateDisks: string[];
+  storages: Record<string, boolean>;
+  resourcesFail?: boolean;
+  /** Storage id → the only nodes it is available on, as /cluster/resources reports it. */
+  storageNodes?: Record<string, string[]>;
+}) {
   const c = fakeClient();
   const ok = (data: unknown) => Promise.resolve({ data: { data } });
   const pools = Object.keys(opts.storages);
@@ -63,6 +69,11 @@ function fakeCluster(opts: { templateDisks: string[]; storages: Record<string, b
         { type: 'node', node: IDLE, status: 'online', maxcpu: 8, cpu: 0.05, maxmem: 32 * GB, mem: 2 * GB },
         ...pools.flatMap((storage) =>
           [HOME, IDLE].map((node) => ({ type: 'storage', storage, node, status: 'available', maxdisk: 1000 * GB, disk: 100 * GB })),
+        ),
+        // Storages that exist only on some nodes (e.g. an NFS snippet share one node
+        // cannot mount) are reported per node, exactly as /cluster/resources does.
+        ...Object.entries(opts.storageNodes ?? {}).flatMap(([storage, nodes]) =>
+          nodes.map((node) => ({ type: 'storage', storage, node, status: 'available', maxdisk: 10 * GB, disk: GB })),
         ),
       ]);
     }
@@ -150,6 +161,44 @@ describe('deployFromTemplate placement', () => {
 
     expect(bodyOf(cloneCall(c))['target']).toBeUndefined();
     expect(rowNode()).toBe(HOME);
+  });
+
+  // Lab test 2 (QueenBee): three deploys landed on a node where the snippet storage
+  // wasn't available. They cloned, resized and configured, then every qmstart failed
+  // with `storage 'musebot-backups' is not available on node 'pve-5'`, leaving the
+  // guests held as failed provisions.
+  it('does not place a deploy on a node that cannot see the snippet storage', async () => {
+    configuredAs({ default_storage: 'ceph-vm' });
+    const c = fakeCluster({
+      templateDisks: ['ceph-vm', 'ceph-vm'],
+      storages: { 'ceph-vm': true },
+      storageNodes: { snippets: [HOME] }, // the idle node cannot serve the vendor snippet
+    });
+    getClient.mockResolvedValue(asClient(c));
+    vi.stubEnv('SNIPPET_STORAGE', 'snippets');
+
+    await deployFromTemplate(user, template(), input);
+
+    expect(bodyOf(cloneCall(c))['target']).toBeUndefined();
+    expect(rowNode()).toBe(HOME);
+    vi.unstubAllEnvs();
+  });
+
+  it('still spreads when the snippet storage is available everywhere', async () => {
+    configuredAs({ default_storage: 'ceph-vm' });
+    const c = fakeCluster({
+      templateDisks: ['ceph-vm', 'ceph-vm'],
+      storages: { 'ceph-vm': true },
+      storageNodes: { snippets: [HOME, IDLE] },
+    });
+    getClient.mockResolvedValue(asClient(c));
+    vi.stubEnv('SNIPPET_STORAGE', 'snippets');
+
+    await deployFromTemplate(user, template(), input);
+
+    expect(bodyOf(cloneCall(c))).toMatchObject({ target: IDLE });
+    expect(rowNode()).toBe(IDLE);
+    vi.unstubAllEnvs();
   });
 
   it('falls back to the template node when the scheduler cannot read the cluster', async () => {

@@ -2214,6 +2214,34 @@ export async function storageAvailableOn(
 }
 
 /**
+ * The nodes a storage is actually available on, or null when that can't be told —
+ * callers then fail open rather than refusing to place a guest.
+ *
+ * Read from `/cluster/resources`, not `/storage/<id>`: the storage *configuration*
+ * endpoint needs `Datastore.Allocate` (a least-privilege token without it gets
+ * `Permission check failed (/storage/<id>, Datastore.Allocate)`), while the resource
+ * list needs only `Datastore.Audit`, which ProxMate already treats as mandatory. It
+ * also reports real per-node availability rather than just the configured `nodes`
+ * restriction.
+ */
+export async function storageNodes(storage: string, client?: AxiosInstance): Promise<string[] | null> {
+  const c = client ?? (await getClient());
+  try {
+    const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources', { params: { type: 'storage' } });
+    const nodes = [
+      ...new Set(
+        res.data.data
+          .filter((s) => s.storage === storage && s.node && (!s.status || s.status === 'available'))
+          .map((s) => s.node!),
+      ),
+    ];
+    return nodes.length > 0 ? nodes : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Whether a VM config exposes a serial port (e.g. `serial0`), which is required
  * for the xterm.js text console (Proxmox `termproxy`). ProxMate's cloud-init VMs
  * are built with `serial0: 'socket'`; ISO VMs typically have none.
