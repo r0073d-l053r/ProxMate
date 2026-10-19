@@ -4,7 +4,7 @@ title: ProxMate backend and system architecture
 description: How ProxMate is put together - Express 5 + Prisma/SQLite backend entrypoints and middleware order, route → service → proxmox.service/Prisma layering, scheduler jobs, the optional module seam, the Next.js frontend route groups, the in-guest IDE, and Docker Compose deployment.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/app.ts
 tags: [proxmate, architecture, backend, deployment, overview]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: index
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/index.ts
@@ -142,20 +142,20 @@ Next.js App Router under `frontend/src/app/`:
 
 - `ide/settings.json` and `ide/autostart/{package.json,extension.js}` are embedded into `backend/src/services/ide-assets.generated.ts` by `backend/scripts/gen-ide-assets.mjs` (regenerate and commit after editing). [ide-provision](/services/ide-provision.md) ships them into the guest through the QEMU guest agent and installs pinned code-server/OpenCode natively.
 - `ide/provision.sh` is a stand-alone native in-guest provisioner; `ide/Dockerfile` builds an alternative container image (`codercom/code-server` + OpenCode + branding + `write-opencode-config.sh` entrypoint hook).
-- Runtime path: browser → [ide-proxy](/services/ide-proxy.md) → guest `:8080`; in-guest agent → [ide-gateway](/services/ide-gateway.md) → upstream LLM; policy in [ide](/services/ide.md).
+- Runtime path: browser → [ide-proxy](/services/ide-proxy.md) → guest `:<IDE_GUEST_PORT>` (8080 by default); in-guest agent → [ide-gateway](/services/ide-gateway.md) → upstream LLM; policy in [ide](/services/ide.md).
 
 # Deploy
 
-- `docker-compose.yml` defines `backend` (built from `./backend`, port 4000, named volume `proxmate-data:/data`, `${PROXMATE_BACKUP_DIR:-./backups}:/var/backups/proxmate`, `cap_drop: ALL` plus CHOWN/DAC_OVERRIDE/SETUID/SETGID, `no-new-privileges`, healthcheck on `/api/health`) and `frontend` (port 3000, `cap_drop: ALL`, waits for backend `service_healthy`). Optional commented mounts: snippets dir, backup-download dir, update control dir, private Proxmox CA. Ports bind to `${BIND_ADDR:-0.0.0.0}`. Env reference: [docker environment](/env/docker-environment.md), [backend environment](/env/backend-environment.md).[^compose]
+- `docker-compose.yml` defines `backend` (built from `./backend`, port 4000, named volume `proxmate-data:/data`, `${PROXMATE_BACKUP_DIR:-./backups}:/var/backups/proxmate`, `cap_drop: ALL` plus CHOWN/DAC_OVERRIDE/SETUID/SETGID, `no-new-privileges`, healthcheck on `/api/health`) and `frontend` (port 3000, `cap_drop: ALL`, waits for backend `service_healthy`). Both images build on `node:22-alpine`. Optional mounts (snippets dir, backup-download dir, update control dir, private Proxmox CA) go in an untracked `docker-compose.override.yml`, copied from `docker-compose.override.example.yml`, so updates never touch them. Ports bind to `${BIND_ADDR:-0.0.0.0}`. Env reference: [docker environment](/env/docker-environment.md), [backend environment](/env/backend-environment.md).[^compose]
 - `backend/docker-entrypoint.sh` starts as root only to `chown` `/data` (and the app-DB backup dir, non-recursively), drops to `node` via `su-exec`, runs `prisma migrate deploy`, then module migrations if `PROXMATE_MODULES` is set, then `node dist/index.js`.[^entry]
 - `install.sh` is a read-before-run installer: prerequisite checks (offers to install Docker, Compose v2, git, curl, openssl), `--local` (HTTP trial) or `--domain` (HTTPS behind a reverse proxy) mode, source checkout (`--ref`, default newest `vX.Y.Z` tag), writes `.env` with a generated `ENCRYPTION_KEY` (refusing to generate one while the `proxmate_proxmate-data` volume already exists, since a new key cannot read that database), builds and starts, waits for API health. It deliberately stops at the browser setup wizard so the Proxmox token never touches shell history.[^install]
-- Self-update: [update service](/services/update.md) writes a request into the control dir; `deploy/proxmate-updater.path` triggers `deploy/proxmate-updater.service` → `deploy/update.sh` on the host (checkout tag, rebuild, restart). `deploy/Caddyfile` is a reverse-proxy example.
+- Self-update: [update service](/services/update.md) writes a request into the control dir; `deploy/proxmate-updater.path` triggers `deploy/proxmate-updater.service` → `deploy/update.sh` on the host (checkout tag, rebuild, restart; it refuses to run over local edits to tracked files). `deploy/Caddyfile` is a reverse-proxy example.
 
 # Gotchas
 
 - `project-architecture.md` is partly stale: its addendum says LXC containers are not implemented and the JWT is in localStorage, but the code has `createContainer` (LXC) in [vm service](/services/vm.md) and uses an httpOnly session cookie plus a readable CSRF token ([auth service](/services/auth.md), `withCredentials` in the frontend).[^arch]
 - Scheduler locks, the IDE relocation tracker and caches are per-process; the design assumes exactly one backend process (SQLite is single-writer anyway).[^sch]
-- `ENCRYPTION_KEY` must be stable: it encrypts SystemConfig secrets, tenant LLM keys, TOTP secrets and pending passwords, and peppers API-token and unsubscribe HMACs.[^compose]
+- `ENCRYPTION_KEY` must be stable: it encrypts SystemConfig secrets, tenant LLM keys, TOTP secrets, IDE guest secrets and pending passwords, and peppers API-token and unsubscribe HMACs.[^compose]
 
 # Relationships
 

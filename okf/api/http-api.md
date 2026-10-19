@@ -4,7 +4,7 @@ title: ProxMate HTTP API
 description: Overview of the ProxMate backend HTTP and WebSocket surface under /api, covering middleware order, cookie/JWT/API-token auth, CSRF, rate limits, OpenAPI and every router.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/app.ts
 tags: [proxmate, api, http, auth, middleware]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: app
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/app.ts
@@ -64,8 +64,8 @@ The Express 5 backend serves a JSON REST API under `/api`, plus `/metrics`, an I
 
 As registered in `app.ts`:[^app]
 
-1. `app.set('trust proxy', Number(TRUST_PROXY ?? 0))`: number of trusted proxy hops (affects `req.ip` and rate limiting).
-2. `mountIdeProxy(app)`: claims only `/api/ide/:id/proxy/*`, streaming raw to in-guest code-server ahead of everything else (session cookie + VM ownership auth).[^ideproxy]
+1. `app.set('trust proxy', TRUST_PROXY)` (default 0; a non-numeric value falls back to 0): number of trusted proxy hops (affects `req.ip`, rate limiting and the audit log's client IP).
+2. `mountIdeProxy(app)`: claims only `/api/ide/:id/proxy/*`, streaming raw to in-guest code-server ahead of everything else (session cookie; VM owner only).[^ideproxy]
 3. `observability`: per-request id (honours inbound `x-request-id`, else a UUID; echoed in the `x-request-id` response header), a latency histogram labelled by method, route and status, and one structured access-log line (skipped for `/api/health` and `/metrics`).[^mw-obs]
 4. `express.json({ limit: '15mb' })` on `/api/ide/:id/llm`, then the [IDE gateway router](/api/ide-gateway.md) on `/api/ide`, before the shared parsers and write limiter.
 5. `helmet()`.
@@ -119,7 +119,7 @@ Other gates:
 | `gatewayAuthLimiter` | 600 / 60 s | `IDE_GATEWAY_RATE_LIMIT_MAX`, `IDE_GATEWAY_RATE_LIMIT_WINDOW_MS` | IDE LLM gateway |
 | `moduleLimiter` | 300 / 60 s (reads too) | `MODULE_RATE_LIMIT_MAX`, `MODULE_RATE_LIMIT_WINDOW_MS` | `/api/ext/<module>` |
 
-All are IP-keyed with `draft-7` `RateLimit-*` headers and 429 JSON errors.[^mw-rl]
+All are IP-keyed except `shareLimiter`, which is keyed by the signed-in user; all send `draft-7` `RateLimit-*` headers and 429 JSON errors. A non-numeric env value falls back to the default.[^mw-rl]
 
 # Endpoints
 
@@ -135,7 +135,7 @@ Inline in `app.ts`:[^app]
 
 | Mount | Router concept | Router-level auth |
 |---|---|---|
-| `/api/setup` | [setup](/api/setup.md) | none (authLimiter on writes; locked after completion) |
+| `/api/setup` | [setup](/api/setup.md) | none for `/status` and step 1 (`/admin`); requireAuth + requireAdmin for later steps (authLimiter on writes; locked after completion) |
 | `/api/auth` | [auth](/api/auth.md) | per route |
 | `/api/invites` | [invite](/api/invite.md) | requireAuth + requireAdmin (+ requireSession on create/send/list) |
 | `/api/vms` | [vm](/api/vm.md) | requireAuth + enforceMfaSetup |
@@ -159,7 +159,7 @@ Inline in `app.ts`:[^app]
 One `upgrade` dispatcher in `index.ts` tries `handleConsoleUpgrade` then `handleIdeUpgrade`, else destroys the socket.[^index]
 
 - `/api/vms/:id/console` and `/api/vms/:id/serial`: noVNC / xterm.js relays, session cookie + exact `FRONTEND_URL` Origin + `console` capability. See [console](/api/console.md).
-- `/api/ide/:id/proxy/*`: code-server WebSocket, session cookie + VM IDE target resolution; lenient Origin check (missing Origin, `FRONTEND_URL`, or `http(s)://<Host>`).[^ideproxy]
+- `/api/ide/:id/proxy/*`: code-server WebSocket, session cookie + VM owner + IDE target resolution; lenient Origin check (missing Origin, `FRONTEND_URL`, or `http(s)://<Host>`).[^ideproxy]
 
 Both use `verifyToken`, which treats a lapsed access window as unauthenticated.[^authsvc]
 

@@ -4,7 +4,7 @@ title: App-DB backup service
 description: Nightly `VACUUM INTO` snapshot of ProxMate's own SQLite database into an admin-configured directory with filename-scoped rolling retention.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/appdb-backup.service.ts
 tags: [proxmate, backup, sqlite, scheduler]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: appdb
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/appdb-backup.service.ts
@@ -12,6 +12,9 @@ sources:
   - id: scheduler
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/scheduler.service.ts
     title: backend/src/services/scheduler.service.ts
+  - id: install
+    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/install.sh
+    title: install.sh
 ---
 
 # Purpose
@@ -44,7 +47,7 @@ Cron `30 2 * * *` (nightly 02:30), overridable with env `APPDB_BACKUP_CRON`; gua
 # Gotchas
 
 - The snapshot contains the same AES-256-GCM-encrypted secrets as the live DB; restoring needs the SAME `ENCRYPTION_KEY`, which must be backed up separately.[^appdb]
-- The snapshot file is created empty with mode `0600` before `VACUUM INTO` fills it (SQLite keeps an existing empty file's mode), so it is owner-only for its whole life; it holds the session table in plaintext. A failed VACUUM removes the placeholder so it never counts toward retention.[^appdb]
+- The snapshot file is created empty with mode `0600` before `VACUUM INTO` fills it (SQLite keeps an existing empty file's mode), so it is owner-only for its whole life; it holds the session table in plaintext. A failed VACUUM removes the placeholder so it never counts toward retention.[^appdb] A host backup directory that `install.sh` creates is set to `0700`, so only uid 1000 and root can list it.[^install]
 - A writability probe (`.proxmate-write-test-<pid>`) runs before the VACUUM so a misconfigured dir fails with an explanation instead of a raw SQLite errno.[^appdb]
 - It deliberately never widens permissions or falls back to a container-internal path: a backup in the container layer would vanish on rebuild.[^appdb]
 - The path is embedded in a SQL literal via `$executeRawUnsafe` with single quotes doubled; the path is admin-configured.[^appdb]
@@ -56,3 +59,4 @@ Cron `30 2 * * *` (nightly 02:30), overridable with env `APPDB_BACKUP_CRON`; gua
 
 [^appdb]: backend/src/services/appdb-backup.service.ts
 [^scheduler]: backend/src/services/scheduler.service.ts
+[^install]: install.sh

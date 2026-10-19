@@ -4,7 +4,7 @@ title: Docker Compose environment
 description: The docker-compose.yml services, volumes, ports, build args and the .env.docker.example variables they consume for a containerised ProxMate deployment.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/docker-compose.yml
 tags: [proxmate, env, docker, deployment, compose]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: compose
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/docker-compose.yml
@@ -33,8 +33,8 @@ sources:
 
 | Service | Image / build | Ports | Volumes | Notes |
 |---|---|---|---|---|
-| `backend` | `proxmate-backend`, built from `./backend` | `${BIND_ADDR:-0.0.0.0}:${BACKEND_PORT:-4000}:4000` | `proxmate-data:/data` (SQLite DB); `${PROXMATE_BACKUP_DIR:-./backups}:/var/backups/proxmate`; optional mounts go in an untracked `docker-compose.override.yml` (template `docker-compose.override.example.yml`): `/snippets` (shared snippets dir), `/backups:ro` (vzdump dump for downloads), `/control` (self-update), `/certs/pve-ca.pem:ro` (private Proxmox CA) | `cap_drop: ALL` plus `CHOWN`, `DAC_OVERRIDE`, `SETUID`, `SETGID`; `no-new-privileges`. Healthcheck: `fetch http://127.0.0.1:4000/api/health` every 30 s (start period 40 s). `restart: unless-stopped`.[^compose] |
-| `frontend` | `proxmate-frontend`, built from `./frontend` | `${BIND_ADDR:-0.0.0.0}:${FRONTEND_PORT:-3000}:3000` | none | `cap_drop: ALL`, `no-new-privileges`. `depends_on: backend` with `condition: service_healthy`. |
+| `backend` | `proxmate-backend`, built from `./backend` (`node:22-alpine`) | `${BIND_ADDR:-0.0.0.0}:${BACKEND_PORT:-4000}:4000` | `proxmate-data:/data` (SQLite DB); `${PROXMATE_BACKUP_DIR:-./backups}:/var/backups/proxmate`; optional mounts go in an untracked `docker-compose.override.yml` (template `docker-compose.override.example.yml`): `/snippets` (shared snippets dir), `/backups:ro` (vzdump dump for downloads), `/control` (self-update), `/certs/pve-ca.pem:ro` (private Proxmox CA) | `cap_drop: ALL` plus `CHOWN`, `DAC_OVERRIDE`, `SETUID`, `SETGID`; `no-new-privileges`. Healthcheck: `fetch http://127.0.0.1:4000/api/health` every 30 s (start period 40 s). `restart: unless-stopped`.[^compose] |
+| `frontend` | `proxmate-frontend`, built from `./frontend` (`node:22-alpine`) | `${BIND_ADDR:-0.0.0.0}:${FRONTEND_PORT:-3000}:3000` | none | `cap_drop: ALL`, `no-new-privileges`. `depends_on: backend` with `condition: service_healthy`. |
 
 ## Backend container environment
 
