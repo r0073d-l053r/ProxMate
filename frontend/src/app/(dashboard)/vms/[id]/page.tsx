@@ -41,6 +41,7 @@ import { copyText } from "@/lib/clipboard";
 import { openPopup, pollUntil } from "@/lib/ide-launch";
 import { formatRam, formatBytes, formatUptime, formatDate } from "@/lib/format";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
+import { HoldBanner, isVmHeld } from "@/components/vm/hold-banner";
 import { NotesCard } from "@/components/vm/notes-card";
 import { TagsCard } from "@/components/vm/tags-card";
 import { MetricsCard } from "@/components/vm/metrics-card";
@@ -510,6 +511,9 @@ export default function VmDetailPage() {
   const busy = acting || ideBusy || deploying || (pending !== null && pending !== "delete-failed");
   const running = vm.status === "running";
   const stopped = vm.status === "stopped" || vm.status === "error";
+  // A held or errored machine can only be repaired or deleted: the backend refuses
+  // start, console and IDE, so those controls are disabled (and the banner says why).
+  const held = isVmHeld(vm);
   // Access: the API grants per-capability (share presets Viewer/Operator/Manager;
   // owner/admin hold everything) — the UI just hides what won't work.
   const caps = new Set(vm.caps ?? []);
@@ -573,6 +577,8 @@ export default function VmDetailPage() {
         </div>
       )}
 
+      <HoldBanner vm={vm} />
+
       {/* DigitalOcean-style header: identity + status on the left, the two things
           you reach for most — Console and Actions — pinned on the right. */}
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
@@ -616,7 +622,7 @@ export default function VmDetailPage() {
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
-                  <Button variant="outline" disabled={!running || acting || ideBusy}>
+                  <Button variant="outline" disabled={!running || acting || ideBusy || held}>
                     <Terminal />
                     Console
                     <ChevronDown className="size-3.5 text-muted-foreground" />
@@ -642,7 +648,7 @@ export default function VmDetailPage() {
                 )}
                 {ideCap?.available && canIde && vm.type !== "lxc" && isDesktop && vm.access === "owner" && (
                   <DropdownMenuItem
-                    disabled={!running || ideBusy}
+                    disabled={!running || ideBusy || held}
                     onClick={() => {
                       if (!isDesktop) return; // desktop-only feature (defense-in-depth)
                       openIde();
@@ -686,7 +692,7 @@ export default function VmDetailPage() {
               <DropdownMenuContent align="end" className="min-w-52">
                 {canPower && (
                 <DropdownMenuGroup>
-                  <DropdownMenuItem disabled={busy || running} onClick={() => action("start", "start")}>
+                  <DropdownMenuItem disabled={busy || running || held} onClick={() => action("start", "start")}>
                     <Play />
                     Start
                   </DropdownMenuItem>

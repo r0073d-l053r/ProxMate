@@ -79,6 +79,12 @@ export interface VirtualMachine {
   storage: number;
   os: string;
   status: VmStatus;
+  /**
+   * Set while the machine may not run (a create, rebuild or restore that didn't
+   * finish, or a restore that left it over quota), with how to recover; null
+   * otherwise.
+   */
+  holdReason?: string | null;
   ipAddress: string | null;
   /** The guest's Tailscale (100.x) address, when Tailscale runs inside it. */
   tailscaleIp: string | null;
