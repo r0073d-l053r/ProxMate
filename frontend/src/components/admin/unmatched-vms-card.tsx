@@ -13,14 +13,40 @@ export interface UnmatchedVm {
   status: string;
   proxmoxVmId: number;
   proxmoxNode: string;
-  guest: { present: boolean; name: string | null; taggedForAnotherRow: boolean };
+  guest: { present: boolean; name: string | null; taggedForAnotherRow: boolean; isTemplate: boolean };
   sharedVmid: boolean;
+  /** The VMID belongs to a Template Store entry. */
+  templateRow: boolean;
+}
+
+/** Why a guest can't be adopted for this machine, or null when it can. */
+function adoptBlocker(vm: UnmatchedVm): string | null {
+  if (!vm.guest.present) return "There is no guest at this VMID.";
+  if (vm.guest.isTemplate || vm.templateRow) return "The guest is a template, not a machine.";
+  if (vm.guest.taggedForAnotherRow) return "The guest is tagged for another machine.";
+  if (vm.sharedVmid) return "Another machine also references this VMID.";
+  return null;
+}
+
+/** The adopt confirmation, with both names and a loud warning when they differ. */
+export function adoptPrompt(vm: UnmatchedVm): string {
+  const guestName = vm.guest.name ?? "(unnamed)";
+  const mismatch = vm.guest.name !== vm.name;
+  return (
+    `Adopt the guest at VMID ${vm.proxmoxVmId} as "${vm.name}"?\n\n` +
+    `Machine name: ${vm.name}\n` +
+    `Guest name:   ${guestName}\n` +
+    (mismatch
+      ? "\n⚠ THE NAMES DIFFER. Only adopt if you are sure this guest really is this machine — its owner gets full control of it."
+      : "\nThe names match.")
+  );
 }
 
 /** What's at the row's VMID, in words, for the admin deciding what to do. */
 function describeGuest(vm: UnmatchedVm): string {
   if (!vm.guest.present) return "no guest at this VMID";
   const name = vm.guest.name ? `"${vm.guest.name}"` : "unnamed guest";
+  if (vm.guest.isTemplate || vm.templateRow) return `${name}, a template`;
   if (vm.guest.taggedForAnotherRow) return `${name}, tagged for another machine`;
   return `${name}, no ProxMate tag`;
 }
@@ -47,6 +73,7 @@ export function UnmatchedVmsCard() {
   }, [load]);
 
   async function adopt(vm: UnmatchedVm) {
+    if (!window.confirm(adoptPrompt(vm))) return;
     setBusy(vm.id);
     try {
       await api.post(`/admin/vms/${vm.id}/adopt`);
@@ -111,7 +138,8 @@ export function UnmatchedVmsCard() {
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={busy !== null || !vm.guest.present || vm.guest.taggedForAnotherRow || vm.sharedVmid}
+                    disabled={busy !== null || adoptBlocker(vm) !== null}
+                    title={adoptBlocker(vm) ?? undefined}
                     onClick={() => adopt(vm)}
                   >
                     Adopt

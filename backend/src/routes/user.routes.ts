@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/admin.js';
 import { enforceMfaSetup } from '../middleware/mfa.js';
-import { destroyVm } from '../services/vm.service.js';
+import { destroyVm, destroyBlocker } from '../services/vm.service.js';
 import { recordAudit } from '../services/audit.service.js';
 import { ACCESS_DURATIONS, accessExpiryFrom } from '../services/access.service.js';
 import { pveMessage } from '../services/proxmox.service.js';
@@ -150,16 +150,34 @@ router.delete('/:id', async (req: Request, res: Response) => {
     return;
   }
 
-  // Best-effort: destroy the user's VMs on Proxmox before removing the account.
+  // Deleting the account cascades its VM rows, so every guest must be destroyed
+  // first — a guest whose row vanished would keep running, unowned and uncounted.
+  // Check them all up front, so nothing is destroyed when the deletion can't finish.
+  const blocked: Array<{ id: string; name: string; proxmoxVmId: number; reason: string }> = [];
   for (const vm of user.vms) {
-    try {
-      await destroyVm(vm);
-    } catch (err) {
-      console.warn(`Failed to destroy VM ${vm.proxmoxVmId} for deleted user: ${pveMessage(err)}`);
+    const reason = await destroyBlocker(vm);
+    if (reason) blocked.push({ id: vm.id, name: vm.name, proxmoxVmId: vm.proxmoxVmId, reason });
+  }
+  if (blocked.length === 0) {
+    for (const vm of user.vms) {
+      try {
+        await destroyVm(vm);
+      } catch (err) {
+        blocked.push({ id: vm.id, name: vm.name, proxmoxVmId: vm.proxmoxVmId, reason: pveMessage(err) });
+      }
     }
   }
+  if (blocked.length > 0) {
+    res.status(409).json({
+      error:
+        "Some of this user's machines couldn't be deleted with their guests, so the account was kept. " +
+        'Adopt or remove those rows (Settings → Maintenance → Unconfirmed machines), then try again.',
+      vms: blocked,
+    });
+    return;
+  }
 
-  // Cascade removes any remaining VM rows, sessions, and frees their invite.
+  // Every VM and its guest is gone; the cascade removes sessions and frees the invite.
   await prisma.user.delete({ where: { id: targetId } });
   res.json({ success: true });
 });

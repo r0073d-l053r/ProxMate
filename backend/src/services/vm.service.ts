@@ -47,6 +47,30 @@ function parsePveTags(raw: string | undefined): string[] {
   return (raw ?? '').split(/[;,\s]+/).map((t) => t.trim().toLowerCase()).filter(Boolean);
 }
 
+/**
+ * The Proxmox tag on a template ProxMate built or registered. It shares the
+ * `proxmate-` prefix, so to every machine row such a guest reads as another's.
+ */
+export function templateMarker(templateId: string): string {
+  return `${MARKER_PREFIX}template-${templateId.toLowerCase()}`;
+}
+
+/** Tag a registered template's Proxmox guest with its template marker (replacing any other ProxMate tag). */
+export async function markTemplateGuest(
+  template: { id: string; proxmoxNode: string; proxmoxVmId: number },
+  client?: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<void> {
+  const c = client ?? (await pve.getClient());
+  const cfg = await pve.getVmConfig(template.proxmoxNode, template.proxmoxVmId, c);
+  const tags = parsePveTags(cfg['tags']);
+  if (tags.includes(templateMarker(template.id))) return;
+  const keep = tags.filter((t) => !t.startsWith(MARKER_PREFIX));
+  await c.put(
+    `/nodes/${template.proxmoxNode}/qemu/${template.proxmoxVmId}/config`,
+    new URLSearchParams({ tags: [...keep, templateMarker(template.id)].join(';') }),
+  );
+}
+
 /** Whether a Proxmox tag list (config `tags` or a /cluster/resources entry's) carries this row's marker. */
 export function tagsMarkRow(raw: string | undefined, vmId: string): boolean {
   return parsePveTags(raw).includes(guestMarker(vmId));
@@ -111,9 +135,11 @@ export async function guestIdentity(
 
 /** Thrown when a row's VMID does not (demonstrably) hold the guest ProxMate created for it. */
 export class GuestIdentityError extends Error {
-  constructor(public readonly identity: 'absent' | 'foreign' | 'unmarked' = 'foreign') {
+  constructor(public readonly identity: 'absent' | 'foreign' | 'unmarked' | 'ours' = 'foreign') {
     super(
-      identity === 'unmarked'
+      identity === 'ours'
+        ? "This machine's guest is confirmed as its own — delete it normally instead of removing only the record."
+        : identity === 'unmarked'
         ? "This VM predates ProxMate's ownership tags — ask an admin."
         : identity === 'absent'
           ? "There is no Proxmox guest at this machine's VMID any more. Delete this machine or ask an admin to check it."
@@ -174,12 +200,14 @@ export async function backfillGuestMarkers(): Promise<{
   errors: number;
 }> {
   const client = await pve.getClient();
-  const [rows, res] = await Promise.all([
+  const [rows, res, templates] = await Promise.all([
     prisma.virtualMachine.findMany(),
     client.get<{ data: Array<{ type: string; vmid?: number; node?: string; name?: string; tags?: string; template?: number }> }>(
       '/cluster/resources?type=vm',
     ),
+    prisma.template.findMany({ select: { id: true, proxmoxVmId: true, proxmoxNode: true } }),
   ]);
+  const templateVmids = new Set(templates.map((t) => t.proxmoxVmId));
   const guests = new Map<number, { node?: string; name?: string; tags?: string; template?: number }>();
   for (const r of res.data.data) {
     if ((r.type === 'qemu' || r.type === 'lxc') && r.vmid !== undefined) guests.set(r.vmid, r);
@@ -190,6 +218,18 @@ export async function backfillGuestMarkers(): Promise<{
   let tagged = 0;
   let errors = 0;
   const unmatched: Array<{ id: string; name: string; proxmoxVmId: number }> = [];
+
+  // Store templates get their own tag, so they read as "another's" to every row.
+  for (const t of templates) {
+    const guest = guests.get(t.proxmoxVmId);
+    if (!guest?.node || parsePveTags(guest.tags).includes(templateMarker(t.id))) continue;
+    try {
+      await markTemplateGuest({ ...t, proxmoxNode: guest.node }, client);
+    } catch (err) {
+      errors += 1;
+      console.warn(`[vm] could not tag template guest ${t.proxmoxVmId}: ${pve.pveMessage(err)}`);
+    }
+  }
   for (const row of rows) {
     const guest = guests.get(row.proxmoxVmId);
     if (guest && tagsMarkRow(guest.tags, row.id)) continue;
@@ -197,6 +237,7 @@ export async function backfillGuestMarkers(): Promise<{
       guest &&
       guest.node &&
       (guest.template ?? 0) !== 1 &&
+      !templateVmids.has(row.proxmoxVmId) &&
       rowsByVmid.get(row.proxmoxVmId)!.length === 1 &&
       row.status !== 'error' &&
       row.status !== 'creating';
@@ -209,7 +250,7 @@ export async function backfillGuestMarkers(): Promise<{
         const tags = parsePveTags(cfg['tags']);
         if (tags.includes(guestMarker(row.id))) continue;
         const name = kindOf(at) === 'lxc' ? cfg['hostname'] : cfg['name'];
-        if (!tags.some((t) => t.startsWith(MARKER_PREFIX)) && name === row.name) {
+        if (cfg['template'] !== '1' && !tags.some((t) => t.startsWith(MARKER_PREFIX)) && name === row.name) {
           await writeGuestMarker(at, client, cfg['tags']);
           tagged += 1;
           continue;
@@ -264,16 +305,22 @@ export async function listUnmatchedVms(): Promise<
     status: string;
     proxmoxVmId: number;
     proxmoxNode: string;
-    guest: { present: boolean; name: string | null; taggedForAnotherRow: boolean };
+    guest: { present: boolean; name: string | null; taggedForAnotherRow: boolean; isTemplate: boolean };
     sharedVmid: boolean;
+    /** The VMID belongs to a Template Store entry. */
+    templateRow: boolean;
   }>
 > {
   const client = await pve.getClient();
-  const [rows, res] = await Promise.all([
+  const [rows, res, templates] = await Promise.all([
     prisma.virtualMachine.findMany({ orderBy: { name: 'asc' } }),
-    client.get<{ data: Array<{ type: string; vmid?: number; name?: string; tags?: string }> }>('/cluster/resources?type=vm'),
+    client.get<{ data: Array<{ type: string; vmid?: number; name?: string; tags?: string; template?: number }> }>(
+      '/cluster/resources?type=vm',
+    ),
+    prisma.template.findMany({ select: { proxmoxVmId: true } }),
   ]);
-  const guests = new Map<number, { name?: string; tags?: string }>();
+  const templateVmids = new Set(templates.map((t) => t.proxmoxVmId));
+  const guests = new Map<number, { name?: string; tags?: string; template?: number }>();
   for (const r of res.data.data) {
     if ((r.type === 'qemu' || r.type === 'lxc') && r.vmid !== undefined) guests.set(r.vmid, r);
   }
@@ -294,8 +341,10 @@ export async function listUnmatchedVms(): Promise<
           present: Boolean(g),
           name: g?.name ?? null,
           taggedForAnotherRow: parsePveTags(g?.tags).some((t) => t.startsWith(MARKER_PREFIX)),
+          isTemplate: (g?.template ?? 0) === 1,
         },
         sharedVmid: (count.get(row.proxmoxVmId) ?? 0) > 1,
+        templateRow: templateVmids.has(row.proxmoxVmId),
       };
     });
 }
@@ -316,6 +365,10 @@ export class AdoptError extends Error {
 export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
   const others = await prisma.virtualMachine.count({ where: { proxmoxVmId: vm.proxmoxVmId, id: { not: vm.id } } });
   if (others > 0) throw new AdoptError('Another machine also references this VMID — remove the wrong row first.');
+  // A template is shared by everyone who deploys from it; it is never one tenant's machine.
+  if ((await prisma.template.count({ where: { proxmoxVmId: vm.proxmoxVmId } })) > 0) {
+    throw new AdoptError('This VMID belongs to a Template Store entry, not a machine.');
+  }
   const { vm: current, synced } = await syncVmNodeChecked(vm);
   const client = await pve.getClient();
   const identity = await guestIdentity(current, client);
@@ -326,6 +379,8 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
     );
   }
   if (identity === 'foreign') throw new AdoptError("The guest at this VMID carries another machine's ProxMate tag.");
+  const cfg = await pve.getVmConfig(current.proxmoxNode, current.proxmoxVmId, client, kindOf(current));
+  if (cfg['template'] === '1') throw new AdoptError('The guest at this VMID is a Proxmox template, not a machine.');
   await markClonedGuest(current, client);
   return current;
 }
@@ -1789,6 +1844,11 @@ async function stopAndDeleteProxmoxVm(
  */
 export async function destroyVm(vm: VirtualMachine, opts: { rowOnly?: boolean } = {}): Promise<void> {
   if (opts.rowOnly) {
+    // Removing only the record of a machine whose guest IS confirmed as its own would
+    // orphan a live, tagged guest — that's what a normal delete is for.
+    if ((await guestIdentity(await syncVmNode(vm))) === 'ours') {
+      throw new GuestIdentityError('ours');
+    }
     await deleteVmRow(vm.id);
     return;
   }
@@ -1805,6 +1865,24 @@ export async function destroyVm(vm: VirtualMachine, opts: { rowOnly?: boolean } 
     await stopAndDeleteProxmoxVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client, kindOf(currentVm));
   }
   await deleteVmRow(currentVm.id);
+}
+
+/**
+ * Why a machine can't be deleted with its guest right now, or null when it can:
+ * its guest carries no ProxMate tag (adopt it or remove the row first), or where
+ * the guest is can't be confirmed. Used to refuse an account deletion up front
+ * rather than orphan guests.
+ */
+export async function destroyBlocker(vm: VirtualMachine): Promise<string | null> {
+  try {
+    const { vm: current, synced } = await syncVmNodeChecked(vm);
+    const identity = await guestIdentity(current);
+    if (identity === 'unmarked') return "its guest predates ProxMate's ownership tags — adopt it or remove the row first";
+    if (identity === 'absent' && !synced) return "couldn't confirm where its guest is on the cluster";
+    return null;
+  } catch (err) {
+    return `couldn't check its guest (${pve.pveMessage(err)})`;
+  }
 }
 
 /**

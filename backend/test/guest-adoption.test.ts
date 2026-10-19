@@ -16,6 +16,7 @@ vi.mock('../src/lib/prisma.js', () => ({
       count: vi.fn(async () => 0),
     },
     resourceSample: { createMany: vi.fn(async () => ({})) },
+    template: { findMany: vi.fn(async () => []), count: vi.fn(async () => 0) },
     ideGuestSecret: { deleteMany: vi.fn(async () => ({})) },
     ideGatewayToken: { deleteMany: vi.fn(async () => ({})) },
     $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops)),
@@ -31,6 +32,7 @@ import { prisma } from '../src/lib/prisma.js';
 import * as pve from '../src/services/proxmox.service.js';
 import {
   destroyVm,
+  destroyBlocker,
   adoptGuest,
   AdoptError,
   listUnmatchedVms,
@@ -98,6 +100,25 @@ describe('deleting a machine whose guest carries no ProxMate tag', () => {
   });
 });
 
+describe('destroyBlocker (account deletion pre-check)', () => {
+  it('names an untagged guest, and passes a tagged or foreign one', async () => {
+    pveWith({ name: 'web' });
+    expect(await destroyBlocker(row())).toMatch(/predates ProxMate's ownership tags/);
+    pveWith({ name: 'web', tags: guestMarker('rowa') });
+    expect(await destroyBlocker(row())).toBeNull();
+    pveWith({ name: 'x', tags: guestMarker('rowb') });
+    expect(await destroyBlocker(row())).toBeNull();
+  });
+});
+
+describe('row-only delete', () => {
+  it('is refused when the guest is confirmed as the row\'s own (a normal delete is the way)', async () => {
+    pveWith({ name: 'web', tags: guestMarker('rowa') });
+    await expect(destroyVm(row(), { rowOnly: true })).rejects.toThrow(/delete it normally/);
+    expect(prisma.virtualMachine.delete).not.toHaveBeenCalled();
+  });
+});
+
 describe('adoptGuest (admin)', () => {
   it('tags an untagged guest as this row\'s, keeping its other tags', async () => {
     const c = pveWith({ name: 'web', tags: 'prod' });
@@ -119,6 +140,19 @@ describe('adoptGuest (admin)', () => {
     expect(c.put).not.toHaveBeenCalled();
   });
 
+  it('refuses a VMID that belongs to a Template Store entry', async () => {
+    const c = pveWith({ name: 'web' });
+    vi.mocked(prisma.template.count).mockResolvedValueOnce(1 as never);
+    await expect(adoptGuest(row())).rejects.toThrow(/Template Store/);
+    expect(c.put).not.toHaveBeenCalled();
+  });
+
+  it('refuses a guest that is a Proxmox template', async () => {
+    const c = pveWith({ name: 'web', template: '1' });
+    await expect(adoptGuest(row())).rejects.toThrow(/Proxmox template/);
+    expect(c.put).not.toHaveBeenCalled();
+  });
+
   it('refuses when there is no guest at the VMID', async () => {
     pveWith(null);
     await expect(adoptGuest(row())).rejects.toThrow(/no Proxmox guest/);
@@ -137,6 +171,33 @@ describe('listUnmatchedVms (admin)', () => {
       ['rowa', true, 'web'],
       ['rowz', false, null],
     ]);
+  });
+});
+
+describe('templates', () => {
+  it('flags a row whose VMID holds a template or a Template Store entry', async () => {
+    pveWith({ name: 'tpl' }, { template: 1 });
+    vi.mocked(prisma.virtualMachine.findMany).mockResolvedValue([row()] as never);
+    vi.mocked(prisma.template.findMany).mockResolvedValueOnce([{ proxmoxVmId: 100 }] as never);
+    const [r] = await listUnmatchedVms();
+    expect(r!.guest.isTemplate).toBe(true);
+    expect(r!.templateRow).toBe(true);
+  });
+
+  it('the backfill tags a store template\'s guest and never offers it to a machine row', async () => {
+    const c = pveWith({ name: 'web' }, { template: 1 });
+    vi.mocked(prisma.virtualMachine.findMany).mockResolvedValue([row()] as never);
+    vi.mocked(prisma.template.findMany).mockResolvedValueOnce([{ id: 'tplx', proxmoxVmId: 100, proxmoxNode: 'pve1' }] as never);
+    const r = await runGuestMarkerBackfill();
+    expect(r).toMatchObject({ tagged: 0, unmatched: 1, errors: 0 });
+    const puts = c.put.mock.calls.map((x) => bodyOf(x)['tags']);
+    expect(puts).toEqual(['proxmate-template-tplx']);
+  });
+
+  it('a template-tagged guest is another\'s to every machine row', async () => {
+    pveWith({ name: 'web', tags: 'proxmate-template-tplx' });
+    await expect(destroyVm(row())).resolves.toBeUndefined();
+    expect(prisma.virtualMachine.delete).toHaveBeenCalled(); // row only — the template is left alone
   });
 });
 

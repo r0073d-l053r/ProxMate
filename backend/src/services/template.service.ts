@@ -2,7 +2,7 @@ import type { Template, VirtualMachine } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { getConfig, setConfig } from './config.service.js';
 import * as pve from './proxmox.service.js';
-import { requireOurGuest } from './vm.service.js';
+import { requireOurGuest, markTemplateGuest } from './vm.service.js';
 
 /** Published templates shown in the user-facing Template Store. */
 export function listPublished(): Promise<Template[]> {
@@ -84,7 +84,7 @@ export async function register(input: RegisterTemplateInput): Promise<Template> 
     }
   }
 
-  return prisma.template.upsert({
+  const template = await prisma.template.upsert({
     where: { proxmoxVmId: input.proxmoxVmId },
     update: {
       name: input.name,
@@ -116,6 +116,12 @@ export async function register(input: RegisterTemplateInput): Promise<Template> 
       guestAgent: input.guestAgent ?? null,
     },
   });
+  // Tag the template's guest so it reads as no machine's (best-effort; the
+  // scheduled backfill retries a tag that couldn't be written now).
+  await markTemplateGuest(template).catch((err) =>
+    console.warn(`[template] could not tag template ${template.proxmoxVmId}: ${pve.pveMessage(err)}`),
+  );
+  return template;
 }
 
 /** Admin: edit a template's notes, description, and/or custom icon. */
@@ -647,8 +653,13 @@ export async function refreshTemplate(id: string): Promise<Template> {
     },
   });
 
-  // The old template VM is now unreferenced (cloud images are full-cloned) — remove it.
+  // Tag the new template guest (best-effort; the scheduled backfill retries).
   const client = await pve.getClient();
+  await markTemplateGuest(updated, client).catch((err) =>
+    console.warn(`[template] could not tag template ${updated.proxmoxVmId}: ${pve.pveMessage(err)}`),
+  );
+
+  // The old template VM is now unreferenced (cloud images are full-cloned) — remove it.
   await pve.deleteVm(oldNode, oldVmid, client).catch((e) => console.warn('[template] old template cleanup failed:', e));
 
   return updated;

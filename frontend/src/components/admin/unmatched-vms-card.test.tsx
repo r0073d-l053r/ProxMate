@@ -14,7 +14,7 @@ vi.mock("@/lib/api", () => ({
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-import { UnmatchedVmsCard, type UnmatchedVm } from "./unmatched-vms-card";
+import { UnmatchedVmsCard, adoptPrompt, type UnmatchedVm } from "./unmatched-vms-card";
 
 const vm = (over: Partial<UnmatchedVm> = {}): UnmatchedVm => ({
   id: "rowa",
@@ -22,8 +22,9 @@ const vm = (over: Partial<UnmatchedVm> = {}): UnmatchedVm => ({
   status: "running",
   proxmoxVmId: 100,
   proxmoxNode: "pve1",
-  guest: { present: true, name: "web", taggedForAnotherRow: false },
+  guest: { present: true, name: "web", taggedForAnotherRow: false, isTemplate: false },
   sharedVmid: false,
+  templateRow: false,
   ...over,
 });
 
@@ -35,8 +36,9 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("UnmatchedVmsCard", () => {
-  it("lists unmatched machines and adopts one", async () => {
+  it("lists unmatched machines and adopts one after confirmation", async () => {
     get.mockResolvedValue({ data: [vm()] });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<UnmatchedVmsCard />);
     await screen.findByText("web");
     fireEvent.click(screen.getByRole("button", { name: "Adopt" }));
@@ -53,7 +55,7 @@ describe("UnmatchedVmsCard", () => {
   });
 
   it("offers no adoption when the guest belongs to another machine", async () => {
-    get.mockResolvedValue({ data: [vm({ guest: { present: true, name: "x", taggedForAnotherRow: true } })] });
+    get.mockResolvedValue({ data: [vm({ guest: { present: true, name: "x", taggedForAnotherRow: true, isTemplate: false } })] });
     render(<UnmatchedVmsCard />);
     await screen.findByText("web");
     expect((screen.getByRole("button", { name: "Adopt" }) as HTMLButtonElement).disabled).toBe(true);
@@ -63,5 +65,36 @@ describe("UnmatchedVmsCard", () => {
     get.mockResolvedValue({ data: [] });
     render(<UnmatchedVmsCard />);
     await screen.findByText(/Every machine.s guest is confirmed/);
+  });
+
+  it("offers no adoption for a template", async () => {
+    get.mockResolvedValue({
+      data: [
+        vm({ id: "a", name: "a", guest: { present: true, name: "tpl", taggedForAnotherRow: false, isTemplate: true } }),
+        vm({ id: "b", name: "b", templateRow: true }),
+      ],
+    });
+    render(<UnmatchedVmsCard />);
+    await screen.findByText("a");
+    for (const b of screen.getAllByRole("button", { name: "Adopt" })) {
+      expect((b as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
+
+  it("does not adopt when the confirmation is declined", async () => {
+    get.mockResolvedValue({ data: [vm()] });
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<UnmatchedVmsCard />);
+    await screen.findByText("web");
+    fireEvent.click(screen.getByRole("button", { name: "Adopt" }));
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("the confirmation shows both names and warns when they differ", () => {
+    const differ = adoptPrompt(vm({ guest: { present: true, name: "other", taggedForAnotherRow: false, isTemplate: false } }));
+    expect(differ).toContain("Machine name: web");
+    expect(differ).toContain("Guest name:   other");
+    expect(differ).toMatch(/NAMES DIFFER/);
+    expect(adoptPrompt(vm())).not.toMatch(/NAMES DIFFER/);
   });
 });
