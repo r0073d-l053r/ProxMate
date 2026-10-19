@@ -13,8 +13,27 @@ curl -H "Authorization: Bearer pm_xxxxxxxx" https://proxmate.example.com/api/vms
 ```
 
 A token acts as the user who created it (same quotas and ownership). Tokens are stored
-as a SHA-256 hash — ProxMate can't recover the secret, only revoke it. For safety, API
-tokens **cannot** create or revoke other tokens; that requires a browser session.
+as a SHA-256 hash — ProxMate can't recover the secret, only revoke it. A password
+reset revokes all of the account's tokens.
+
+### Session-only routes
+
+Routes that change how an account signs in or is secured accept only a browser
+session. Called with an API token they answer **403** (`API tokens cannot manage
+account security — use the web app.`):
+
+| Area | Routes |
+|---|---|
+| Session | `POST /api/auth/session/refresh` |
+| Kiosk exit | `POST /api/auth/kiosk-exit`, `POST /api/auth/kiosk-exit/passkey-options`, `POST /api/auth/kiosk-exit/passkey-verify` |
+| Two-factor | `POST /api/auth/2fa/setup`, `POST /api/auth/2fa/enable`, `POST /api/auth/2fa/disable`, `GET /api/auth/2fa/status` |
+| Passkeys | `POST /api/auth/passkeys/register/options`, `POST /api/auth/passkeys/register/verify`, `GET /api/auth/passkeys`, `DELETE /api/auth/passkeys/:id` |
+| API tokens | `GET /api/api-tokens`, `POST /api/api-tokens`, `DELETE /api/api-tokens/:id` |
+| Invites (admin) | `GET /api/invites`, `POST /api/invites`, `POST /api/invites/:id/send` |
+| Admin | `PUT /api/admin/settings/kiosk`, `PUT /api/admin/settings/sso`, `POST /api/admin/users/:id/reset-password` |
+
+Everything else an account can do — VMs, backups, snapshots, shares, templates,
+and the rest of the admin API — works with a token.
 
 ## Discovering the API
 
