@@ -20,6 +20,9 @@
 # Env:
 #   PROXMATE_DIR        repo checkout (default: /opt/proxmate)
 #   UPDATE_CONTROL_DIR  request/status dir (default: $PROXMATE_DIR/deploy/update-control)
+#   UPDATE_CONTROL_UID / UPDATE_CONTROL_GID
+#                       owner of a control dir this script has to create
+#                       (default: 1000, the backend container's `node` user)
 #
 set -euo pipefail
 
@@ -28,7 +31,14 @@ CONTROL_DIR="${UPDATE_CONTROL_DIR:-$PROXMATE_DIR/deploy/update-control}"
 STATUS_FILE="$CONTROL_DIR/update-status.json"
 REQUEST_FILE="$CONTROL_DIR/update-request.json"
 
-mkdir -p "$CONTROL_DIR"
+# The app (uid 1000, `node`, in its container) writes the request and status
+# files here, so a control dir this script has to create must belong to that
+# user — created root-owned, "Install update" could never queue a request. An
+# existing directory is left as it is.
+if [[ ! -d "$CONTROL_DIR" ]]; then
+  install -d -m 0775 -o "${UPDATE_CONTROL_UID:-1000}" -g "${UPDATE_CONTROL_GID:-1000}" "$CONTROL_DIR" 2>/dev/null \
+    || mkdir -p "$CONTROL_DIR"
+fi
 
 # json_escape <text> — make arbitrary text safe inside a JSON string literal.
 json_escape() {

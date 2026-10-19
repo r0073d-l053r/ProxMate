@@ -513,7 +513,13 @@ applies DB migrations on boot (`docker-entrypoint.sh`). **Back up the DB first**
 
 ### 14.3 Enabling the one-click "Install update" button
 
-1. **Mount the control dir + enable the flag** — in `docker-compose.override.yml` (copy
+1. **Mount the control dir + enable the flag** — create the directory owned by the
+   backend's unprivileged user (uid 1000), so the app can write its request there:
+   ```bash
+   sudo install -d -m 0775 -o 1000 -g 1000 deploy/update-control
+   ```
+   (the backend's entrypoint also hands an existing `/control` mount to that user on
+   start). Then in `docker-compose.override.yml` (copy
    `docker-compose.override.example.yml`), uncomment `- ./deploy/update-control:/control`
    under the backend `volumes`, and in `.env` set:
    ```

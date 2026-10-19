@@ -227,4 +227,22 @@ t_edited_tracked_file_blocks_update() {
     assert_no_grep "compose build" "$T/docker.log"
 }
 
+# ── BUG-066: a control dir the updater creates is writable by the app ────────
+t_missing_control_dir_created_for_app_user() {
+  [ "$(id -u)" -eq 0 ] || skip "needs root"
+  new_case
+  rm -rf "$CONTROL"
+  run_update v1.1.0
+  assert_eq "$(stat -c '%u:%g' "$CONTROL")" 1000:1000 "control dir owner" &&
+    assert_eq "$(status_field state)" success "state"
+}
+
+t_existing_control_dir_ownership_kept() {
+  [ "$(id -u)" -eq 0 ] || skip "needs root"
+  new_case
+  chown 1234:1234 "$CONTROL"
+  run_update v1.1.0
+  assert_eq "$(stat -c '%u:%g' "$CONTROL")" 1234:1234 "control dir owner"
+}
+
 run_cases "$@"
