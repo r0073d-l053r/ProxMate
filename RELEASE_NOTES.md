@@ -50,6 +50,10 @@ Read DEPLOYMENT.md §14.4 before updating. In short:
 - A machine in `error`, or held after a create, rebuild or restore that didn't finish (or a restore that left it over quota), can't be started and its console and IDE don't open. Its page says why. It can be restored, rebuilt, adopted by an admin, or deleted.
 - Backups are refused for a machine whose config references a disk that isn't one of its own storage volumes. That includes disks that are not volumes at all, such as an iSCSI LUN or a host disk passed through by path; such a guest can't be adopted either. Detach the disk in Proxmox first.
 - **Restore from an uploaded backup** accepts only archives whose config describes the guest itself. Host devices and paths, raw QEMU or LXC keys, hook scripts, custom cloud-init snippets, CPU/NUMA host pinning, container features beyond nesting, a template flag and privileged containers are refused. Containers are always restored unprivileged.
+- Machines need at least 64 MB of RAM: a create, deploy or resize asking for less is refused with 400.
+- A resize changes the root disk by the difference between the requested total and the current total, so data disks are no longer counted twice.
+- Bulk stop, restart and delete, single migrations, the Cluster Balancer and node drains skip a machine that is locked while its IDE installs or its cloud-init deploy finishes, and report it instead of acting on it.
+- A machine can have at most 20 alert rules; adding a 21st, or a duplicate of an existing rule, answers 409.
 - Stored power and backup schedules that aren't valid cron expressions never fire. At startup, admins are notified with a list of the affected machines; re-save those schedules on each machine's page.
 
 **ProxMate IDE**
@@ -60,6 +64,7 @@ Read DEPLOYMENT.md §14.4 before updating. In short:
 **Accounts, sign-in and API tokens**
 
 - `pm_` API tokens are refused (403) on routes that change how an account signs in or is secured: session refresh, 2FA, passkeys, API-token management, invites, the kiosk exit check, and the admin kiosk, SSO and reset-password settings. The full list is in `docs/api.md`. Scripts that used a token for these must use the web app.
+- An invite sent to an email address can only be used to register with that address (400 otherwise); invites without an address are unchanged.
 - A password reset (self-service or by an admin) revokes all of the account's API tokens and signs it out everywhere.
 - Re-running 2FA setup on an account that already has 2FA requires a current authenticator or recovery code.
 - Leaving kiosk mode with a wrong PIN, password or passkey now answers **403** with `code: "reauth_failed"`. A 401 there always means the session is gone.
