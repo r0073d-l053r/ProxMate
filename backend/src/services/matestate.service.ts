@@ -16,7 +16,7 @@ import {
   syncRestoredGuest,
   assertOwnerAccessActive,
 } from './vm.service.js';
-import { parseGuestConfigText } from '../lib/guest-config.js';
+import { parseGuestConfigText, pciLines } from '../lib/guest-config.js';
 
 /** Rolling retention: only this many MateStates are kept per VM. */
 export const MATESTATE_RETENTION = 2;
@@ -363,6 +363,15 @@ export async function rollbackToSnapshot(vm: VirtualMachine, snapname: string): 
   // other and needs the owner's compute-access window open.
   if (snapCfg['vmstate']) await assertOwnerAccessActive(vm);
   const approvedPci = await approvedPciLines(vm, client);
+  // A RAM snapshot comes back running with its devices attached, before anything
+  // could strip them — so a snapshot holding a PCI device that isn't approved now
+  // is refused outright rather than cleaned up afterwards.
+  const unapproved = pciLines(snapCfg).filter((l) => !approvedPci.includes(l.value));
+  if (unapproved.length > 0) {
+    throw new Error(
+      `This snapshot has a PCI device (${unapproved.map((l) => l.key).join(', ')}) that isn't approved for this VM any more, so it can't be rolled back to.`,
+    );
+  }
   const reservation = await reserveRestoreGrowth(vm, snapCfg);
 
   let taskStarted = false;

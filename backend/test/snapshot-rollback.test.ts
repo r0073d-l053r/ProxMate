@@ -45,7 +45,7 @@ import vmRouter from '../src/routes/vm.routes.js';
 import { prisma } from '../src/lib/prisma.js';
 import * as pve from '../src/services/proxmox.service.js';
 import { getVmWithCap, guestMarker } from '../src/services/vm.service.js';
-import { fakeClient, asClient, bodyOf } from './helpers.js';
+import { fakeClient, asClient } from './helpers.js';
 
 const ok = (data: unknown) => Promise.resolve({ data: { data } });
 const marker = guestMarker('rowa');
@@ -181,15 +181,21 @@ describe('snapshot rollback (BUG-039)', () => {
     });
   });
 
-  it('removes a PCI device that was detached after the snapshot', async () => {
-    const { c, state } = fakePve(LIVE, { ...LIVE, hostpci0: 'mapping=gpu0,pcie=1' });
+  it('refuses a snapshot holding a PCI device that was detached since (audit minor)', async () => {
+    const { c } = fakePve(LIVE, { ...LIVE, hostpci0: 'mapping=gpu0,pcie=1' });
+    const res = await rollback();
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect((await res.json()).error).toMatch(/hostpci0/);
+    expect(rolledBack(c)).toBe(false);
+  });
+
+  it('allows a snapshot whose PCI device is approved and attached now', async () => {
+    const gpu = 'mapping=gpu0,pcie=1';
+    vi.mocked(getVmWithCap).mockResolvedValue(row({ hasPassthrough: true }));
+    vi.mocked(prisma.virtualMachine.findUnique).mockResolvedValue(row({ hasPassthrough: true }));
+    const { c } = fakePve({ ...LIVE, hostpci0: gpu }, { ...LIVE, hostpci0: gpu });
     const res = await rollback();
     expect(res.status).toBe(200);
-    expect(state.cfg['hostpci0']).toBeUndefined();
-    expect(c.put.mock.calls.some((x) => bodyOf(x)['delete'] === 'hostpci0')).toBe(true);
-    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({
-      where: { id: 'rowa' },
-      data: expect.objectContaining({ hasPassthrough: false }),
-    });
+    expect(rolledBack(c)).toBe(true);
   });
 });
