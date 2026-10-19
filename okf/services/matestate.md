@@ -31,7 +31,7 @@ A MateState is ProxMate's name for a Proxmox vzdump backup of a tenant guest, tr
 | `restoreFromMateState` | `(vm, ms)` | Refuses an archive whose config would grow the guest past the owner's quota (`assertRestoreWithinQuota`), stops guest (waits up to 30 s), marks `restoring`, restore-in-place into the same VMID (LXC targets current rootfs pool or `default_storage`), re-syncs the row from the restored config (`syncRestoredGuest`), re-applies NIC firewall if isolation on, starts guest. |
 | `deleteMateState` | `(ms)` | Deletes the Proxmox file (ignores "not exist/not found") and the row. |
 | `runScheduledBackups` | `() => { ran, failed }` | Weekly: all VMs not `creating` with `backupCron: null`. |
-| `isBackupDue` / `runDueBackups` | `(vm, now)` / `(now)` | Per-minute: VMs whose own `backupCron` matches this minute. |
+| `isBackupDue` / `isBackupDueSince` / `runDueBackups` | `(vm, now)` / `(vm, now, since?)` / `(now, since?)` | Per-minute: VMs whose own `backupCron` fired at any minute after `since` up to `now` (just `now`'s minute without `since`; at most 24 h back), each once. |
 | `setBackupPolicy` | `(vm, { backupCron, backupKeep })` | Sets/clears the per-VM policy. |
 
 # Data

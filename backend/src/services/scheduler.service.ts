@@ -155,20 +155,7 @@ export function startScheduler(): void {
 
   // Per-minute tick that takes per-VM scheduled backups as their cron fires.
   // Separate lock from power actions: a slow vzdump must never block start/stop.
-  backupTask = cron.schedule('* * * * *', async () => {
-    if (backupRunning) return; // a previous (slow) backup tick is still working — skip
-    backupRunning = true;
-    try {
-      const r = await runDueBackups(new Date());
-      if (r.ran || r.failed) {
-        console.log(`[scheduler] per-VM backups: ${r.ran} ok, ${r.failed} failed`);
-      }
-    } catch (err) {
-      console.error('[scheduler] per-VM backup tick failed:', err);
-    } finally {
-      backupRunning = false;
-    }
-  });
+  backupTask = cron.schedule('* * * * *', () => void perVmBackupTick());
 
   console.log('[scheduler] per-VM backup schedules active (1-min tick)');
 
@@ -273,6 +260,32 @@ export function startScheduler(): void {
   setTimeout(() => void accessTick(), 15_000);
 
   console.log(`[scheduler] access-expiry sweep scheduled (${accessExpr})`);
+}
+
+/** The minute the last per-VM backup tick covered (null until the first one runs). */
+let lastBackupTickAt: Date | null = null;
+
+/**
+ * One per-VM backup tick. Backups run one after another and each can take many
+ * minutes, so ticks that fire meanwhile return at once — and the next tick that
+ * does run covers every minute since the last one that ran, so a schedule that
+ * fired during someone else's vzdump is still backed up. Exported for tests.
+ */
+export async function perVmBackupTick(now: Date = new Date()): Promise<void> {
+  if (backupRunning) return; // a previous (slow) backup tick is still working — the next one catches up
+  backupRunning = true;
+  const since = lastBackupTickAt ?? undefined;
+  lastBackupTickAt = now;
+  try {
+    const r = await runDueBackups(now, since);
+    if (r.ran || r.failed) {
+      console.log(`[scheduler] per-VM backups: ${r.ran} ok, ${r.failed} failed`);
+    }
+  } catch (err) {
+    console.error('[scheduler] per-VM backup tick failed:', err);
+  } finally {
+    backupRunning = false;
+  }
 }
 
 async function accessTick(): Promise<void> {

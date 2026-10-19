@@ -290,15 +290,40 @@ export function isBackupDue(vm: Pick<VirtualMachine, 'backupCron'>, now: Date): 
   return !!vm.backupCron && cronMatches(vm.backupCron, now);
 }
 
+/** Longest stretch of missed minutes a late per-VM backup tick still catches up. */
+const MAX_CATCH_UP_MINUTES = 24 * 60;
+
+/**
+ * Whether a VM's own backup schedule fired at any minute after `since` up to and
+ * including `now`'s minute (just `now`'s minute when `since` is omitted).
+ */
+export function isBackupDueSince(vm: Pick<VirtualMachine, 'backupCron'>, now: Date, since?: Date): boolean {
+  if (!vm.backupCron) return false;
+  const end = new Date(now);
+  end.setSeconds(0, 0);
+  const start = new Date(since ?? end);
+  start.setSeconds(0, 0);
+  if (since) start.setMinutes(start.getMinutes() + 1);
+  const floor = end.getTime() - MAX_CATCH_UP_MINUTES * 60_000;
+  if (start.getTime() < floor) start.setTime(floor);
+  for (const d = start; d.getTime() <= end.getTime(); d.setMinutes(d.getMinutes() + 1)) {
+    if (cronMatches(vm.backupCron, d)) return true;
+  }
+  return false;
+}
+
 /**
  * Per-minute tick for VMs with their own backup schedule: back up each one whose
- * `backupCron` fires this minute (retention honors its `backupKeep`).
+ * `backupCron` fires this minute (retention honors its `backupKeep`). `since` is
+ * the minute the previous tick covered: a tick that comes late because the one
+ * before it was still busy backing up also takes the schedules that fired in
+ * between, each VM once.
  */
-export async function runDueBackups(now: Date = new Date()): Promise<{ ran: number; failed: number }> {
+export async function runDueBackups(now: Date = new Date(), since?: Date): Promise<{ ran: number; failed: number }> {
   const vms = await prisma.virtualMachine.findMany({
     where: { status: { not: 'creating' }, backupCron: { not: null } },
   });
-  return backupEach(vms.filter((vm) => isBackupDue(vm, now)));
+  return backupEach(vms.filter((vm) => isBackupDueSince(vm, now, since)));
 }
 
 /** Back up a list of VMs sequentially, isolating per-VM failures. */
