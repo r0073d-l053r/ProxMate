@@ -247,6 +247,14 @@ describe('restoreFromUpload', () => {
     expect(pve.restoreNewGuest).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'lxc');
   });
 
+  it('clamps a restored container\'s swap to ProxMate\'s default (audit round 2)', async () => {
+    vi.mocked(pve.extractBackupConfig).mockResolvedValue(LXC_CFG);
+    vi.mocked(pve.getVmConfig).mockResolvedValue({ hostname: 'ct-1', swap: '65536', net0: 'name=eth0,bridge=vmbr9,ip=10.0.0.5/24' });
+    await restoreFromUpload(user, { filename: 'vzdump-lxc-105-2026_07_03-03_00_00.tar.zst', name: 'ct' });
+    const put = client.put.mock.calls.find((x) => String(x[0]) === '/nodes/pve-0/lxc/200/config');
+    expect(bodyOf(put!)).toMatchObject({ swap: '512', net0: 'name=eth0,bridge=vmbr0,firewall=1,ip=dhcp,tag=42' });
+  });
+
   it('cleans up the archive and never restores when quota is exceeded', async () => {
     vi.mocked(assertWithinQuota).mockRejectedValue(new Error('Quota exceeded'));
     await expect(restoreFromUpload(user, { filename: FILENAME, name: 'too-big' })).rejects.toThrow(

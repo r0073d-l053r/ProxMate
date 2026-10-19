@@ -202,6 +202,9 @@ export function ownCicustom(value: string): boolean {
   return parts.length > 0 && parts.every((p) => part.test(p));
 }
 
+/** The swap ProxMate gives a container it creates (pve.createLxc's default), in MB. */
+const LXC_DEFAULT_SWAP_MB = 512;
+
 const NIC_MODELS = new Set(['virtio', 'e1000', 'e1000e', 'rtl8139', 'vmxnet3']);
 
 /**
@@ -235,6 +238,10 @@ async function rebuildRestoredGuestConfig(
       const model = first[0] === 'model' ? first[1] ?? '' : first[0] ?? '';
       params.set(key, `${NIC_MODELS.has(model) ? model : 'virtio'},bridge=${bridge},firewall=1${tag}`);
     }
+  }
+  // Swap is not quota-counted, so a container keeps no more than ProxMate's own default.
+  if (kind === 'lxc' && cfg['swap'] !== undefined && !(Number(cfg['swap']) <= LXC_DEFAULT_SWAP_MB)) {
+    params.set('swap', String(LXC_DEFAULT_SWAP_MB));
   }
   const strip = STRIPPED_AFTER_RESTORE.filter((k) => k in cfg);
   if (cfg['cicustom'] !== undefined && !ownCicustom(cfg['cicustom'])) strip.push('cicustom');
