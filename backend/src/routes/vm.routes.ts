@@ -95,6 +95,7 @@ import {
   TEMP_UPLOAD_RE,
   RestoreUploadError,
 } from '../services/restore-upload.service.js';
+import { envNumber } from '../lib/env-number.js';
 import type { RebuildSource } from '../services/vm.service.js';
 import type { AuthRequest } from '../types/index.js';
 
@@ -261,7 +262,7 @@ router.get('/restore-capability', async (_req: Request, res: Response) => {
 });
 
 // Uploads can be tens of GB; cap is env-tunable (0 disables the cap).
-const RESTORE_UPLOAD_MAX_GB = Math.max(0, parseInt(process.env['RESTORE_UPLOAD_MAX_GB'] || '50', 10) || 0);
+const RESTORE_UPLOAD_MAX_GB = Math.floor(envNumber('RESTORE_UPLOAD_MAX_GB', 50, 0));
 
 const restoreUploadMulter = multer({
   storage: multer.diskStorage({

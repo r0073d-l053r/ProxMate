@@ -21,8 +21,9 @@ import { handleIdeUpgrade } from './services/ide-proxy.service.js';
 import { startScheduler } from './services/scheduler.service.js';
 import { reconcileInterruptedPassthroughApplies } from './services/passthrough-request.service.js';
 import { runGuestMarkerBackfill } from './services/vm.service.js';
+import { envNumber } from './lib/env-number.js';
 
-const PORT = parseInt(process.env.PORT || '4000', 10);
+const PORT = Math.floor(envNumber('PORT', 4000, 1));
 // Default to 0.0.0.0 so the port is reachable by the reverse proxy and sibling
 // containers (Docker networking) — the container boundary is the isolation, and
 // *host* exposure is controlled at the reverse proxy / the compose `ports:`
