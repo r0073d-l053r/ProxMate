@@ -2,6 +2,8 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import { encrypt, decrypt } from '../lib/crypto.js';
 import { logger } from '../lib/logger.js';
+import { isLoopbackOrLinkLocal } from '../lib/url-safety.js';
+import { getClient, getVmIps } from './proxmox.service.js';
 
 /**
  * Per-VM guest credential for the ProxMate IDE.
@@ -26,8 +28,15 @@ import { logger } from '../lib/logger.js';
  *   - Every proxied request then carries the cookie, injected server-side; the
  *     browser never holds it. Another VM's code-server rejects it.
  *
+ * Scope of the guarantee: the proof shows the answering code-server holds this
+ * VM's secret. It relies on the address being the one this VM's guest agent
+ * reports now (read live before each proof, for running VMs only) and on the
+ * backend→guest network path being trusted, as the isolation pinhole already
+ * assumes. It does not by itself authenticate the network.
+ *
  * Successful logins do not consume code-server's login rate limit, so the proof
- * costs nothing on a healthy install; results are cached briefly per target.
+ * costs nothing on a healthy install; a positive result is cached briefly per VM
+ * and dropped as soon as the VM's recorded address changes or it stops running.
  */
 
 /** code-server's session cookie name (no `--cookie-suffix` is configured). */
@@ -117,25 +126,87 @@ export async function proveIdeGuest(target: string, secret: string, timeoutMs = 
   }
 }
 
-// Positive proofs only, keyed by vm + target + credential, so a changed IP or a
-// re-provision (new secret) always re-proves. Single-process backend, so an
-// in-memory map is enough.
-const PROOF_TTL_MS = 5 * 60 * 1000;
-const proofs = new Map<string, number>();
+/**
+ * The upstream code-server URL for a guest address. Pure (env-injected) so the
+ * per-VM routing precedence is unit-testable:
+ *   1. `IDE_TARGET_OVERRIDE` — a single fixed URL for the rig. TEST-ONLY: it
+ *      clobbers per-VM routing, so it must NOT be set in a multi-VM deployment.
+ *   2. `http://<ipAddress>:<IDE_GUEST_PORT or 8080>`, never a loopback /
+ *      link-local / metadata address.
+ */
+export function resolveIdeTargetUrl(
+  vm: { ipAddress: string | null },
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const override = env['IDE_TARGET_OVERRIDE'];
+  if (override) return override;
+  if (!vm.ipAddress || isLoopbackOrLinkLocal(vm.ipAddress)) return null;
+  const port = env['IDE_GUEST_PORT'] || '8080';
+  return `http://${vm.ipAddress}:${port}`;
+}
 
-/** {@link proveIdeGuest}, with a short positive cache for the proxy's hot path. */
-export async function ensureIdeGuestProven(vmId: string, target: string, secret: string): Promise<boolean> {
-  const key = `${vmId}|${target}|${ideGuestCookieValue(secret)}`;
-  const until = proofs.get(key);
-  if (until && until > Date.now()) return true;
-  const ok = await proveIdeGuest(target, secret);
-  if (ok) {
-    if (proofs.size > 1000) proofs.clear();
-    proofs.set(key, Date.now() + PROOF_TTL_MS);
-  } else {
-    proofs.delete(key);
+/** What {@link proveIdeGuestTarget} needs to know about a VM. */
+export interface IdeGuestVm {
+  id: string;
+  type: string;
+  status: string;
+  ipAddress: string | null;
+  proxmoxNode: string;
+  proxmoxVmId: number;
+}
+
+/**
+ * The target for the address this VM's guest agent reports right now (recorded
+ * on the VM row if it moved), or null when it can't be read. A stale recorded
+ * address is never dialled with the secret.
+ */
+async function freshIdeTarget(vm: IdeGuestVm, env: NodeJS.ProcessEnv): Promise<string | null> {
+  if (env['IDE_TARGET_OVERRIDE']) return resolveIdeTargetUrl(vm, env);
+  if (vm.type === 'lxc') return null; // the IDE is QEMU-only (no guest agent on LXC)
+  let ip: string | null = null;
+  try {
+    ip = (await getVmIps(vm.proxmoxNode, vm.proxmoxVmId, await getClient())).ip;
+  } catch {
+    return null;
   }
-  return ok;
+  if (!ip) return null;
+  if (ip !== vm.ipAddress) {
+    await prisma.virtualMachine.update({ where: { id: vm.id }, data: { ipAddress: ip } }).catch(() => undefined);
+  }
+  return resolveIdeTargetUrl({ ipAddress: ip }, env);
+}
+
+// Positive proofs only, one per VM: the target it was proven at and the
+// credential used. A different recorded address, a new secret, a stopped VM or
+// age all drop it. Single-process backend, so an in-memory map is enough.
+const PROOF_TTL_MS = 5 * 60 * 1000;
+const proofs = new Map<string, { target: string; cred: string; until: number }>();
+
+/**
+ * The proven code-server target for a running VM, or null. Uses a recent proof
+ * while the VM's recorded address still matches it; otherwise reads the address
+ * live from the guest agent and proves the guest there with {@link proveIdeGuest}.
+ */
+export async function proveIdeGuestTarget(
+  vm: IdeGuestVm,
+  secret: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string | null> {
+  if (vm.status !== 'running') {
+    proofs.delete(vm.id);
+    return null;
+  }
+  const cred = ideGuestCookieValue(secret);
+  const hit = proofs.get(vm.id);
+  if (hit && hit.cred === cred && hit.until > Date.now() && hit.target === resolveIdeTargetUrl(vm, env)) {
+    return hit.target;
+  }
+  proofs.delete(vm.id);
+  const target = await freshIdeTarget(vm, env);
+  if (!target || !(await proveIdeGuest(target, secret))) return null;
+  if (proofs.size > 1000) proofs.clear();
+  proofs.set(vm.id, { target, cred, until: Date.now() + PROOF_TTL_MS });
+  return target;
 }
 
 /** Test hook: forget cached proofs. */

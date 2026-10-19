@@ -94,7 +94,7 @@ async function start(server: http.Server): Promise<string> {
 }
 
 const OWNER = { id: 'u1', role: 'user' };
-const VM = { id: 'vm1', userId: 'u1', ipAddress: '10.0.0.5' };
+const VM = { id: 'vm1', userId: 'u1', type: 'qemu', status: 'running', ipAddress: '10.0.0.5' };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -184,6 +184,17 @@ describe('IDE proxy — guest authentication', () => {
     expect(await r.text()).not.toContain('workbench');
     // Only the proof request reached it — nothing from the browser was relayed.
     expect(other.seen.every((h) => !h.cookie?.includes('proxmate_session'))).toBe(true);
+  });
+
+  it('refuses a VM that is not running, without contacting anything at its address', async () => {
+    const g = fakeGuest({ secret: 'vm1-secret' });
+    process.env['IDE_TARGET_OVERRIDE'] = await start(g.server);
+    vi.mocked(prisma.ideGuestSecret.findUnique).mockResolvedValue({ vmId: 'vm1', secretEnc: 'enc:vm1-secret' } as never);
+    vi.mocked(getVmWithCap).mockResolvedValue({ ...VM, status: 'stopped' } as never);
+
+    const r = await get(await proxyApp());
+    expect(r.status).toBe(409);
+    expect(g.seen).toHaveLength(0);
   });
 
   it('fails closed with a reinstall message when the install has no guest secret', async () => {

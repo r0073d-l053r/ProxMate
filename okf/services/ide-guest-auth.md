@@ -23,9 +23,12 @@ The IDE proxy dials the address the guest's own agent reports, so reaching a cod
 | `ideGuestCookieValue` | `(secret) => string` | SHA-256 hex of the secret: the guest's `HASHED_PASSWORD` and the `code-server-session` cookie value. |
 | `saveIdeGuestSecret` / `loadIdeGuestSecret` | `(vmId, secret)` / `(vmId) => string \| null` | Encrypted upsert / decrypt of [IdeGuestSecret](/database/ide-guest-secret.md); null when missing or undecryptable. |
 | `proveIdeGuest` | `(target, secret, timeoutMs?) => boolean` | POSTs the secret to the guest's `/login` and requires the returned `code-server-session` cookie to equal the expected hash. |
-| `ensureIdeGuestProven` | `(vmId, target, secret) => boolean` | `proveIdeGuest` with a 5-minute positive cache keyed by VM, target and credential. |
+| `resolveIdeTargetUrl` | `(vm: { ipAddress }, env?) => string \| null` | `IDE_TARGET_OVERRIDE` if set; else `http://<ipAddress>:<IDE_GUEST_PORT or 8080>`; null if no IP or the IP is loopback/link-local. |
+| `proveIdeGuestTarget` | `(vm, secret, env?) => string \| null` | Running VMs only. Reuses a proof under 5 minutes old while the VM's recorded address still matches it; otherwise reads the address live from the guest agent (recording it if it moved), proves the guest there and returns the target. A stopped VM or a changed address drops the cached proof. |
 
 # Gotchas
+
+- The guarantee is that the answering code-server holds this VM's secret. It assumes the address is the one this VM's guest agent reports now and that the backend-to-guest network path is trusted (as the isolation pinhole already does); it does not authenticate the network itself.[^guest]
 
 - Uses code-server's SHA256 password mode (`--auth password` with a non-argon2 `HASHED_PASSWORD`), where the session cookie must equal the hash string; verified against code-server 4.128.0. A successful login does not consume code-server's login rate limit.[^guest]
 - The browser never receives the guest cookie; the proxy adds it server-side.[^guest]

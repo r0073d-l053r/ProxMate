@@ -22,7 +22,7 @@ The browser only ever talks to ProxMate; the guest is never exposed. code-server
 
 | Function | Signature summary | What it does |
 |---|---|---|
-| `resolveIdeTargetUrl` | `(vm: { ipAddress }, env?) => string \| null` | `IDE_TARGET_OVERRIDE` if set; else `http://<ipAddress>:<IDE_GUEST_PORT or 8080>`; null if no IP or the IP is loopback/link-local. |
+| `resolveIdeTargetUrl` | `(vm: { ipAddress }, env?) => string \| null` | Re-exported from [ide-guest-auth](/services/ide-guest-auth.md): `IDE_TARGET_OVERRIDE` if set; else `http://<ipAddress>:<IDE_GUEST_PORT or 8080>`; null if no IP or the IP is loopback/link-local. |
 | `mountIdeProxy` | `(app: Express)` | Middleware claiming `^/api/ide/([^/]+)/proxy(/...)?`; 302 to add the trailing slash; 401 without a valid session; 403 when not allowed (including a non-owner, with an owner-only message); 409 when the install has no guest secret (reinstall needed); 502 when the guest can't prove the secret; else `proxy.web` with the guest cookie attached. |
 | `guestCookieHeader` | `(header, guestCookie) => string` | The Cookie header sent to the guest: the browser's cookies minus every `proxmate_*` cookie and any `code-server-session*`, plus the server-held guest cookie. |
 | `sanitizeGuestResponseHeaders` | `(headers) => void` | Removes `Service-Worker-Allowed` and any `Set-Cookie` for `proxmate_*` or `code-server-session*` from a guest response (HTTP via `proxyRes`, WebSocket 101/refusals via `proxyReqWs`). |
@@ -39,7 +39,7 @@ Reads [VirtualMachine](/database/virtual-machine.md) `ipAddress` via `vm.service
 - ProxMate's own credentials never reach the guest: every `proxmate_*` cookie and the `Authorization` header are removed from proxied HTTP and WebSocket requests.[^proxy]
 - `changeOrigin` MUST stay false: code-server validates the WebSocket Origin against Host; rewriting Host makes it reject the management WS with 403 (verified against code-server 4.127).[^proxy]
 - The entry URL must end in `/` or relative resolution breaks (hence the 302).[^proxy]
-- The guest IP comes from the guest's own agent, so loopback/link-local/metadata targets are refused, and any other target must prove the VM's per-install secret (cached 5 minutes per VM, target and credential) before anything is relayed. A different VM's code-server or an unrelated service can't, so the proxy refuses it.[^proxy]
+- Only a running VM is proxied (409 otherwise). The guest IP comes from the guest's own agent and is re-read live before each proof; loopback/link-local/metadata targets are refused, and the target must prove the VM's per-install secret before anything is relayed (a proof is reused for up to 5 minutes while the recorded IP is unchanged). A different VM's code-server or an unrelated service can't prove it, so the proxy refuses it. This assumes the backend-to-guest network path is trusted.[^proxy]
 - An install without a guest secret (made before guest authentication) is refused with 409 and a reinstall message; reinstalling creates the secret.[^proxy]
 - `IDE_TARGET_OVERRIDE` is TEST-ONLY: it sends every VM's IDE to the same box. The guest proof still applies to it.[^proxy]
 - WS Origin check is lenient (absent, `FRONTEND_URL`, or the backend's own host) because the IDE page is served from the backend origin; cookie + ownership are the real gate.[^proxy]

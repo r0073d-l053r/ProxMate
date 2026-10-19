@@ -43,7 +43,7 @@ vi.mock('../src/services/ide-guest-auth.service.js', async (orig) => ({
   ...(await orig<typeof import('../src/services/ide-guest-auth.service.js')>()),
   saveIdeGuestSecret: vi.fn().mockResolvedValue(undefined),
   loadIdeGuestSecret: vi.fn(),
-  ensureIdeGuestProven: vi.fn(),
+  proveIdeGuestTarget: vi.fn(),
 }));
 
 import type { VirtualMachine } from '@prisma/client';
@@ -52,7 +52,7 @@ import { guestFileWrite } from '../src/services/proxmox.service.js';
 import {
   saveIdeGuestSecret,
   loadIdeGuestSecret,
-  ensureIdeGuestProven,
+  proveIdeGuestTarget,
 } from '../src/services/ide-guest-auth.service.js';
 import { startIdeProvision, refreshIdeState } from '../src/services/ide-provision.service.js';
 
@@ -126,16 +126,16 @@ describe('refreshIdeState — ready only once the guest proves the secret', () =
 
   it('stays installing while the guest cannot prove the secret (e.g. an old install still answering)', async () => {
     vi.mocked(loadIdeGuestSecret).mockResolvedValue('s');
-    vi.mocked(ensureIdeGuestProven).mockResolvedValue(false);
+    vi.mocked(proveIdeGuestTarget).mockResolvedValue(null);
     expect(await refreshIdeState(installing())).toBe('installing');
     expect(vi.mocked(prisma.virtualMachine.update)).not.toHaveBeenCalled();
   });
 
   it('flips to ready when the guest proves the secret', async () => {
     vi.mocked(loadIdeGuestSecret).mockResolvedValue('s');
-    vi.mocked(ensureIdeGuestProven).mockResolvedValue(true);
+    vi.mocked(proveIdeGuestTarget).mockResolvedValue('http://10.0.0.5:8080');
     expect(await refreshIdeState(installing())).toBe('ready');
-    expect(vi.mocked(ensureIdeGuestProven)).toHaveBeenCalledWith('vm-1', 'http://10.0.0.5:8080', 's');
+    expect(vi.mocked(proveIdeGuestTarget)).toHaveBeenCalledWith(expect.objectContaining({ id: 'vm-1' }), 's');
   });
 });
 

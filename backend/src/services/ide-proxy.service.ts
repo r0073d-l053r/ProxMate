@@ -8,8 +8,13 @@ import { getVmWithCap } from './vm.service.js';
 import { getIdeCapability, isIdeOwner, IDE_OWNER_ONLY_MESSAGE } from './ide.service.js';
 import { SESSION_COOKIE } from '../lib/cookies.js';
 import { logger } from '../lib/logger.js';
-import { isLoopbackOrLinkLocal } from '../lib/url-safety.js';
-import { IDE_GUEST_COOKIE, ideGuestCookieValue, loadIdeGuestSecret, ensureIdeGuestProven } from './ide-guest-auth.service.js';
+import {
+  IDE_GUEST_COOKIE,
+  ideGuestCookieValue,
+  loadIdeGuestSecret,
+  proveIdeGuestTarget,
+  resolveIdeTargetUrl,
+} from './ide-guest-auth.service.js';
 
 /**
  * ProxMate IDE transport (Phase 2): reverse-proxy an in-guest code-server (HTTP +
@@ -124,23 +129,8 @@ function getCookie(header: string | undefined, name: string): string | undefined
   return undefined;
 }
 
-/**
- * Pick the upstream code-server URL for a guest. Pure (env-injected) so the
- * per-VM routing precedence is unit-testable. See the file header for the modes.
- */
-export function resolveIdeTargetUrl(
-  vm: { ipAddress: string | null },
-  env: NodeJS.ProcessEnv = process.env,
-): string | null {
-  const override = env['IDE_TARGET_OVERRIDE'];
-  if (override) return override;
-  // The guest agent reports the IP, and a tenant with root in their guest could
-  // report a bogus one (resolveTarget also makes the guest prove its secret). Refuse to proxy to the host's own loopback / link-local /
-  // metadata address (private LAN is fine — that's where guests live).
-  if (!vm.ipAddress || isLoopbackOrLinkLocal(vm.ipAddress)) return null;
-  const port = env['IDE_GUEST_PORT'] || '8080';
-  return `http://${vm.ipAddress}:${port}`;
-}
+// Target resolution lives with the guest proof; re-exported for callers/tests.
+export { resolveIdeTargetUrl };
 
 type ResolvedTarget =
   | { ok: true; target: string; guestCookie: string }
@@ -158,8 +148,9 @@ async function resolveTarget(vmId: string, user: { id: string; role: string }): 
   if (!isIdeOwner(vm, user)) return { ok: false, status: 403, message: IDE_OWNER_ONLY_MESSAGE };
   const cap = await getIdeCapability({ role: user.role });
   if (!cap.available) return NOT_AVAILABLE;
-  const target = resolveIdeTargetUrl(vm);
-  if (!target) return NOT_AVAILABLE;
+  if (vm.status !== 'running') {
+    return { ok: false, status: 409, message: 'Start the VM to open its ProxMate IDE.' };
+  }
   const secret = await loadIdeGuestSecret(vm.id);
   if (!secret) {
     // Installed before guest authentication existed (or the secret is gone):
@@ -170,7 +161,8 @@ async function resolveTarget(vmId: string, user: { id: string; role: string }): 
       message: 'This IDE install is out of date. Reinstall the IDE from the VM page (Console → ProxMate IDE) to open it.',
     };
   }
-  if (!(await ensureIdeGuestProven(vm.id, target, secret))) {
+  const target = await proveIdeGuestTarget(vm, secret);
+  if (!target) {
     return {
       ok: false,
       status: 502,

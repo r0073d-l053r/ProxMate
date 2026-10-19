@@ -15,7 +15,7 @@ vi.mock('../src/lib/logger.js', () => ({ logger: { info: vi.fn(), warn: vi.fn(),
 vi.mock('../src/services/ide-guest-auth.service.js', async (orig) => ({
   ...(await orig<typeof import('../src/services/ide-guest-auth.service.js')>()),
   loadIdeGuestSecret: vi.fn().mockResolvedValue('vm1-secret'),
-  ensureIdeGuestProven: vi.fn().mockResolvedValue(true),
+  proveIdeGuestTarget: vi.fn(async () => process.env['IDE_TARGET_OVERRIDE'] ?? null),
 }));
 
 import { verifyToken } from '../src/services/auth.service.js';
@@ -76,7 +76,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   seen = [];
   vi.mocked(verifyToken).mockResolvedValue({ id: 'u1', role: 'user' } as never);
-  vi.mocked(getVmWithCap).mockResolvedValue({ id: 'vm1', userId: 'u1', ipAddress: '10.0.0.5' } as never);
+  vi.mocked(getVmWithCap).mockResolvedValue({ id: 'vm1', userId: 'u1', type: 'qemu', status: 'running', ipAddress: '10.0.0.5' } as never);
   vi.mocked(getIdeCapability).mockResolvedValue({ available: true } as never);
   await startGuest();
 });

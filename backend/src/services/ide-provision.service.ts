@@ -24,7 +24,7 @@ import {
   ideGuestCookieValue,
   saveIdeGuestSecret,
   loadIdeGuestSecret,
-  ensureIdeGuestProven,
+  proveIdeGuestTarget,
 } from './ide-guest-auth.service.js';
 import {
   IDE_SETTINGS_JSON,
@@ -299,12 +299,9 @@ export async function startIdeProvision(
  * at its address — during a reinstall the previous code-server may still be up.
  */
 async function probeIdeUp(vm: VirtualMachine): Promise<boolean> {
-  const override = process.env['IDE_TARGET_OVERRIDE'];
-  const target = override || (vm.ipAddress ? `http://${vm.ipAddress}:${IDE_GUEST_PORT}` : null);
-  if (!target) return false;
   const secret = await loadIdeGuestSecret(vm.id);
   if (!secret) return false;
-  return ensureIdeGuestProven(vm.id, target, secret);
+  return (await proveIdeGuestTarget(vm, secret)) !== null;
 }
 
 /**
