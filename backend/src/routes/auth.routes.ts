@@ -29,7 +29,7 @@ import {
   clearSsoCookie,
   SSO_COOKIE,
 } from '../lib/cookies.js';
-import { requireAuth, allowExpiredAccess } from '../middleware/auth.js';
+import { requireAuth, requireSession, allowExpiredAccess } from '../middleware/auth.js';
 import { requireAuthOrEnrollment } from '../middleware/enrollment.js';
 import { authLimiter, publicTokenLimiter, kioskExitLimiter } from '../middleware/rate-limit.js';
 import { verifyKioskPin } from '../services/kiosk.service.js';
@@ -269,11 +269,12 @@ router.post('/logout', allowExpiredAccess, requireAuth, async (req: Request, res
 // stay alive. The old row must NOT be deleted outright — the kiosk polls every
 // second, and in-flight requests still carrying the old cookie would 401, which
 // the frontend treats as "logged out" (see retireSessionWithGrace). Grants no
-// new privileges — it only re-ups the caller's own already-valid session.
+// new privileges — it only re-ups the caller's own already-valid session, which
+// is why an API token is refused here (requireSession): it is not a session.
 // no-access-gate: sits behind requireAuth, which already 403s a lapsed window
 // (chokepoint 3). Re-checking here would be dead code, and this mints no new
 // privilege — it re-ups the caller's own already-validated session.
-router.post('/session/refresh', requireAuth, async (req: Request, res: Response) => {
+router.post('/session/refresh', requireAuth, requireSession, async (req: Request, res: Response) => {
   const ar = req as AuthRequest;
   const { token, csrfToken, expiresAt } = await createSession(ar.user.id);
   setAuthCookies(res, token, csrfToken, expiresAt);
@@ -296,7 +297,7 @@ const KioskExitSchema = z.object({
   method: z.enum(['pin', 'password']),
   value: z.string().min(1).max(128),
 });
-router.post('/kiosk-exit', kioskExitLimiter, requireAuth, async (req: Request, res: Response) => {
+router.post('/kiosk-exit', kioskExitLimiter, requireAuth, requireSession, async (req: Request, res: Response) => {
   const ar = req as AuthRequest;
   if (ar.user.role !== 'admin') {
     res.status(403).json({ error: 'Kiosk mode is admin-only.' });
@@ -325,7 +326,7 @@ router.post('/kiosk-exit', kioskExitLimiter, requireAuth, async (req: Request, r
 // verify against the CURRENT session's admin and do NOT mint a new session — so
 // presenting some other person's passkey can't downgrade the kiosk's session; it
 // simply won't unlock. Session-authed + admin-only + rate-limited.
-router.post('/kiosk-exit/passkey-options', kioskExitLimiter, requireAuth, async (req: Request, res: Response) => {
+router.post('/kiosk-exit/passkey-options', kioskExitLimiter, requireAuth, requireSession, async (req: Request, res: Response) => {
   if ((req as AuthRequest).user.role !== 'admin') {
     res.status(403).json({ error: 'Kiosk mode is admin-only.' });
     return;
@@ -335,7 +336,7 @@ router.post('/kiosk-exit/passkey-options', kioskExitLimiter, requireAuth, async 
   res.json(options);
 });
 
-router.post('/kiosk-exit/passkey-verify', kioskExitLimiter, requireAuth, async (req: Request, res: Response) => {
+router.post('/kiosk-exit/passkey-verify', kioskExitLimiter, requireAuth, requireSession, async (req: Request, res: Response) => {
   const ar = req as AuthRequest;
   if (ar.user.role !== 'admin') {
     res.status(403).json({ error: 'Kiosk mode is admin-only.' });
@@ -426,14 +427,14 @@ router.put('/email-preferences', requireAuth, async (req: Request, res: Response
 
 // ─── 2FA (TOTP) management — authenticated ────────────────────
 
-router.post('/2fa/setup', requireAuthOrEnrollment, async (req: Request, res: Response) => {
+router.post('/2fa/setup', requireAuthOrEnrollment, requireSession, async (req: Request, res: Response) => {
   const u = (req as AuthRequest).user;
   res.json(await twofa.beginSetup(u.id, u.email));
 });
 
 const TwoFaCodeSchema = z.object({ code: z.string().min(1) });
 
-router.post('/2fa/enable', requireAuthOrEnrollment, async (req: Request, res: Response) => {
+router.post('/2fa/enable', requireAuthOrEnrollment, requireSession, async (req: Request, res: Response) => {
   const parsed = TwoFaCodeSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Enter the 6-digit code from your app.' }); return; }
   const u = (req as AuthRequest).user;
@@ -446,7 +447,7 @@ router.post('/2fa/enable', requireAuthOrEnrollment, async (req: Request, res: Re
   }
 });
 
-router.post('/2fa/disable', requireAuth, async (req: Request, res: Response) => {
+router.post('/2fa/disable', requireAuth, requireSession, async (req: Request, res: Response) => {
   const parsed = TwoFaCodeSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Enter a code to confirm.' }); return; }
   const u = (req as AuthRequest).user;
@@ -459,7 +460,7 @@ router.post('/2fa/disable', requireAuth, async (req: Request, res: Response) => 
   }
 });
 
-router.get('/2fa/status', requireAuth, async (req: Request, res: Response) => {
+router.get('/2fa/status', requireAuth, requireSession, async (req: Request, res: Response) => {
   res.json(await twofa.getStatus((req as AuthRequest).user.id));
 });
 
@@ -508,7 +509,7 @@ router.post('/passkeys/auth/verify', authLimiter, async (req: Request, res: Resp
 });
 
 // Enroll a passkey (authenticated).
-router.post('/passkeys/register/options', requireAuthOrEnrollment, async (req: Request, res: Response) => {
+router.post('/passkeys/register/options', requireAuthOrEnrollment, requireSession, async (req: Request, res: Response) => {
   const u = (req as AuthRequest).user;
   const options = await passkeys.registrationOptions(u.id, u.email);
   setChallengeCookie(res, options.challenge);
@@ -517,7 +518,7 @@ router.post('/passkeys/register/options', requireAuthOrEnrollment, async (req: R
 
 const PasskeyRegisterSchema = z.object({ response: z.any(), name: z.string().max(100).optional() });
 
-router.post('/passkeys/register/verify', requireAuthOrEnrollment, async (req: Request, res: Response) => {
+router.post('/passkeys/register/verify', requireAuthOrEnrollment, requireSession, async (req: Request, res: Response) => {
   const challenge = req.cookies?.[WEBAUTHN_COOKIE];
   if (!challenge) {
     res.status(400).json({ error: 'Passkey challenge expired — please try again.' });
@@ -539,11 +540,11 @@ router.post('/passkeys/register/verify', requireAuthOrEnrollment, async (req: Re
   }
 });
 
-router.get('/passkeys', requireAuth, async (req: Request, res: Response) => {
+router.get('/passkeys', requireAuth, requireSession, async (req: Request, res: Response) => {
   res.json({ passkeys: await passkeys.listPasskeys((req as AuthRequest).user.id) });
 });
 
-router.delete('/passkeys/:id', requireAuth, async (req: Request, res: Response) => {
+router.delete('/passkeys/:id', requireAuth, requireSession, async (req: Request, res: Response) => {
   const u = (req as AuthRequest).user;
   await passkeys.deletePasskey(u.id, req.params.id as string);
   await recordAudit({ action: 'auth.passkey_removed', actor: u, req });

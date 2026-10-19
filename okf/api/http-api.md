@@ -100,6 +100,7 @@ All are `SameSite=Lax`, `path=/`; `Secure` defaults to on when `NODE_ENV=product
 
 Other gates:
 
+- `requireSession`: 403 when the caller authenticated with a `pm_` API token. Mounted after `requireAuth` on account-security routes (session refresh, 2FA, passkeys, kiosk exit, API-token management).[^mw-auth]
 - `requireAdmin`: `user.role === 'admin'`, else 403.[^mw-admin]
 - `enforceMfaSetup`: 403 `{ code: 'mfa_setup_required' }` while an admin-required second factor is not enrolled.[^mw-mfa]
 - `requireAuthOrEnrollment`: a real session (with CSRF) or a scoped enrollment Bearer token that is honoured only while MFA setup is still required and the access window is not lapsed. Used only by first-factor enrollment endpoints.[^mw-enroll]
@@ -144,7 +145,7 @@ Inline in `app.ts`:[^app]
 | `/api/ide` | [ide](/api/ide.md) | requireAuth |
 | `/api/templates` | [template](/api/template.md) | requireAuth + enforceMfaSetup (+ requireAdmin per route) |
 | `/api/ssh-keys` | [ssh-key](/api/ssh-key.md) | requireAuth |
-| `/api/api-tokens` | [api-token](/api/api-token.md) | requireAuth + no API tokens |
+| `/api/api-tokens` | [api-token](/api/api-token.md) | requireAuth + requireSession |
 | `/api/quota-requests` | [quota-request](/api/quota-request.md) | requireAuth |
 | `/api/passthrough-requests` | [passthrough-request](/api/passthrough-request.md) | requireAuth + enforceMfaSetup |
 | `/api/downloads` | [download](/api/download.md) | none; single-use token |
