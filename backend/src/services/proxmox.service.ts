@@ -2529,6 +2529,38 @@ export async function startBackup(
   return res.data.data;
 }
 
+/** A task's log lines (all of them — `limit: 0` is Proxmox's "no limit"). */
+export async function getTaskLog(node: string, upid: string, client?: AxiosInstance): Promise<string[]> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Array<{ t: string }> }>(
+    `/nodes/${node}/tasks/${encodeURIComponent(upid)}/log`,
+    { params: { limit: 0 } },
+  );
+  return (res.data.data ?? []).map((l) => l.t);
+}
+
+/** Stop a running Proxmox task. */
+export async function stopTask(node: string, upid: string, client?: AxiosInstance): Promise<void> {
+  const c = client ?? (await getClient());
+  await c.delete(`/nodes/${node}/tasks/${encodeURIComponent(upid)}`);
+}
+
+/**
+ * The backup volid a vzdump task wrote, read from its own log ("creating vzdump
+ * archive '<path>'", or "creating Proxmox Backup Server archive '<name>'"), or
+ * null when the log doesn't name one.
+ */
+export function backupVolidFromLog(lines: string[], storage: string): string | null {
+  for (const line of lines) {
+    const m = /creating (?:vzdump|Proxmox Backup Server) archive '([^']+)'/.exec(line);
+    if (!m) continue;
+    const archive = m[1]!;
+    // A directory storage logs a file path; its volid names only the file.
+    return `${storage}:backup/${archive.startsWith('/') ? archive.slice(archive.lastIndexOf('/') + 1) : archive}`;
+  }
+  return null;
+}
+
 export interface PveBackup {
   volid: string;
   storage: string;

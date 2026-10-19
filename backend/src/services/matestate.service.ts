@@ -106,8 +106,9 @@ export async function createMateState(
     },
   });
 
+  let upid: string | undefined;
   try {
-    const upid = await pve.startBackup(
+    upid = await pve.startBackup(
       { node: vm.proxmoxNode, vmid: vm.proxmoxVmId, storage, mode: 'snapshot' },
       client,
     );
@@ -128,7 +129,39 @@ export async function createMateState(
     return updated;
   } catch (err) {
     await prisma.mateState.update({ where: { id: placeholder.id }, data: { status: 'error' } });
+    if (upid && /timed out/i.test(pve.pveMessage(err))) {
+      await abandonBackup(vm.proxmoxNode, upid, storage, client);
+    }
     throw err;
+  }
+}
+
+/**
+ * Give up on a vzdump task we stopped waiting for. Left running, it would still
+ * write an archive that no MateState row records — and retention only prunes
+ * recorded ones, while vzdump's own pruning is off (`remove=0`) — so every slow
+ * run would leave a full-size file behind until the backup storage filled up.
+ * Stop the task, then delete whatever archive its log says it wrote. Best-effort.
+ */
+async function abandonBackup(
+  node: string,
+  upid: string,
+  storage: string,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<void> {
+  try {
+    await pve.stopTask(node, upid, client);
+    await pve.waitForTask(node, upid, client, 60_000).catch(() => undefined);
+  } catch (err) {
+    console.warn(`[matestate] Failed to stop backup task ${upid}: ${pve.pveMessage(err)}`);
+  }
+  try {
+    const volid = pve.backupVolidFromLog(await pve.getTaskLog(node, upid, client), storage);
+    if (!volid) return;
+    const present = (await pve.listBackups(storage, client)).find((b) => b.volid === volid);
+    if (present) await pve.deleteBackup(present.node, storage, volid, client);
+  } catch (err) {
+    console.warn(`[matestate] Failed to remove the abandoned backup of task ${upid}: ${pve.pveMessage(err)}`);
   }
 }
 
