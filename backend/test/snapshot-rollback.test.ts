@@ -118,6 +118,29 @@ const rollback = () => fetch(`${base}/vms/rowa/snapshots/snap1/rollback`, { meth
 const rolledBack = (c: ReturnType<typeof fakeClient>) =>
   c.post.mock.calls.some((x) => x[0] === '/nodes/pve1/qemu/100/snapshot/snap1/rollback');
 
+describe('snapshot rollback and the owner\'s compute-access window (BUG-067)', () => {
+  const expired = () =>
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      id: 'u1', role: 'user', maxCpu: 8, maxRam: 16384, maxStorage: 200, accessExpiresAt: new Date(Date.now() - 60_000),
+    } as never);
+
+  it('refuses a RAM snapshot (it comes back running) when the owner\'s window has closed', async () => {
+    const { c } = fakePve(LIVE, { ...LIVE, vmstate: 'local-lvm:vm-100-state-snap1' });
+    expired();
+    const res = await rollback();
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(rolledBack(c)).toBe(false);
+  });
+
+  it('still allows a disk-only rollback (the guest stays off)', async () => {
+    const { c } = fakePve(LIVE, LIVE);
+    expired();
+    const res = await rollback();
+    expect(res.status).toBe(200);
+    expect(rolledBack(c)).toBe(true);
+  });
+});
+
 describe('snapshot rollback (BUG-039)', () => {
   it('is refused when the snapshot would grow the guest past the quota spent elsewhere since', async () => {
     const { c } = fakePve(LIVE, SNAP);

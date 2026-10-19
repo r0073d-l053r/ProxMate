@@ -216,6 +216,24 @@ describe('MateState restore after the guest moved outside ProxMate (BUG-060)', (
   });
 });
 
+describe('MateState restore and the owner\'s compute-access window (BUG-067)', () => {
+  it('restores the data but leaves the guest off when the owner\'s window has closed', async () => {
+    const { c } = fakePve(LIVE, LIVE);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      id: 'u1', role: 'user', maxCpu: 8, maxRam: 16384, maxStorage: 200, accessExpiresAt: new Date(Date.now() - 60_000),
+    } as never);
+    await restoreFromMateState(row(), ms);
+    expect(c.post.mock.calls.some((x) => x[0] === '/nodes/pve1/qemu')).toBe(true);
+    expect(c.post.mock.calls.some((x) => /status\/start$/.test(String(x[0])))).toBe(false);
+  });
+
+  it('starts the guest while the window is open', async () => {
+    const { c } = fakePve(LIVE, LIVE);
+    await restoreFromMateState(row(), ms);
+    expect(c.post.mock.calls.some((x) => /status\/start$/.test(String(x[0])))).toBe(true);
+  });
+});
+
 describe('syncRestoredGuest', () => {
   it('pins a restored container with no cores line to the row\'s cores (BUG-028)', async () => {
     const { state } = fakePve({ hostname: 'ct', tags: marker, memory: '1024', rootfs: 'local-lvm:vm-100-disk-0,size=8G' }, {});

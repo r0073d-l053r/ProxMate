@@ -10,6 +10,7 @@ import {
   approvedPciLines,
   assertRestoreWithinQuota,
   syncRestoredGuest,
+  assertOwnerAccessActive,
 } from './vm.service.js';
 import { parseGuestConfigText } from '../lib/guest-config.js';
 
@@ -285,7 +286,11 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
     vm = await syncRestoredGuest(vm, { approvedPci, client });
     // The restore brought back the backup-time NIC and firewall too.
     await reapplyIsolation(vm, client);
-    await pve.startVm(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
+    // Powering on is what every start path gates on the owner's compute-access
+    // window; a restore by a share-holder must not revive a suspended owner's
+    // machine. The data is restored either way; the guest just stays off.
+    const ownerActive = await assertOwnerAccessActive(vm).then(() => true, () => false);
+    if (ownerActive) await pve.startVm(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
   } catch (err) {
     await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'ready' } });
     throw err;
@@ -303,6 +308,9 @@ export async function rollbackToSnapshot(vm: VirtualMachine, snapname: string): 
   const client = await pve.getClient();
   vm = await requireOurGuest(vm, { client });
   const snapCfg = await pve.getSnapshotConfig(vm.proxmoxNode, vm.proxmoxVmId, snapname, client);
+  // A snapshot with RAM state comes back running, so it is a power-on like any
+  // other and needs the owner's compute-access window open.
+  if (snapCfg['vmstate']) await assertOwnerAccessActive(vm);
   await assertRestoreWithinQuota(vm, snapCfg);
   const approvedPci = await approvedPciLines(vm, client);
 

@@ -2217,7 +2217,7 @@ async function notifyOwnerOfFailedRebuild(vm: VirtualMachine, kept: boolean, err
  * access is fine holds the `power` capability, so one click on Start undoes the
  * suspension of the machine's actual owner.
  */
-async function assertOwnerAccessActive(vm: VirtualMachine): Promise<void> {
+export async function assertOwnerAccessActive(vm: VirtualMachine): Promise<void> {
   const owner = await prisma.user.findUnique({
     where: { id: vm.userId },
     select: { role: true, accessExpiresAt: true },
