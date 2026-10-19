@@ -77,11 +77,18 @@ export async function listShares(vmId: string): Promise<ShareView[]> {
 
 /**
  * Share a VM with an existing user (by email). Re-sharing the same user just
- * updates their preset. Throws {@link ShareError} for the known failure cases.
+ * updates their preset. Returns null when no account has that address — the
+ * caller must answer that case exactly like a success, so sharing can't be used
+ * to discover which addresses have accounts. Throws {@link ShareError} for the
+ * remaining failure cases.
  */
-export async function addShare(vm: { id: string; userId: string }, email: string, role: ShareRole): Promise<ShareView> {
+export async function addShare(
+  vm: { id: string; userId: string },
+  email: string,
+  role: ShareRole,
+): Promise<ShareView | null> {
   const target = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } });
-  if (!target) throw new ShareError('No ProxMate user with that email. They need an account first.', 404);
+  if (!target) return null;
   if (target.id === vm.userId) throw new ShareError('That user already owns this VM.', 400);
 
   const share = await prisma.vmShare.upsert({

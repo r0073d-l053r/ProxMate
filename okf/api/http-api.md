@@ -114,6 +114,7 @@ Other gates:
 | `authLimiter` | 20 / 15 min | `AUTH_RATE_LIMIT_MAX`, `AUTH_RATE_LIMIT_WINDOW_MS` | credential POSTs in auth, mutating setup steps |
 | `apiWriteLimiter` | 60 / 60 s | `API_WRITE_RATE_LIMIT_MAX`, `API_WRITE_RATE_LIMIT_WINDOW_MS` | all non-GET/HEAD/OPTIONS under `/api` |
 | `publicTokenLimiter` | 60 / 15 min | `PUBLIC_TOKEN_RATE_LIMIT_MAX`, `PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS` | invite lookup, downloads |
+| `shareLimiter` | 30 / 1 h per signed-in user | `SHARE_RATE_LIMIT_MAX`, `SHARE_RATE_LIMIT_WINDOW_MS` | `POST /api/vms/:id/shares` |
 | `kioskExitLimiter` | 10 / 5 min | `KIOSK_EXIT_RATE_LIMIT_MAX`, `KIOSK_EXIT_RATE_LIMIT_WINDOW_MS` | kiosk exit |
 | `gatewayAuthLimiter` | 600 / 60 s | `IDE_GATEWAY_RATE_LIMIT_MAX`, `IDE_GATEWAY_RATE_LIMIT_WINDOW_MS` | IDE LLM gateway |
 | `moduleLimiter` | 300 / 60 s (reads too) | `MODULE_RATE_LIMIT_MAX`, `MODULE_RATE_LIMIT_WINDOW_MS` | `/api/ext/<module>` |

@@ -50,8 +50,9 @@ export function SharePanel({ vmId }: { vmId: string }) {
     }
     setBusy(true);
     try {
-      await api.post(`/vms/${vmId}/shares`, { email: email.trim(), role });
-      toast.success(`Shared with ${email.trim()}.`);
+      // The server answers the same whether or not the address has an account.
+      const res = await api.post<{ message: string }>(`/vms/${vmId}/shares`, { email: email.trim(), role });
+      toast.success(res.data.message);
       setEmail("");
       load();
     } catch (err) {

@@ -88,6 +88,21 @@ export const kioskExitLimiter = createRateLimiter({
 });
 
 /**
+ * Per-user throttle for sharing a VM by email. Each share names an address, so the
+ * share list can confirm whether that address has an account; this bounds how
+ * many addresses one tenant can try. Keyed by the signed-in user (mounted after
+ * requireAuth), not by IP. Generous for real use: a handful of colleagues.
+ */
+export const shareLimiter = rateLimit({
+  windowMs: Number(process.env.SHARE_RATE_LIMIT_WINDOW_MS ?? 60 * 60 * 1000),
+  limit: Number(process.env.SHARE_RATE_LIMIT_MAX ?? 30),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: (req) => `user:${(req as unknown as { user?: { id?: string } }).user?.id ?? 'anon'}`,
+  message: { error: 'Too many share requests — try again later.' },
+});
+
+/**
  * Pre-auth throttle for the IDE LLM gateway. The gateway is exempt from
  * apiWriteLimiter (chat streaming must not be throttled mid-conversation), so
  * without this the Bearer-token verification — a hash + DB lookup on every

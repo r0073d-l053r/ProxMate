@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { promises as fsp, existsSync } from 'node:fs';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
+import { shareLimiter } from '../middleware/rate-limit.js';
 import { enforceMfaSetup } from '../middleware/mfa.js';
 import { recordAudit, listAuditForTarget } from '../services/audit.service.js';
 import {
@@ -959,7 +960,7 @@ const AddShareSchema = z.object({
   role: z.enum([...SHARE_ROLES, 'co-owner', 'read-only']).transform(normalizeShareRole),
 });
 
-router.post('/:id/shares', async (req: Request, res: Response) => {
+router.post('/:id/shares', shareLimiter, async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getOwnedVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
@@ -967,12 +968,15 @@ router.post('/:id/shares', async (req: Request, res: Response) => {
   const parsed = AddShareSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Enter a valid email and role.' }); return; }
   try {
-    const share = await addShare(vm, parsed.data.email, parsed.data.role);
+    // Same response and same audit detail whether or not the address has an
+    // account (the VM activity feed is visible to the tenant), so this endpoint
+    // never confirms that an account exists.
+    await addShare(vm, parsed.data.email, parsed.data.role);
     await recordAudit({
       action: 'vm.share', actor: user, targetType: 'vm', targetId: vm.id,
       detail: `${parsed.data.email} as ${parsed.data.role}`, req,
     });
-    res.status(201).json(share);
+    res.status(202).json({ message: 'If that person has a ProxMate account, the VM is now shared with them.' });
   } catch (err) {
     if (err instanceof ShareError) { res.status(err.status).json({ error: err.message }); return; }
     res.status(500).json({ error: 'Failed to share the VM' });
