@@ -193,6 +193,29 @@ describe('MateState restore re-applies the network placement and isolation of no
   });
 });
 
+describe('MateState restore after the guest moved outside ProxMate (BUG-060)', () => {
+  it('restores on the node the guest is on now, as Proxmox reports it', async () => {
+    const { c } = fakePve(LIVE, LIVE);
+    await restoreFromMateState(row({ proxmoxNode: 'pve-old' }), ms);
+    expect(c.post.mock.calls.some((x) => x[0] === '/nodes/pve1/qemu')).toBe(true);
+  });
+
+  it('refuses plainly when the backup is on another node\'s local storage', async () => {
+    const { c } = fakePve(LIVE, LIVE);
+    const get = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) => {
+      if (url.startsWith('/cluster/resources')) {
+        return ok([{ type: 'qemu', vmid: 100, node: 'pve1' }, { type: 'node', node: 'pve1', status: 'online' }, { type: 'node', node: 'pve2', status: 'online' }]);
+      }
+      if (url.startsWith('/nodes/pve1/storage/backups/content')) return ok([]);
+      if (url.startsWith('/nodes/pve2/storage/backups/content')) return ok([{ volid: VOLID, vmid: 100 }]);
+      return get(url);
+    });
+    await expect(restoreFromMateState(row(), ms)).rejects.toThrow(/stored on pve2, but the VM is now on pve1/);
+    expect(c.post.mock.calls.some((x) => x[0] === '/nodes/pve1/qemu')).toBe(false);
+  });
+});
+
 describe('syncRestoredGuest', () => {
   it('pins a restored container with no cores line to the row\'s cores (BUG-028)', async () => {
     const { state } = fakePve({ hostname: 'ct', tags: marker, memory: '1024', rootfs: 'local-lvm:vm-100-disk-0,size=8G' }, {});

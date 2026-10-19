@@ -214,6 +214,18 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
   // A restore overwrites the guest at this VMID — only ever this row's (or an empty slot).
   vm = await requireOurGuest(vm, { allowAbsent: true, client });
 
+  // The guest may have moved since the backup (Proxmox HA, the PVE UI). On
+  // node-local backup storage the archive is only on the node it was taken on, so
+  // say so plainly rather than let the restore fail inside Proxmox.
+  const backupNodes = await pve.getBackupNodes(mateState.storage, mateState.volid, client);
+  if (!backupNodes.includes(vm.proxmoxNode)) {
+    throw new Error(
+      backupNodes.length > 0
+        ? `This backup is stored on ${backupNodes.join(', ')}, but the VM is now on ${vm.proxmoxNode}. Move the VM back to restore it.`
+        : 'This backup is not available on any online node.',
+    );
+  }
+
   // The archive brings back the guest's whole config as it was at backup time.
   // Refuse one that would grow the guest past its owner's quota, and note which PCI
   // devices are approved now (a device detached since the backup must not return).

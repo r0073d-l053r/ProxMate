@@ -1391,7 +1391,6 @@ export async function migrateVmToNode(
     timeoutMs?: number;
   } = {},
 ): Promise<VirtualMachine> {
-  if (targetNode === vm.proxmoxNode) throw new Error('The VM is already on that node.');
   // Containers can't be live-migrated in ProxMate's API-only model (LXC has no
   // live migration; a restart-migration would mean downtime), so they're excluded
   // from manual moves, the balancer, and drains. Keep them pinned.
@@ -1401,7 +1400,10 @@ export async function migrateVmToNode(
   // never applies there; it protects generic admin/balancer moves.)
   if (vm.hasPassthrough) throw new Error('A VM with PCI/GPU passthrough can’t be migrated. Detach the device first.');
   const client = await pve.getClient();
+  // Judged against where the guest actually is: the stored node is stale after a
+  // move made outside ProxMate (Proxmox HA, the PVE UI).
   vm = await requireOurGuest(vm, { client });
+  if (targetNode === vm.proxmoxNode) throw new Error('The VM is already on that node.');
 
   const nodes = await pve.getNodes(client);
   if (!nodes.some((n) => n.node === targetNode)) throw new Error(`No such node "${targetNode}".`);
