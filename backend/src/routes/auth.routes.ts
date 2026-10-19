@@ -38,6 +38,7 @@ import { authLimiter, publicTokenLimiter, kioskExitLimiter } from '../middleware
 import { verifyKioskPin } from '../services/kiosk.service.js';
 import { recordAudit } from '../services/audit.service.js';
 import {
+  isAccountLocked,
   reserveLoginAttempt,
   registerFailedLogin,
   clearFailedLogins,
@@ -183,6 +184,17 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
 
   // Correct password — clear any prior failure streak before continuing.
   await clearFailedLogins(user);
+
+  // Re-check the lock now that the password is verified: one may have been
+  // applied while this request was in flight (by wrong 2FA codes or other wrong
+  // passwords). A correct password never lifts it, and nothing is issued while it
+  // holds — same generic answer as a wrong password.
+  const current = await prisma.user.findUnique({ where: { id: user.id }, select: { lockedUntil: true } });
+  if (current && isAccountLocked(current)) {
+    await recordAudit({ action: 'auth.login_blocked', actor: user, detail: 'account locked', req });
+    res.status(401).json({ error: 'Invalid email or password' });
+    return;
+  }
 
   // Compute-access window (admins exempt). This MUST come before the 2FA and
   // enrollment branches below: those hand out real credentials (a 5-minute 2FA

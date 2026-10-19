@@ -76,7 +76,7 @@ No router-level middleware; each route picks its own:[^routes]
 # Gotchas
 
 - All bodies are zod-validated (Register/Login/TwoFaVerify/KioskExit/EmailPrefs/TwoFaCode/PasskeyRegister/Forgot/Reset schemas).[^routes]
-- Login hardening: locked accounts get the same generic 401 after a dummy bcrypt; each login reserves an attempt (`reserveLoginAttempt`) before bcrypt runs and a failure settles it with `registerFailedLogin`; correct passwords clear the streak; bcrypt always runs so timing does not reveal account existence.[^routes]
+- Login hardening: locked accounts get the same generic 401 after a dummy bcrypt; each login reserves an attempt (`reserveLoginAttempt`) before bcrypt runs and a failure settles it with `registerFailedLogin`; correct passwords clear the password streak but never lift a lock in force, and the lock is re-checked after the password check so no challenge or session is issued while one holds (e.g. one applied by wrong 2FA codes during the request); bcrypt always runs so timing does not reveal account existence.[^routes]
 - Compute-access gate (`loginRefusal`, admins exempt) runs on every session-minting path: password login (before 2FA/enrollment branches), 2FA verify, passkey login and SSO callback.[^routes]
 - A `require2fa` user whose only factor is a passkey (`twoFactorEnabled=false`) cannot log in with a password alone (401 `passkey_required`), whether or not the account is SSO-linked; one with no factor yet gets an enrollment token instead of a session.[^routes]
 - Register claims the invite atomically (`updateMany where usedById: null`) and deletes the just-created user if the claim loses a race. Access window starts at redemption. Email is lowercased and trimmed.[^routes]

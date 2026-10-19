@@ -57,10 +57,19 @@ describe('isAccountLocked', () => {
 });
 
 describe('clearFailedLogins', () => {
-  it('resets the stored counter + lock', async () => {
+  it('resets the stored counter and tidies away an expired lock', async () => {
     const row = fakeRow(3, new Date(Date.now() - 1000));
     await clearFailedLogins({ id: 'u1' });
     expect(row).toMatchObject({ failedLoginAttempts: 0, lockedUntil: null });
+  });
+
+  it('leaves a lock that is still in force, and the second-factor count, alone', async () => {
+    const until = new Date(Date.now() + 60_000);
+    const row = fakeRow(3, until);
+    row.twoFactorFailedAttempts = 11;
+    await clearFailedLogins({ id: 'u1' });
+    expect(row.lockedUntil).toBe(until);
+    expect(row.twoFactorFailedAttempts).toBe(11);
   });
 
   it('clears the slot a reservation just took, even if the caller read a clean row', async () => {
@@ -84,7 +93,7 @@ describe('reserve + register', () => {
     // Default AUTH_LOCKOUT_MAX is 10, so attempt #10 (from 9) trips the lock.
     const row = fakeRow(9);
     expect(await failOnce()).toEqual({ evaluated: true, locked: true });
-    expect(row.failedLoginAttempts).toBe(0); // reset as we lock
+    expect(row.failedLoginAttempts).toBe(11); // marked spent until the lock runs out
     expect(row.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
     expect(recordAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'auth.account_locked', targetId: 'u1' }),
@@ -110,7 +119,23 @@ describe('reserve + register', () => {
     const row = fakeRow(10);
     expect(await reserveLoginAttempt(who, null)).toBe(false);
     expect(row.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
-    expect(row.failedLoginAttempts).toBe(0);
+    expect(row.failedLoginAttempts).toBe(11);
+  });
+
+  it('gives a fresh allowance only once the lock has run out', async () => {
+    const row = fakeRow(11, new Date(Date.now() + 60_000));
+    expect(await reserveLoginAttempt(who, null)).toBe(false);
+    expect(row.failedLoginAttempts).toBe(11);
+    row.lockedUntil = new Date(Date.now() - 1);
+    expect(await reserveLoginAttempt(who, null)).toBe(true);
+    expect(row.failedLoginAttempts).toBe(1);
+  });
+
+  it('an old, expired lock does not reopen the cap while the last attempts are in flight', async () => {
+    // Counter at MAX (attempts reserved, not yet settled) with a lock from long ago.
+    const row = fakeRow(10, new Date(Date.now() - 3_600_000));
+    expect(await reserveLoginAttempt(who, null)).toBe(false);
+    expect(row.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
   });
 
   it('emails every admin when SMTP is configured', async () => {

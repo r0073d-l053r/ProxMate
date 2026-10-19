@@ -35,6 +35,12 @@ export function isAccountLocked(user: Pick<User, 'lockedUntil'>): boolean {
  * The reserved slot is the attempt's count. A failure then only has to decide
  * whether the account is exhausted and lock it (registerFailed*); a success
  * clears the counter (clearFailed*).
+ *
+ * Locking does NOT reset the counter: it marks it as spent (EXHAUSTED, above
+ * MAX) for the whole lock window, and only the lock running out gives a fresh
+ * allowance. A correct password never lifts a lock that is in force, nor resets
+ * the second-factor count, so holding the password cannot buy more code guesses
+ * than MAX per lock window.
  */
 
 /**
@@ -69,13 +75,22 @@ export async function registerFailedSecondFactor(user: Who, ip: string | null): 
   return lockIfExhausted(user, ip, 'twoFactorFailedAttempts', 'wrong 2FA codes');
 }
 
-/** Clear the password failure counter + any lock (called after a correct password). */
+/**
+ * Clear the password failure counter after a correct password. A lock that is
+ * still in force is left alone: it may have been applied by wrong 2FA codes, or
+ * by other wrong passwords, while this login was in flight, and the login route
+ * re-checks it before issuing anything. Only an already-expired lock is tidied up.
+ */
 export async function clearFailedLogins(user: Pick<User, 'id'>): Promise<void> {
   // Conditional in the database rather than on the caller's (stale) copy: the
   // reservation just incremented the stored counter.
   await prisma.user.updateMany({
-    where: { id: user.id, OR: [{ failedLoginAttempts: { gt: 0 } }, { lockedUntil: { not: null } }] },
-    data: { failedLoginAttempts: 0, lockedUntil: null },
+    where: { id: user.id, failedLoginAttempts: { gt: 0 } },
+    data: { failedLoginAttempts: 0 },
+  });
+  await prisma.user.updateMany({
+    where: { id: user.id, lockedUntil: { lte: new Date() } },
+    data: { lockedUntil: null },
   });
 }
 
@@ -92,8 +107,18 @@ const notLocked = (now: Date): Prisma.UserWhereInput => ({
   OR: [{ lockedUntil: null }, { lockedUntil: { lte: now } }],
 });
 
+/** Counter value that marks an allowance spent by a lock, until that lock runs out. */
+const EXHAUSTED = MAX + 1;
+
 async function reserve(user: Who, ip: string | null, counter: FailureCounter, what: string): Promise<boolean> {
   const now = new Date();
+  // A lock that has run out gives a fresh allowance. Only a counter marked
+  // EXHAUSTED by a lock is reset — never one merely at MAX with attempts still
+  // in flight — so this cannot reopen the cap mid-burst.
+  await prisma.user.updateMany({
+    where: { id: user.id, [counter]: { gt: MAX }, ...notLocked(now) } as Prisma.UserWhereInput,
+    data: { [counter]: 0 } as Prisma.UserUpdateManyMutationInput,
+  });
   const { count } = await prisma.user.updateMany({
     where: { id: user.id, [counter]: { lt: MAX }, ...notLocked(now) } as Prisma.UserWhereInput,
     data: { [counter]: { increment: 1 } } as Prisma.UserUpdateManyMutationInput,
@@ -110,15 +135,15 @@ async function reserve(user: Who, ip: string | null, counter: FailureCounter, wh
 /**
  * Lock the account when `counter` has reached MAX and no lock is in force. The
  * lock is claimed with a conditional write, so of several concurrent failures
- * exactly one locks, audits and alerts. The counter is reset as we lock, so the
- * first attempt after auto-unlock starts a fresh window.
+ * exactly one locks, audits and alerts. The counter is marked EXHAUSTED rather
+ * than reset, so the allowance stays spent until the lock runs out (see reserve).
  */
 async function lockIfExhausted(user: Who, ip: string | null, counter: FailureCounter, what: string): Promise<boolean> {
   const now = new Date();
   const lockedUntil = new Date(now.getTime() + LOCK_MINUTES * 60_000);
   const { count } = await prisma.user.updateMany({
     where: { id: user.id, [counter]: { gte: MAX }, ...notLocked(now) } as Prisma.UserWhereInput,
-    data: { [counter]: 0, lockedUntil } as Prisma.UserUpdateManyMutationInput,
+    data: { [counter]: EXHAUSTED, lockedUntil } as Prisma.UserUpdateManyMutationInput,
   });
   if (count === 0) return false; // not exhausted, or a concurrent failure already locked
 

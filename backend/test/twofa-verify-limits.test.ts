@@ -212,3 +212,46 @@ describe('parallel bursts are capped before anything is verified', () => {
     expect(recovery).not.toHaveBeenCalled();
   });
 });
+
+describe('a correct password does not lift or refresh a 2FA lockout', () => {
+  it('a lock applied while a password login is in flight still holds, and no challenge is issued', async () => {
+    const challenges: string[] = [];
+    for (let i = 0; i < 11; i++) challenges.push(await login());
+
+    // A slow, CORRECT password check is in flight while ten wrong codes lock the account.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    verifyPasswordSafe.mockImplementationOnce(async () => {
+      await gate;
+      return true;
+    });
+    const inFlight = post('/login', { email: row.email, password: 'right' });
+    await delay(20);
+    for (const challenge of challenges.slice(0, 10)) await post('/2fa/verify', { challenge, code: '000000' });
+    expect(row.lockedUntil).not.toBeNull();
+    release();
+
+    const res = await inFlight;
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { challenge?: string }).challenge).toBeUndefined();
+    expect(row.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
+
+    // The 11th code is never checked, even a correct one on a challenge from before the lock.
+    verifyTotp.mockClear();
+    verifyTotp.mockResolvedValue(true);
+    expect((await post('/2fa/verify', { challenge: challenges[10], code: '123456' })).status).toBe(401);
+    expect(verifyTotp).not.toHaveBeenCalled();
+  });
+
+  it('locking keeps the spent code allowance spent, and a correct password cannot reset it', async () => {
+    for (let i = 0; i < 5; i++) {
+      const challenge = await login();
+      await post('/2fa/verify', { challenge, code: '000000' });
+      await post('/2fa/verify', { challenge, code: '000000' });
+    }
+    expect(row.lockedUntil).not.toBeNull();
+    // While the lock holds, password logins are refused and the code allowance stays spent.
+    expect((await post('/login', { email: row.email, password: 'right' })).status).toBe(401);
+    expect(row.twoFactorFailedAttempts).toBeGreaterThanOrEqual(10);
+  });
+});
