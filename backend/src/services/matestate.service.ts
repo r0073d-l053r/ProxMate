@@ -112,6 +112,7 @@ export async function createMateState(
   });
 
   let upid: string | undefined;
+  let unidentified = false;
   try {
     upid = await pve.startBackup(
       { node: vm.proxmoxNode, vmid: vm.proxmoxVmId, storage, mode: 'snapshot' },
@@ -131,7 +132,10 @@ export async function createMateState(
     );
     const added = after.filter((b) => !before.has(b.volid));
     const fresh = logged ? after.find((b) => b.volid === logged) : added.length === 1 ? added[0] : undefined;
-    if (!fresh) throw new Error('Backup finished but its volume could not be identified on Proxmox.');
+    if (!fresh) {
+      unidentified = true;
+      throw new Error('Backup finished but its volume could not be identified on Proxmox.');
+    }
 
     const updated = await prisma.mateState.update({
       where: { id: placeholder.id },
@@ -143,7 +147,10 @@ export async function createMateState(
   } catch (err) {
     await prisma.mateState.update({ where: { id: placeholder.id }, data: { status: 'error' } });
     if (upid && /timed out/i.test(pve.pveMessage(err))) {
-      await abandonBackup(vm.proxmoxNode, upid, storage, client);
+      await abandonBackup(vm.proxmoxNode, upid, storage, vm.proxmoxVmId, client);
+    } else if (upid && unidentified) {
+      // Nothing records this run's archive either — remove it the same way.
+      await removeTaskArchive(vm.proxmoxNode, upid, storage, vm.proxmoxVmId, client);
     }
     throw err;
   }
@@ -160,6 +167,7 @@ async function abandonBackup(
   node: string,
   upid: string,
   storage: string,
+  vmid: number,
   client: Awaited<ReturnType<typeof pve.getClient>>,
 ): Promise<void> {
   try {
@@ -168,13 +176,28 @@ async function abandonBackup(
   } catch (err) {
     console.warn(`[matestate] Failed to stop backup task ${upid}: ${pve.pveMessage(err)}`);
   }
+  await removeTaskArchive(node, upid, storage, vmid, client);
+}
+
+/**
+ * Delete the archive a vzdump task's log names — only when it is listed on the
+ * backup storage as this guest's (same VMID), so nothing else is ever removed.
+ * Best-effort.
+ */
+async function removeTaskArchive(
+  node: string,
+  upid: string,
+  storage: string,
+  vmid: number,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<void> {
   try {
     const volid = pve.backupVolidFromLog(await pve.getTaskLog(node, upid, client), storage);
     if (!volid) return;
-    const present = (await pve.listBackups(storage, client)).find((b) => b.volid === volid);
+    const present = (await pve.listBackups(storage, client)).find((b) => b.volid === volid && b.vmid === vmid);
     if (present) await pve.deleteBackup(present.node, storage, volid, client);
   } catch (err) {
-    console.warn(`[matestate] Failed to remove the abandoned backup of task ${upid}: ${pve.pveMessage(err)}`);
+    console.warn(`[matestate] Failed to remove the archive of backup task ${upid}: ${pve.pveMessage(err)}`);
   }
 }
 

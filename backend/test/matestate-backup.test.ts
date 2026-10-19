@@ -76,6 +76,29 @@ describe('a backup that outlives the wait (BUG-025)', () => {
     expect(prisma.mateState.update).toHaveBeenCalledWith({ where: { id: 'ms1' }, data: { status: 'error' } });
   });
 
+  it('never deletes a logged archive that is listed under another VMID (audit minor)', async () => {
+    const c = fakePve([{ volid: OURS, vmid: 999 }]);
+    vi.mocked(pve.waitForTask).mockRejectedValueOnce(new Error('Proxmox task timed out'));
+    await expect(createMateState(row)).rejects.toThrow(/timed out/);
+    expect(c.delete).not.toHaveBeenCalledWith(`/nodes/pve1/storage/backups/content/${encodeURIComponent(OURS)}`);
+  });
+
+  it('a finished backup whose volume could not be identified removes the archive its log names (audit minor)', async () => {
+    const c = fakePve([{ volid: OURS, vmid: 100 }]);
+    // The storage listing lags: the archive shows up only after the identification step.
+    const get = c.get.getMockImplementation()!;
+    let listings = 0;
+    c.get.mockImplementation((url: string) => {
+      if (url.startsWith('/nodes/pve1/storage/backups/content')) {
+        listings++;
+        return listings <= 2 ? ok([]) : get(url);
+      }
+      return get(url);
+    });
+    await expect(createMateState(row)).rejects.toThrow(/could not be identified/);
+    expect(c.delete).toHaveBeenCalledWith(`/nodes/pve1/storage/backups/content/${encodeURIComponent(OURS)}`);
+  });
+
   it('does not stop the task on other failures', async () => {
     const c = fakePve([{ volid: OURS, vmid: 100 }]);
     vi.mocked(pve.waitForTask).mockRejectedValueOnce(new Error('Proxmox task failed: job errors'));
