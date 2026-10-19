@@ -93,8 +93,11 @@ fail() {
 # an unset variable, a signal — must still leave an error status behind.
 # Otherwise the in-app card keeps showing "queued"/"running" forever and nobody
 # learns that the update never happened.
+REQ_DIR=""
 on_exit() {
   local rc=$?
+  # rm -rf never follows links inside the directory it removes.
+  if [[ -n "$REQ_DIR" ]]; then rm -rf "$REQ_DIR" 2>/dev/null || true; fi
   if [[ $rc -ne 0 && $FINISHED -eq 0 ]]; then
     status "error" "Update failed during: $STEP (exit $rc) — $LOG_HINT"
     echo "ProxMate update failed during: $STEP (exit $rc)" >&2
@@ -149,15 +152,25 @@ cd "$PROXMATE_DIR" || fail "PROXMATE_DIR $PROXMATE_DIR not found"
 TAG=""
 if [[ "${1:-}" == "--from-request" ]]; then
   [[ -e "$REQUEST_FILE" || -L "$REQUEST_FILE" ]] || { echo "no pending update request"; FINISHED=1; exit 0; }
-  # The request comes from the app-writable control dir: only a plain file the
-  # app wrote is a request. A link would make root read some other host file.
-  # (rm -f on a link removes the link, not its target.)
-  if [[ -L "$REQUEST_FILE" || ! -f "$REQUEST_FILE" ]]; then
-    rm -f "$REQUEST_FILE"
+  # The request sits in the app-writable control dir, where the app can swap
+  # it for a link, a FIFO or a directory at any moment. So first MOVE it into a
+  # root-only directory next to the control dir (on the host, never mounted
+  # into the container): a rename moves the entry itself, never what a link
+  # points to, and once it is there nothing the app does can change it. Only
+  # then check that it is a plain file and read it. `timeout` bounds the move
+  # in case it has to fall back to copying (control dir on another filesystem).
+  REQ_DIR="$(mktemp -d "$(dirname "$CONTROL_DIR")/.update-request.XXXXXX")" \
+    || fail "could not create a private work directory next to the control dir"
+  if ! timeout 20 mv -fT "$REQUEST_FILE" "$REQ_DIR/request" 2>/dev/null; then
+    rm -rf "$REQUEST_FILE" 2>/dev/null || true
+    fail "could not take the update request — ignored"
+  fi
+  if [[ -L "$REQ_DIR/request" || ! -f "$REQ_DIR/request" ]]; then
     fail "update request is not a regular file — ignored"
   fi
-  TAG="$(head -c 4096 "$REQUEST_FILE" | sed -nE 's/.*"tag"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1)"
-  rm -f "$REQUEST_FILE"
+  TAG="$(head -c 4096 "$REQ_DIR/request" | sed -nE 's/.*"tag"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1)"
+  rm -rf "$REQ_DIR"
+  REQ_DIR=""
 elif [[ -n "${1:-}" ]]; then
   TAG="$1"
 fi
@@ -172,7 +185,11 @@ if [[ -z "$TAG" ]]; then
 fi
 
 # Validate the tag charset (defense in depth — it's passed to git checkout).
-[[ "$TAG" =~ ^v?[0-9A-Za-z][0-9A-Za-z._-]*$ ]] || fail "invalid tag: $TAG"
+# Never echo a rejected value into the status: it is unvalidated text.
+if [[ ! "$TAG" =~ ^v?[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
+  TAG=""
+  fail "invalid tag (allowed: letters, digits, '.', '_' and '-')"
+fi
 git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null 2>&1 || fail "unknown tag: $TAG"
 
 # Never discard local edits to tracked files: a forced checkout would silently

@@ -28,7 +28,7 @@ skip() { printf '    skipped: %s\n' "$*"; exit 77; }
 assert_eq() { [ "$1" = "$2" ] || fail_msg "$3: expected '$2', got '$1'"; }
 assert_ne() { [ "$1" != "$2" ] || fail_msg "$3: expected anything but '$2'"; }
 assert_match() { case "$1" in *"$2"*) return 0 ;; esac; fail_msg "$3: '$1' does not contain '$2'"; }
-assert_no_match() { case "$1" in *"$2"*) fail_msg "$3: '$1' contains '$2'" ;; esac; return 0; }
+assert_no_match() { case "$1" in *"$2"*) fail_msg "$3: '$1' contains '$2'"; return 1 ;; esac; return 0; }
 assert_grep() { grep -qF -- "$1" "$2" 2>/dev/null || fail_msg "'$1' not found in $2"; }
 assert_no_grep() { ! grep -qF -- "$1" "$2" 2>/dev/null || fail_msg "'$1' unexpectedly found in $2"; }
 assert_file_missing() { [ ! -e "$1" ] && [ ! -L "$1" ] || fail_msg "$1 should not exist"; }

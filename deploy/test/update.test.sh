@@ -224,6 +224,64 @@ t_symlinked_request_not_read() {
     assert_eq "$(status_field state)" error "state"
 }
 
+t_fifo_request_does_not_hang() {
+  new_case
+  mkfifo "$CONTROL/update-request.json"
+  PATH="$T/bin:$PATH" STUB_LOG="$T/docker.log" PROXMATE_DIR="$CHECKOUT" UPDATE_CONTROL_DIR="$CONTROL" \
+    timeout 30 bash "$UPDATE_SH" --from-request >"$T/out" 2>&1
+  RC=$?
+  assert_ne "$RC" 124 "updater hung on a FIFO request" &&
+    assert_eq "$(status_field state)" error "state" &&
+    assert_file_missing "$CONTROL/update-request.json" &&
+    assert_eq "$(version)" 1.0.0 "checkout must not move"
+}
+
+t_request_moved_out_of_control_dir_before_reading() {
+  # The request is taken out of the app-writable directory before it is
+  # inspected, so nothing the app does afterwards can change what is read.
+  new_case
+  request v1.1.0
+  run_update --from-request
+  assert_eq "$(status_field state)" success "state" &&
+    assert_file_missing "$CONTROL/update-request.json" &&
+    assert_eq "$(find "$CHECKOUT/deploy" -maxdepth 1 -name '.update-request.*' | wc -l)" 0 "private work dir cleaned up"
+}
+
+t_request_swapped_for_symlink_never_followed() {
+  # Stress: while the updater runs, keep swapping the request between a plain
+  # file (unknown tag) and a link to a host file that names a real tag. The
+  # updater must never act on the linked file's contents.
+  new_case
+  make_victim
+  printf '{"tag":"v1.1.0"}\n' > "$VICTIM"
+  printf '{"tag":"vDOESNOTEXIST"}\n' > "$T/plain.json"
+  request vDOESNOTEXIST
+  (
+    end=$((SECONDS + 3))
+    while [ "$SECONDS" -lt "$end" ]; do
+      ln -sfn "$VICTIM" "$CONTROL/.swap" && mv -fT "$CONTROL/.swap" "$CONTROL/update-request.json" 2>/dev/null
+      cp "$T/plain.json" "$CONTROL/.swap2" && mv -fT "$CONTROL/.swap2" "$CONTROL/update-request.json" 2>/dev/null
+    done
+  ) &
+  local swapper=$!
+  local _
+  for _ in 1 2 3 4 5; do
+    run_update --from-request
+    [ "$(version)" = 1.0.0 ] || break
+  done
+  wait "$swapper"
+  assert_eq "$(version)" 1.0.0 "checkout must never move to the linked file's tag"
+}
+
+t_invalid_request_tag_not_echoed() {
+  new_case
+  # shellcheck disable=SC2016  # the literal text is the point
+  request 'v1;$(reboot)'
+  run_update --from-request
+  assert_eq "$(status_field state)" error "state" &&
+    assert_no_match "$(cat "$CONTROL/update-status.json")" 'reboot' "status echoes the raw tag"
+}
+
 t_status_message_is_valid_json() {
   command -v python3 >/dev/null 2>&1 || skip "needs python3 to parse JSON"
   new_case
