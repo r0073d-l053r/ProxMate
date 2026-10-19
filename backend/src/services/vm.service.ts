@@ -350,7 +350,20 @@ let markerBackfillComplete = false;
 export async function runGuestMarkerBackfill(): Promise<{ ran: boolean; tagged?: number; unmatched?: number; errors?: number }> {
   if (markerBackfillComplete) return { ran: false };
   const r = await backfillGuestMarkers();
-  if (r.errors === 0) markerBackfillComplete = true;
+  if (r.errors === 0) {
+    markerBackfillComplete = true;
+    // The pass is final, so these rows stay refused until an admin settles each
+    // one. Said once per completed pass (passes stop after that), not per tick.
+    if (r.unmatched.length > 0) {
+      await notify({
+        event: 'vm.error',
+        title: `${r.unmatched.length} machine(s) could not be matched to their Proxmox guest`,
+        message:
+          'These machines are refused (start, console, delete, backups) until an admin adopts the guest or removes the row. ' +
+          'Review them in Settings → Maintenance → Unconfirmed machines.',
+      }).catch(() => undefined);
+    }
+  }
   return { ran: true, tagged: r.tagged, unmatched: r.unmatched.length, errors: r.errors };
 }
 

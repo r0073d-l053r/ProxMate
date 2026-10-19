@@ -47,6 +47,7 @@ import {
   isHeld,
 } from '../src/services/vm.service.js';
 import { sampleResourceUsage } from '../src/services/resource-history.service.js';
+import { notify } from '../src/services/notify.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
 
 const row = (over: Record<string, unknown> = {}) =>
@@ -256,6 +257,34 @@ describe('runGuestMarkerBackfill keeps retrying until a clean pass', () => {
     expect(await runGuestMarkerBackfill()).toMatchObject({ ran: true, errors: 0, tagged: 1 });
     // Done: later ticks are no-ops.
     expect(await runGuestMarkerBackfill()).toEqual({ ran: false });
+  });
+
+  it('tells the admins once, with the count, when a completed pass leaves rows unmatched', async () => {
+    vi.mocked(prisma.virtualMachine.findMany).mockResolvedValue([
+      row(),
+      row({ id: 'rowz', name: 'gone', proxmoxVmId: 555 }),
+    ] as never);
+    // 100 is another row's guest; 555 has no guest — neither can be matched.
+    pveWith({ name: 'web', tags: guestMarker('rowb') });
+    expect(await runGuestMarkerBackfill()).toMatchObject({ ran: true, errors: 0, unmatched: 2 });
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringMatching(/2 machine/) }));
+    await runGuestMarkerBackfill();
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('says nothing after a pass with errors (it will run again) or a pass that matched everything', async () => {
+    vi.mocked(prisma.virtualMachine.findMany).mockResolvedValue([row()] as never);
+    const c = pveWith({ name: 'web' });
+    const base = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) =>
+      /\/config$/.test(url) ? Promise.reject(new Error('pveproxy timeout')) : base(url),
+    );
+    await runGuestMarkerBackfill();
+    expect(notify).not.toHaveBeenCalled();
+    c.get.mockImplementation(base);
+    expect(await runGuestMarkerBackfill()).toMatchObject({ errors: 0, unmatched: 0 });
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it('retries after the listing itself failed', async () => {
