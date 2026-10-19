@@ -6,7 +6,7 @@
 
 <p>
   <a href="https://github.com/r0073d-l053r/ProxMate/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="License: AGPL v3"/></a>
-  <img src="https://img.shields.io/badge/Node.js-20%2B-brightgreen" alt="Node.js 20+"/>
+  <img src="https://img.shields.io/badge/Node.js-22-brightgreen" alt="Node.js 22"/>
   <img src="https://img.shields.io/badge/Next.js-16-black" alt="Next.js 16"/>
   <img src="https://img.shields.io/badge/Proxmox%20VE-9%2B-e57000" alt="Proxmox VE 9+"/>
   <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker" alt="Docker ready"/>
@@ -33,7 +33,7 @@ Proxmox admin panel.
 - **VMs & LXC containers** — create from an ISO, the Template Store, or 20 curated cloud images (16 x86-64 + 4 ARM64); resize, rebuild, rename, snapshots, power schedules, tags & bulk actions
 - **Share a VM** — hand another tenant access at one of three preset levels (Viewer / Operator / Manager); no share level can delete, rebuild, migrate, or re-share
 - **In-browser consoles** — graphical (noVNC) *and* a text console with clickable links, real copy/paste, and scrollback — no SSH, no open ports
-- **ProxMate IDE (beta)** — a per-VM **browser IDE** (VS Code / code-server) opened inside the tenant's own VM, with an **in-guest AI coding agent** (OpenCode) wired to admin-controlled models; reuses your tenant-isolation firewall — [docs](docs/proxmate-ide.md)
+- **ProxMate IDE (beta)** — a per-VM **browser IDE** (VS Code / code-server) opened inside the tenant's own VM (owner-only), with an **in-guest AI coding agent** (OpenCode) wired to admin-controlled models; reuses your tenant-isolation firewall — [docs](docs/proxmate-ide.md)
 - **Serious auth** — TOTP 2FA, passkeys (WebAuthn), bring-your-own OIDC SSO, SMTP password resets, optional invite-enforced 2FA
 - **Time-boxed access** — invites can grant a fixed term (or never expire); when a window closes ProxMate **suspends, never deletes** — VMs stop, sign-in is refused, nothing is destroyed
 - **MateStates backups** — scheduled backups with rolling retention, one-click in-place restore, per-VM policies, quick snapshots — plus nightly backups of **ProxMate's own database** to a host directory
@@ -70,14 +70,15 @@ Proxmox admin panel.
 | **Compute Access Windows** | Time-box a tenant's access — invites can grant a fixed term (or never expire), with an admin per-user override. Expiry **suspends, never deletes**: VMs stop and sign-in is refused across every auth path, but nothing is destroyed. 7-day and 1-day warning emails, plus an admin notification when a window closes |
 | **App-Database Backups** | ProxMate backs up **itself** on a nightly schedule (`VACUUM INTO`, consistent on a live DB) with rolling retention, written to a host directory you choose via `PROXMATE_BACKUP_DIR`. Pair it with an off-host copy of `ENCRYPTION_KEY` — a snapshot without the key restores nothing |
 | **Tenant Network Isolation** | Per-VM Proxmox firewall — MAC filtering, RFC1918 drop rules, and a configurable DNS allow-list — keeps guests off your LAN, your other VMs, and the host. **Requires the Proxmox cluster firewall to be enabled**; ProxMate turns it on for you from the admin UI, adding management allow-rules first so you can't lock yourself out |
-| **Share a VM** | Grant another tenant access to a guest at one of three preset levels — **Viewer** (see the VM and its status), **Operator** (+ power actions and console), **Manager** (+ config, resize, backups, IDE). No share level can delete, rebuild, migrate, re-share, or touch passthrough — those stay owner/admin only |
+| **Share a VM** | Grant another tenant access to a guest at one of three preset levels — **Viewer** (see the VM and its status), **Operator** (+ power actions and console), **Manager** (+ config, resize, backups). No share level can delete, rebuild, migrate, re-share, or touch passthrough — those stay owner/admin only, and the ProxMate IDE opens only for the owner |
 | **Admin Deploy-for-Tenant** | Admins create a VM directly inside a chosen tenant's account, optionally pinning the node and optionally as a **quota-exempt** grant. Admin-provisioned VMs are resize- and rebuild-locked to admins, and a Manager-share resize bills the VM **owner's** quota, not the caller's |
-| **Personal API Tokens & REST API** | Per-user `pm_…` Bearer tokens for the public REST API (OpenAPI spec included) — only the token hash is stored, and public token lookups are separately throttled |
+| **Personal API Tokens & REST API** | Per-user `pm_…` Bearer tokens for the public REST API (OpenAPI spec included) — only the token hash is stored, and public token lookups are separately throttled. Routes that change how an account signs in or is secured need a browser session, and a password reset revokes the account's tokens |
 | **Audit Log** | Who created / deleted / restored / started which VM, plus sign-ins — an admin-viewable activity trail |
 | **Rate Limiting** | Built-in brute-force protection on the login / register / invite endpoints, plus per-account lockout with admin alerts and dedicated throttling on public token lookups |
 | **Outbound & Secret Hardening** | Admin-configured webhooks and cloud-image URLs are **SSRF-guarded** (private/loopback/metadata blocked; opt-in for LAN targets); secrets are AES-256-GCM at rest with a **fail-closed** key requirement; `/metrics` is token-gated in production |
 | **Resource Quotas** | Users can only provision resources within their assigned limits — with a built-in quota-increase request workflow |
-| **First-Time Setup Wizard** | Guided OOBE to configure admin credentials and the Proxmox connection |
+| **Guest Ownership Tags** | Every guest ProxMate manages carries a Proxmox tag naming its machine, and every action checks it, so a stale or reused VMID never points at someone else's guest. Machines that can't be matched are listed for an admin to adopt or remove |
+| **First-Time Setup Wizard** | Guided OOBE to configure admin credentials and the Proxmox connection (Linux bridges, Open vSwitch bridges and SDN VNets are discovered) |
 | **Docker + CI** | Multi-stage production images, plus GitHub Actions CI (typecheck, tests, image builds) and an automated test suite |
 
 </details>
@@ -182,14 +183,16 @@ conversationally.
 
 For working on ProxMate itself rather than running it.
 
-**Prerequisites:** Node.js 20+, a Proxmox VE cluster (tested on PVE 9.2), and a
+**Prerequisites:** Node.js 22, a Proxmox VE cluster (tested on PVE 9.2), and a
 [Proxmox API token](https://pve.proxmox.com/wiki/User_Management#pveum_tokens).
 
 > **The #1 setup pitfall:** Proxmox creates API tokens with *Privilege Separation*
 > enabled, which leaves the token with an **empty permission set** (even for `root`) —
 > the connection test passes but storage lists come back empty and VM creation 403s.
 > Uncheck it, or grant the token a role — see the
-> [admin guide §1.1](./docs/admin-guide.md#11-create-the-api-token).
+> [admin guide §1.1](./docs/admin-guide.md#11-create-the-api-token). The token must
+> also be able to set guest tags (`VM.Config.Options`) and, on Proxmox VE 8+, hold
+> `SDN.Use` (plus `SDN.Audit` to list SDN VNets); a privsep-off token has all of them.
 
 ```bash
 git clone https://github.com/r0073d-l053r/ProxMate.git
@@ -243,8 +246,13 @@ automatically when the backend container starts — never run them by hand:
 
 ```bash
 ./deploy/update.sh             # newest vX.Y.Z tag, rebuild + restart
-./deploy/update.sh v0.8.6      # or pin a specific tag
+./deploy/update.sh v1.1.0      # or pin a specific tag
 ```
+
+Keep local compose changes (extra mounts) in `docker-compose.override.yml`, not in
+`docker-compose.yml`: the updater refuses to run over local edits to tracked files.
+**Coming from 1.0.x?** Read [DEPLOYMENT.md §14.4](./DEPLOYMENT.md#144-upgrading-from-10x-and-earlier)
+and the [release notes](./RELEASE_NOTES.md) before updating.
 
 For a real public deployment, serve ProxMate from a **single HTTPS origin** (passkeys,
 `Secure` cookies, and OIDC SSO require it) behind Caddy / nginx / Traefik or a
@@ -257,8 +265,8 @@ tenant isolation, Keycloak SSO, SMTP, and the 2FA test matrix — is in
 
 ## Testing & CI
 
-The backend ships a Vitest suite (718 tests) covering the security-critical logic —
-quotas, the per-VM firewall builder, placement, retention, ownership and share
+The backend ships a Vitest suite (1,800+ tests) covering the security-critical logic —
+quotas, guest ownership tags, the per-VM firewall builder, placement, retention, ownership and share
 permissions, compute access windows, balancer/drain planning, cloud-init snippet
 generation, guest-agent SSH-key injection, migration migratability, and the
 outbound-URL/SSRF guard — against a mocked Proxmox API (no live cluster needed):
