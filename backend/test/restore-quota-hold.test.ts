@@ -162,6 +162,16 @@ describe('a restore that leaves the guest over its storage quota (audit MAJOR 2)
     await expect(startVm(db.rows.get('rowa') as never)).rejects.toBeInstanceOf(GuestErroredError);
   });
 
+  it('a repeat restore that keeps the oversize is judged on the full quota and does not lift the hold (audit round 2)', async () => {
+    const { c } = fakePve(LIVE, big);
+    await expect(restoreFromMateState(db.rows.get('rowa') as never, ms)).rejects.toBeInstanceOf(QuotaError);
+    c.post.mockClear();
+    // Same backup again — the archive says 332 GB now, which does not "grow" the row.
+    fakePve(big, big);
+    await expect(restoreFromMateState(db.rows.get('rowa') as never, ms)).rejects.toBeInstanceOf(QuotaError);
+    expect(db.rows.get('rowa')).toMatchObject({ status: 'error', holdReason: QUOTA_HOLD_MESSAGE });
+  });
+
   it('removing the extra data disk lifts the hold', async () => {
     fakePve(LIVE, big);
     await expect(restoreFromMateState(db.rows.get('rowa') as never, ms)).rejects.toBeInstanceOf(QuotaError);

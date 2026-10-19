@@ -1699,6 +1699,9 @@ async function growthViolations(
   vm: VirtualMachine,
   target: { cpu: number; ram: number; storage: number },
 ): Promise<QuotaError['details']> {
+  // A row held for being over quota is judged on the full quota: a repeat restore
+  // or rollback that merely keeps the oversize must not count as a repair.
+  const full = vm.holdReason === QUOTA_HOLD_MESSAGE;
   const owner = await prisma.user.findUnique({ where: { id: vm.userId } });
   if (!owner) return {};
   try {
@@ -1707,9 +1710,9 @@ async function growthViolations(
   } catch (err) {
     if (!(err instanceof QuotaError)) throw err;
     const grows: Record<string, boolean> = {
-      cpu: target.cpu > vm.cpu,
-      ram: target.ram > vm.ram,
-      storage: target.storage > vm.storage,
+      cpu: full || target.cpu > vm.cpu,
+      ram: full || target.ram > vm.ram,
+      storage: full || target.storage > vm.storage,
     };
     return Object.fromEntries(Object.entries(err.details).filter(([k]) => grows[k]));
   }
