@@ -9,6 +9,7 @@ vi.mock('../src/lib/prisma.js', () => ({
       createMany: vi.fn(),
       findFirst: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn(),
       count: vi.fn(),
     },
     $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops)),
@@ -59,15 +60,28 @@ describe('2FA (TOTP)', () => {
 
   it('verifyRecoveryCode consumes a matching unused code, rejects unknown', async () => {
     vi.mocked(prisma.twoFactorRecoveryCode.findFirst).mockResolvedValue({ id: 'rc1' } as never);
-    vi.mocked(prisma.twoFactorRecoveryCode.update).mockResolvedValue({} as never);
+    vi.mocked(prisma.twoFactorRecoveryCode.updateMany).mockResolvedValue({ count: 1 } as never);
     expect(await verifyRecoveryCode('u1', 'abcde-fghij')).toBe(true);
-    expect(prisma.twoFactorRecoveryCode.update).toHaveBeenCalledWith({
-      where: { id: 'rc1' },
+    expect(prisma.twoFactorRecoveryCode.updateMany).toHaveBeenCalledWith({
+      where: { id: 'rc1', usedAt: null },
       data: { usedAt: expect.any(Date) },
     });
 
     vi.mocked(prisma.twoFactorRecoveryCode.findFirst).mockResolvedValue(null);
     expect(await verifyRecoveryCode('u1', 'nope')).toBe(false);
+  });
+
+  it('a recovery code presented twice at the same moment is accepted once', async () => {
+    vi.mocked(prisma.twoFactorRecoveryCode.findFirst).mockResolvedValue({ id: 'rc1' } as never);
+    let claimed = false;
+    vi.mocked(prisma.twoFactorRecoveryCode.updateMany).mockImplementation((async () => {
+      await Promise.resolve();
+      if (claimed) return { count: 0 };
+      claimed = true;
+      return { count: 1 };
+    }) as never);
+    const results = await Promise.all([verifyRecoveryCode('u1', 'abcde-fghij'), verifyRecoveryCode('u1', 'abcde-fghij')]);
+    expect(results.filter(Boolean)).toHaveLength(1);
   });
 });
 

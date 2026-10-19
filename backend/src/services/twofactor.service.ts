@@ -82,8 +82,13 @@ export async function verifyRecoveryCode(userId: string, code: string): Promise<
     where: { userId, codeHash: sha256(normalize(code)), usedAt: null },
   });
   if (!row) return false;
-  await prisma.twoFactorRecoveryCode.update({ where: { id: row.id }, data: { usedAt: new Date() } });
-  return true;
+  // Conditional on still being unused, so a code presented by two requests at
+  // once is accepted by only one of them.
+  const { count } = await prisma.twoFactorRecoveryCode.updateMany({
+    where: { id: row.id, usedAt: null },
+    data: { usedAt: new Date() },
+  });
+  return count === 1;
 }
 
 /** Disable 2FA — requires a valid current TOTP or recovery code. */

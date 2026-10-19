@@ -20,7 +20,7 @@ Self-service and admin-assisted password resets.[^reset]
 | Function | Signature summary | What it does |
 |---|---|---|
 | `requestReset` | `(email, appUrl) => { method: 'email' \| 'admin' }` | Normalises email. With SMTP → creates a token (SHA-256 hash, TTL 1 h) and emails `<appUrl>/reset-password?token=<raw>`; without SMTP → creates a pending `PasswordResetRequest` (deduped). |
-| `resetWithToken` | `(token, newPassword) => { id, email }` | Validates unused/unexpired token; in one transaction sets the bcrypt hash, marks token used, deletes all the user's sessions and API tokens, and voids their other outstanding reset links. |
+| `resetWithToken` | `(token, newPassword) => { id, email }` | Validates unused/unexpired token and claims it with a write conditional on it still being unused (so a link sets at most one password); then in one transaction sets the bcrypt hash, deletes all the user's sessions and API tokens, and voids their other outstanding reset links. |
 | `adminResetPassword` | `(userId, newPassword)` | Transaction: set hash, delete sessions and API tokens, void outstanding reset links, mark pending requests `handled`. |
 | `listResetRequests` | `()` | Pending requests, newest first. |
 

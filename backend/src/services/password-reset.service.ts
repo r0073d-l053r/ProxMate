@@ -74,10 +74,17 @@ export async function resetWithToken(
   if (!row || row.usedAt || row.expiresAt < new Date()) {
     throw new Error('This reset link is invalid or has expired.');
   }
+  // Spend the link before changing anything. The write is conditional on it
+  // still being unused, so when two requests present the same link at once only
+  // one of them goes on to set a password.
+  const { count } = await prisma.passwordResetToken.updateMany({
+    where: { id: row.id, usedAt: null },
+    data: { usedAt: new Date() },
+  });
+  if (count === 0) throw new Error('This reset link is invalid or has expired.');
   const passwordHash = await hashPassword(newPassword);
   await prisma.$transaction([
     prisma.user.update({ where: { id: row.userId }, data: { passwordHash } }),
-    prisma.passwordResetToken.update({ where: { id: row.id }, data: { usedAt: new Date() } }),
     ...revokeAccessOnReset(row.userId),
   ]);
   const user = await prisma.user.findUnique({ where: { id: row.userId } });

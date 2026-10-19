@@ -26,7 +26,10 @@ const reqCreate = vi.mocked(prisma.passwordResetRequest.create);
 const isMailConfigured = vi.mocked(mail.isMailConfigured);
 const sendMail = vi.mocked(mail.sendMail);
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(prisma.passwordResetToken.updateMany).mockResolvedValue({ count: 1 } as never);
+});
 
 describe('requestReset (anti-enumeration)', () => {
   it('emails a reset link when SMTP is on and the user exists', async () => {
@@ -88,8 +91,32 @@ describe('resetWithToken', () => {
     const res = await resetWithToken('good', 'newpassword1');
     expect(res.id).toBe('u1');
     expect(prisma.user.update).toHaveBeenCalledWith({ where: { id: 'u1' }, data: { passwordHash: 'HASH' } });
-    expect(prisma.passwordResetToken.update).toHaveBeenCalledWith({ where: { id: 't1' }, data: { usedAt: expect.any(Date) } });
+    expect(prisma.passwordResetToken.updateMany).toHaveBeenCalledWith({
+      where: { id: 't1', usedAt: null },
+      data: { usedAt: expect.any(Date) },
+    });
     expect(prisma.session.deleteMany).toHaveBeenCalledWith({ where: { userId: 'u1' } });
+  });
+});
+
+describe('reset links are single-use under concurrency', () => {
+  it('two resets presenting the same link at the same moment: only one sets a password', async () => {
+    tokenFind.mockResolvedValue({ id: 't1', userId: 'u1', usedAt: null, expiresAt: new Date(Date.now() + 60_000) } as never);
+    findUser.mockResolvedValue({ id: 'u1', email: 'a@b.c' } as never);
+    let claimed = false;
+    vi.mocked(prisma.passwordResetToken.updateMany).mockImplementation((async (args: { where: { id?: string } }) => {
+      await Promise.resolve();
+      if (!args.where.id) return { count: 0 }; // the "void other links" sweep
+      if (claimed) return { count: 0 };
+      claimed = true;
+      return { count: 1 };
+    }) as never);
+    const results = await Promise.allSettled([
+      resetWithToken('good', 'first-password'),
+      resetWithToken('good', 'second-password'),
+    ]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(prisma.user.update).toHaveBeenCalledTimes(1);
   });
 });
 

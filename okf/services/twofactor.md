@@ -22,7 +22,7 @@ Authenticator-app second factor (issuer `ProxMate`) built on `otplib` and `qrcod
 | `beginSetup` | `(userId, accountLabel, currentCode?) => { otpauthUrl, secret, qrDataUrl }` | Generates a secret and stages it encrypted in `twoFactorPendingSecret`; the active secret and `twoFactorEnabled` are left as they are. When 2FA is already on, requires a valid current TOTP or recovery code. |
 | `enable` | `(userId, code) => { recoveryCodes }` | Verifies the code against the staged secret; transaction moves it into `twoFactorSecret`, enables 2FA, clears the staged secret and replaces recovery codes with 10 new ones (5 random bytes hex, shown as `xxxxx-xxxxx`). |
 | `verifyTotp` | `(userId, code) => boolean` | Requires 2FA enabled. |
-| `verifyRecoveryCode` | `(userId, code) => boolean` | Normalises (alphanumerics, lowercase), matches unused hash, marks `usedAt`. |
+| `verifyRecoveryCode` | `(userId, code) => boolean` | Normalises (alphanumerics, lowercase), matches unused hash, marks `usedAt` with a write conditional on it still being unused (a code presented twice at once is accepted once). |
 | `disable` | `(userId, code)` | Needs a valid TOTP or recovery code; clears the active and staged secrets and all recovery codes. |
 | `getStatus` | `(userId) => { enabled, recoveryCodesLeft }` | |
 
