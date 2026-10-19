@@ -36,6 +36,7 @@ import { SiTailscale } from "react-icons/si";
 import { TemplateIcon } from "@/components/template-icon";
 import { api, apiBaseUrl, apiError } from "@/lib/api";
 import type { IdeCapability, IdeStatus, VmDetail } from "@/lib/types";
+import { openReadyIde } from "@/lib/ide-open";
 import { copyText } from "@/lib/clipboard";
 import { formatRam, formatBytes, formatUptime, formatDate } from "@/lib/format";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
@@ -175,19 +176,20 @@ export default function VmDetailPage() {
 
   async function openIde() {
     if (!vm) return;
-    const popup = () =>
-      window.open(`${apiBaseUrl}/ide/${vm.id}/proxy/`, `proxmate-ide-${vm.id}`, "popup,width=1500,height=940");
+    const proxyUrl = `${apiBaseUrl}/ide/${vm.id}/proxy/`;
+    const openWindow = (url: string) => window.open(url, `proxmate-ide-${vm.id}`, "popup,width=1500,height=940");
+    const popup = () => openWindow(proxyUrl);
     if (vm.ideState === "ready") {
       // An install from an older ProxMate has no per-VM guest credential and the
       // proxy won't open it, so reinstall it (the same flow as a first install).
-      const status = await api
-        .get<IdeStatus>(`/ide/${vm.id}/status`)
-        .then((r) => r.data)
-        .catch(() => null);
-      if (!status?.reinstallRequired) {
-        popup();
-        return;
-      }
+      // The window opens before the check so the click still allows the popup.
+      const result = await openReadyIde({
+        open: openWindow,
+        proxyUrl,
+        checkReinstall: () =>
+          api.get<IdeStatus>(`/ide/${vm.id}/status`).then((r) => !!r.data.reinstallRequired),
+      });
+      if (result === "opened") return;
       toast.info("This IDE was installed by an older ProxMate version and needs a reinstall before it can open. Reinstalling now…");
     }
     setIdeInstalling(true);
