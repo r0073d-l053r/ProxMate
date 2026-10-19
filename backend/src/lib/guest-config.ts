@@ -100,8 +100,15 @@ export function foreignVolumeKeys(cfg: Record<string, string>, vmid: number): st
     if (/media=cdrom/.test(value) && /^[^/:]+:iso\//.test(volume)) continue;
     const colon = volume.indexOf(':');
     const name = colon > 0 && !volume.startsWith('/') ? volume.slice(colon + 1) : '';
-    const last = name.split('/').pop() ?? '';
-    if (!owned.test(last)) out.push(key);
+    const parts = name.split('/');
+    const last = parts.pop() ?? '';
+    // Directory-type storages (dir, NFS, CIFS, Gluster) file a volume under
+    // `<vmid>/` — that directory, not just the file name, decides whose it is. (A
+    // linked clone there is `<base>/<base file>/<vmid>/<file>`: the directory right
+    // above the file is still the owner's.)
+    const dir = parts.pop();
+    const dirForeign = dir !== undefined && /^\d+$/.test(dir) && Number(dir) !== vmid;
+    if (!owned.test(last) || dirForeign) out.push(key);
   }
   return out;
 }

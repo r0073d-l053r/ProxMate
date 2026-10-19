@@ -57,6 +57,19 @@ describe('foreignVolumeKeys', () => {
     ).toEqual([]);
   });
 
+  it('flags a directory-storage volume filed under another VMID\'s directory (audit round 3)', () => {
+    expect(
+      foreignVolumeKeys(
+        {
+          scsi0: 'local:200/vm-100-disk-0.qcow2,size=10G',
+          scsi1: 'nfs:100/vm-100-disk-1.qcow2,size=10G',
+          scsi2: 'local:9000/base-9000-disk-0.qcow2/100/vm-100-disk-2.qcow2,size=10G',
+        },
+        100,
+      ),
+    ).toEqual(['scsi0']);
+  });
+
   it('flags another guest\'s volume, a host path, and another VMID that only starts with the same digits', () => {
     expect(
       foreignVolumeKeys(
