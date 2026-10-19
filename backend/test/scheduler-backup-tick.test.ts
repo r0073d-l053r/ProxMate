@@ -29,6 +29,7 @@ describe('per-VM backup tick (BUG-029)', () => {
     runDue.mockResolvedValue({ ran: 0, failed: 0 });
 
     const first = perVmBackupTick(at(2, 0)); // VM A's 20-minute backup
+    await vi.waitFor(() => expect(runDue).toHaveBeenCalledTimes(1));
     await perVmBackupTick(at(2, 10)); // skipped: still busy
     finish();
     await first;
@@ -36,6 +37,21 @@ describe('per-VM backup tick (BUG-029)', () => {
 
     expect(runDue).toHaveBeenCalledTimes(2);
     expect(runDue).toHaveBeenLastCalledWith(at(2, 21), at(2, 0));
+  });
+});
+
+describe('per-VM backup tick marker across restarts (audit minor)', () => {
+  it('the first tick after a restart covers the minutes since the stored marker, and stores its own', async () => {
+    vi.resetModules();
+    const config = await import('../src/services/config.service.js');
+    const ms = await import('../src/services/matestate.service.js');
+    const { perVmBackupTick: freshTick } = await import('../src/services/scheduler.service.js');
+    vi.mocked(config.getConfig).mockResolvedValue(at(1, 50).toISOString() as never);
+    vi.mocked(ms.runDueBackups).mockResolvedValue({ ran: 0, failed: 0 });
+
+    await freshTick(at(2, 21));
+    expect(ms.runDueBackups).toHaveBeenCalledWith(at(2, 21), at(1, 50));
+    expect(config.setConfig).toHaveBeenCalledWith('matestate_vm_tick_last', at(2, 21).toISOString());
   });
 });
 

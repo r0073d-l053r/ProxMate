@@ -268,6 +268,9 @@ export function startScheduler(): void {
   console.log(`[scheduler] access-expiry sweep scheduled (${accessExpr})`);
 }
 
+/** SystemConfig key: ISO timestamp of the minute the last per-VM backup tick covered. */
+const VM_BACKUP_TICK_KEY = 'matestate_vm_tick_last';
+
 /** The minute the last per-VM backup tick covered (null until the first one runs). */
 let lastBackupTickAt: Date | null = null;
 
@@ -280,9 +283,17 @@ let lastBackupTickAt: Date | null = null;
 export async function perVmBackupTick(now: Date = new Date()): Promise<void> {
   if (backupRunning) return; // a previous (slow) backup tick is still working — the next one catches up
   backupRunning = true;
-  const since = lastBackupTickAt ?? undefined;
-  lastBackupTickAt = now;
   try {
+    // The marker is also kept in SystemConfig, so schedules that fired while the
+    // backend was down (up to the 24 h catch-up cap) are backed up after a restart.
+    let since = lastBackupTickAt ?? undefined;
+    if (!since) {
+      const stored = await Promise.resolve(getConfig(VM_BACKUP_TICK_KEY)).catch(() => null);
+      const parsed = stored ? new Date(stored) : null;
+      since = parsed && !Number.isNaN(parsed.getTime()) && parsed < now ? parsed : undefined;
+    }
+    lastBackupTickAt = now;
+    await Promise.resolve(setConfig(VM_BACKUP_TICK_KEY, now.toISOString())).catch(() => undefined);
     const r = await runDueBackups(now, since);
     if (r.ran || r.failed) {
       console.log(`[scheduler] per-VM backups: ${r.ran} ok, ${r.failed} failed`);

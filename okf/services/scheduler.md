@@ -48,7 +48,7 @@ SystemConfig `matestate_last_run` (ISO timestamp) and `template_refresh_enabled`
 
 - Locks are plain in-process booleans: a tick is skipped while the previous one is still running. This assumes a single backend process; multiple replicas would each run every job.[^sch]
 - The per-VM backup lock is separate from the power lock so a slow vzdump never blocks start/stop.[^sch]
-- A per-VM backup tick that fires while the previous one is still running returns at once; the next tick that runs (`perVmBackupTick`) passes the last covered minute as `since`, so schedules that fired meanwhile are still backed up.[^sch]
+- A per-VM backup tick that fires while the previous one is still running returns at once; the next tick that runs (`perVmBackupTick`) passes the last covered minute as `since`, so schedules that fired meanwhile are still backed up. The marker is also stored as SystemConfig `matestate_vm_tick_last`, so after a restart schedules missed while down (up to 24 h) are caught up.[^sch]
 - An invalid `MATESTATE_CRON` logs a warning and falls back to the default; other overrides silently fall back if `cron.validate` fails.[^sch]
 - node-cron uses server local time; cron matching inside services (`cronMatches`) also uses local time.[^sch]
 - Errors inside each periodic tick are logged and swallowed, and ticks log only when they acted. The weekly backup job (`runWeeklyBackups`) catches and logs an error outside the per-VM loop (per-VM failures are caught in [matestate](/services/matestate.md)); `matestate_last_run` is then left as it was, so the next boot's catch-up retries the window.[^sch]
