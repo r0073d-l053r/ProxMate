@@ -225,7 +225,12 @@ describe('restoreFromUpload', () => {
     // The archive's NICs are rebuilt from scratch (audit minor): model kept (unknown
     // models become virtio), no MAC (Proxmox generates a fresh one), the default
     // bridge, the isolation VLAN and the firewall flag — nothing else from the archive.
-    const nicPut = client.put.mock.calls.find((x) => String(x[0]) === '/nodes/pve-0/qemu/200/config');
+    // Protection/autostart go first — before the volume check (audit round 3).
+    const stripIdx = client.put.mock.calls.findIndex((x) => bodyOf(x)['delete'] === 'onboot' && !bodyOf(x)['net0']);
+    expect(stripIdx).toBeGreaterThanOrEqual(0);
+    const { assertOwnVolumes } = await import('../src/services/vm.service.js');
+    expect(client.put.mock.invocationCallOrder[stripIdx]!).toBeLessThan(vi.mocked(assertOwnVolumes).mock.invocationCallOrder[0]!);
+    const nicPut = client.put.mock.calls.find((x) => String(x[0]) === '/nodes/pve-0/qemu/200/config' && bodyOf(x)['net0']);
     expect(bodyOf(nicPut!)).toEqual({
       net0: 'e1000,bridge=vmbr0,firewall=1,tag=42',
       net1: 'virtio,bridge=vmbr0,firewall=1,tag=42',

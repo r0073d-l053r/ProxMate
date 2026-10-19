@@ -202,6 +202,20 @@ export function ownCicustom(value: string): boolean {
   return parts.length > 0 && parts.every((p) => part.test(p));
 }
 
+/** Remove the keys a restore must not keep (STRIPPED_AFTER_RESTORE) from a restored guest. */
+async function stripRestoreFlags(
+  node: string,
+  vmid: number,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+  kind: pve.GuestKind,
+): Promise<void> {
+  const cfg = await pve.getVmConfig(node, vmid, client, kind);
+  const strip = STRIPPED_AFTER_RESTORE.filter((k) => k in cfg);
+  if (strip.length > 0) {
+    await client.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams({ delete: strip.join(',') }));
+  }
+}
+
 /** The swap ProxMate gives a container it creates (pve.createLxc's default), in MB. */
 const LXC_DEFAULT_SWAP_MB = 512;
 
@@ -382,8 +396,9 @@ async function restoreFromUploadLocked(
         // stays held either way).
         beforeTag: async () => {
           await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
-          await rebuildRestoredGuestConfig(node, vmid, isolate, client, kind);
+          await stripRestoreFlags(node, vmid, client, kind);
           await assertOwnVolumes(vm, client, leftovers);
+          await rebuildRestoredGuestConfig(node, vmid, isolate, client, kind);
           if (isolate) await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, kind);
           await syncRestoredGuest(vm, { approvedPci: [], client });
         },
@@ -393,6 +408,9 @@ async function restoreFromUploadLocked(
       created = true;
       // The archive's config carries the OLD guest's tags; tie the guest to this row.
       await markClonedGuest(vm, client);
+      // Drop the archive's protection/autostart first: a protected guest couldn't
+      // be cleaned up by the volume check below, and nothing may start it on its own.
+      await stripRestoreFlags(node, vmid, client, kind);
       // Every volume the restored config references must be this guest's own.
       await assertOwnVolumes(vm, client, leftovers);
 

@@ -126,6 +126,29 @@ describe('which volume a backup records (BUG-026)', () => {
   });
 });
 
+describe('backups of a guest that may carry someone else\'s data (audit round 3)', () => {
+  it('are refused for a row held for foreign volumes or unfinished provisioning', async () => {
+    const { FOREIGN_VOLUME_MESSAGE, PROVISION_FAILED_MESSAGE } = await import('../src/services/vm.service.js');
+    for (const holdReason of [FOREIGN_VOLUME_MESSAGE, PROVISION_FAILED_MESSAGE]) {
+      const c = fakePve([{ volid: OURS, vmid: 100 }]);
+      await expect(createMateState({ ...(row as object), status: 'error', holdReason } as never)).rejects.toThrow();
+      expect(c.post.mock.calls.some((x) => x[0] === '/nodes/pve1/vzdump')).toBe(false);
+    }
+  });
+
+  it('are refused when the live config references another guest\'s volume', async () => {
+    const c = fakePve([{ volid: OURS, vmid: 100 }]);
+    const get = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) =>
+      /\/qemu\/100\/config$/.test(url)
+        ? ok({ name: 'web', tags: guestMarker('rowa'), scsi1: 'local-lvm:vm-200-disk-0,size=10G' })
+        : get(url),
+    );
+    await expect(createMateState(row)).rejects.toThrow(/aren't its own/);
+    expect(c.post.mock.calls.some((x) => x[0] === '/nodes/pve1/vzdump')).toBe(false);
+  });
+});
+
 describe('backupVolidFromLog', () => {
   it('maps a directory-storage archive path to its volid', () => {
     expect(

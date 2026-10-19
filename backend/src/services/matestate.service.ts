@@ -16,8 +16,10 @@ import {
   syncRestoredGuest,
   assertOwnerAccessActive,
   assertOwnVolumes,
+  FOREIGN_VOLUME_MESSAGE,
+  PROVISION_FAILED_MESSAGE,
 } from './vm.service.js';
-import { parseGuestConfigText, pciLines } from '../lib/guest-config.js';
+import { parseGuestConfigText, pciLines, foreignVolumeKeys } from '../lib/guest-config.js';
 
 /** Rolling retention: only this many MateStates are kept per VM. */
 export const MATESTATE_RETENTION = 2;
@@ -91,6 +93,16 @@ export async function createMateState(
   const client = await pve.getClient();
   // Never back up a guest that isn't this row's into this row's backup list.
   vm = await requireOurGuest(vm, { allowError: true, client });
+  // A guest whose provisioning didn't finish, or that referenced another guest's
+  // volumes, is not backed up: the archive would carry whatever it was left with,
+  // and backups can be downloaded.
+  if (vm.holdReason === FOREIGN_VOLUME_MESSAGE || vm.holdReason === PROVISION_FAILED_MESSAGE) {
+    throw new Error(vm.holdReason);
+  }
+  const liveCfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, vm.type === 'lxc' ? 'lxc' : 'qemu');
+  if (foreignVolumeKeys(liveCfg, vm.proxmoxVmId).length > 0) {
+    throw new Error("This machine references disks that aren't its own, so it can't be backed up. Ask an admin to check it.");
+  }
   const storage = await getBackupStorage();
 
   // Snapshot the set of existing backups for this VM so we can identify the new one.
