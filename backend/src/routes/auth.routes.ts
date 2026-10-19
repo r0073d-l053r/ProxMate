@@ -8,8 +8,8 @@ import {
   retireSessionWithGrace,
   signChallenge,
   verifyChallenge,
-  recordChallengeFailure,
-  consumeChallenge,
+  beginChallengeAttempt,
+  endChallengeAttempt,
   signEnrollment,
 } from '../services/auth.service.js';
 import * as twofa from '../services/twofactor.service.js';
@@ -38,9 +38,10 @@ import { authLimiter, publicTokenLimiter, kioskExitLimiter } from '../middleware
 import { verifyKioskPin } from '../services/kiosk.service.js';
 import { recordAudit } from '../services/audit.service.js';
 import {
-  isAccountLocked,
+  reserveLoginAttempt,
   registerFailedLogin,
   clearFailedLogins,
+  reserveSecondFactorAttempt,
   registerFailedSecondFactor,
   clearFailedSecondFactor,
 } from '../services/account-lockout.service.js';
@@ -157,10 +158,12 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
 
   const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
-  // Brute-force lockout: a locked account short-circuits with the SAME generic
-  // response (and a dummy bcrypt for timing parity) so neither the lock nor the
-  // account's existence leaks. The lock auto-expires (see account-lockout.service).
-  if (user && isAccountLocked(user)) {
+  // Brute-force lockout: reserve this attempt against the account BEFORE the
+  // password is checked, so a parallel burst cannot all be evaluated ahead of
+  // being counted. A locked (or exhausted) account short-circuits with the SAME
+  // generic response (and a dummy bcrypt for timing parity) so neither the lock
+  // nor the account's existence leaks. The lock auto-expires (see account-lockout.service).
+  if (user && !(await reserveLoginAttempt(user, req.ip ?? null))) {
     await verifyPasswordSafe(password, null);
     await recordAudit({ action: 'auth.login_blocked', actor: user, detail: 'account locked', req });
     res.status(401).json({ error: 'Invalid email or password' });
@@ -171,7 +174,7 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
   const valid = await verifyPasswordSafe(password, user?.passwordHash);
 
   if (!user || !valid) {
-    // Count the failure against the (real) account; may lock it + alert admins.
+    // The attempt was already counted; this may lock the account + alert admins.
     if (user) await registerFailedLogin(user, req.ip ?? null);
     await recordAudit({ action: 'auth.login_failed', targetType: 'email', targetId: email.toLowerCase(), req });
     res.status(401).json({ error: 'Invalid email or password' });
@@ -246,37 +249,43 @@ router.post('/2fa/verify', authLimiter, async (req: Request, res: Response) => {
     return;
   }
   const { userId, challengeId } = challenge;
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user) {
-    res.status(401).json({ error: 'Account not found.' });
-    return;
-  }
-  // A lock (from wrong passwords or wrong codes) also stops challenges that were
-  // issued before it, so the lock caps guessing rather than just new challenges.
-  if (isAccountLocked(user)) {
-    await recordAudit({ action: 'auth.login_blocked', actor: user, detail: 'account locked (2fa)', req });
+  // Every code is counted twice, and both counts are taken BEFORE it is checked:
+  // against this challenge (one check at a time, retired after a few) and against
+  // the account (locks at the threshold). So neither re-using one challenge, nor
+  // fetching fresh ones, nor firing many requests at once gives more guesses.
+  if (!beginChallengeAttempt(challengeId)) {
     res.status(401).json({ error: 'Your login session expired — please sign in again.' });
     return;
   }
-  const ok =
-    (await twofa.verifyTotp(userId, parsed.data.code)) ||
-    (await twofa.verifyRecoveryCode(userId, parsed.data.code));
-  if (!ok) {
-    // Counted twice on purpose: against this challenge (retired after a few
-    // misses) and against the account (locks at the threshold), so neither
-    // re-using one challenge nor fetching fresh ones gives unlimited guesses.
-    recordChallengeFailure(challengeId);
-    await registerFailedSecondFactor(user, req.ip ?? null);
-    await recordAudit({ action: 'auth.2fa_failed', actor: { id: userId }, req });
-    res.status(401).json({ error: 'Invalid authentication code.' });
-    return;
+  let ok = false;
+  let user: Awaited<ReturnType<typeof prisma.user.findUnique>> = null;
+  try {
+    user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      res.status(401).json({ error: 'Account not found.' });
+      return;
+    }
+    // A lock (from wrong passwords or wrong codes) also stops challenges that were
+    // issued before it, so the lock caps guessing rather than just new challenges.
+    if (!(await reserveSecondFactorAttempt(user, req.ip ?? null))) {
+      await recordAudit({ action: 'auth.login_blocked', actor: user, detail: 'account locked (2fa)', req });
+      res.status(401).json({ error: 'Your login session expired — please sign in again.' });
+      return;
+    }
+    ok =
+      (await twofa.verifyTotp(userId, parsed.data.code)) ||
+      (await twofa.verifyRecoveryCode(userId, parsed.data.code));
+    if (!ok) {
+      await registerFailedSecondFactor(user, req.ip ?? null);
+      await recordAudit({ action: 'auth.2fa_failed', actor: { id: userId }, req });
+      res.status(401).json({ error: 'Invalid authentication code.' });
+      return;
+    }
+    await clearFailedSecondFactor(user);
+  } finally {
+    // A correct code spends the challenge (single-use); a wrong one frees it.
+    endChallengeAttempt(challengeId, ok);
   }
-  // Single-use: a challenge that already produced a session cannot produce another.
-  if (!consumeChallenge(challengeId)) {
-    res.status(401).json({ error: 'Your login session expired — please sign in again.' });
-    return;
-  }
-  await clearFailedSecondFactor(user);
   // Re-check entitlement rather than trusting the challenge. /login gates before
   // issuing one, but the challenge lives ~5 minutes, and an admin who suspends an
   // account in that gap should not have a session minted afterwards.

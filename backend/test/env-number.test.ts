@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { fakeUserWrites } from './fake-user-row.js';
 
 /**
  * Numeric tunables read from the environment fall back to their default when
@@ -41,20 +42,19 @@ describe('a non-numeric AUTH_LOCKOUT_MAX', () => {
   it('keeps the default threshold of 10', async () => {
     vi.stubEnv('AUTH_LOCKOUT_MAX', 'abc');
     const { prisma } = await import('../src/lib/prisma.js');
-    vi.mocked(prisma.user.updateMany).mockResolvedValue({ count: 1 } as never);
-    const { registerFailedLogin } = await import('../src/services/account-lockout.service.js');
-    const user = { id: 'u1', email: 'a@b.c', failedLoginAttempts: 0, lockedUntil: null };
+    const row = { failedLoginAttempts: 0, lockedUntil: null as Date | null };
+    vi.mocked(prisma.user.updateMany).mockImplementation(fakeUserWrites(row).updateMany as never);
+    const { reserveLoginAttempt, registerFailedLogin } = await import('../src/services/account-lockout.service.js');
+    const user = { id: 'u1', email: 'a@b.c' };
 
-    // The first failure is just counted…
-    vi.mocked(prisma.user.update).mockResolvedValue({ failedLoginAttempts: 1 } as never);
-    expect(await registerFailedLogin(user, null)).toBe(false);
-    expect(prisma.user.updateMany).not.toHaveBeenCalled();
-
-    // …and the tenth locks, claimed against the default threshold.
-    vi.mocked(prisma.user.update).mockResolvedValue({ failedLoginAttempts: 10 } as never);
+    // Nine failures are counted without a lock…
+    for (let i = 0; i < 9; i++) {
+      expect(await reserveLoginAttempt(user, null)).toBe(true);
+      expect(await registerFailedLogin(user, null)).toBe(false);
+    }
+    // …and the tenth locks.
+    expect(await reserveLoginAttempt(user, null)).toBe(true);
     expect(await registerFailedLogin(user, null)).toBe(true);
-    expect(prisma.user.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'u1', failedLoginAttempts: { gte: 10 } } }),
-    );
+    expect(row.lockedUntil).not.toBeNull();
   });
 });

@@ -34,6 +34,7 @@ vi.mock('../src/lib/prisma.js', () => ({
         return Object.fromEntries(Object.keys(args.select).map((k) => [k, (row as Record<string, unknown>)[k]]));
       }),
       update: vi.fn(async () => ({ ...row })),
+      updateMany: vi.fn(async () => ({ count: 1 })),
     },
     passkey: { count: vi.fn(async () => passkeys) },
   },

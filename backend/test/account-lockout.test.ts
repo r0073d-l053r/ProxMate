@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fakeUserWrites } from './fake-user-row.js';
 
 vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
@@ -7,6 +8,7 @@ vi.mock('../src/lib/prisma.js', () => ({
 }));
 vi.mock('../src/services/audit.service.js', () => ({ recordAudit: vi.fn() }));
 vi.mock('../src/services/mail.service.js', () => ({ getMailConfig: vi.fn(), sendMail: vi.fn() }));
+vi.mock('../src/services/notify.service.js', () => ({ notifyWebhook: vi.fn(async () => undefined) }));
 
 import { prisma } from '../src/lib/prisma.js';
 import * as audit from '../src/services/audit.service.js';
@@ -14,46 +16,36 @@ import * as mail from '../src/services/mail.service.js';
 import {
   isAccountLocked,
   clearFailedLogins,
+  reserveLoginAttempt,
   registerFailedLogin,
 } from '../src/services/account-lockout.service.js';
 
-const update = vi.mocked(prisma.user.update);
 const updateMany = vi.mocked(prisma.user.updateMany);
 const findMany = vi.mocked(prisma.user.findMany);
 const recordAudit = vi.mocked(audit.recordAudit);
 const getMailConfig = vi.mocked(mail.getMailConfig);
 const sendMail = vi.mocked(mail.sendMail);
 
-/**
- * An in-memory stand-in for one User row whose writes behave like the database:
- * `{ increment }` is applied atomically to the CURRENT stored value, and the
- * conditional `updateMany` only matches while its `where` still holds. Each call
- * yields first, so concurrent callers interleave the way parallel requests do.
- */
-function fakeRow(initial: number) {
-  const row = { failedLoginAttempts: initial, lockedUntil: null as Date | null };
-  update.mockImplementation((async (args: { data: { failedLoginAttempts: number | { increment: number } } }) => {
-    await Promise.resolve();
-    const v = args.data.failedLoginAttempts;
-    row.failedLoginAttempts = typeof v === 'number' ? v : row.failedLoginAttempts + v.increment;
-    return { failedLoginAttempts: row.failedLoginAttempts };
-  }) as never);
-  updateMany.mockImplementation((async (args: {
-    where: { failedLoginAttempts?: { gte: number } };
-    data: { failedLoginAttempts: number; lockedUntil: Date };
-  }) => {
-    await Promise.resolve();
-    const min = args.where.failedLoginAttempts?.gte ?? 0;
-    if (row.failedLoginAttempts < min) return { count: 0 };
-    Object.assign(row, args.data);
-    return { count: 1 };
-  }) as never);
+const who = { id: 'u1', email: 'a@b.c' };
+
+/** Back the prisma mocks with one in-memory row; returns the row. */
+function fakeRow(failedLoginAttempts: number, lockedUntil: Date | null = null) {
+  const row = { failedLoginAttempts, twoFactorFailedAttempts: 0, lockedUntil };
+  const fake = fakeUserWrites(row);
+  vi.mocked(prisma.user.update).mockImplementation(fake.update as never);
+  updateMany.mockImplementation(fake.updateMany as never);
   return row;
+}
+
+/** One full failed attempt the way the login route does it: reserve, then settle. */
+async function failOnce(): Promise<{ evaluated: boolean; locked: boolean }> {
+  if (!(await reserveLoginAttempt(who, '1.2.3.4'))) return { evaluated: false, locked: false };
+  return { evaluated: true, locked: await registerFailedLogin(who, '1.2.3.4') };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  fakeRow(0);
+  getMailConfig.mockResolvedValue(null);
 });
 
 describe('isAccountLocked', () => {
@@ -65,40 +57,33 @@ describe('isAccountLocked', () => {
 });
 
 describe('clearFailedLogins', () => {
-  it('resets the counter + lock when there is a streak', async () => {
-    await clearFailedLogins({ id: 'u1', email: 'a@b.c', failedLoginAttempts: 3, lockedUntil: null });
-    expect(update).toHaveBeenCalledWith({
-      where: { id: 'u1' },
-      data: { failedLoginAttempts: 0, lockedUntil: null },
-    });
+  it('resets the stored counter + lock', async () => {
+    const row = fakeRow(3, new Date(Date.now() - 1000));
+    await clearFailedLogins({ id: 'u1' });
+    expect(row).toMatchObject({ failedLoginAttempts: 0, lockedUntil: null });
   });
 
-  it('is a no-op when already clean (no needless write)', async () => {
-    await clearFailedLogins({ id: 'u1', email: 'a@b.c', failedLoginAttempts: 0, lockedUntil: null });
-    expect(update).not.toHaveBeenCalled();
+  it('clears the slot a reservation just took, even if the caller read a clean row', async () => {
+    const row = fakeRow(0);
+    expect(await reserveLoginAttempt(who, null)).toBe(true);
+    expect(row.failedLoginAttempts).toBe(1);
+    await clearFailedLogins({ id: 'u1' });
+    expect(row.failedLoginAttempts).toBe(0);
   });
 });
 
-describe('registerFailedLogin', () => {
-  const base = { id: 'u1', email: 'a@b.c', lockedUntil: null };
-
-  it('increments the stored counter atomically below the threshold (no lock, no alert)', async () => {
+describe('reserve + register', () => {
+  it('counts a failure below the threshold without locking or alerting', async () => {
     const row = fakeRow(2);
-    const locked = await registerFailedLogin({ ...base, failedLoginAttempts: 2 }, '1.2.3.4');
-    expect(locked).toBe(false);
-    expect(update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'u1' }, data: { failedLoginAttempts: { increment: 1 } } }),
-    );
+    expect(await failOnce()).toEqual({ evaluated: true, locked: false });
     expect(row.failedLoginAttempts).toBe(3);
     expect(recordAudit).not.toHaveBeenCalled();
   });
 
-  it('locks the account and audits once the threshold is hit', async () => {
-    getMailConfig.mockResolvedValue(null); // SMTP off → no email, still locks + audits
+  it('locks and audits on the attempt that reaches the threshold', async () => {
     // Default AUTH_LOCKOUT_MAX is 10, so attempt #10 (from 9) trips the lock.
     const row = fakeRow(9);
-    const locked = await registerFailedLogin({ ...base, failedLoginAttempts: 9 }, '1.2.3.4');
-    expect(locked).toBe(true);
+    expect(await failOnce()).toEqual({ evaluated: true, locked: true });
     expect(row.failedLoginAttempts).toBe(0); // reset as we lock
     expect(row.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
     expect(recordAudit).toHaveBeenCalledWith(
@@ -106,16 +91,26 @@ describe('registerFailedLogin', () => {
     );
   });
 
-  it('counts every one of a burst of concurrent failures and locks exactly once', async () => {
-    getMailConfig.mockResolvedValue(null);
+  it('refuses to reserve while locked, and again once the lock has expired', async () => {
+    fakeRow(0, new Date(Date.now() + 60_000));
+    expect(await reserveLoginAttempt(who, null)).toBe(false);
+    fakeRow(0, new Date(Date.now() - 1));
+    expect(await reserveLoginAttempt(who, null)).toBe(true);
+  });
+
+  it('evaluates at most MAX of a concurrent burst and locks exactly once', async () => {
     const row = fakeRow(0);
-    // Every request in the burst read the row before any of them wrote, so each
-    // holds the same stale snapshot (failedLoginAttempts: 0).
-    const stale = { ...base, failedLoginAttempts: 0 };
-    const results = await Promise.all(Array.from({ length: 12 }, () => registerFailedLogin(stale, '1.2.3.4')));
-    expect(results.filter(Boolean)).toHaveLength(1);
+    const results = await Promise.all(Array.from({ length: 40 }, () => failOnce()));
+    expect(results.filter((r) => r.evaluated)).toHaveLength(10);
     expect(row.lockedUntil).not.toBeNull();
     expect(recordAudit.mock.calls.filter(([a]) => a.action === 'auth.account_locked')).toHaveLength(1);
+  });
+
+  it('turns a counter left at the threshold with no lock into an ordinary, expiring lock', async () => {
+    const row = fakeRow(10);
+    expect(await reserveLoginAttempt(who, null)).toBe(false);
+    expect(row.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
+    expect(row.failedLoginAttempts).toBe(0);
   });
 
   it('emails every admin when SMTP is configured', async () => {
@@ -123,7 +118,7 @@ describe('registerFailedLogin', () => {
     findMany.mockResolvedValue([{ email: 'admin1@x.y' }, { email: 'admin2@x.y' }] as never);
     sendMail.mockResolvedValue();
     fakeRow(9);
-    await registerFailedLogin({ ...base, failedLoginAttempts: 9 }, '1.2.3.4');
+    await failOnce();
     expect(sendMail).toHaveBeenCalledTimes(2);
     expect(sendMail).toHaveBeenCalledWith(
       expect.objectContaining({ to: 'admin1@x.y', subject: expect.stringContaining('Account locked') }),

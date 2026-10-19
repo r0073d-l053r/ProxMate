@@ -20,10 +20,10 @@ Protects a targeted account from distributed password guessing (MITRE T1110), co
 | Function | Signature summary | What it does |
 |---|---|---|
 | `isAccountLocked` | `(user: {lockedUntil}) => boolean` | True while `lockedUntil` is in the future. |
-| `clearFailedLogins` | `(user) => Promise<void>` | Resets `failedLoginAttempts` to 0 and `lockedUntil` to null after a correct password (no-op if already clear). |
-| `registerFailedSecondFactor` | `(user, ip: string \| null) => Promise<boolean>` | Same as `registerFailedLogin` but on `twoFactorFailedAttempts` (wrong 2FA codes at login), which a correct password does not reset. Reaching the threshold applies the same lock and alerts. |
-| `clearFailedSecondFactor` | `(user) => Promise<void>` | Resets `twoFactorFailedAttempts` once a 2FA login completes. |
-| `registerFailedLogin` | `(user, ip: string \| null) => Promise<boolean>` | Increments the counter atomically in the database and reads the new value back; at the threshold claims the lock with a conditional write (so concurrent failures lock exactly once), sets `lockedUntil`, resets the counter, audits `auth.account_locked`, emails admins and fires the `auth.lockout` webhook. Returns true if this attempt locked the account. |
+| `reserveLoginAttempt` | `(user, ip) => Promise<boolean>` | Called BEFORE a password is checked. One conditional write increments `failedLoginAttempts` only while it is below `MAX` and no lock is in force. False means locked or exhausted: answer as for a wrong password without verifying. A counter found at `MAX` with no lock is turned into a normal lock. |
+| `registerFailedLogin` | `(user, ip) => Promise<boolean>` | Settles a reserved attempt that failed: when the counter has reached `MAX`, claims the lock with a conditional write (so concurrent failures lock exactly once), sets `lockedUntil`, resets the counter, audits `auth.account_locked`, emails admins and fires the `auth.lockout` webhook. Returns true if this call locked the account. |
+| `clearFailedLogins` | `(user) => Promise<void>` | Resets the stored `failedLoginAttempts` and `lockedUntil` after a correct password (conditional in the database, so the slot just reserved is cleared too). |
+| `reserveSecondFactorAttempt` / `registerFailedSecondFactor` / `clearFailedSecondFactor` | as above | The same on `twoFactorFailedAttempts`: wrong 2FA codes at login and wrong codes that confirm a 2FA change. A correct password does not reset it. Exhausting it applies the same lock and alerts. |
 
 # Data
 
@@ -36,7 +36,8 @@ Env tunables: `AUTH_LOCKOUT_MAX` (default 10, min 1) and `AUTH_LOCKOUT_MINUTES` 
 # Gotchas
 
 - The counter is reset AS the lock is applied, so the first failed attempt after auto-unlock starts a fresh window rather than instantly re-locking.[^lockout]
-- Admin email is sent at most once per lock window (further attempts hit the locked-out short-circuit first), so it cannot become a mail bomb; it is a no-op when SMTP is off.[^lockout]
+- Because every attempt is reserved before it is verified, a parallel burst gets at most `MAX` guesses evaluated per lock window.[^lockout]
+- Admin email is sent at most once per lock window (the lock is claimed conditionally and no attempt can be reserved while it holds), so it cannot become a mail bomb; it is a no-op when SMTP is off.[^lockout]
 - Uses `notifyWebhook` (webhook only) because admins are already emailed directly; both are best-effort (`.catch(() => {})`).[^lockout]
 
 # Relationships

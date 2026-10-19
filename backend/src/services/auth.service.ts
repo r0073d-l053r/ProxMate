@@ -132,16 +132,16 @@ export async function verifyToken(token: string): Promise<AuthUser | null> {
   return !s || s.accessExpired ? null : s.user;
 }
 
-/** Wrong codes a single 2FA login challenge tolerates before it stops working. */
-const CHALLENGE_MAX_FAILURES = 5;
+/** Codes a single 2FA login challenge may be checked against before it stops working. */
+const CHALLENGE_MAX_ATTEMPTS = 5;
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
 /**
  * Server-side record of every outstanding 2FA challenge (keyed by its `jti`), so
  * a challenge can be retired: after a successful exchange (single-use) or after
- * CHALLENGE_MAX_FAILURES wrong codes. The signed JWT alone cannot express either.
+ * CHALLENGE_MAX_ATTEMPTS wrong codes. The signed JWT alone cannot express either.
  */
-const challenges = new EphemeralStore<{ userId: string; failures: number }>(CHALLENGE_TTL_MS);
+const challenges = new EphemeralStore<{ userId: string; attempts: number; busy: boolean }>(CHALLENGE_TTL_MS);
 
 /**
  * Sign a short-lived "2FA pending" token issued after a correct password, to be
@@ -151,7 +151,7 @@ const challenges = new EphemeralStore<{ userId: string; failures: number }>(CHAL
 export async function signChallenge(userId: string): Promise<string> {
   const secret = await getJwtSecret();
   const jti = randomBytes(16).toString('hex');
-  challenges.set(jti, { userId, failures: 0 });
+  challenges.set(jti, { userId, attempts: 0, busy: false });
   return jwt.sign({ sub: userId, twofa: true }, secret, { expiresIn: '5m', jwtid: jti });
 }
 
@@ -176,21 +176,35 @@ export async function verifyChallenge(token: string): Promise<{ userId: string; 
   }
 }
 
-/** Count a wrong code against a challenge; retires it at the failure cap. */
-export function recordChallengeFailure(challengeId: string): void {
+/**
+ * Start checking a code against a challenge. Synchronous, and it both counts the
+ * attempt and marks the challenge busy BEFORE any code is verified, so requests
+ * racing on one challenge are evaluated one at a time and never more than
+ * CHALLENGE_MAX_ATTEMPTS in total. Serialising also means a recovery code is
+ * never spent by a request that was bound to lose to a concurrent one. Returns
+ * false when the challenge is unknown, spent, exhausted or already being checked.
+ */
+export function beginChallengeAttempt(challengeId: string): boolean {
   const entry = challenges.get(challengeId);
-  if (!entry) return;
-  entry.failures += 1;
-  if (entry.failures >= CHALLENGE_MAX_FAILURES) challenges.delete(challengeId);
+  if (!entry || entry.busy || entry.attempts >= CHALLENGE_MAX_ATTEMPTS) return false;
+  entry.busy = true;
+  entry.attempts += 1;
+  return true;
 }
 
 /**
- * Spend a challenge after a correct code. Returns false if it was already spent
- * (a concurrent exchange of the same challenge won), in which case no session
- * may be issued.
+ * Finish a check started with beginChallengeAttempt. A correct code spends the
+ * challenge (single-use); a wrong one frees it for another try, or retires it at
+ * the cap.
  */
-export function consumeChallenge(challengeId: string): boolean {
-  return challenges.take(challengeId) !== undefined;
+export function endChallengeAttempt(challengeId: string, ok: boolean): void {
+  const entry = challenges.get(challengeId);
+  if (!entry) return;
+  if (ok || entry.attempts >= CHALLENGE_MAX_ATTEMPTS) {
+    challenges.delete(challengeId);
+    return;
+  }
+  entry.busy = false;
 }
 
 /**

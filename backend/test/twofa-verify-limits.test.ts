@@ -13,7 +13,7 @@ import type { AddressInfo } from 'node:net';
  * - a locked account cannot finish a 2FA login even with a correct code.
  */
 
-const row = {
+const row = vi.hoisted(() => ({
   id: 'u1',
   email: 'bob@corp.example',
   role: 'user',
@@ -26,37 +26,22 @@ const row = {
   twoFactorFailedAttempts: 0,
   lockedUntil: null as Date | null,
   accessExpiresAt: null,
-};
-
-type Data = Record<string, unknown>;
-function applyData(data: Data) {
-  for (const [k, v] of Object.entries(data)) {
-    const r = row as unknown as Record<string, unknown>;
-    r[k] = v && typeof v === 'object' && 'increment' in v ? (r[k] as number) + (v as { increment: number }).increment : v;
-  }
-}
-
-vi.mock('../src/lib/prisma.js', () => ({
-  prisma: {
-    user: {
-      findUnique: vi.fn(async () => ({ ...row })),
-      findMany: vi.fn(async () => []),
-      update: vi.fn(async (args: { data: Data }) => {
-        applyData(args.data);
-        return { ...row };
-      }),
-      updateMany: vi.fn(async (args: { where: Record<string, { gte: number } | string>; data: Data }) => {
-        for (const [k, cond] of Object.entries(args.where)) {
-          if (k === 'id') continue;
-          const v = (row as unknown as Record<string, number>)[k]!;
-          if (typeof cond === 'object' && v < cond.gte) return { count: 0 };
-        }
-        applyData(args.data);
-        return { count: 1 };
-      }),
-    },
-  },
 }));
+
+vi.mock('../src/lib/prisma.js', async () => {
+  const { fakeUserWrites } = await import('./fake-user-row.js');
+  const fake = fakeUserWrites(row);
+  return {
+    prisma: {
+      user: {
+        findUnique: vi.fn(fake.findUnique),
+        findMany: vi.fn(async () => []),
+        update: vi.fn(fake.update),
+        updateMany: vi.fn(fake.updateMany),
+      },
+    },
+  };
+});
 vi.mock('../src/services/config.service.js', () => ({
   getConfig: vi.fn(async (k: string) => (k === 'jwt_secret' ? 'test-secret-2fa-limits' : null)),
 }));
@@ -87,8 +72,11 @@ vi.mock('../src/middleware/rate-limit.js', () => {
 
 import authRoutes from '../src/routes/auth.routes.js';
 import * as twofa from '../src/services/twofactor.service.js';
+import * as authService from '../src/services/auth.service.js';
 
 const verifyTotp = vi.mocked(twofa.verifyTotp);
+const verifyPasswordSafe = vi.mocked(authService.verifyPasswordSafe);
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let server: http.Server | undefined;
 let base = '';
@@ -97,6 +85,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   Object.assign(row, { failedLoginAttempts: 0, twoFactorFailedAttempts: 0, lockedUntil: null });
   verifyTotp.mockResolvedValue(false);
+  verifyPasswordSafe.mockResolvedValue(true);
   const app = express();
   app.use(cookieParser());
   app.use(express.json());
@@ -170,5 +159,56 @@ describe('POST /auth/2fa/verify attempt limits', () => {
     verifyTotp.mockResolvedValue(true);
     expect((await post('/2fa/verify', { challenge, code: '123456' })).status).toBe(200);
     expect(row.twoFactorFailedAttempts).toBe(0);
+  });
+});
+
+describe('parallel bursts are capped before anything is verified', () => {
+  it('evaluates at most 10 of 40 parallel wrong passwords', async () => {
+    // A slow check, so every request in the burst is in flight at once.
+    verifyPasswordSafe.mockImplementation(async (_pw: string, hash: string | null | undefined) => {
+      await delay(20);
+      return hash ? false : false;
+    });
+    await Promise.all(Array.from({ length: 40 }, () => post('/login', { email: row.email, password: 'wrong' })));
+    const realChecks = verifyPasswordSafe.mock.calls.filter(([, hash]) => hash === 'hash');
+    expect(realChecks.length).toBeLessThanOrEqual(10);
+    expect(row.lockedUntil).not.toBeNull();
+  });
+
+  it('evaluates at most 5 of 16 parallel wrong codes on one challenge', async () => {
+    const challenge = await login();
+    verifyTotp.mockImplementation(async () => {
+      await delay(20);
+      return false;
+    });
+    await Promise.all(Array.from({ length: 16 }, () => post('/2fa/verify', { challenge, code: '000000' })));
+    expect(verifyTotp.mock.calls.length).toBeLessThanOrEqual(5);
+  });
+
+  it('evaluates at most 10 parallel wrong codes per account across fresh challenges', async () => {
+    const challenges: string[] = [];
+    for (let i = 0; i < 20; i++) challenges.push(await login());
+    verifyTotp.mockImplementation(async () => {
+      await delay(20);
+      return false;
+    });
+    await Promise.all(challenges.map((challenge) => post('/2fa/verify', { challenge, code: '000000' })));
+    expect(verifyTotp.mock.calls.length).toBeLessThanOrEqual(10);
+    expect(row.lockedUntil).not.toBeNull();
+  });
+
+  it('checks one code at a time per challenge, so a racing request cannot spend a recovery code', async () => {
+    const challenge = await login();
+    const recovery = vi.mocked(twofa.verifyRecoveryCode);
+    verifyTotp.mockImplementation(async (_userId: string, code: string) => {
+      await delay(20);
+      return code === '123456';
+    });
+    const [a, b] = await Promise.all([
+      post('/2fa/verify', { challenge, code: '123456' }),
+      post('/2fa/verify', { challenge, code: 'abcde-fghij' }),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 401]);
+    expect(recovery).not.toHaveBeenCalled();
   });
 });
