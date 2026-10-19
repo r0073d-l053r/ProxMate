@@ -104,9 +104,35 @@ const OPERATIONAL_PRIVILEGES: ReadonlyArray<readonly [string, string]> = [
   ['VM.Console', 'the noVNC and xterm.js consoles'],
   ['VM.Clone', 'deploying from a template'],
   ['VM.Snapshot', 'snapshots'],
+  ['VM.Config.Options', 'setting the ownership tag on new guests and renaming them'],
+  ['VM.Config.CPU', 'creating guests and changing their CPU'],
+  ['VM.Config.Memory', 'creating guests and changing their memory'],
+  ['VM.Config.HWType', 'creating guests (disk controller, display, serial console)'],
+  ['VM.Config.CDROM', 'ISO installs and rescue mode'],
+  ['VM.Backup', 'backups and restores'],
+  ['VM.Migrate', 'migration, the Cluster Balancer and node drains'],
   ['Datastore.AllocateSpace', 'creating disks on a storage'],
+  ['Datastore.Allocate', 'enabling snippets and cleaning up imported cloud images'],
+  ['Datastore.AllocateTemplate', 'importing cloud images for the Template Store'],
   ['Sys.Audit', 'node health and capacity readings'],
+  ['Sys.Modify', 'enforcing isolation on the cluster firewall'],
 ];
+
+/**
+ * Guest-agent privileges changed in Proxmox VE 9: `VM.Monitor` was removed and agent
+ * access split into `VM.GuestAgent.*`. ProxMate reads guest IPs and runs commands
+ * through the agent (cloud-init status, applying a deploy's login password, the IDE).
+ */
+function guestAgentPrivileges(major: number | null): ReadonlyArray<readonly [string, string]> {
+  if (major === null) return [];
+  if (major >= 9) {
+    return [
+      ['VM.GuestAgent.Audit', 'reading guest IP addresses through the guest agent'],
+      ['VM.GuestAgent.Unrestricted', 'applying a deploy\'s login password and checking cloud-init progress'],
+    ];
+  }
+  return [['VM.Monitor', 'the guest agent (guest IPs, login passwords, cloud-init progress)']];
+}
 
 /**
  * SDN privileges, checked separately because what they gate depends on the release.
@@ -216,10 +242,10 @@ export async function testProxmoxConnection(): Promise<ProxmoxConnectionResult> 
     );
   }
 
-  for (const [priv, what] of OPERATIONAL_PRIVILEGES) {
+  const major = pveMajor(version);
+  for (const [priv, what] of [...OPERATIONAL_PRIVILEGES, ...guestAgentPrivileges(major)]) {
     if (!held.has(priv)) warnings.push(`${priv} is missing — ${what} will fail.`);
   }
-  const major = pveMajor(version);
   if (major !== null && major >= 8 && !held.has('SDN.Use')) warnings.push(SDN_USE_WARNING);
   if (!held.has('SDN.Audit')) warnings.push(SDN_AUDIT_WARNING);
   if (nodes.length === 0) {

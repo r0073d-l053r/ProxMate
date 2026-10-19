@@ -53,6 +53,11 @@ const FULL = {
     'VM.Config.Cloudinit': 1, 'VM.PowerMgmt': 1, 'VM.Console': 1, 'VM.Clone': 1,
     'VM.Snapshot': 1, 'Datastore.Audit': 1, 'Datastore.AllocateSpace': 1, 'Sys.Audit': 1,
     'SDN.Audit': 1, 'SDN.Use': 1,
+    'VM.Config.Options': 1, 'VM.Config.CPU': 1, 'VM.Config.Memory': 1, 'VM.Config.HWType': 1,
+    'VM.Config.CDROM': 1, 'VM.Backup': 1, 'VM.Migrate': 1, 'Datastore.Allocate': 1,
+    'Datastore.AllocateTemplate': 1, 'Sys.Modify': 1,
+    // Guest agent: VM.Monitor up to Proxmox VE 8, VM.GuestAgent.* from 9.
+    'VM.Monitor': 1, 'VM.GuestAgent.Audit': 1, 'VM.GuestAgent.Unrestricted': 1,
   },
 };
 
@@ -215,5 +220,39 @@ describe('heldPrivileges', () => {
   it('is empty for an empty or absent map', () => {
     expect(pve.heldPrivileges({}).size).toBe(0);
     expect(pve.heldPrivileges(undefined as never).size).toBe(0);
+  });
+});
+
+describe('privileges beyond the basics', () => {
+  const without = (...drop: string[]) =>
+    Object.fromEntries(Object.entries(FULL['/']).filter(([k]) => !drop.includes(k)));
+
+  it.each([
+    ['VM.Config.Options', /ownership tag/],
+    ['VM.Backup', /backups/],
+    ['VM.Migrate', /migration/],
+    ['Sys.Modify', /cluster firewall/],
+    ['Datastore.AllocateTemplate', /cloud images/],
+  ])('warns when %s is missing', async (priv, what) => {
+    perms.mockResolvedValue({ '/': without(priv) });
+    const r = await testProxmoxConnection();
+    expect(r.connected).toBe(true);
+    const line = r.warnings.find((w) => w.startsWith(`${priv} is missing`));
+    expect(line).toMatch(what);
+  });
+
+  it('asks for the VM.GuestAgent privileges on Proxmox VE 9, not VM.Monitor', async () => {
+    perms.mockResolvedValue({ '/': without('VM.Monitor', 'VM.GuestAgent.Unrestricted') });
+    const r = await testProxmoxConnection();
+    expect(r.warnings.join('\n')).toMatch(/VM\.GuestAgent\.Unrestricted is missing.*login password/);
+    expect(r.warnings.join('\n')).not.toMatch(/VM\.Monitor/);
+  });
+
+  it('asks for VM.Monitor on Proxmox VE 8', async () => {
+    version.mockResolvedValue('8.4.1');
+    perms.mockResolvedValue({ '/': without('VM.Monitor', 'VM.GuestAgent.Audit', 'VM.GuestAgent.Unrestricted') });
+    const r = await testProxmoxConnection();
+    expect(r.warnings.join('\n')).toMatch(/VM\.Monitor is missing.*guest agent/);
+    expect(r.warnings.join('\n')).not.toMatch(/VM\.GuestAgent/);
   });
 });
