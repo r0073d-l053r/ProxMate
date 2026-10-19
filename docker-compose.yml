@@ -145,7 +145,8 @@ services:
     environment:
       # Optional: pin the CSP connect-src to your exact API + WebSocket origin,
       # e.g. "'self' https://proxmate.example.com wss://proxmate.example.com".
-      # Blank = a safe default ('self' https: wss:). See frontend/src/proxy.ts.
+      # Blank = a default of ('self' https: wss:) plus the NEXT_PUBLIC_API_URL origin
+      # and its ws/wss twin. See frontend/src/lib/csp.ts.
       # In .env this value MUST be wrapped in double quotes, or compose stops
       # reading at the first closing single quote and you get just `self`.
       CSP_CONNECT_SRC: ${CSP_CONNECT_SRC:-}

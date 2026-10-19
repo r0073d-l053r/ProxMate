@@ -72,7 +72,7 @@ sources:
 | `PROXMATE_BACKUP_DIR` | `./backups` | backend volume | **Host** directory for app-DB snapshots. Changing it requires `docker compose up -d backend` (mounts are set at container creation), not just a restart.[^env-docker] |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:4000/api` | frontend **build arg** | API URL baked into the client bundle. The frontend code falls back to `http://localhost:4000/api` (`lib/api.ts`).[^fe-api] |
 | `NEXT_PUBLIC_SITE_URL` | `http://localhost:3000` | frontend build arg and runtime env | Public origin for SEO metadata (OG image, canonical, manifest). |
-| `CSP_CONNECT_SRC` | `''`, giving the default `'self' https: wss:` | frontend runtime env (`src/proxy.ts`) | Pins the CSP `connect-src`. In `.env` the whole value must be wrapped in double quotes. |
+| `CSP_CONNECT_SRC` | `''`, giving the default `'self' https: wss:` plus the `NEXT_PUBLIC_API_URL` origin and its `ws:`/`wss:` counterpart | frontend runtime env (`src/proxy.ts`) | Pins the CSP `connect-src`. In `.env` the whole value must be wrapped in double quotes. |
 
 # Gotchas
 
