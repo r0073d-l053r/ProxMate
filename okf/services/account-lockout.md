@@ -21,11 +21,13 @@ Protects a targeted account from distributed password guessing (MITRE T1110), co
 |---|---|---|
 | `isAccountLocked` | `(user: {lockedUntil}) => boolean` | True while `lockedUntil` is in the future. |
 | `clearFailedLogins` | `(user) => Promise<void>` | Resets `failedLoginAttempts` to 0 and `lockedUntil` to null after a correct password (no-op if already clear). |
+| `registerFailedSecondFactor` | `(user, ip: string \| null) => Promise<boolean>` | Same as `registerFailedLogin` but on `twoFactorFailedAttempts` (wrong 2FA codes at login), which a correct password does not reset. Reaching the threshold applies the same lock and alerts. |
+| `clearFailedSecondFactor` | `(user) => Promise<void>` | Resets `twoFactorFailedAttempts` once a 2FA login completes. |
 | `registerFailedLogin` | `(user, ip: string \| null) => Promise<boolean>` | Increments the counter atomically in the database and reads the new value back; at the threshold claims the lock with a conditional write (so concurrent failures lock exactly once), sets `lockedUntil`, resets the counter, audits `auth.account_locked`, emails admins and fires the `auth.lockout` webhook. Returns true if this attempt locked the account. |
 
 # Data
 
-- [User](/database/user.md): reads/writes `failedLoginAttempts`, `lockedUntil`; reads admin emails.[^lockout]
+- [User](/database/user.md): reads/writes `failedLoginAttempts`, `twoFactorFailedAttempts`, `lockedUntil`; reads admin emails.[^lockout]
 - [AuditLog](/database/audit-log.md): `auth.account_locked` entry.
 - [smtp config](/config/smtp.md) (via `getMailConfig`) and [notifications config](/config/notifications.md) (webhook).
 

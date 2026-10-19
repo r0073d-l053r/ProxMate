@@ -32,6 +32,10 @@ model User {
   // window. Reset on any successful password verification; auto-expires.
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?
+  // Wrong 2FA codes at login. Kept apart from failedLoginAttempts because a
+  // correct password must not reset it; cleared only by a completed 2FA login.
+  // Reaching the threshold applies the same lockedUntil window.
+  twoFactorFailedAttempts Int   @default(0)
 
   // Resource Quotas (set from invite token at registration)
   maxCpu        Int       @default(0)      // total vCPU cores allowed

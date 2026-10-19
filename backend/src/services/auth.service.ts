@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma.js';
 import { getConfig } from './config.service.js';
 import { isAccessExpired } from './access.service.js';
+import { EphemeralStore } from '../lib/ephemeral-store.js';
 import type { AuthUser } from '../types/index.js';
 
 export async function hashPassword(password: string): Promise<string> {
@@ -131,6 +132,17 @@ export async function verifyToken(token: string): Promise<AuthUser | null> {
   return !s || s.accessExpired ? null : s.user;
 }
 
+/** Wrong codes a single 2FA login challenge tolerates before it stops working. */
+const CHALLENGE_MAX_FAILURES = 5;
+const CHALLENGE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Server-side record of every outstanding 2FA challenge (keyed by its `jti`), so
+ * a challenge can be retired: after a successful exchange (single-use) or after
+ * CHALLENGE_MAX_FAILURES wrong codes. The signed JWT alone cannot express either.
+ */
+const challenges = new EphemeralStore<{ userId: string; failures: number }>(CHALLENGE_TTL_MS);
+
 /**
  * Sign a short-lived "2FA pending" token issued after a correct password, to be
  * exchanged (with a TOTP/recovery code) for a real session. Proves the password
@@ -138,18 +150,47 @@ export async function verifyToken(token: string): Promise<AuthUser | null> {
  */
 export async function signChallenge(userId: string): Promise<string> {
   const secret = await getJwtSecret();
-  return jwt.sign({ sub: userId, twofa: true }, secret, { expiresIn: '5m' });
+  const jti = randomBytes(16).toString('hex');
+  challenges.set(jti, { userId, failures: 0 });
+  return jwt.sign({ sub: userId, twofa: true }, secret, { expiresIn: '5m', jwtid: jti });
 }
 
-/** Verify a 2FA challenge token; returns the userId or null. */
-export async function verifyChallenge(token: string): Promise<string | null> {
+/**
+ * Verify a 2FA challenge token. Returns the userId and the challenge's id, or
+ * null when the token is invalid, expired, already used or exhausted.
+ */
+export async function verifyChallenge(token: string): Promise<{ userId: string; challengeId: string } | null> {
   try {
     const secret = await getJwtSecret();
-    const payload = jwt.verify(token, secret, { algorithms: ['HS256'] }) as { sub: string; twofa?: boolean };
-    return payload.twofa ? payload.sub : null;
+    const payload = jwt.verify(token, secret, { algorithms: ['HS256'] }) as {
+      sub: string;
+      twofa?: boolean;
+      jti?: string;
+    };
+    if (!payload.twofa || !payload.jti) return null;
+    const entry = challenges.get(payload.jti);
+    if (!entry || entry.userId !== payload.sub) return null;
+    return { userId: payload.sub, challengeId: payload.jti };
   } catch {
     return null;
   }
+}
+
+/** Count a wrong code against a challenge; retires it at the failure cap. */
+export function recordChallengeFailure(challengeId: string): void {
+  const entry = challenges.get(challengeId);
+  if (!entry) return;
+  entry.failures += 1;
+  if (entry.failures >= CHALLENGE_MAX_FAILURES) challenges.delete(challengeId);
+}
+
+/**
+ * Spend a challenge after a correct code. Returns false if it was already spent
+ * (a concurrent exchange of the same challenge won), in which case no session
+ * may be issued.
+ */
+export function consumeChallenge(challengeId: string): boolean {
+  return challenges.take(challengeId) !== undefined;
 }
 
 /**

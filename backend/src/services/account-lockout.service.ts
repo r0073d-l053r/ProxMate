@@ -1,4 +1,4 @@
-import type { User } from '@prisma/client';
+import type { Prisma, User } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { recordAudit } from './audit.service.js';
 import { getMailConfig, sendMail } from './mail.service.js';
@@ -43,19 +43,51 @@ export async function clearFailedLogins(user: LockFields): Promise<void> {
  * of them locks, audits and alerts.
  */
 export async function registerFailedLogin(user: LockFields, ip: string | null): Promise<boolean> {
-  const { failedLoginAttempts: attempts } = await prisma.user.update({
+  return registerFailure(user, ip, 'failedLoginAttempts', 'failed logins');
+}
+
+/**
+ * Record a wrong second-factor code (TOTP or recovery code) at login. Counted on
+ * its own column, which a correct password does NOT reset: whoever is guessing
+ * codes already holds the password, so a password-keyed reset would hand them a
+ * fresh allowance with every new challenge. Reaching the threshold applies the
+ * same temporary lock (and alerts) as password failures.
+ */
+export async function registerFailedSecondFactor(
+  user: Pick<User, 'id' | 'email'>,
+  ip: string | null,
+): Promise<boolean> {
+  return registerFailure(user, ip, 'twoFactorFailedAttempts', 'wrong 2FA codes');
+}
+
+/** Clear the second-factor failure counter (called once a 2FA login fully succeeds). */
+export async function clearFailedSecondFactor(user: Pick<User, 'id' | 'twoFactorFailedAttempts'>): Promise<void> {
+  if (user.twoFactorFailedAttempts === 0) return;
+  await prisma.user.update({ where: { id: user.id }, data: { twoFactorFailedAttempts: 0 } });
+}
+
+type FailureCounter = 'failedLoginAttempts' | 'twoFactorFailedAttempts';
+
+async function registerFailure(
+  user: Pick<User, 'id' | 'email'>,
+  ip: string | null,
+  counter: FailureCounter,
+  what: string,
+): Promise<boolean> {
+  const updated = await prisma.user.update({
     where: { id: user.id },
-    data: { failedLoginAttempts: { increment: 1 } },
-    select: { failedLoginAttempts: true },
+    data: { [counter]: { increment: 1 } } as Prisma.UserUpdateInput,
+    select: { [counter]: true } as Prisma.UserSelect,
   });
+  const attempts = (updated as unknown as Record<FailureCounter, number>)[counter];
   if (attempts < MAX) return false;
 
   const lockedUntil = new Date(Date.now() + LOCK_MINUTES * 60_000);
   // Reset the counter as we lock, so the next failed attempt after auto-unlock
   // starts a fresh window rather than instantly re-locking.
   const { count } = await prisma.user.updateMany({
-    where: { id: user.id, failedLoginAttempts: { gte: MAX } },
-    data: { failedLoginAttempts: 0, lockedUntil },
+    where: { id: user.id, [counter]: { gte: MAX } } as Prisma.UserWhereInput,
+    data: { [counter]: 0, lockedUntil } as Prisma.UserUpdateManyMutationInput,
   });
   if (count === 0) return false; // a concurrent failure already applied this lock
 
@@ -64,7 +96,7 @@ export async function registerFailedLogin(user: LockFields, ip: string | null): 
     actor: { id: user.id, email: user.email },
     targetType: 'user',
     targetId: user.id,
-    detail: `locked ${LOCK_MINUTES}m after ${attempts} failed logins${ip ? ` from ${ip}` : ''}`,
+    detail: `locked ${LOCK_MINUTES}m after ${attempts} ${what}${ip ? ` from ${ip}` : ''}`,
   });
   await alertAdmins(user, attempts, ip, lockedUntil).catch(() => {});
   // Webhook-only here — admins are already emailed by alertAdmins above.
