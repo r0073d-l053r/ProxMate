@@ -61,7 +61,12 @@ const busOf = (slot: string): string => slot.match(/^[a-z]+/)?.[0] ?? 'scsi';
 /** Quota guard for a storage change of `deltaGb` against the VM owner's cap. */
 async function assertStorageDelta(owner: User, deltaGb: number): Promise<void> {
   if (owner.role === 'admin' || deltaGb <= 0) return;
-  const vms = await prisma.virtualMachine.findMany({ where: { userId: owner.id }, select: { storage: true } });
+  // Quota-exempt machines never count toward the owner's usage (same rule as
+  // create/resize in vm.service assertWithinQuota).
+  const vms = await prisma.virtualMachine.findMany({
+    where: { userId: owner.id, quotaExempt: false },
+    select: { storage: true },
+  });
   const used = vms.reduce((s, v) => s + v.storage, 0);
   if (used + deltaGb > owner.maxStorage) {
     throw new QuotaError({ storage: { used, requested: deltaGb, max: owner.maxStorage } });
