@@ -32,7 +32,7 @@ No DB. Uses the Proxmox connection (`host`, `tokenId`, `tokenSecret`, `verifySsl
 
 - Always `wss://`: Proxmox's API listens on HTTPS only, and a host saved as `http://` works for REST (301) but not for the ws client.[^vnc]
 - The text/binary opcode is preserved in both directions: RFB is binary, but termproxy control frames (`0:len:data`, `1:cols:rows:`, `2`) are text.[^vnc]
-- TLS verification follows the stored `verifySsl` flag (`rejectUnauthorized`).[^vnc]
+- TLS verification follows the stored `verifySsl` flag (`rejectUnauthorized`). The private CA from `PROXMOX_CA_CERT` / `PROXMOX_CA_CERT_FILE` (`config.ca`, which the REST client trusts) is not passed to the WebSocket, so with verification on, the console relay trusts only the default CA store.[^vnc]
 - Non-1000 target closes are logged as errors.[^vnc]
 
 # Relationships

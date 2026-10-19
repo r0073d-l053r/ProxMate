@@ -25,7 +25,7 @@ cluster whose guests run on SDN VNets (VLAN, VXLAN or EVPN zones).[^issue-126]
 
 1. **Apply the SDN configuration.** In Datacenter → SDN, click *Apply*. A VNet that is
    configured but not applied doesn't exist on the nodes, and guests attached to it fail
-   to start.
+   to start (Proxmox VE behaviour; ProxMate lists pending VNets without telling them apart).
 2. **Grant the token the SDN privileges.** `SDN.Audit` lets ProxMate list VNets.
    `SDN.Use` lets it attach guest NICs; Proxmox VE 8+ checks it on every NIC attachment.
    For example:

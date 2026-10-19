@@ -45,7 +45,7 @@ Maps a ProxMate VM id to a Proxmox guest (`proxmoxVmId` on `proxmoxNode`) and ow
 | proxmoxVmId | Int | `@@index` | Proxmox VMID (not unique in the schema). |
 | proxmoxNode | String | | Node the guest currently lives on; rewritten on migration / node resync. |
 | name | String | | |
-| description | String? | | Template deploys write `"From template: <name>"`.[^deploy-lock] |
+| description | String? | | Template deploys write `"From template: <name>"`.[^vm-svc] |
 | type | String | `@default("qemu")` | `"qemu"` or `"lxc"`; selects the PVE API path and feature set. |
 | hasPassthrough | Boolean | `@default(false)` | A `hostpciN` device is attached; balancer/drain skip it. |
 | cpu | Int | | Allocated vCPUs. |
@@ -84,7 +84,7 @@ Maps a ProxMate VM id to a Proxmox guest (`proxmoxVmId` on `proxmoxNode`) and ow
 - Quota usage sums `cpu`, `ram`, `storage` over the owner's rows with `quotaExempt: false`; admins skip the check.[^vm-svc]
 - `deployState='deploying'` makes destructive VM routes return 409; it clears when a guest-agent `cloud-init status` probe reports done, or after 8 minutes (`DEPLOY_TIMEOUT_MS`).[^deploy-lock]
 - An `ideState` of `installing` older than 10 minutes (`INSTALL_TIMEOUT_MS`) is treated as timed out.[^ide-prov]
-- `pendingCiPassword` is set only for cloud-init template deploys with a password, and is cleared once applied in-guest or when the deploy window closes without an agent (that path also notifies admins with `deploy.agent_missing`).[^vm-svc] [^deploy-lock]
+- `pendingCiPassword` is set only for cloud-init template deploys (and template rebuilds) with a password, and is cleared once applied in-guest or when the deploy window closes without an agent (that path also notifies admins with `deploy.agent_missing`).[^vm-svc] [^deploy-lock]
 - `hasPassthrough` is set true only after a successful passthrough attach, and recomputed on detach.[^passthrough]
 - Tenants can't set `backupKeep`; for non-admins the route forces it to null.[^vm-routes]
 

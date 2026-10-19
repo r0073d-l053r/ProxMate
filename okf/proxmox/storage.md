@@ -111,14 +111,14 @@ agent, convert to template, delete the import volume.[^template] See
 - `resizeDataDisk`: grow-only; the root disk is resized through VM resize instead.
 - `removeDataDisk`: `removeDisk` sets `delete=<slot>`, then deletes only the newly created `unusedN`
   entry (diffed before/after) so pre-existing unused volumes are untouched.
-- `VirtualMachine.storage` tracks **total** GB (root + data); every change is quota-checked against the
-  owner's `maxStorage` (admins exempt). See [VirtualMachine](/database/virtual-machine.md).
+- `VirtualMachine.storage` tracks **total** GB (root + data); every increase (add or grow) is
+  quota-checked against the owner's `maxStorage` (admins exempt); removal just frees the space. See [VirtualMachine](/database/virtual-machine.md).
 
 # Backups (vzdump)
 
 - `startBackup`: `mode` default `snapshot`, `compress=zstd`, `remove=0` (Proxmox retention never
-  prunes; ProxMate prunes via `pruneOldMateStates`, default keep `MATESTATE_RETENTION` or
-  `vm.backupKeep`).[^pve][^matestate]
+  prunes; ProxMate prunes via `pruneOldMateStates`, keeping `vm.backupKeep`, or
+  `MATESTATE_RETENTION` = 2 when unset).[^pve][^matestate]
 - `createMateState` diffs `listBackups` before/after the task (30 min timeout) to find the new volid;
   rows live in [MateState](/database/mate-state.md).[^matestate]
 - `listBackups`/`getBackupNodes` dedupe by volid because shared storage reports the same volid on

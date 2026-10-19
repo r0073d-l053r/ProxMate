@@ -31,10 +31,13 @@ service, or you changed behaviour that a concept describes.
 | Every concept has `title`, a one-line `description` and `generated: { by, at }` | house style |
 | `generated.by` / `verified[].by` follow the actor convention (`human:<id>`, `process:<id>`, `<producer>/<version>`) | OKF §7 |
 | Every footnote label matches a `sources[].id` | OKF §5.1 |
+| Every `sources[]` entry has a non-empty `resource` | house style |
 | Every internal markdown link resolves to a file in the bundle | house style (stricter than §6.1) |
 | Every directory has an `index.md` linking each concept and subdirectory in it | house style |
+| The bundle holds more than 50 concepts | house style |
 | Every Prisma model has `database/<kebab-name>.md` | sync |
 | Every `*.routes.ts` has `api/<name>.md` | sync |
+| Every `*.service.ts` has `services/<name>.md` | sync |
 | Every `getConfig('…')` / `setConfig('…')` key appears in `config/system-config-keys.md` | sync |
 
 # Steps
