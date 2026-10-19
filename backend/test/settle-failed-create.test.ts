@@ -49,7 +49,7 @@ function pveWith(tags: string | null, task: { status: string; exitstatus?: strin
 
 const kept = () => {
   expect(prisma.virtualMachine.delete).not.toHaveBeenCalled();
-  expect(prisma.virtualMachine.update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: { status: 'error' } });
+  expect(prisma.virtualMachine.update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: expect.objectContaining({ status: 'error', holdReason: expect.any(String) }) });
 };
 const dropped = () => expect(prisma.virtualMachine.delete).toHaveBeenCalledWith({ where: { id: 'rowa' } });
 

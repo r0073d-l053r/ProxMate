@@ -19,7 +19,9 @@ export const kindOf = (vm: { type?: string | null }): pve.GuestKind => (vm.type 
 
 /** Flag a VM as failed in the DB and fire a best-effort vm.error notification. */
 async function markVmError(vmId: string, name: string, err: unknown): Promise<void> {
-  await prisma.virtualMachine.update({ where: { id: vmId }, data: { status: 'error' } });
+  // Held as well: a guest whose provisioning didn't finish never got its isolation
+  // or sizing applied, so nothing may start it (see requireOurGuest).
+  await prisma.virtualMachine.update({ where: { id: vmId }, data: { status: 'error', holdReason: PROVISION_FAILED_MESSAGE } });
   await notify({
     event: 'vm.error',
     title: name,
@@ -181,7 +183,11 @@ export async function requireOurGuest(
   return current;
 }
 
-/** Thrown for anything but repair or delete on a row in `error`. */
+/** holdReason of a row whose create, clone, upload restore or rebuild didn't finish. */
+export const PROVISION_FAILED_MESSAGE =
+  "This machine's provisioning didn't finish, so it can't be started. Delete it, restore a backup or rebuild it — or ask an admin to check it.";
+
+/** Thrown for anything but repair or delete on a held row (or one in `error`). */
 export class GuestErroredError extends Error {
   constructor(detail?: string | null) {
     super(
@@ -201,7 +207,16 @@ export class GuestErroredError extends Error {
  * loaded for this request.
  */
 function assertNotErrored(vm: VirtualMachine): void {
-  if (vm.status === 'error') throw new GuestErroredError(vm.statusMessage);
+  if (vm.holdReason || vm.status === 'error') throw new GuestErroredError(vm.holdReason);
+}
+
+/**
+ * Whether a row's status must be left alone by status syncs and power actions:
+ * a held row (or one in `error`) keeps its state until a repair path clears it,
+ * so viewing or stopping it never makes it startable again.
+ */
+export function isHeld(vm: Pick<VirtualMachine, 'status' | 'holdReason'>): boolean {
+  return !!vm.holdReason || vm.status === 'error';
 }
 
 /**
@@ -403,10 +418,17 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
   const client = await pve.getClient();
   const identity = await guestIdentity(current, client);
   if (identity === 'ours') {
-    // An admin's repair: lift a restore's over-quota hold once the row fits again
-    // (e.g. after the admin raised the owner's quota).
-    if (await withQuotaLock(current.userId, () => liftQuotaHoldIfFits(current.id))) {
-      return (await prisma.virtualMachine.findUnique({ where: { id: current.id } })) ?? current;
+    // An admin's repair. An over-quota hold lifts only once the row fits again
+    // (e.g. after the admin raised the owner's quota); any other hold is the admin's
+    // call — they have checked the guest.
+    if (current.holdReason === QUOTA_HOLD_MESSAGE) {
+      if (await withQuotaLock(current.userId, () => liftQuotaHoldIfFits(current.id))) {
+        return (await prisma.virtualMachine.findUnique({ where: { id: current.id } })) ?? current;
+      }
+      return current;
+    }
+    if (isHeld(current)) {
+      return prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'stopped', holdReason: null } });
     }
     return current;
   }
@@ -1716,12 +1738,12 @@ export async function releaseRestoreReservation(vm: VirtualMachine, r: RestoreRe
   );
 }
 
-/** statusMessage of a row a restore left over its owner's storage quota. */
+/** holdReason of a row a restore left over its owner's storage quota. */
 export const QUOTA_HOLD_MESSAGE =
   "After the restore this machine's disks exceed the owner's storage quota, so it can't be started. " +
   'Remove a data disk (or ask an admin to raise the quota), then start it again — or delete it.';
 
-/** statusMessage of a row whose restore or rollback did not finish. */
+/** holdReason of a row whose restore or rollback did not finish. */
 export const RESTORE_FAILED_MESSAGE =
   "A restore or rollback of this machine didn't finish, so it can't be started. " +
   'Restore a backup again, rebuild it, or delete it.';
@@ -1731,7 +1753,7 @@ export const RESTORE_FAILED_MESSAGE =
  * repair path has re-checked it (see requireOurGuest).
  */
 export async function holdErroredRow(vm: VirtualMachine, message: string): Promise<void> {
-  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'error', statusMessage: message } });
+  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'error', holdReason: message } });
 }
 
 /**
@@ -1741,7 +1763,7 @@ export async function holdErroredRow(vm: VirtualMachine, message: string): Promi
  */
 export async function liftQuotaHoldIfFits(vmId: string): Promise<boolean> {
   const row = await prisma.virtualMachine.findUnique({ where: { id: vmId } });
-  if (!row || row.status !== 'error' || row.statusMessage !== QUOTA_HOLD_MESSAGE) return false;
+  if (!row || row.holdReason !== QUOTA_HOLD_MESSAGE) return false;
   const owner = await prisma.user.findUnique({ where: { id: row.userId } });
   if (owner) {
     try {
@@ -1751,7 +1773,7 @@ export async function liftQuotaHoldIfFits(vmId: string): Promise<boolean> {
       throw err;
     }
   }
-  await prisma.virtualMachine.update({ where: { id: vmId }, data: { status: 'stopped', statusMessage: null } });
+  await prisma.virtualMachine.update({ where: { id: vmId }, data: { status: 'stopped', holdReason: null } });
   return true;
 }
 
@@ -2014,7 +2036,8 @@ export async function getVmWithLiveStatus(
     }
 
     // Keep the DB status loosely in sync with reality.
-    if (live.status && live.status !== currentVm.status && currentVm.status !== 'creating') {
+    // A held row keeps its state: only a repair path may make it startable again.
+    if (live.status && live.status !== currentVm.status && currentVm.status !== 'creating' && !isHeld(currentVm)) {
       await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: live.status } });
       currentVm.status = live.status;
     }
@@ -2369,7 +2392,8 @@ async function rebuildVmLocked(
       );
     }
 
-    await prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'stopped' } });
+    // The rebuilt guest is configured from scratch: a successful rebuild is a repair.
+    await prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'stopped', holdReason: null } });
     const startUpid = await pve.startVm(targetNode, vmid, client);
     await pve.waitForTask(targetNode, startUpid, client);
     // A template rebuild re-runs cloud-init on the fresh clone, so lock it until
@@ -2462,7 +2486,9 @@ export async function stopVm(vm: VirtualMachine, force: boolean): Promise<void> 
   const kind = kindOf(currentVm);
   if (force) await pve.stopVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind);
   else await pve.shutdownVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind);
-  await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'stopped' } });
+  if (!isHeld(currentVm)) {
+    await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'stopped' } });
+  }
 }
 
 export async function restartVm(vm: VirtualMachine): Promise<void> {

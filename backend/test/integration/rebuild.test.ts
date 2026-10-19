@@ -131,7 +131,7 @@ describe('rebuildVm — ISO reinstall', () => {
     getClientMock.mockResolvedValue(client as never);
 
     await expect(rebuildVm(admin, VM, { kind: 'iso', os: 'debian.iso' })).rejects.toThrow('pve create failed');
-    expect(update).toHaveBeenCalledWith({ where: { id: 'vm-1' }, data: { status: 'error' } });
+    expect(update).toHaveBeenCalledWith({ where: { id: 'vm-1' }, data: expect.objectContaining({ status: 'error', holdReason: expect.any(String) }) });
   });
 });
 
@@ -180,7 +180,7 @@ describe('rebuildVm — failure after teardown', () => {
     failingRebuild();
     await expect(rebuildVm(admin, VM, { kind: 'iso', os: 'debian.iso' })).rejects.toThrow('pve create failed');
     expect(del).toHaveBeenCalledWith({ where: { id: 'vm-1' } });
-    expect(update).not.toHaveBeenCalledWith({ where: { id: 'vm-1' }, data: { status: 'error' } });
+    expect(update).not.toHaveBeenCalledWith({ where: { id: 'vm-1' }, data: expect.objectContaining({ status: 'error', holdReason: expect.any(String) }) });
   });
 
   it('keeps the row in error when it has backups to restore from', async () => {
@@ -188,7 +188,7 @@ describe('rebuildVm — failure after teardown', () => {
     vi.mocked(prisma.mateState.count).mockResolvedValueOnce(2 as never);
     await expect(rebuildVm(admin, VM, { kind: 'iso', os: 'debian.iso' })).rejects.toThrow('pve create failed');
     expect(del).not.toHaveBeenCalled();
-    expect(update).toHaveBeenCalledWith({ where: { id: 'vm-1' }, data: { status: 'error' } });
+    expect(update).toHaveBeenCalledWith({ where: { id: 'vm-1' }, data: expect.objectContaining({ status: 'error', holdReason: expect.any(String) }) });
   });
 });
 

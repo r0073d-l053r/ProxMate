@@ -52,8 +52,8 @@ Maps a ProxMate VM id to a Proxmox guest (`proxmoxVmId` on `proxmoxNode`) and ow
 | ram | Int | | Allocated RAM (MB). |
 | storage | Int | | Allocated disk (GB). |
 | os | String | | OS label. |
-| status | String | `@default("creating")` | `creating`, `running`, `stopped`, `error`. An `error` row can only be deleted or repaired (restore, rebuild, admin adoption); nothing may start it or open its console/IDE. |
-| statusMessage | String? | | Why ProxMate put the row in `error` on purpose (e.g. over quota after a restore) and how to recover; null otherwise. |
+| status | String | `@default("creating")` | `creating`, `running`, `stopped`, `error`. A held (`holdReason`) or `error` row can only be deleted or repaired (restore, rebuild, admin adoption); nothing may start it or open its console/IDE. |
+| holdReason | String? | | Set while the guest may not run — provisioning, rebuild or a restore didn't finish, or a restore left it over quota — with how to recover; null otherwise. Live-status syncs, stop and PCI detach never change a held row's status; only `liftQuotaHoldIfFits`, a successful MateState restore / snapshot rollback / rebuild, and admin adoption clear it. |
 | ipAddress | String? | | Guest LAN IP. |
 | tailscaleIp | String? | | Guest Tailscale address (100.64.0.0/10), kept separate from `ipAddress`. |
 | rescueBoot | String? | | JSON snapshot of pre-rescue `{ boot, ide3 }`; non-null while in rescue mode. |

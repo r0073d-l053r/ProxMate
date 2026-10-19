@@ -313,7 +313,7 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
     if (ownerActive) await pve.startVm(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
     await prisma.virtualMachine.update({
       where: { id: vm.id },
-      data: { status: ownerActive ? 'running' : 'stopped', statusMessage: null },
+      data: { status: ownerActive ? 'running' : 'stopped', holdReason: null },
     });
   } catch (err) {
     await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'ready' } });
@@ -406,7 +406,7 @@ export async function rollbackToSnapshot(vm: VirtualMachine, snapname: string): 
     const synced = await settleRestoredGuest(vm, approvedPci, client);
     return await prisma.virtualMachine.update({
       where: { id: synced.id },
-      data: { status: snapCfg['vmstate'] ? 'running' : 'stopped', statusMessage: null },
+      data: { status: snapCfg['vmstate'] ? 'running' : 'stopped', holdReason: null },
     });
   } catch (err) {
     await afterFailedRestore(vm, reservation, taskStarted, err);

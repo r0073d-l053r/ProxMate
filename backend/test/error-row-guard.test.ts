@@ -37,7 +37,7 @@ import { fakeClient, asClient, bodyOf } from './helpers.js';
 
 const ok = (data: unknown) => Promise.resolve({ data: { data } });
 const row = (over: Record<string, unknown> = {}) =>
-  ({ id: 'rowa', userId: 'u1', name: 'web', type: 'qemu', proxmoxVmId: 100, proxmoxNode: 'pve1', status: 'error', statusMessage: null, ...over }) as never;
+  ({ id: 'rowa', userId: 'u1', name: 'web', type: 'qemu', proxmoxVmId: 100, proxmoxNode: 'pve1', status: 'error', holdReason: null, ...over }) as never;
 
 function pve1(tags: string, task: { status: string; exitstatus?: string } = { status: 'stopped', exitstatus: 'OK' }) {
   const c = fakeClient();
@@ -66,7 +66,7 @@ describe('a row in error can\'t be started or handed over (audit MAJOR 1)', () =
 
   it('the shared gate (console, serial, IDE install, rename, …) refuses it, with the row\'s own explanation', async () => {
     pve1(guestMarker('rowa'));
-    await expect(requireOurGuest(row({ statusMessage: 'Over quota after a restore.' }))).rejects.toThrow('Over quota after a restore.');
+    await expect(requireOurGuest(row({ holdReason: 'Over quota after a restore.' }))).rejects.toThrow('Over quota after a restore.');
   });
 
   it('repair and teardown paths are still allowed', async () => {
@@ -100,6 +100,6 @@ describe('late create-task follower (audit MAJOR 1)', () => {
       timeout: 5000,
     });
     // The row stays in error: the tag only lets it be deleted together with its guest.
-    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: { status: 'error' } });
+    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: expect.objectContaining({ status: 'error', holdReason: expect.any(String) }) });
   });
 });

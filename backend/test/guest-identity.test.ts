@@ -99,7 +99,7 @@ describe('failed create', () => {
 
     await expect(createVm(user, input)).rejects.toThrow(/parameter verification/);
     expect(del).toHaveBeenCalledWith({ where: { id: 'rowa' } });
-    expect(update).not.toHaveBeenCalledWith(expect.objectContaining({ data: { status: 'error' } }));
+    expect(update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'error' }) }));
   });
 
   it('drops the row when the VMID turned out to hold another row\'s guest', async () => {
@@ -119,7 +119,7 @@ describe('failed create', () => {
 
     await expect(createVm(user, input)).rejects.toThrow(/start failed/);
     expect(del).not.toHaveBeenCalled();
-    expect(update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: { status: 'error' } });
+    expect(update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: expect.objectContaining({ status: 'error', holdReason: expect.any(String) }) });
   });
 
   it('tags the new guest with its row marker at create time', async () => {

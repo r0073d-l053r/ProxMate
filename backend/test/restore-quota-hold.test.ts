@@ -111,7 +111,7 @@ beforeEach(() => {
   db.rows.clear();
   db.rows.set('rowa', {
     id: 'rowa', userId: 'u1', name: 'web', type: 'qemu', proxmoxVmId: 100, proxmoxNode: 'pve1',
-    cpu: 1, ram: 1024, storage: 32, hasPassthrough: false, quotaExempt: false, status: 'running', statusMessage: null,
+    cpu: 1, ram: 1024, storage: 32, hasPassthrough: false, quotaExempt: false, status: 'running', holdReason: null,
   });
 });
 
@@ -157,7 +157,7 @@ describe('a restore that leaves the guest over its storage quota (audit MAJOR 2)
     expect(state.cfg['net0']).toContain('bridge=vmbr0');
     expect(pve.configureVmIsolation).toHaveBeenCalled();
     expect(started(c)).toBe(false);
-    expect(db.rows.get('rowa')).toMatchObject({ storage: 332, status: 'error', statusMessage: QUOTA_HOLD_MESSAGE });
+    expect(db.rows.get('rowa')).toMatchObject({ storage: 332, status: 'error', holdReason: QUOTA_HOLD_MESSAGE });
     await expect(startVm(db.rows.get('rowa') as never)).rejects.toBeInstanceOf(GuestErroredError);
   });
 
@@ -165,7 +165,7 @@ describe('a restore that leaves the guest over its storage quota (audit MAJOR 2)
     fakePve(LIVE, big);
     await expect(restoreFromMateState(db.rows.get('rowa') as never, ms)).rejects.toBeInstanceOf(QuotaError);
     await removeDataDisk(db.rows.get('rowa') as never, 'scsi1');
-    expect(db.rows.get('rowa')).toMatchObject({ storage: 32, status: 'stopped', statusMessage: null });
+    expect(db.rows.get('rowa')).toMatchObject({ storage: 32, status: 'stopped', holdReason: null });
   });
 });
 
@@ -175,14 +175,14 @@ describe('a restore that fails after its task ran (audit MAJOR 2)', () => {
     vi.mocked(pve.configureVmIsolation).mockRejectedValueOnce(new Error('firewall API down'));
     await expect(restoreFromMateState(db.rows.get('rowa') as never, ms)).rejects.toThrow(/firewall API down/);
     expect(started(c)).toBe(false);
-    expect(db.rows.get('rowa')).toMatchObject({ status: 'error', statusMessage: RESTORE_FAILED_MESSAGE });
+    expect(db.rows.get('rowa')).toMatchObject({ status: 'error', holdReason: RESTORE_FAILED_MESSAGE });
   });
 
   it('a successful restore clears the error and records the guest as running', async () => {
-    db.rows.set('rowa', { ...db.rows.get('rowa')!, status: 'error', statusMessage: RESTORE_FAILED_MESSAGE });
+    db.rows.set('rowa', { ...db.rows.get('rowa')!, status: 'error', holdReason: RESTORE_FAILED_MESSAGE });
     const { c } = fakePve(LIVE);
     await restoreFromMateState(db.rows.get('rowa') as never, ms);
     expect(started(c)).toBe(true);
-    expect(db.rows.get('rowa')).toMatchObject({ status: 'running', statusMessage: null });
+    expect(db.rows.get('rowa')).toMatchObject({ status: 'running', holdReason: null });
   });
 });

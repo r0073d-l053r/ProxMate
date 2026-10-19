@@ -225,7 +225,7 @@ describe('MateState restore and the owner\'s compute-access window (BUG-067)', (
     await restoreFromMateState(row(), ms);
     expect(c.post.mock.calls.some((x) => x[0] === '/nodes/pve1/qemu')).toBe(true);
     expect(c.post.mock.calls.some((x) => /status\/start$/.test(String(x[0])))).toBe(false);
-    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: { status: 'stopped', statusMessage: null } });
+    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: { status: 'stopped', holdReason: null } });
   });
 
   it('starts the guest while the window is open', async () => {
