@@ -459,24 +459,29 @@ router.post('/bulk', async (req: Request, res: Response) => {
     return;
   }
   const { action, ids } = parsed.data;
-  const results: Array<{ id: string; ok: boolean; error?: string }> = [];
-  for (const id of ids) {
+  const one = async (id: string): Promise<{ id: string; ok: boolean; error?: string }> => {
     const vm = await getOwnedVm(id, user);
-    if (!vm) { results.push({ id, ok: false, error: 'not found' }); continue; }
+    if (!vm) return { id, ok: false, error: 'not found' };
     // Same lock as the single-VM stop/restart/delete routes (start is never locked);
     // a locked VM is reported as a per-item failure so the rest still proceed.
     const locked = action === 'start' ? null : lockReason(vm);
-    if (locked) { results.push({ id, ok: false, error: locked }); continue; }
+    if (locked) return { id, ok: false, error: locked };
     try {
       if (action === 'start') await startVm(vm);
       else if (action === 'stop') await stopVm(vm, false);
       else if (action === 'restart') await restartVm(vm);
       else await destroyVm(vm);
-      results.push({ id, ok: true });
+      return { id, ok: true };
     } catch (err) {
-      results.push({ id, ok: false, error: pveMessage(err) });
+      return { id, ok: false, error: pveMessage(err) };
     }
-  }
+  };
+  // A stop waits for each guest to go down (bounded per guest), so stops run side by
+  // side: one after another, a handful of slow guests would outlast a reverse proxy's
+  // request timeout. The other actions keep their one-at-a-time order.
+  const results: Array<{ id: string; ok: boolean; error?: string }> = [];
+  if (action === 'stop') results.push(...(await Promise.all(ids.map(one))));
+  else for (const id of ids) results.push(await one(id));
   const ok = results.filter((r) => r.ok).length;
   await recordAudit({
     action: `vm.bulk_${action}`, actor: user, targetType: 'vm',

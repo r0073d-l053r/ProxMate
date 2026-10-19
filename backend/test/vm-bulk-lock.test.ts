@@ -24,6 +24,7 @@ vi.mock('../src/services/audit.service.js', () => ({
 }));
 const ROWS: Record<string, Record<string, unknown>> = {
   ready: { id: 'ready', userId: 'u1', name: 'a', proxmoxVmId: 100, proxmoxNode: 'pve1', ideState: null, deployState: 'ready' },
+  ready2: { id: 'ready2', userId: 'u1', name: 'a2', proxmoxVmId: 103, proxmoxNode: 'pve1', ideState: null, deployState: 'ready' },
   deploying: { id: 'deploying', userId: 'u1', name: 'b', proxmoxVmId: 101, proxmoxNode: 'pve1', ideState: null, deployState: 'deploying' },
   ide: { id: 'ide', userId: 'u1', name: 'c', proxmoxVmId: 102, proxmoxNode: 'pve1', ideState: 'installing', deployState: null },
 };
@@ -84,6 +85,28 @@ describe('POST /api/vms/bulk', () => {
     await post('/vms/bulk', { action: 'restart', ids: ['ide'] });
     expect(vmService.stopVm).not.toHaveBeenCalled();
     expect(vmService.restartVm).not.toHaveBeenCalled();
+  });
+
+  it('stops several VMs side by side so the request is not the sum of every shutdown', async () => {
+    // A stop waits for the guest to go down; one after another, a few slow guests
+    // would outlast a reverse proxy's request timeout.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    vi.mocked(vmService.stopVm).mockImplementation(async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 30));
+      inFlight--;
+    });
+    const res = await post('/vms/bulk', { action: 'stop', ids: ['ready', 'ready2', 'deploying'] });
+    const { results } = (await res.json()) as { results: Array<{ id: string; ok: boolean }> };
+    expect(results.map((r) => [r.id, r.ok])).toEqual([
+      ['ready', true],
+      ['ready2', true],
+      ['deploying', false],
+    ]);
+    expect(vmService.stopVm).toHaveBeenCalledTimes(2);
+    expect(maxInFlight).toBe(2);
   });
 
   it('still starts a locked VM, as the single-VM start route does', async () => {

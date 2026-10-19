@@ -129,9 +129,12 @@ export async function runDuePowerActions(now: Date = new Date()): Promise<{ star
 
   let started = 0;
   let stopped = 0;
-  for (const vm of vms) {
+  // Side by side, not one after another: a stop waits for the guest to go down, and
+  // waiting on each in turn could hold this tick past the next minute, whose
+  // schedules would then never fire (the tick skips while one is still running).
+  await Promise.all(vms.map(async (vm) => {
     const status = statusByVmid.get(vm.proxmoxVmId);
-    if (!status) continue; // VM not visible right now — skip this tick
+    if (!status) return; // VM not visible right now — skip this tick
     try {
       if (vm.startCron && cronMatches(vm.startCron, now) && status !== 'running') {
         await startVm(vm);
@@ -145,7 +148,7 @@ export async function runDuePowerActions(now: Date = new Date()): Promise<{ star
     } catch (err) {
       console.error(`[power-schedule] action for vm ${vm.proxmoxVmId} failed:`, err);
     }
-  }
+  }));
   return { started, stopped };
 }
 
