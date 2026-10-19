@@ -32,6 +32,7 @@ Single place where periodic work is registered. `startScheduler()` is called fro
 | Template refresh | `0 4 1 * *` (1st, 04:00) | `TEMPLATE_REFRESH_CRON` | `templateRunning` | [template](/services/template.md) `refreshAllTemplates`, only if `template_refresh_enabled === 'true'` |
 | App-DB backup | `30 2 * * *` | `APPDB_BACKUP_CRON` | `appDbRunning` | [appdb-backup](/services/appdb-backup.md) `runAppDbBackup` (no-op without a dir) |
 | Guest ownership-tag backfill | `*/15 * * * *` | — | `markerRunning` | [vm](/services/vm.md) `runGuestMarkerBackfill`; a no-op once a pass completed without Proxmox errors (also run at boot from index.ts) |
+| Malformed stored schedules report | once, 20 s after start | — | — | [power-schedule](/services/power-schedule.md) `reportInvalidStoredCrons` |
 | Access-expiry sweep | `20 * * * *` | `ACCESS_EXPIRY_CRON` | `accessRunning` | [access-sweep](/services/access-sweep.md) `runAccessExpiryTick`; also once 15 s after start |
 
 # Key functions

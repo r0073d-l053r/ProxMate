@@ -64,6 +64,11 @@ describe('isValidCron', () => {
     expect(isValidCron('*/15 0-6/2 1,15 1-12 1-5')).toBe(true);
   });
 
+  it('a malformed field never matches, even at a value an earlier list item names', () => {
+    expect(cronMatches('0 1,,2 * * *', new Date(2026, 0, 5, 1, 0))).toBe(false);
+    expect(cronMatches('0 1,99 * * *', new Date(2026, 0, 5, 1, 0))).toBe(false);
+  });
+
   it('an empty list item never matches as 0', () => {
     expect(cronMatches('0 1,,2 * * *', new Date(2026, 0, 5, 0, 0))).toBe(false);
   });

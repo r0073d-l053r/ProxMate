@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { runScheduledBackups, runDueBackups } from './matestate.service.js';
-import { runDuePowerActions, previousCronOccurrence } from './power-schedule.service.js';
+import { runDuePowerActions, previousCronOccurrence, reportInvalidStoredCrons } from './power-schedule.service.js';
 import { sampleResourceUsage, pruneResourceSamples } from './resource-history.service.js';
 import { evaluateAlerts } from './alert.service.js';
 import { refreshAllTemplates } from './template.service.js';
@@ -150,6 +150,9 @@ export function startScheduler(): void {
   setTimeout(() => {
     void catchUpMissedBackups().catch((err) => console.error('[scheduler] catch-up check failed:', err));
   }, 10_000);
+
+  // Schedules stored before validation was strict may never fire; say so once at boot.
+  setTimeout(() => void reportInvalidStoredCrons(), 20_000);
 
   // Per-minute tick that applies due per-VM power schedules (auto start/stop).
   powerTask = cron.schedule('* * * * *', async () => {

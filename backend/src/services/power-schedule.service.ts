@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { recordAudit } from './audit.service.js';
 import * as pve from './proxmox.service.js';
 import { startVm, stopVm } from './vm.service.js';
+import { notify } from './notify.service.js';
 
 /**
  * Minimal 5-field cron evaluation (minute resolution) — enough for ProxMate's
@@ -27,12 +28,11 @@ function parseCronToken(token: string, min: number, max: number): { lo: number; 
 
 function fieldMatches(field: string, value: number, min: number, max: number): boolean {
   if (field === '*') return true;
-  for (const token of field.split(',')) {
-    const t = parseCronToken(token, min, max);
-    if (!t) return false; // a malformed field matches nothing
-    if (value >= t.lo && value <= t.hi && (value - t.lo) % t.step === 0) return true;
-  }
-  return false;
+  // Parse the whole field first: a malformed field matches nothing at all, rather
+  // than matching whichever values its well-formed items happen to name.
+  const tokens = field.split(',').map((token) => parseCronToken(token, min, max));
+  if (tokens.some((t) => t === null)) return false;
+  return tokens.some((t) => value >= t!.lo && value <= t!.hi && (value - t!.lo) % t!.step === 0);
 }
 
 /** Day-of-week, honoring cron's 0-or-7 = Sunday convention (JS getDay() is 0–6). */
@@ -147,4 +147,44 @@ export async function runDuePowerActions(now: Date = new Date()): Promise<{ star
     }
   }
   return { started, stopped };
+}
+
+/**
+ * Stored schedules that fail {@link isValidCron} — saved before validation was
+ * strict, or edited by hand. They never fire, so an admin has to hear about them.
+ */
+export async function findInvalidStoredCrons(): Promise<
+  Array<{ id: string; name: string; field: 'startCron' | 'stopCron' | 'backupCron'; value: string }>
+> {
+  const vms = await prisma.virtualMachine.findMany({
+    where: { OR: [{ startCron: { not: null } }, { stopCron: { not: null } }, { backupCron: { not: null } }] },
+    select: { id: true, name: true, startCron: true, stopCron: true, backupCron: true },
+  });
+  const bad: Array<{ id: string; name: string; field: 'startCron' | 'stopCron' | 'backupCron'; value: string }> = [];
+  for (const vm of vms) {
+    for (const field of ['startCron', 'stopCron', 'backupCron'] as const) {
+      const value = vm[field];
+      if (value && !isValidCron(value)) bad.push({ id: vm.id, name: vm.name, field, value });
+    }
+  }
+  return bad;
+}
+
+/** Startup check: log and notify admins about stored schedules that will never fire. Never throws. */
+export async function reportInvalidStoredCrons(): Promise<number> {
+  try {
+    const bad = await findInvalidStoredCrons();
+    if (bad.length === 0) return 0;
+    const lines = bad.map((b) => `${b.name} (${b.id}): ${b.field} "${b.value}"`);
+    console.warn(`[scheduler] ${bad.length} stored schedule(s) are malformed and will never run:\n  ${lines.join('\n  ')}`);
+    await notify({
+      event: 'vm.error',
+      title: `${bad.length} VM schedule(s) are malformed and will never run`,
+      message: `Re-save these schedules on each VM's page:\n${lines.join('\n')}`,
+    }).catch(() => undefined);
+    return bad.length;
+  } catch (err) {
+    console.error('[scheduler] could not check stored schedules:', err);
+    return 0;
+  }
 }
