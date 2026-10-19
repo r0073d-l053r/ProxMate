@@ -52,7 +52,7 @@ OpenCode runs inside the tenant's VM with no ProxMate session cookie. It instead
 
 # Gotchas
 
-- Deleting a VM does not delete its token row (no FK); the token becomes useless because verification re-loads the VM live.[^gw]
+- There is no FK to the VM, so `destroyVm` and template conversion delete the VM's token rows in the same transaction as the VM row; verification also re-loads the VM live.[^gw]
 - `revokeGatewayToken` exists but no route or service outside its own module calls it.[^gw]
 
 [^schema]: backend/prisma/schema.prisma

@@ -27,7 +27,7 @@ Templates are Proxmox template VMs registered as [Template](/database/template.m
 | `register` | `(input: RegisterTemplateInput) => Template` | Upsert by `proxmoxVmId`; auto-detects disk size, `cloudInit` (`isCloudInitTemplate`) and arch (`aarch64` → arm64) when not given; sets `published: true`. |
 | `updateTemplate` | `(id, { notes?, description?, icon? })` | Admin edits. |
 | `unregister` | `(id)` | Deletes the Proxmox template VM (tolerates already gone) then the row; rethrows other errors (e.g. "still has linked clones"), keeping the row. |
-| `convertVmToTemplate` | `(vm, meta)` | Stops, converts on Proxmox, deletes the VirtualMachine row, registers the template. |
+| `convertVmToTemplate` | `(vm, meta)` | Stops, converts on Proxmox, deletes the VirtualMachine row and its IDE credential rows in one transaction, registers the template. |
 | `CURATED_IMAGES` / `curatedImagesWithArch` / `archFromImageUrl` | consts / helpers | Vetted qcow2/img cloud images (Debian, Ubuntu, Fedora, Alma, Rocky, CentOS Stream, Oracle, openSUSE, Arch, ARM64 variants); arch inferred from `arm64`/`aarch64` in the URL. |
 | `addCloudImage` | `(input) => Template` | `buildCloudTemplateVm` then `register` with `cloudInit: true`, `sourceUrl`, measured `guestAgent`. |
 | `refreshTemplate` | `(id)` | Rebuild from `sourceUrl`, repoint the SAME row (id/name/notes/icon kept), set `refreshedAt`, delete the old template VM. |

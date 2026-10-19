@@ -179,7 +179,12 @@ export async function convertVmToTemplate(
   await pve.convertToTemplate(vm.proxmoxNode, vm.proxmoxVmId, client);
 
   // It's no longer a usable VM — move the record into the template store.
-  await prisma.virtualMachine.delete({ where: { id: vm.id } });
+  // Its IDE credential rows (keyed by VM id, no relation) go with it.
+  await prisma.$transaction([
+    prisma.virtualMachine.delete({ where: { id: vm.id } }),
+    prisma.ideGuestSecret.deleteMany({ where: { vmId: vm.id } }),
+    prisma.ideGatewayToken.deleteMany({ where: { vmId: vm.id } }),
+  ]);
   return register({
     proxmoxVmId: vm.proxmoxVmId,
     node: vm.proxmoxNode,

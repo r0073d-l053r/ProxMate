@@ -39,7 +39,7 @@ Holds the random secret generated for a VM's IDE install. The guest receives onl
 
 # Gotchas
 
-- Deleting a VM does not delete its row (no FK, like [IdeGatewayToken](/database/ide-gateway-token.md)); the row is useless without the VM.[^schema]
+- There is no FK (like [IdeGatewayToken](/database/ide-gateway-token.md)), so `destroyVm` and template conversion delete the VM's row in the same transaction as the VM row.[^schema]
 
 [^schema]: backend/prisma/schema.prisma
 [^guest]: backend/src/services/ide-guest-auth.service.ts
