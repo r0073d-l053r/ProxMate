@@ -111,15 +111,19 @@ router.use(enforceMfaSetup);
  * the response) when locked, so callers just `if (rejectIfLocked(vm, res)) return;`.
  */
 function rejectIfLocked(vm: { ideState: string | null; deployState: string | null }, res: Response): boolean {
-  if (isIdeInstalling(vm)) {
-    res.status(409).json({ error: 'The ProxMate IDE is installing on this VM — wait until it finishes.' });
-    return true;
-  }
-  if (isDeploying(vm)) {
-    res.status(409).json({ error: "This VM is still finishing its cloud-init setup — wait until it's ready." });
+  const reason = lockReason(vm);
+  if (reason) {
+    res.status(409).json({ error: reason });
     return true;
   }
   return false;
+}
+
+/** Why the VM is locked against destructive actions, or null when it isn't. */
+function lockReason(vm: { ideState: string | null; deployState: string | null }): string | null {
+  if (isIdeInstalling(vm)) return 'The ProxMate IDE is installing on this VM — wait until it finishes.';
+  if (isDeploying(vm)) return "This VM is still finishing its cloud-init setup — wait until it's ready.";
+  return null;
 }
 
 /**
@@ -459,6 +463,10 @@ router.post('/bulk', async (req: Request, res: Response) => {
   for (const id of ids) {
     const vm = await getOwnedVm(id, user);
     if (!vm) { results.push({ id, ok: false, error: 'not found' }); continue; }
+    // Same lock as the single-VM stop/restart/delete routes (start is never locked);
+    // a locked VM is reported as a per-item failure so the rest still proceed.
+    const locked = action === 'start' ? null : lockReason(vm);
+    if (locked) { results.push({ id, ok: false, error: locked }); continue; }
     try {
       if (action === 'start') await startVm(vm);
       else if (action === 'stop') await stopVm(vm, false);
@@ -916,6 +924,7 @@ router.post('/:id/migrate', async (req: Request, res: Response) => {
   }
   const vm = await getOwnedVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (rejectIfLocked(vm, res)) return;
   const parsed = MigrateSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Choose a target node.' }); return; }
   try {
