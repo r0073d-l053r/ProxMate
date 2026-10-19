@@ -127,7 +127,7 @@ All schedules are read in `scheduler.service.ts`.[^scheduler]
 - **ENCRYPTION_KEY auto-generation:** when the variable is unset, `index.ts` generates `randomBytes(32).toString('hex')`, sets it on the process and writes it into `.env` in the current working directory, but **only if that `.env` file already exists**. Without a `.env`, a new key is generated on every start and previously encrypted secrets become undecryptable. Never change the key after setup.[^index][^env-example]
 - `config/env.ts` is dead code. Changing its defaults has no effect.[^env-ts]
 - The logger header comment mentions `LOG_PRETTY=1`, but no code reads that variable.
-- Numeric variables are parsed with `Number(...)`, so a non-numeric value becomes `NaN`. Some readers clamp the result with `Math.max` (lockout, retries, cooldown), but `Math.max` returns `NaN` for a `NaN` input, so the clamp does not catch a non-numeric value. The rate-limit values are not clamped at all.[^rate-limit]
+- The lockout, alert cooldown, Proxmox timeout and retries, resource-history retention and live-feed interval are read with `envNumber` (`lib/env-number.ts`): an unset, empty or non-numeric value falls back to the default, and a value below the minimum is raised to it. The rate-limit values are still parsed with a bare `Number(...)`, so a non-numeric value there becomes `NaN` and is not clamped.[^rate-limit]
 
 [^env-example]: .env.example
 [^env-ts]: backend/src/config/env.ts

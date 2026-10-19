@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import * as pve from './proxmox.service.js';
+import { envNumber } from '../lib/env-number.js';
 
 /**
  * Per-tenant resource history. A scheduler tick samples every running VM's live
@@ -7,7 +8,7 @@ import * as pve from './proxmox.service.js';
  * owner over a window ("who consumed what last week"). Complements the live-only
  * Admin Monitor. Samples are denormalized + pruned to a rolling retention window.
  */
-const RETENTION_DAYS = Math.max(1, Number(process.env['RESOURCE_HISTORY_DAYS'] ?? 14));
+const RETENTION_DAYS = envNumber('RESOURCE_HISTORY_DAYS', 14, 1);
 const DAY_MS = 86_400_000;
 
 interface PveResource {

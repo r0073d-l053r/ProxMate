@@ -1,5 +1,6 @@
 import type { Response } from 'express';
 import { getClient } from './proxmox.service.js';
+import { envNumber } from '../lib/env-number.js';
 
 export interface LiveStat {
   status: string;
@@ -75,7 +76,7 @@ export async function getLiveStats(): Promise<Record<number, LiveStat>> {
 // to prevent a memory leak from clients that disconnect without firing 'close'.
 const subscribers = new Set<Response>();
 let feedTimer: ReturnType<typeof setInterval> | null = null;
-const FEED_INTERVAL_MS = Math.max(250, Number(process.env['LIVE_FEED_INTERVAL_MS'] ?? 1000));
+const FEED_INTERVAL_MS = envNumber('LIVE_FEED_INTERVAL_MS', 1000, 250);
 
 function isDead(res: Response): boolean {
   // writableEnded: response fully sent; destroyed: socket gone; writable false: can't write

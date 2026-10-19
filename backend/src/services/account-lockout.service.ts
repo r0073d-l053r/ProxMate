@@ -4,6 +4,7 @@ import { recordAudit } from './audit.service.js';
 import { getMailConfig, sendMail } from './mail.service.js';
 import { notifyWebhook } from './notify.service.js';
 import { accountLockedEmail } from '../lib/email-templates.js';
+import { envNumber } from '../lib/env-number.js';
 
 /**
  * Per-account brute-force lockout. The IP rate limiter (rate-limit.ts) blocks a
@@ -12,8 +13,8 @@ import { accountLockedEmail } from '../lib/email-templates.js';
  * account is locked for `LOCK_MINUTES`, auto-unlocking — never a permanent lock,
  * so an attacker can't weaponise it into a denial-of-service. Tunable via env.
  */
-const MAX = Math.max(1, Number(process.env.AUTH_LOCKOUT_MAX ?? 10));
-const LOCK_MINUTES = Math.max(1, Number(process.env.AUTH_LOCKOUT_MINUTES ?? 15));
+const MAX = envNumber('AUTH_LOCKOUT_MAX', 10, 1);
+const LOCK_MINUTES = envNumber('AUTH_LOCKOUT_MINUTES', 15, 1);
 
 type LockFields = Pick<User, 'id' | 'email' | 'failedLoginAttempts' | 'lockedUntil'>;
 
