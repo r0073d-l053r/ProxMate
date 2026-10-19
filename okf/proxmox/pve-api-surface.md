@@ -4,7 +4,7 @@ title: Proxmox VE API surface
 description: How ProxMate's backend builds its Proxmox VE REST client (API-token auth, TLS, retries, credential redaction, task polling, error mapping) and every Proxmox path it calls.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts
 tags: [proxmate, proxmox, api, http-client, integration]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: pve
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts
@@ -156,10 +156,10 @@ literal path segment); rows marked qemu use the `qemu` segment only. Paths are r
 | GET | `/nodes/{node}/network?type=any_bridge` | `getGuestNetworks` | Linux/OVS bridges per online node (the code comment says PVE 8+ also lists applied VNets here); nodes queried in parallel, per-node failure tolerated |
 | GET | `/nodes/{node}/network` | `getGuestNetworks` | Unfiltered fallback when the `any_bridge` request fails; filtered to `bridge`/`OVSBridge`/`vnet` types in code |
 | GET | `/nodes/{node}/network/{bridge}` | `getBridgeGateway`, `getBridgeNetwork` | Bridge `gateway` and `cidr` |
-| POST | `/nodes/{node}/qemu` | `createVm`, `createCloudInitVm`, `restoreBackup` (qemu), `restoreNewGuest` (qemu) | Create VM, or restore with `archive=` |
-| POST | `/nodes/{node}/lxc` | `createLxc`, `restoreBackup` (lxc), `restoreNewGuest` (lxc) | Create container, or restore with `ostemplate=` + `restore=1` |
+| POST | `/nodes/{node}/qemu` | `createVm`, `createCloudInitVm`, `restoreBackup` (qemu), `restoreNewGuest` (qemu) | Create VM (with `tags` carrying the ownership tag), or restore with `archive=` |
+| POST | `/nodes/{node}/lxc` | `createLxc`, `restoreBackup` (lxc), `restoreNewGuest` (lxc) | Create container (with `tags`), or restore with `ostemplate=` + `restore=1` |
 | GET | `/nodes/{node}/{kind}/{vmid}/config` | `getVmConfig`; `migratePreflight` (qemu) | Guest config as string map |
-| PUT | `/nodes/{node}/{kind}/{vmid}/config` | `setVmResources`, `setVmName`, `ensureNicFirewall`, `setVmVlanTag`, `setVmBridge`, `ensureHostCpu` | cores/memory, name or hostname, `netN` rewrites, `cpu=host` |
+| PUT | `/nodes/{node}/{kind}/{vmid}/config` | `setVmResources`, `setVmName`, `ensureNicFirewall`, `setVmVlanTag`, `setVmBridge`, `ensureHostCpu`; `markClonedGuest` / `markTemplateGuest` / the ownership-tag backfill (vm.service) | cores/memory, name or hostname, `netN` rewrites, `cpu=host`, `tags` (ProxMate's `proxmate-<id>` ownership tag, other tags kept) |
 | PUT | `/nodes/{node}/qemu/{vmid}/config` | `setCloudInitConfig`, `attachDisk`, `removeDisk`, `deleteVmConfigKeys`, `addCloudInitDrive`, `attachPci`, `detachPci`, `applyRescueConfig`, `restoreBootConfig`; `configureClonedVm` (vm.service, `vga=std`); `bakeGuestAgent` (template.service) | QEMU-only config edits |
 | PUT | `/nodes/{node}/{kind}/{vmid}/resize` | `resizeDisk` | Grow a disk to an absolute `size=<N>G` |
 | POST | `/nodes/{node}/qemu/{vmid}/template` | `convertToTemplate` | Convert a stopped VM to a template |
