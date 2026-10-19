@@ -285,12 +285,11 @@ export async function saveDefaults(data: {
 
 // ─── Step 4: Finalize setup ───────────────────────────────────
 
-export async function completeSetup(): Promise<{
-  token: string;
-  csrfToken: string;
-  expiresAt: Date;
-  user: { id: string; email: string; role: string; displayName: string };
-}> {
+/**
+ * Mark setup finished. The route only lets the admin's own session reach this,
+ * so no new session is minted: the wizard keeps the one it got in step 1.
+ */
+export async function completeSetup(): Promise<void> {
   const admin = await prisma.user.findFirst({ where: { role: 'admin' } });
   if (!admin) throw new Error('Admin account not found — complete step 1 first');
 
@@ -298,12 +297,4 @@ export async function completeSetup(): Promise<{
     await setConfig('jwt_secret', randomBytes(64).toString('hex'), true);
   }
   await setConfig('setup_complete', 'true');
-
-  const { token, csrfToken, expiresAt } = await createSession(admin.id);
-  return {
-    token,
-    csrfToken,
-    expiresAt,
-    user: { id: admin.id, email: admin.email, role: admin.role, displayName: admin.displayName },
-  };
 }
