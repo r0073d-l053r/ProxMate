@@ -60,7 +60,7 @@ No router-level middleware; each route picks its own:[^routes]
 | POST | `/api/auth/2fa/enable` | requireAuthOrEnrollment + requireSession | `{ code }`; returns `{ recoveryCodes }`. Audited `auth.2fa_enabled`. |
 | POST | `/api/auth/2fa/disable` | requireAuth + requireSession | `{ code }`. Audited `auth.2fa_disabled`. |
 | GET | `/api/auth/2fa/status` | requireAuth + requireSession | TOTP status. |
-| POST | `/api/auth/passkeys/auth/options` | public + authLimiter | Usernameless passkey login options; sets `proxmate_webauthn` cookie (5 min). |
+| POST | `/api/auth/passkeys/auth/options` | public + authLimiter | Usernameless passkey login options; sets `proxmate_webauthn` cookie (5 min) holding a handle to the challenge, which stays server-side. Every passkey verify route accepts only a challenge the server issued for that ceremony (and user), once. |
 | POST | `/api/auth/passkeys/auth/verify` | public + authLimiter | Verify assertion and issue a session. |
 | POST | `/api/auth/passkeys/register/options` | requireAuthOrEnrollment + requireSession | Passkey registration options. |
 | POST | `/api/auth/passkeys/register/verify` | requireAuthOrEnrollment + requireSession | `{ response, name? }`; stores the passkey. Audited `auth.passkey_added`. |

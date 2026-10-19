@@ -31,6 +31,7 @@ import {
   clearSsoCookie,
   SSO_COOKIE,
 } from '../lib/cookies.js';
+import { issueWebauthnChallenge, takeWebauthnChallenge } from '../lib/webauthn-challenges.js';
 import { requireAuth, requireSession, allowExpiredAccess } from '../middleware/auth.js';
 import { requireAuthOrEnrollment } from '../middleware/enrollment.js';
 import { authLimiter, publicTokenLimiter, kioskExitLimiter } from '../middleware/rate-limit.js';
@@ -372,7 +373,7 @@ router.post('/kiosk-exit/passkey-options', kioskExitLimiter, requireAuth, requir
     return;
   }
   const options = await passkeys.authenticationOptions();
-  setChallengeCookie(res, options.challenge);
+  setChallengeCookie(res, issueWebauthnChallenge(options.challenge, 'kiosk-exit', (req as AuthRequest).user.id));
   res.json(options);
 });
 
@@ -382,14 +383,14 @@ router.post('/kiosk-exit/passkey-verify', kioskExitLimiter, requireAuth, require
     res.status(403).json({ error: 'Kiosk mode is admin-only.' });
     return;
   }
-  const challenge = req.cookies?.[WEBAUTHN_COOKIE];
+  const challenge = takeWebauthnChallenge(req.cookies?.[WEBAUTHN_COOKIE], 'kiosk-exit', ar.user.id);
+  clearChallengeCookie(res);
   if (!challenge) {
     res.status(400).json({ error: 'Passkey challenge expired — please try again.' });
     return;
   }
   try {
     const userId = await passkeys.verifyAuthentication(req.body, challenge);
-    clearChallengeCookie(res);
     // Must be THIS admin's own passkey — no session is issued either way.
     if (userId !== ar.user.id) {
       res.status(401).json({ error: "That passkey isn't for this account." });
@@ -519,20 +520,21 @@ router.get('/2fa/status', requireAuth, requireSession, async (req: Request, res:
 // Passwordless login: request assertion options (usernameless / discoverable).
 router.post('/passkeys/auth/options', authLimiter, async (_req: Request, res: Response) => {
   const options = await passkeys.authenticationOptions();
-  setChallengeCookie(res, options.challenge);
+  // The cookie holds only a handle; the challenge itself stays server-side.
+  setChallengeCookie(res, issueWebauthnChallenge(options.challenge, 'login'));
   res.json(options);
 });
 
 // Passwordless login: verify the assertion → issue a real session.
 router.post('/passkeys/auth/verify', authLimiter, async (req: Request, res: Response) => {
-  const challenge = req.cookies?.[WEBAUTHN_COOKIE];
+  const challenge = takeWebauthnChallenge(req.cookies?.[WEBAUTHN_COOKIE], 'login');
+  clearChallengeCookie(res);
   if (!challenge) {
     res.status(400).json({ error: 'Passkey challenge expired — please try again.' });
     return;
   }
   try {
     const userId = await passkeys.verifyAuthentication(req.body, challenge);
-    clearChallengeCookie(res);
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
       res.status(401).json({ error: 'Account not found.' });
@@ -562,14 +564,16 @@ router.post('/passkeys/auth/verify', authLimiter, async (req: Request, res: Resp
 router.post('/passkeys/register/options', requireAuthOrEnrollment, requireSession, async (req: Request, res: Response) => {
   const u = (req as AuthRequest).user;
   const options = await passkeys.registrationOptions(u.id, u.email);
-  setChallengeCookie(res, options.challenge);
+  setChallengeCookie(res, issueWebauthnChallenge(options.challenge, 'register', u.id));
   res.json(options);
 });
 
 const PasskeyRegisterSchema = z.object({ response: z.any(), name: z.string().max(100).optional() });
 
 router.post('/passkeys/register/verify', requireAuthOrEnrollment, requireSession, async (req: Request, res: Response) => {
-  const challenge = req.cookies?.[WEBAUTHN_COOKIE];
+  const u = (req as AuthRequest).user;
+  const challenge = takeWebauthnChallenge(req.cookies?.[WEBAUTHN_COOKIE], 'register', u.id);
+  clearChallengeCookie(res);
   if (!challenge) {
     res.status(400).json({ error: 'Passkey challenge expired — please try again.' });
     return;
@@ -579,10 +583,8 @@ router.post('/passkeys/register/verify', requireAuthOrEnrollment, requireSession
     res.status(400).json({ error: 'Validation failed' });
     return;
   }
-  const u = (req as AuthRequest).user;
   try {
     await passkeys.verifyRegistration(u.id, parsed.data.response, challenge, parsed.data.name ?? 'Passkey');
-    clearChallengeCookie(res);
     await recordAudit({ action: 'auth.passkey_added', actor: u, req });
     res.json({ success: true });
   } catch (err) {
