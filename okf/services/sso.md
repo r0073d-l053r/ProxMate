@@ -27,7 +27,7 @@ Single sign-on against any OIDC provider (e.g. Keycloak).[^sso]
 | `verifyDiscovery` | `()` | Admin "Test": fresh discovery (`.well-known` + JWKS). |
 | `beginLogin` | `() => { url, cookie }` | PKCE S256 verifier, state, nonce; cookie value is JSON `{ state, nonce, codeVerifier }`. |
 | `completeLogin` | `(currentUrl, cookieValue) => User` | `authorizationCodeGrant` validating state, PKCE, nonce, signature, issuer, audience, expiry; normalises claims. |
-| `upsertSsoUser` | `(claims, cfg) => User` | Link by `ssoSubject`, else link by email (only to an account with `emailBound`; otherwise throws, telling the user to sign in with their password), else JIT-create if `allowSignup`; promote to admin by group. |
+| `upsertSsoUser` | `(claims, cfg) => User` | Link by `ssoSubject`, else link by email (only when the ID token has `email_verified: true` and the account has `emailBound`; otherwise throws, telling the user to sign in with their password), else JIT-create if `allowSignup`; promote to admin by group. |
 
 # Data
 
@@ -38,7 +38,7 @@ Single sign-on against any OIDC provider (e.g. Keycloak).[^sso]
 # Gotchas
 
 - Admin group membership can PROMOTE but never auto-demotes (to avoid lockout); removing someone from the IdP admin group does not revoke ProxMate admin.[^sso]
-- Linking by email: an existing local account with the same email is bound to the IdP subject on first SSO login only when the account's `emailBound` is true (addressed invite, setup-wizard admin, or SSO sign-up with a verified email). Otherwise the login is refused.[^sso]
+- Linking by email: an existing local account with the same email is bound to the IdP subject on first SSO login only when the ID token asserts `email_verified: true` and the account's `emailBound` is true (addressed invite, setup-wizard admin, or SSO sign-up with a verified email). Otherwise the login is refused.[^sso]
 - JIT users get an unusable random bcrypt password.[^sso]
 - Discovery is cached in-process keyed by issuer + client id.[^sso]
 - The access-window refusal is applied by the auth router after this returns (see [access](/services/access.md)).
