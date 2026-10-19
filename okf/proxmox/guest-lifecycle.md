@@ -4,7 +4,7 @@ title: Guest lifecycle on Proxmox
 description: How ProxMate creates, clones, templates, powers, migrates, backs up, restores, deletes and consoles QEMU VMs and LXC containers on Proxmox VE, including VMID allocation, bridge/VLAN application and tenant firewall isolation.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/vm.service.ts
 tags: [proxmate, proxmox, vm, lxc, isolation]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: pve
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts
@@ -159,7 +159,9 @@ See [cloud-init config](/config/cloud-init.md).
 # Power and console
 
 - Start/shutdown/stop/reboot: `POST /nodes/{node}/{kind}/{vmid}/status/<action>`. ProxMate `stopVm`
-  with `force=false` calls `shutdown`; `force=true` calls `stop`. Pause/resume are QEMU-only
+  with `force=false` calls `shutdown`; `force=true` calls `stop`; either way it waits up to 45 s for
+  the returned task and records `stopped` only when the task succeeds (a graceful stop still running
+  at the deadline is reported to the user with a hint to force it). Pause/resume are QEMU-only
   (`suspend`/`resume`). Every power-on path (start, reboot, resume, rescue enter/exit) calls
   `assertOwnerAccessActive` before powering on (the owner's compute access window, not the caller's). All power actions run `syncVmNode` first, which re-reads
   `/cluster/resources` and updates `proxmoxNode` if the guest moved.[^vm]
@@ -183,7 +185,8 @@ currently running unless `offline`. `POST .../qemu/{vmid}/migrate` with `target`
 (default 30 min), then sets `proxmoxNode`.[^vm][^pve]
 
 `migratePreflight` wraps `GET .../migrate` (`allowed_nodes`, `not_allowed_nodes` normalised into
-sentences, `local_disks`) and adds two ProxMate blocks, both fail-open: a running guest with
+sentences, `local_disks`; Proxmox mentions every other node in `not_allowed_nodes`, so an entry with
+no cause for a node that is also in `allowed_nodes` is not reported as a blocker) and adds two ProxMate blocks, both fail-open: a running guest with
 `cpu=host` may not live-migrate to a node with a different `cpuinfo.model`; a target lacking a
 `cicustom` snippet storage is refused. It returns `null` if the preflight cannot be read.[^pve]
 The balancer and drain plans use `migratableTargets`; containers are pinned.[^balancer][^security]

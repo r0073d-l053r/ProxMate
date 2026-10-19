@@ -4,7 +4,7 @@ title: Access-sweep service (access-window warnings and suspension)
 description: Hourly sweep that emails tenants 7 and 1 days before their compute-access window closes and powers off lapsed tenants' guests, latching a suspension and notifying admins.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/access-sweep.service.ts
 tags: [proxmate, access-expiry, scheduler, tenancy]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: sweep
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/access-sweep.service.ts
@@ -43,7 +43,7 @@ Runs on cron `20 * * * *` (hourly at :20), overridable with env `ACCESS_EXPIRY_C
 - No SMTP configured → nothing is stamped, so warnings still fire once SMTP is set up. A failed send is still stamped (one attempt per deadline per level) so a bad address does not re-send forever.[^sweep]
 - If less than a day remains when armed, only the 1-day mail is sent but both columns are stamped.[^sweep]
 - The lapsed query deliberately does NOT filter on `accessSuspendedAt: null`: the latch controls the one-shot notification, not the power-off. First pass sends a graceful stop; later passes force a hard stop (`stopVm(vm, !firstPass)`) for guests that ignored ACPI.[^sweep]
-- Live status is read from Proxmox, not the DB, because `stopVm` writes `status: 'stopped'` whether or not the guest went down. A status-read failure counts as "still running" for the next tick.[^sweep]
+- Live status is read from Proxmox, not the DB: `stopVm` waits for the task and writes nothing when it fails, but the row can still be stale (a stop from the Proxmox UI, a crash between task and write). A status-read failure or a stop that fails or times out counts as "still running" for the next tick.[^sweep]
 - Admins are excluded (`role: { not: 'admin' }`) even if they were promoted after an invite set an expiry.[^sweep]
 - Restoring access is done by an admin extending the window (or setting never) in Admin → Users.[^sweep]
 

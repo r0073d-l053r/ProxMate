@@ -4,7 +4,7 @@ title: VM router
 description: Tenant VM and LXC lifecycle API (create, restore, power, resize, disks, shares, schedules, alerts, snapshots, MateState backups, rescue, console tickets), mounted at /api/vms.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/vm.routes.ts
 tags: [proxmate, api, vm, lxc, lifecycle]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/vm.routes.ts
@@ -42,7 +42,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | GET | `/api/vms/restore-capability` | user | `{ enabled }` for restore-from-upload. |
 | POST | `/api/vms/restore-upload` | user | multipart `file` (vzdump archive) + `name`; restore as a new guest; 201 `{ vm, status }`. Audited `vm.restore_upload`. |
 | POST | `/api/vms/containers` | user | Create an LXC container from a vztmpl volid; 201 `{ vm, status }`. Audited `vm.create`. |
-| POST | `/api/vms/bulk` | user (`getOwnedVm` per id) + not locked (except start) | `{ action: start/stop/restart/delete, ids (1..50) }`; per-VM results; a locked VM is a per-item failure. Audited `vm.bulk_<action>`. |
+| POST | `/api/vms/bulk` | user (`getOwnedVm` per id) + not locked (except start) | `{ action: start/stop/restart/delete, ids (1..50) }`; per-VM results; a locked VM is a per-item failure. Stops run side by side (each waits for its guest); start, restart and delete run one at a time. Audited `vm.bulk_<action>`. |
 | GET | `/api/vms/:id` | any access | Detail + live status, `deployState`, `access`, `caps`, `rescueAvailable`. |
 | GET | `/api/vms/:id/metrics` | viewable | RRD history `?timeframe=hour/day/week/month/year` (default hour). |
 | GET | `/api/vms/:id/passthrough` | viewable | Attached `hostpciN` devices (empty for LXC). |
@@ -56,14 +56,14 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | POST | `/api/vms/:id/disks` | `configure` + size lock | Add data disk `{ sizeGb 1..4096 }`; 201. Audited `vm.disk_add`. |
 | PATCH | `/api/vms/:id/disks/:slot` | `configure` + size lock | Grow data disk. Audited `vm.disk_resize`. |
 | DELETE | `/api/vms/:id/disks/:slot` | `configure` + size lock | Remove data disk. Audited `vm.disk_remove`. |
-| GET | `/api/vms/:id/migrate-targets` | admin | `{ current, targets, blockers, localDisks }` from Proxmox preflight intersected with online nodes; LXC and passthrough guests get an empty `targets` list with a `*` blocker. |
+| GET | `/api/vms/:id/migrate-targets` | admin | `{ current, targets, blockers, localDisks }` from Proxmox preflight intersected with online nodes; offline nodes are added as blockers, and a node Proxmox lists in both `allowed_nodes` and `not_allowed_nodes` without a cause is a target, not a blocker. LXC and passthrough guests get an empty `targets` list with a `*` blocker. |
 | POST | `/api/vms/:id/migrate` | admin + not locked | `{ targetNode }`; migrates and notifies owner. Audited `vm.migrate`. |
 | GET | `/api/vms/:id/shares` | owned | List shares as `{ id, email, role, createdAt }` (no sharee account id or display name). |
 | POST | `/api/vms/:id/shares` | owned + `shareLimiter` | `{ email, role }` share with another user; always 202 `{ message }` with the same audit detail, whether or not the address has an account. Audited `vm.share`. |
 | DELETE | `/api/vms/:id/shares/:shareId` | owned | Remove share. Audited `vm.unshare`. |
 | DELETE | `/api/vms/:id` | owned + not locked | Destroy the guest. `?rowOnly=true` (admin only, else 403) removes just the record and leaves the guest untouched. Audited `vm.delete` / `vm.delete_row`. |
 | POST | `/api/vms/:id/start` | `power` | Start. Audited `vm.start`. |
-| POST | `/api/vms/:id/stop` | `power` + not locked | Graceful stop; `?force=true` kills. Audited `vm.stop` / `vm.stop_force`. |
+| POST | `/api/vms/:id/stop` | `power` + not locked | Graceful stop; `?force=true` kills. Waits up to 45 s for the Proxmox task; a failed task, or a graceful stop the guest has not finished by then, is an error (the latter suggests a forced stop). Audited `vm.stop` / `vm.stop_force`. |
 | POST | `/api/vms/:id/restart` | `power` + not locked | Restart. Audited `vm.restart`. |
 | POST | `/api/vms/:id/pause` | `power` + not locked | Pause (QEMU only; 409 for LXC). Audited `vm.pause`. |
 | POST | `/api/vms/:id/resume` | `power` | Resume (QEMU only). Audited `vm.resume`. |
