@@ -36,10 +36,18 @@ import {
   createVm,
   destroyVm,
   stopVm,
+  pauseVm,
+  resumeVm,
+  resetGuestPassword,
+  addGuestSshKey,
+  migrateVmToNode,
   guestIdentity,
   guestMarker,
+  backfillGuestMarkers,
   GuestIdentityError,
 } from '../src/services/vm.service.js';
+import { convertVmToTemplate } from '../src/services/template.service.js';
+import { listDisks } from '../src/services/disk.service.js';
 import { createMateState } from '../src/services/matestate.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
 
@@ -129,16 +137,15 @@ describe('guestIdentity', () => {
     expect(await guestIdentity(row(), asClient(c))).toBe('foreign');
   });
 
-  it('accepts an unmarked (pre-marker) guest whose name matches, and backfills the marker', async () => {
+  it('never treats an untagged guest as ours at runtime, even with a matching name (and writes nothing)', async () => {
     const c = pveWith({ name: 'web', tags: 'prod' });
-    expect(await guestIdentity(row(), asClient(c))).toBe('ours');
-    const put = c.put.mock.calls.find((x) => /\/qemu\/100\/config$/.test(String(x[0])));
-    expect(bodyOf(put!)['tags']).toBe(`prod;${guestMarker('rowa')}`);
+    expect(await guestIdentity(row(), asClient(c))).toBe('unmarked');
+    expect(c.put).not.toHaveBeenCalled();
   });
 
-  it('rejects an unmarked guest with a different name', async () => {
-    const c = pveWith({ name: 'someone-else' });
-    expect(await guestIdentity(row(), asClient(c))).toBe('foreign');
+  it('refuses an action on an untagged guest with an ask-an-admin message', async () => {
+    pveWith({ name: 'web' });
+    await expect(stopVm(row(), true)).rejects.toThrow(/ask an admin/i);
   });
 
   it('reports an empty VMID as absent', async () => {
@@ -172,5 +179,117 @@ describe('actions on a guest that is not the row\'s', () => {
     const c = pveWith({ name: 'other', tags: guestMarker('rowb') });
     await expect(stopVm(row(), true)).rejects.toBeInstanceOf(GuestIdentityError);
     expect(c.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('every path that changes a guest or hands over control of it is refused for a foreign guest', () => {
+  const KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHfXm3PpXcVSyCTXlq2WCyDPeeVGrLYU2VgYPBYcqvlj dev@laptop';
+  const cases: Array<[string, () => Promise<unknown>]> = [
+    ['guest password reset', () => resetGuestPassword(row(), 'root')],
+    ['SSH key injection', () => addGuestSshKey(row(), 'root', KEY)],
+    ['pause', () => pauseVm(row())],
+    ['resume', () => resumeVm(row())],
+    ['migration', () => migrateVmToNode(row(), 'pve2')],
+    ['convert to template', () => convertVmToTemplate(row(), { name: 'tpl' })],
+  ];
+  for (const [label, run] of cases) {
+    it(label, async () => {
+      vi.mocked(prisma.user.findUnique).mockResolvedValue({ role: 'user', accessExpiresAt: null } as never);
+      const c = pveWith({ name: 'other', tags: guestMarker('rowb') });
+      await expect(run()).rejects.toBeInstanceOf(GuestIdentityError);
+      expect(c.post).not.toHaveBeenCalled();
+      expect(c.put).not.toHaveBeenCalled();
+    });
+  }
+
+  it('convert to template also refuses the row\'s own guest when it carries a PCI device', async () => {
+    const c = pveWith({ name: 'web', tags: guestMarker('rowa'), hostpci0: 'mapping=gpu' });
+    await expect(convertVmToTemplate(row(), { name: 'tpl' })).rejects.toThrow(/passthrough/i);
+    expect(c.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('read-only views of a foreign guest', () => {
+  it('list no disks', async () => {
+    pveWith({ name: 'other', tags: guestMarker('rowb'), scsi0: 'local-lvm:vm-100-disk-0,size=10G' });
+    expect(await listDisks(row())).toEqual([]);
+  });
+});
+
+describe('destroy when the guest\'s whereabouts are unknown', () => {
+  it('keeps the row when the VMID is empty on the stored node but the cluster lookup failed', async () => {
+    const c = pveWith(null);
+    const base = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) =>
+      url === '/cluster/resources' ? Promise.reject(new Error('cluster unreachable')) : base(url),
+    );
+    await expect(destroyVm(row())).rejects.toThrow(/try again/i);
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it('drops only the row when the cluster confirms the VMID is empty', async () => {
+    pveWith(null);
+    await destroyVm(row());
+    expect(del).toHaveBeenCalledWith({ where: { id: 'rowa' } });
+  });
+});
+
+describe('backfillGuestMarkers (one-time startup tagging of pre-marker guests)', () => {
+  /** Rows + a cluster where each vmid maps to { name, tags } and its config. */
+  function cluster(rows: Array<Record<string, unknown>>, guests: Record<number, Record<string, string>>) {
+    vi.mocked(prisma.virtualMachine.findMany).mockResolvedValue(rows as never);
+    const c = fakeClient();
+    c.get.mockImplementation((url: string) => {
+      if (url.startsWith('/cluster/resources')) {
+        return ok(Object.entries(guests).map(([vmid, g]) => ({ type: 'qemu', vmid: Number(vmid), node: 'pve1', ...g })));
+      }
+      const m = /\/qemu\/(\d+)\/config$/.exec(url);
+      if (m) return guests[Number(m[1])] ? ok(guests[Number(m[1])]) : missing();
+      return ok(null);
+    });
+    getClient.mockResolvedValue(asClient(c));
+    return c;
+  }
+  const tagsPut = (c: ReturnType<typeof fakeClient>, vmid: number) =>
+    c.put.mock.calls.filter((x) => String(x[0]) === `/nodes/pve1/qemu/${vmid}/config`).map((x) => bodyOf(x)['tags']);
+
+  it('tags an unambiguous match, keeping its other tags', async () => {
+    const c = cluster([{ id: 'rowa', name: 'web', proxmoxVmId: 100, proxmoxNode: 'pve1', status: 'running', type: 'qemu' }], {
+      100: { name: 'web', tags: 'prod' },
+    });
+    const r = await backfillGuestMarkers();
+    expect(r.tagged).toBe(1);
+    expect(tagsPut(c, 100)).toEqual([`prod;${guestMarker('rowa')}`]);
+  });
+
+  it('leaves alone (and reports) a name mismatch, an error row, two rows on one VMID, and another row\'s tag', async () => {
+    const c = cluster(
+      [
+        { id: 'r1', name: 'web', proxmoxVmId: 101, proxmoxNode: 'pve1', status: 'running', type: 'qemu' },
+        { id: 'r2', name: 'db', proxmoxVmId: 102, proxmoxNode: 'pve1', status: 'error', type: 'qemu' },
+        { id: 'r3', name: 'x', proxmoxVmId: 103, proxmoxNode: 'pve1', status: 'running', type: 'qemu' },
+        { id: 'r4', name: 'x', proxmoxVmId: 103, proxmoxNode: 'pve1', status: 'stopped', type: 'qemu' },
+        { id: 'r5', name: 'y', proxmoxVmId: 104, proxmoxNode: 'pve1', status: 'running', type: 'qemu' },
+      ],
+      {
+        101: { name: 'someone-else' },
+        102: { name: 'db' },
+        103: { name: 'x' },
+        104: { name: 'y', tags: guestMarker('elsewhere') },
+      },
+    );
+    const r = await backfillGuestMarkers();
+    expect(r.tagged).toBe(0);
+    expect(c.put).not.toHaveBeenCalled();
+    expect(r.unmatched.map((u) => u.id).sort()).toEqual(['r1', 'r2', 'r3', 'r4', 'r5']);
+  });
+
+  it('is idempotent: an already-tagged guest is left as is', async () => {
+    const c = cluster([{ id: 'rowa', name: 'web', proxmoxVmId: 100, proxmoxNode: 'pve1', status: 'running', type: 'qemu' }], {
+      100: { name: 'web', tags: guestMarker('rowa') },
+    });
+    const r = await backfillGuestMarkers();
+    expect(r).toEqual({ tagged: 0, unmatched: [] });
+    expect(c.put).not.toHaveBeenCalled();
   });
 });

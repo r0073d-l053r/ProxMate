@@ -19,10 +19,14 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   setGuestUserPassword: vi.fn(async () => undefined),
 }));
 
+// The guest at the VMID is the row's own unless a test says otherwise.
+vi.mock('../src/services/vm.service.js', () => ({ requireOurGuest: vi.fn(async (v: unknown) => v) }));
+
 // Real crypto — this test also proves the value we persist is not plaintext.
 import { encrypt } from '../src/lib/crypto.js';
 import * as pve from '../src/services/proxmox.service.js';
 import { refreshDeployState } from '../src/services/deploy-lock.service.js';
+import { requireOurGuest } from '../src/services/vm.service.js';
 
 const setPassword = vi.mocked(pve.setGuestUserPassword);
 const guestExec = vi.mocked(pve.guestExecOutput);
@@ -154,5 +158,14 @@ describe('applying the login password via the guest agent', () => {
     const stored = encrypt(SECRET);
     expect(stored).not.toContain(SECRET);
     expect(stored.split(':')).toHaveLength(3); // iv:tag:ciphertext
+  });
+});
+
+describe('pending password and guest identity', () => {
+  it('never sets the password in a guest that is not the row\'s own, and keeps it for a retry', async () => {
+    vi.mocked(requireOurGuest).mockRejectedValueOnce(new Error('not the one ProxMate created'));
+    await refreshDeployState(deployingVm());
+    expect(setPassword).not.toHaveBeenCalled();
+    expect(updateMock.mock.calls.some((c) => (c[0] as { data: Record<string, unknown> }).data.pendingCiPassword === null)).toBe(false);
   });
 });

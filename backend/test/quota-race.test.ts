@@ -21,11 +21,17 @@ vi.mock('../src/lib/prisma.js', () => ({
       update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
         const row = rows.find((r) => r['id'] === where.id)!;
         for (const [k, v] of Object.entries(data)) {
-          row[k] = typeof v === 'object' && v && 'increment' in v ? (row[k] as number) + (v as { increment: number }).increment : v;
+          row[k] =
+            typeof v === 'object' && v && 'increment' in v
+              ? (row[k] as number) + (v as { increment: number }).increment
+              : typeof v === 'object' && v && 'decrement' in v
+                ? (row[k] as number) - (v as { decrement: number }).decrement
+                : v;
         }
         return row;
       }),
       delete: vi.fn(),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => rows.find((r) => r['id'] === where.id) ?? null),
     },
     user: { findUnique: vi.fn(async () => USER) },
   },
@@ -46,8 +52,9 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
     getIsoNodes: vi.fn(async () => (await sleep(20), ['pve1'])),
     pickBestNode: vi.fn(async () => (await sleep(20), 'pve1')),
     getNextVmId: vi.fn(async () => (await sleep(5), nextId++)),
-    getVmConfig: vi.fn(async () => (await sleep(10), { scsi0: 'local-lvm:vm-1-disk-0,size=10G' })),
+    getVmConfig: vi.fn(async () => (await sleep(10), { tags: 'proxmate-vm-a', scsi0: 'local-lvm:vm-1-disk-0,size=10G' })),
     attachDisk: vi.fn(async () => sleep(10)),
+    removeDisk: vi.fn(async () => sleep(10)),
   };
 });
 
@@ -56,12 +63,13 @@ import { createVm, QuotaError } from '../src/services/vm.service.js';
 import { addDataDisk } from '../src/services/disk.service.js';
 import { fakeClient, asClient } from './helpers.js';
 
+let c: ReturnType<typeof fakeClient>;
 const USER = { id: 'u1', role: 'user', maxCpu: 4, maxRam: 4096, maxStorage: 50 } as never;
 
 beforeEach(() => {
   rows.length = 0;
   nextId = 100;
-  const c = fakeClient();
+  c = fakeClient();
   c.get.mockImplementation((url: string) =>
     Promise.resolve({ data: { data: /\/tasks\//.test(url) ? { status: 'stopped', exitstatus: 'OK' } : null } }),
   );

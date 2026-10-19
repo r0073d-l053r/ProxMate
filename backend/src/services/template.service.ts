@@ -2,6 +2,7 @@ import type { Template, VirtualMachine } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { getConfig, setConfig } from './config.service.js';
 import * as pve from './proxmox.service.js';
+import { requireOurGuest } from './vm.service.js';
 
 /** Published templates shown in the user-facing Template Store. */
 export function listPublished(): Promise<Template[]> {
@@ -164,6 +165,14 @@ export async function convertVmToTemplate(
   meta: { name: string; description?: string; os?: string },
 ): Promise<Template> {
   const client = await pve.getClient();
+  // The guest at the VMID becomes a shared template — only ever this row's own.
+  vm = await requireOurGuest(vm, { client });
+  // A template's clones would each inherit its `hostpciN` lines, i.e. passthrough
+  // that was approved for this one VM only.
+  const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client);
+  if (vm.hasPassthrough || Object.keys(cfg).some((k) => /^hostpci\d+$/.test(k))) {
+    throw new Error('A VM with PCI/GPU passthrough can’t be converted to a template. Detach the device first.');
+  }
 
   // Templates must be stopped before conversion.
   try {

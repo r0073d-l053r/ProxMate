@@ -87,7 +87,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | POST | `/api/vms/:id/snapshots` | `backups` | `{ name, description?, includeRam? }`; waits for the task; 201. Audited `snapshot.create`. |
 | POST | `/api/vms/:id/snapshots/:name/rollback` | `backups` | Roll back (waits up to 300 s). Audited `snapshot.rollback`. |
 | DELETE | `/api/vms/:id/snapshots/:name` | `backups` | Delete snapshot. Audited `snapshot.delete`. |
-| POST | `/api/vms/:id/console` | `console` + not locked | Mint a vncproxy `{ ticket, port }` for the WebSocket relay (refused unless the guest is the row's own, `assertGuestIsOurs`). |
+| POST | `/api/vms/:id/console` | `console` + not locked | Mint a vncproxy `{ ticket, port }` for the WebSocket relay (refused unless the guest is the row's own, `requireOurGuest`). |
 | POST | `/api/vms/:id/serial` | `console` | Mint a termproxy ticket (same guest-identity check); 409 `no_serial` if a QEMU VM has no serial console. |
 
 # Gotchas

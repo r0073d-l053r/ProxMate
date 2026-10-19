@@ -37,7 +37,7 @@ function fakePve(opts: { config?: Record<string, string>; execStatus?: object[] 
   c.get.mockImplementation((url: string) => {
     if (url === '/cluster/resources') return ok([{ type: 'qemu', vmid: 120, node: 'pve1' }]);
     if (/agent\/exec-status\?pid=77$/.test(url)) return ok(statuses[Math.min(statusIdx++, statuses.length - 1)]);
-    if (/\/qemu\/120\/config$/.test(url)) return ok(opts.config ?? {});
+    if (/\/qemu\/120\/config$/.test(url)) return ok({ tags: 'proxmate-db-1', ...(opts.config ?? {}) }); // the row's own guest
     return ok(null);
   });
   c.post.mockImplementation((url: string) => {

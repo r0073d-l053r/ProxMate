@@ -4,7 +4,7 @@ import { getConfig, setConfig } from './config.service.js';
 import { cronMatches } from './power-schedule.service.js';
 import { notify } from './notify.service.js';
 import * as pve from './proxmox.service.js';
-import { assertGuestIsOurs } from './vm.service.js';
+import { requireOurGuest, markClonedGuest } from './vm.service.js';
 
 /** Rolling retention: only this many MateStates are kept per VM. */
 export const MATESTATE_RETENTION = 2;
@@ -77,7 +77,7 @@ export async function createMateState(
 ): Promise<MateState> {
   const client = await pve.getClient();
   // Never back up a guest that isn't this row's into this row's backup list.
-  await assertGuestIsOurs(vm, { client });
+  vm = await requireOurGuest(vm, { client });
   const storage = await getBackupStorage();
 
   // Snapshot the set of existing backups for this VM so we can identify the new one.
@@ -139,7 +139,7 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
   const client = await pve.getClient();
   const kind: pve.GuestKind = vm.type === 'lxc' ? 'lxc' : 'qemu';
   // A restore overwrites the guest at this VMID — only ever this row's (or an empty slot).
-  await assertGuestIsOurs(vm, { allowAbsent: true, client });
+  vm = await requireOurGuest(vm, { allowAbsent: true, client });
 
   // Stop first if running — Proxmox refuses to restore over a running guest, and
   // stop is async (same pattern as destroyVm).
@@ -182,6 +182,9 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
       kind,
     );
     await pve.waitForTask(vm.proxmoxNode, upid, client, 30 * 60 * 1000);
+    // The archive's config replaces the guest's, tags included (a backup taken
+    // before ownership tags existed has none) — tag it as this row's again.
+    await markClonedGuest(vm, client);
     await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'ready' } });
     // Restore creates a fresh config; re-assert tenant isolation on the NIC.
     const isolate = (await getConfig('isolation_enabled')) !== 'false';

@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // request-builders (setVmResources, resizeDisk, getVmConfig, findPrimaryDisk) and
 // the REAL quota/resize logic run against the fake axios below.
 vi.mock('../src/lib/prisma.js', () => ({
-  prisma: { virtualMachine: { findMany: vi.fn(), update: vi.fn() } },
+  prisma: { virtualMachine: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() } },
 }));
 vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/services/proxmox.service.js')>();
@@ -13,10 +13,19 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
 
 import { prisma } from '../src/lib/prisma.js';
 import * as pve from '../src/services/proxmox.service.js';
-import { resizeVm, QuotaError, ResizeError } from '../src/services/vm.service.js';
+import { resizeVm as resizeVmService, QuotaError, ResizeError } from '../src/services/vm.service.js';
 import { bodyOf } from './helpers.js';
 
 const findMany = vi.mocked(prisma.virtualMachine.findMany);
+const findUnique = vi.mocked(prisma.virtualMachine.findUnique);
+
+/** resizeVm re-reads the row under the quota lock — serve it the row under test. */
+let row: Record<string, unknown> = {};
+const resizeVm: typeof resizeVmService = (u, v, input) => {
+  row = v as unknown as Record<string, unknown>;
+  findUnique.mockResolvedValue(v as never);
+  return resizeVmService(u, v, input);
+};
 const update = vi.mocked(prisma.virtualMachine.update);
 const getClient = vi.mocked(pve.getClient);
 
@@ -34,7 +43,7 @@ function fakePve(over: Record<string, unknown> = {}) {
       if (url === '/cluster/resources') return ok([{ type: 'qemu', vmid: 120, node: 'pve1' }]);
       // getVmConfig: a primary scsi0 disk (10G) plus a cdrom that must be ignored.
       if (/\/qemu\/120\/config$/.test(url))
-        return ok({ scsi0: 'local-lvm:vm-120-disk-0,size=10G', ide2: 'local:iso/x.iso,media=cdrom' });
+        return ok({ tags: 'proxmate-db-1', scsi0: 'local-lvm:vm-120-disk-0,size=10G', ide2: 'local:iso/x.iso,media=cdrom' });
       return ok(null);
     }),
     put: vi.fn(() => Promise.resolve({ data: { data: '' } })),
@@ -47,10 +56,14 @@ function fakePve(over: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   findMany.mockResolvedValue([] as never); // no other VMs by default
-  update.mockImplementation(
-    async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) =>
-      ({ ...vm(), id: where.id, ...data }) as never,
-  );
+  update.mockImplementation(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+    // Apply `{ increment }` the way the DB would, on top of the row under test.
+    const out: Record<string, unknown> = { ...vm(), ...row, id: where.id };
+    for (const [k, v] of Object.entries(data)) {
+      out[k] = v && typeof v === 'object' && 'increment' in v ? (out[k] as number) + (v as { increment: number }).increment : v;
+    }
+    return out as never;
+  });
 });
 
 describe('resizeVm', () => {
@@ -139,7 +152,7 @@ describe('resizeVm', () => {
         const ok = (data: unknown) => Promise.resolve({ data: { data } });
         if (url === '/cluster/resources') return ok([{ type: 'qemu', vmid: 120, node: 'pve1' }]);
         if (/\/qemu\/120\/config$/.test(url))
-          return ok({ scsi0: 'local-lvm:vm-120-disk-0,size=20G', scsi1: 'local-lvm:vm-120-disk-1,size=100G' });
+          return ok({ tags: 'proxmate-db-1', scsi0: 'local-lvm:vm-120-disk-0,size=20G', scsi1: 'local-lvm:vm-120-disk-1,size=100G' });
         return ok(null);
       }),
     });
@@ -158,7 +171,7 @@ describe('resizeVm', () => {
       get: vi.fn((url: string) => {
         const ok = (data: unknown) => Promise.resolve({ data: { data } });
         if (url === '/cluster/resources') return ok([{ type: 'lxc', vmid: 120, node: 'pve1' }]);
-        if (/\/lxc\/120\/config$/.test(url)) return ok({ rootfs: 'local-lvm:subvol-120-disk-0,size=8G' });
+        if (/\/lxc\/120\/config$/.test(url)) return ok({ tags: 'proxmate-db-1', rootfs: 'local-lvm:subvol-120-disk-0,size=8G' });
         return ok(null);
       }),
     });

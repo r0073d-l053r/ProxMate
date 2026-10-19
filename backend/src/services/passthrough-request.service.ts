@@ -1,7 +1,7 @@
 import type { VirtualMachine } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import * as pve from './proxmox.service.js';
-import { syncVmNode, migrateVmToNode, startVm } from './vm.service.js';
+import { syncVmNode, migrateVmToNode, startVm, requireOurGuest, guestIdentity } from './vm.service.js';
 import { getConfig } from './config.service.js';
 import { recordAudit } from './audit.service.js';
 import { notify } from './notify.service.js';
@@ -57,6 +57,8 @@ export async function createPassthroughRequest(
   if (vm.hasPassthrough) {
     throw new PassthroughRequestError('This VM already has a PCI device attached.', 409);
   }
+  // A request is for the guest this row created; refuse one whose VMID holds another.
+  await requireOurGuest(vm);
   const existing = await prisma.passthroughRequest.findFirst({ where: { vmId: vm.id, status: 'pending' } });
   if (existing) {
     throw new PassthroughRequestError('There is already a pending passthrough request for this VM.', 409);
@@ -289,7 +291,7 @@ export async function beginPassthroughApproval(
     throw new PassthroughRequestError(`No PCI mapping named "${mapping}" exists on the cluster.`, 400);
   }
 
-  const vm = await syncVmNode(row.vm);
+  const vm = await requireOurGuest(row.vm, { client });
   let running = false;
   try {
     running = (await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu')).status !== 'stopped';
@@ -346,7 +348,14 @@ export async function applyPassthroughApproval(id: string, adminId: string): Pro
   const actor = { id: adminId, email: admin?.email ?? null };
   const mapping = row.mapping;
 
-  let vm = await syncVmNode(row.vm);
+  // The device is attached to whatever guest holds the VMID — only ever this row's.
+  let vm: VirtualMachine;
+  try {
+    vm = await requireOurGuest(row.vm);
+  } catch (err) {
+    await setState({ applyState: 'failed', applyError: pve.pveMessage(err) }).catch(() => undefined);
+    return;
+  }
   const sourceNode = vm.proxmoxNode;
   let wasRunning = false;
   let stoppedByUs = false;
@@ -596,7 +605,8 @@ export async function reconcileInterruptedPassthroughApplies(): Promise<number> 
         }
       }
 
-      if (row.ciDropped && client) {
+      // Only ever regenerate drives on this row's own guest.
+      if (row.ciDropped && client && (await guestIdentity(vm, client)) === 'ours') {
         const drives = JSON.parse(row.ciDropped) as Array<{ slot: string; storage: string }>;
         const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu');
         // Regenerate on whatever storage the guest's disks now live on (source
@@ -660,7 +670,7 @@ export async function denyPassthroughRequest(
 export async function detachPassthrough(vm: VirtualMachine, index: number): Promise<void> {
   if (vm.type !== 'qemu') throw new PassthroughRequestError('PCI passthrough is only available for VMs.', 400);
   const client = await pve.getClient();
-  const current = await syncVmNode(vm);
+  const current = await requireOurGuest(vm, { client });
 
   try {
     const st = await pve.getVmStatus(current.proxmoxNode, current.proxmoxVmId, client, 'qemu');

@@ -73,8 +73,10 @@ import {
   enterRescue,
   exitRescue,
   duplicateVm,
-  syncVmNode,
-  assertGuestIsOurs,
+  requireOurGuest,
+  ourGuestOrNull,
+  markClonedGuest,
+  tagsMarkRow,
   MIN_RAM_MB,
 } from '../services/vm.service.js';
 import { isValidPublicKey } from '../services/ssh-key.service.js';
@@ -513,7 +515,10 @@ router.get('/:id/metrics', async (req: Request, res: Response) => {
     : 'hour';
 
   try {
-    vm = await syncVmNode(vm);
+    // Only this row's own guest's history — never another guest's at a reused VMID.
+    const ours = await ourGuestOrNull(vm);
+    if (!ours) { res.json({ timeframe, points: [] }); return; }
+    vm = ours;
     const data = await getVmRrdData(vm.proxmoxNode, vm.proxmoxVmId, timeframe, undefined, kindOf(vm));
     res.json({ timeframe, points: data });
   } catch (err) {
@@ -531,7 +536,9 @@ router.get('/:id/passthrough', async (req: Request, res: Response) => {
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (kindOf(vm) === 'lxc') { res.json({ devices: [] }); return; }
   try {
-    vm = await syncVmNode(vm);
+    const ours = await ourGuestOrNull(vm);
+    if (!ours) { res.json({ devices: [] }); return; }
+    vm = ours;
     const cfg = await getVmConfig(vm.proxmoxNode, vm.proxmoxVmId);
     res.json({ devices: getPassthroughDevices(cfg) });
   } catch (err) {
@@ -630,7 +637,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
     // doesn't desync our DB).
     if (metaChanged) {
       if (renaming) {
-        vm = await syncVmNode(vm);
+        vm = await requireOurGuest(vm);
         await setVmName(vm.proxmoxNode, vm.proxmoxVmId, newName!);
       }
       vm = await updateVm(vm, {
@@ -869,7 +876,7 @@ router.get('/:id/migrate-targets', async (req: Request, res: Response) => {
     return;
   }
   try {
-    const current = await syncVmNode(vm);
+    const current = await requireOurGuest(vm);
     const [pre, health] = await Promise.all([
       migratePreflight(current.proxmoxNode, current.proxmoxVmId),
       getNodesHealth(),
@@ -1307,7 +1314,9 @@ router.get('/:id/live-stats', async (req: Request, res: Response) => {
 
   try {
     const all = await getLiveStats();
-    const s = all[vm.proxmoxVmId];
+    const live = all[vm.proxmoxVmId];
+    // Stats of whatever guest holds the VMID are only this row's when it carries the row's tag.
+    const s = live && tagsMarkRow(live.tags, vm.id) ? live : undefined;
     if (!s) { res.json({ status: vm.status, cpu: 0, maxcpu: vm.cpu, mem: 0, maxmem: 0 }); return; }
     res.json({ status: s.status, cpu: s.cpu, maxcpu: s.maxcpu, mem: s.mem, maxmem: s.maxmem, uptime: s.uptime });
   } catch (err) {
@@ -1548,12 +1557,13 @@ const CreateSnapshotSchema = z.object({
 
 router.get('/:id/snapshots', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  let vm = await getViewableVm(req.params['id'] as string, user);
+  const vm = await getViewableVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (kindOf(vm) === 'lxc') { res.json([]); return; }
   try {
-    vm = await syncVmNode(vm);
-    res.json(await listSnapshots(vm.proxmoxNode, vm.proxmoxVmId));
+    const ours = await ourGuestOrNull(vm);
+    if (!ours) { res.json([]); return; }
+    res.json(await listSnapshots(ours.proxmoxNode, ours.proxmoxVmId));
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }
@@ -1571,7 +1581,7 @@ router.post('/:id/snapshots', async (req: Request, res: Response) => {
     return;
   }
   try {
-    vm = await syncVmNode(vm);
+    vm = await requireOurGuest(vm);
     const existing = await listSnapshots(vm.proxmoxNode, vm.proxmoxVmId);
     if (existing.length >= MAX_SNAPSHOTS_PER_VM) {
       res.status(409).json({
@@ -1604,9 +1614,12 @@ router.post('/:id/snapshots/:name/rollback', async (req: Request, res: Response)
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Snapshots aren’t available for containers yet.' }); return; }
   try {
-    vm = await syncVmNode(vm);
+    vm = await requireOurGuest(vm);
     const upid = await rollbackSnapshot(vm.proxmoxNode, vm.proxmoxVmId, name);
     await waitForTask(vm.proxmoxNode, upid, undefined, 300_000);
+    // A rollback restores the snapshot's config, tags included — re-tag the guest
+    // as this row's (a snapshot from before ownership tags existed has none).
+    await markClonedGuest(vm);
     await recordAudit({
       action: 'snapshot.rollback', actor: user, targetType: 'vm', targetId: vm.id,
       detail: `rolled ${vm.name} back to "${name}"`, req,
@@ -1625,7 +1638,7 @@ router.delete('/:id/snapshots/:name', async (req: Request, res: Response) => {
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Snapshots aren’t available for containers yet.' }); return; }
   try {
-    vm = await syncVmNode(vm);
+    vm = await requireOurGuest(vm);
     const upid = await deleteSnapshot(vm.proxmoxNode, vm.proxmoxVmId, name);
     await waitForTask(vm.proxmoxNode, upid);
     await recordAudit({
@@ -1648,8 +1661,7 @@ router.post('/:id/console', async (req: Request, res: Response) => {
   if (rejectIfLocked(vm, res)) return;
 
   try {
-    vm = await syncVmNode(vm);
-    await assertGuestIsOurs(vm);
+    vm = await requireOurGuest(vm);
     const { ticket, port } = await requestVncProxy(vm.proxmoxNode, vm.proxmoxVmId, kindOf(vm));
     res.json({ ticket, port });
   } catch (err) {
@@ -1667,8 +1679,7 @@ router.post('/:id/serial', async (req: Request, res: Response) => {
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
 
   try {
-    vm = await syncVmNode(vm);
-    await assertGuestIsOurs(vm);
+    vm = await requireOurGuest(vm);
     const kind = kindOf(vm);
     // LXC containers always expose a text console (their native console is the
     // termproxy); QEMU VMs need a serial port in their config.

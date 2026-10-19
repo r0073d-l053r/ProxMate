@@ -37,7 +37,7 @@ function fakePve(status = 'stopped') {
     if (url === '/cluster/resources') return ok([{ type: 'qemu', vmid: 120, node: 'pve1' }]);
     if (/\/qemu\/120\/status\/current$/.test(url)) return ok({ status });
     if (url === '/cluster/nextid') return ok('130');
-    if (/\/qemu\/(120|130)\/config$/.test(url)) return ok({ name: 'web' });
+    if (/\/qemu\/(120|130)\/config$/.test(url)) return ok({ name: 'web', tags: 'proxmate-src' });
     if (/\/tasks\/.*\/status$/.test(url)) return ok({ status: 'stopped', exitstatus: 'OK' });
     return ok(null);
   });
@@ -97,7 +97,7 @@ describe('duplicateVm', () => {
     const base = c.get.getMockImplementation()!;
     c.get.mockImplementation((url: string) =>
       /\/qemu\/120\/config$/.test(url)
-        ? Promise.resolve({ data: { data: { name: 'web', hostpci0: 'mapping=gpu,pcie=1' } } })
+        ? Promise.resolve({ data: { data: { name: 'web', tags: 'proxmate-src', hostpci0: 'mapping=gpu,pcie=1' } } })
         : base(url),
     );
     getClient.mockResolvedValue(asClient(c));

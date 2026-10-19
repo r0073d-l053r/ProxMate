@@ -26,7 +26,7 @@ Tenants set thresholds on their own machines. A rule fires when its condition ho
 | `conditionMet` | `(rule, signals: VmSignals) => boolean` | cpu/memory/disk need the guest running and value `>= threshold`; disk also needs a known `diskPct`; `down` = expected running but not running. |
 | `describeAlert` | `(rule, signals) => string` | One-line notification body. |
 | `evaluateRule` | `(rule, signals, now) => RuleAction` | Pure decision: `fire`, `start-breach`, `clear-breach` or `none`, honouring sustained window and cooldown. |
-| `evaluateAlerts` | `(now?) => Promise<{ fired }>` | Loads enabled rules, reads `/cluster/resources` once, computes signals, persists `breachingSince`/`lastFiredAt`, sends notifications. |
+| `evaluateAlerts` | `(now?) => Promise<{ fired }>` | Loads enabled rules, reads `/cluster/resources` once, computes signals, persists `breachingSince`/`lastFiredAt`, sends notifications. Skips a rule whose VMID holds a guest without the row's ProxMate tag. |
 
 # Data
 

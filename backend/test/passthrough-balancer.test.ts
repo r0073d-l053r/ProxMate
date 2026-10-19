@@ -47,8 +47,8 @@ describe('computeClusterPlan skips VMs with PCI/GPU passthrough', () => {
     c.get.mockResolvedValue({
       data: {
         data: [
-          { type: 'qemu', vmid: 100, node: 'pve-a', status: 'running', mem: 30 * GB },
-          { type: 'qemu', vmid: 101, node: 'pve-a', status: 'running', mem: 30 * GB },
+          { type: 'qemu', vmid: 100, node: 'pve-a', status: 'running', mem: 30 * GB, tags: 'proxmate-vm1' },
+          { type: 'qemu', vmid: 101, node: 'pve-a', status: 'running', mem: 30 * GB, tags: 'proxmate-vm2' },
         ],
       },
     });
@@ -68,7 +68,7 @@ describe('planNodeDrain flags passthrough VMs as blockers', () => {
     getNodesHealth.mockResolvedValue(nodesHealth(0.1, 0.1));
     const c = fakeClient();
     c.get.mockResolvedValue({
-      data: { data: [{ type: 'qemu', vmid: 101, node: 'pve-a', status: 'running', mem: 2 * GB }] },
+      data: { data: [{ type: 'qemu', vmid: 101, node: 'pve-a', status: 'running', mem: 2 * GB, tags: 'proxmate-vm2' }] },
     });
     findMany.mockResolvedValue([
       { id: 'vm2', proxmoxVmId: 101, name: 'ml', proxmoxNode: 'pve-a', tags: null, type: 'qemu', hasPassthrough: true },

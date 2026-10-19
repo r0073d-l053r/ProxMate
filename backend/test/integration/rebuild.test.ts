@@ -4,7 +4,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // proxmox.service request-builders run against a fake axios; only the DB, config
 // reads, and the client factory are mocked.
 vi.mock('../../src/lib/prisma.js', () => ({
-  prisma: { virtualMachine: { update: vi.fn(), findMany: vi.fn(), delete: vi.fn() } },
+  prisma: {
+    virtualMachine: { update: vi.fn(), findMany: vi.fn(), delete: vi.fn() },
+    mateState: { count: vi.fn(async () => 0) },
+    user: { findUnique: vi.fn(async () => null) },
+  },
 }));
 vi.mock('../../src/services/config.service.js', () => ({ getConfig: vi.fn() }));
 vi.mock('../../src/services/proxmox.service.js', async (importOriginal) => {
@@ -51,7 +55,7 @@ function fakePve() {
       // getVmConfig (template autoscale) — a primary disk + a cloud-init cdrom.
       if (/\/qemu\/\d+\/config$/.test(url))
         return ok({
-          name: 'box', // the row's own guest (pre-marker, matched by name)
+          tags: 'proxmate-vm-1', // the row's own guest
           scsi0: 'local-lvm:vm-110-disk-0,size=2G',
           ide2: 'local-lvm:vm-110-cloudinit,media=cdrom',
         });
@@ -92,6 +96,7 @@ const TEMPLATE = {
 beforeEach(() => {
   vi.clearAllMocks();
   getConfigMock.mockImplementation(async (k: string) => DEFAULTS[k] ?? null);
+  del.mockResolvedValue({} as never);
   update.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ ...(VM as object), ...data }) as never);
 });
 
@@ -144,6 +149,46 @@ describe('rebuildVm — guest identity', () => {
     await expect(rebuildVm(admin, VM, { kind: 'iso', os: 'debian.iso' })).rejects.toThrow(/not the one ProxMate created/);
     expect(client.delete).not.toHaveBeenCalled();
     expect(client.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('rebuildVm — failure after teardown', () => {
+  /** The guest is ours until teardown deletes it; the re-create then never lands. */
+  function failingRebuild() {
+    const client = fakePve();
+    const base = client.get.getMockImplementation()!;
+    let deleted = false;
+    client.delete = vi.fn(() => {
+      deleted = true;
+      return Promise.resolve({ data: { data: 'UPID:del' } });
+    });
+    client.get.mockImplementation((url: string) =>
+      deleted && /\/qemu\/110\/config$/.test(url)
+        ? Promise.reject(new Error("Configuration file 'nodes/pve-x/qemu-server/110.conf' does not exist"))
+        : base(url),
+    );
+    client.post = vi.fn((url: string) =>
+      url === '/nodes/pve-x/qemu'
+        ? Promise.reject(new Error('pve create failed'))
+        : Promise.resolve({ data: { data: 'UPID:task' } }),
+    );
+    getClientMock.mockResolvedValue(client as never);
+    return client;
+  }
+
+  it('drops the row when nothing of ours is left at the (now free) VMID and it has no backups', async () => {
+    failingRebuild();
+    await expect(rebuildVm(admin, VM, { kind: 'iso', os: 'debian.iso' })).rejects.toThrow('pve create failed');
+    expect(del).toHaveBeenCalledWith({ where: { id: 'vm-1' } });
+    expect(update).not.toHaveBeenCalledWith({ where: { id: 'vm-1' }, data: { status: 'error' } });
+  });
+
+  it('keeps the row in error when it has backups to restore from', async () => {
+    failingRebuild();
+    vi.mocked(prisma.mateState.count).mockResolvedValueOnce(2 as never);
+    await expect(rebuildVm(admin, VM, { kind: 'iso', os: 'debian.iso' })).rejects.toThrow('pve create failed');
+    expect(del).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith({ where: { id: 'vm-1' }, data: { status: 'error' } });
   });
 });
 

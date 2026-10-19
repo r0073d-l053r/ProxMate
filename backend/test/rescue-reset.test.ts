@@ -81,7 +81,7 @@ describe('generateGuestPassword', () => {
 
 describe('resetGuestPassword', () => {
   it('POSTs username + a generated password to agent/set-user-password', async () => {
-    const c = fakePve({});
+    const c = fakePve({ tags: 'proxmate-db-1' });
     getClient.mockResolvedValue(asClient(c));
 
     const password = await resetGuestPassword(vm({ status: 'running' }), 'ubuntu');

@@ -1,7 +1,7 @@
 import type { VirtualMachine, User } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import * as pve from './proxmox.service.js';
-import { QuotaError, withQuotaLock } from './vm.service.js';
+import { QuotaError, withQuotaLock, requireOurGuest, ourGuestOrNull } from './vm.service.js';
 
 /**
  * Extra-data-disk management. A VM's `storage` column tracks **total** provisioned
@@ -74,8 +74,10 @@ async function ownerOf(vm: VirtualMachine): Promise<User> {
   return owner;
 }
 
-/** List a VM's disks (live from Proxmox). */
-export async function listDisks(vm: VirtualMachine): Promise<VmDisk[]> {
+/** List a VM's disks (live from Proxmox) — none when its VMID doesn't hold its own guest. */
+export async function listDisks(row: VirtualMachine): Promise<VmDisk[]> {
+  const vm = await ourGuestOrNull(row);
+  if (!vm) return [];
   return parseDisks(await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId));
 }
 
@@ -89,7 +91,8 @@ export function addDataDisk(vm: VirtualMachine, sizeGb: number): Promise<VmDisk>
   return withQuotaLock(vm.userId, () => addDataDiskLocked(vm, sizeGb));
 }
 
-async function addDataDiskLocked(vm: VirtualMachine, sizeGb: number): Promise<VmDisk> {
+async function addDataDiskLocked(row: VirtualMachine, sizeGb: number): Promise<VmDisk> {
+  const vm = await requireOurGuest(row);
   const owner = await ownerOf(vm);
   await assertStorageDelta(owner, sizeGb);
 
@@ -111,7 +114,8 @@ export function resizeDataDisk(vm: VirtualMachine, slot: string, sizeGb: number)
   return withQuotaLock(vm.userId, () => resizeDataDiskLocked(vm, slot, sizeGb));
 }
 
-async function resizeDataDiskLocked(vm: VirtualMachine, slot: string, sizeGb: number): Promise<void> {
+async function resizeDataDiskLocked(row: VirtualMachine, slot: string, sizeGb: number): Promise<void> {
+  const vm = await requireOurGuest(row);
   const config = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId);
   if (!(slot in config)) throw new Error('Disk not found.');
   if (slot === pve.findPrimaryDisk(config)) throw new Error('Resize the root disk from the VM resize controls.');
@@ -124,7 +128,8 @@ async function resizeDataDiskLocked(vm: VirtualMachine, slot: string, sizeGb: nu
 }
 
 /** Detach + destroy a data disk. Refuses the root disk. Frees the quota it used. */
-export async function removeDataDisk(vm: VirtualMachine, slot: string): Promise<void> {
+export async function removeDataDisk(row: VirtualMachine, slot: string): Promise<void> {
+  const vm = await requireOurGuest(row);
   const config = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId);
   if (!(slot in config)) throw new Error('Disk not found.');
   if (slot === pve.findPrimaryDisk(config)) throw new Error('The root disk cannot be removed.');

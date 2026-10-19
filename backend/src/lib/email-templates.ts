@@ -326,6 +326,25 @@ export function announcementEmail(subject: string, message: string, unsubscribeU
  * a running guest keeps running with at most a momentary blip; a stopped guest
  * has no extra interruption.
  */
+/**
+ * Tells a VM's owner that a rebuild failed after the old disk was wiped. `kept` is
+ * whether the machine is still listed (in an error state, so it can be restored
+ * from a backup or deleted) or was removed because nothing was left of it.
+ */
+export function vmRebuildFailedEmail(opts: { vmName: string; kept: boolean; reason: string }): RenderedEmail {
+  const { vmName, kept, reason } = opts;
+  const subject = `[ProxMate] Rebuild of "${vmName}" failed`;
+  const next = kept
+    ? 'The machine is still listed in an error state: you can restore it from one of its backups, or delete it.'
+    : 'The old disk had already been wiped and nothing was created in its place, so the machine has been removed from your list.';
+  const text = `Rebuilding your VM "${vmName}" failed: ${reason}\n\n${next}`;
+  const bodyRows =
+    h1('A rebuild failed') +
+    p(`Rebuilding your VM <strong style="color:${INK};">${escapeHtml(vmName)}</strong> failed: ${escapeHtml(reason)}`) +
+    p(next, { color: MUTED, size: 13, mb: 0 });
+  return { subject, text, html: wrapEmail(`Rebuild of "${escapeHtml(vmName)}" failed.`, bodyRows) };
+}
+
 export function vmMaintenanceEmail(opts: { vmName: string; live: boolean }): RenderedEmail {
   const { vmName, live } = opts;
   const subject = `[ProxMate] Maintenance: your server "${vmName}" is being moved`;
