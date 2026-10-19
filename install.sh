@@ -625,11 +625,31 @@ env_value() {
   grep -E "^[[:space:]]*$1=" .env 2>/dev/null | tail -n1 | sed "s/^[^=]*=//; s/^[\"']//; s/[\"']$//; s/[[:space:]]*$//" || true
 }
 
+# The compose file pins the project name, so every install on this host shares
+# one database volume no matter which directory it was installed from. A fresh
+# key generated here (lost .env, or a new --dir) would come up against that old
+# database with setup already complete and every stored secret undecryptable —
+# so refuse, and let the operator choose deliberately.
+DB_VOLUME="${COMPOSE_PROJECT_NAME:-proxmate}_proxmate-data"
+refuse_new_key_over_existing_db() {
+  docker volume inspect "$DB_VOLUME" >/dev/null 2>&1 || return 0
+  die "a ProxMate database already exists on this host (Docker volume $DB_VOLUME),
+  but this checkout has no ENCRYPTION_KEY for it. A new key cannot decrypt anything
+  stored in that database (Proxmox token, SMTP password, TOTP secrets), so the stack
+  would come up broken.
+
+  Either put the ORIGINAL key back: copy ENCRYPTION_KEY from the old install's .env
+  (or your off-host backup of it) into $(pwd)/.env and re-run this script;
+  or, only if that database is disposable, delete it first — this destroys it:
+      docker volume rm $DB_VOLUME"
+}
+
 if [ -f .env ]; then
   ok ".env already exists — keeping it (your ENCRYPTION_KEY is preserved)"
 
   existing_key="$(env_value ENCRYPTION_KEY)"
   if [ -z "$existing_key" ]; then
+    refuse_new_key_over_existing_db
     warn "ENCRYPTION_KEY is empty; generating one"
     KEY="$(gen_key)"
     # Temp file in the SAME directory so the rename is atomic and cannot land on
@@ -675,6 +695,7 @@ if [ -f .env ]; then
   # The reuse path never chmodded, so a hand-made .env could be world-readable.
   chmod 600 .env 2>/dev/null || warn "could not chmod 600 .env — check its permissions"
 else
+  refuse_new_key_over_existing_db
   KEY="$(gen_key)"
   [ "${#KEY}" -eq 64 ] || die "generated key was not 64 hex characters."
 

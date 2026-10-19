@@ -62,4 +62,41 @@ t_local_install_disables_real_ip_header() {
     assert_eq "$(env_line REAL_IP_HEADER)" "REAL_IP_HEADER=" "REAL_IP_HEADER is explicitly empty"
 }
 
+# ── BUG-058: never mint a new key against an existing database volume ────────
+t_new_key_refused_when_db_volume_exists() {
+  new_case
+  STUB_VOLUMES="proxmate_proxmate-data" run_install --local --host 10.0.0.5
+  assert_ne "$RC" 0 "exit code" &&
+    assert_file_missing "$CHECKOUT/.env" &&
+    assert_grep "proxmate_proxmate-data" "$T/out" &&
+    assert_grep "ENCRYPTION_KEY" "$T/out"
+}
+
+t_empty_key_not_filled_when_db_volume_exists() {
+  new_case
+  printf 'ENCRYPTION_KEY=\nFRONTEND_URL=http://10.0.0.5:3000\n' > "$CHECKOUT/.env"
+  cp "$CHECKOUT/.env" "$T/env.expected"
+  STUB_VOLUMES="proxmate_proxmate-data" run_install --local --host 10.0.0.5
+  assert_ne "$RC" 0 "exit code" &&
+    assert_eq "$(cat "$CHECKOUT/.env")" "$(cat "$T/env.expected")" ".env unchanged"
+}
+
+t_existing_key_reused_with_existing_volume() {
+  # The normal re-run: .env (with its key) is kept, the volume is expected.
+  new_case
+  key="$(printf 'a%.0s' $(seq 64))"
+  printf 'ENCRYPTION_KEY=%s\nNEXT_PUBLIC_SITE_URL=http://10.0.0.5:3000\n' "$key" > "$CHECKOUT/.env"
+  STUB_VOLUMES="proxmate_proxmate-data" run_install --local --host 10.0.0.5
+  assert_eq "$RC" 0 "exit code" &&
+    assert_eq "$(env_line ENCRYPTION_KEY)" "ENCRYPTION_KEY=$key" "key preserved"
+}
+
+# ── BUG-013: a backup dir the installer creates is owner-only ────────────────
+t_backup_dir_created_owner_only() {
+  new_case
+  run_install --local --host 10.0.0.5
+  assert_eq "$RC" 0 "exit code" &&
+    assert_eq "$(stat -c '%a' "$CHECKOUT/backups")" 700 "backups dir mode"
+}
+
 run_cases "$@"
