@@ -34,7 +34,11 @@ In Proxmox: **Datacenter → Permissions → API Tokens → Add**.
 > ```
 
 Whichever you choose, the token must be able to set guest tags (`VM.Config.Options`):
-ProxMate tags every guest it manages with the machine it belongs to.
+ProxMate tags every guest it manages with the machine it belongs to. On Proxmox VE 8+ it
+also needs `SDN.Use` (Proxmox checks it whenever a guest NIC is attached, plain bridges
+included; `PVESDNUser` carries it), and `SDN.Audit` to list SDN VNets. A token with
+privilege separation off, or the Administrator role, has all of these; the connection test
+warns when either SDN privilege is missing.
 
 Copy the secret that Proxmox shows you — **it's only shown once**.
 
@@ -44,7 +48,7 @@ Open the ProxMate web UI. The wizard walks you through:
 
 1. **Admin account** — your owner login
 2. **Proxmox connection** — host URL (`https://your-host:8006`), token ID, secret. Leave "Verify TLS" off for a self-signed cert on a private network. Click **Test connection** — you should see "Connected to Proxmox VE X.Y (N nodes)".
-3. **Defaults** — pick the storage pool for VM disks (must support `images` — e.g. `local-lvm`, `local-zfs`, Ceph), the network bridge for VMs (e.g. `vmbr0`), and the ISO storage (typically `local`).
+3. **Defaults** — pick the storage pool for VM disks (must support `images` — e.g. `local-lvm`, `local-zfs`, Ceph), the network for VMs (a Linux bridge such as `vmbr0`, an Open vSwitch bridge or an SDN VNet; or type its name if it isn't listed), and the ISO storage (typically `local`).
 4. **Finish** — you're signed in as the admin from step 1 (every step after it needs that session).
 
 ---
@@ -226,7 +230,8 @@ only — the tenant's per-VM Activity feed shows just their own and their shared
 
 A VM's owner can share it from **VM ▸ Settings ▸ Shared access** at three levels: **Viewer**
 (details, metrics, activity), **Operator** (adds power actions + console), **Manager** (adds
-settings, disks, backups including downloads, and the IDE). No share can ever delete, rebuild,
+settings, disks, and backups including downloads). The ProxMate IDE opens only for the
+owner, never through a share. No share can ever delete, rebuild,
 migrate, or re-share the VM — those stay with the owner (and you, the admin). The API enforces
 every level server-side.
 
@@ -256,7 +261,7 @@ Admins can enforce two-step authentication for new users:
 - When generating an invite link (**Admin → Invites → New invite**), check **"Require two-step authentication"**.
 - Upon registration, the invited user will be forced to enroll in either TOTP or a Passkey before accessing any dashboard or VM operations.
 - Until MFA is set up, they will be redirected to the Security page on every navigation, and all VM API requests will return a `403 MFA Setup Required` error.
-- *Note:* SSO-linked users are exempt from this requirement since their Identity Provider handles authentication policy.
+- *Note:* Sign-ins through SSO are exempt from this requirement, since the Identity Provider handles authentication policy. A password login on an SSO-linked account still needs the second factor.
 
 ### 5.3 Bring-Your-Own SSO (OIDC)
 You can delegate authentication to an external OpenID Connect (OIDC) provider (e.g., Keycloak, Authentik, Google) in **Admin → Settings → Single Sign-On (OIDC)**:
@@ -276,8 +281,12 @@ agent wired to models you control. Enable and configure it in **admin Settings �
 pick the availability tier, add an OpenAI-compatible **model source** (a LAN Ollama is fine for
 admins), choose which models tenants see, and set **`ide_ingress_cidr`**.
 
+The IDE opens only for a VM's **owner**: admins and people the VM is shared with can't open it.
+An IDE installed by ProxMate 1.0.x is reinstalled once, automatically, the first time its owner
+opens it after the upgrade (about a minute).
+
 Two things must be true for a deployment: the ProxMate host can reach tenant VM IPs on **:8080**
-(provide routing on a non-flat network), and IDE VMs run the **qemu-guest-agent** with **>= 8 GB
+(or `IDE_GUEST_PORT`; provide routing on a non-flat network), and IDE VMs run the **qemu-guest-agent** with **>= 8 GB
 RAM** and AVX (auto-handled via `cpu: host` + reboot). Full setup + security model:
 [`proxmate-ide.md`](proxmate-ide.md).
 
@@ -313,6 +322,7 @@ A few things worth knowing day-to-day:
   resets, sign-in alerts, VM notifications) are never affected by the opt-out. _(The EDU edition has
   no opt-out — instructors must be able to reach every student.)_
 - **Unconfirmed machines** (**Settings → Maintenance → Unconfirmed machines**). ProxMate tags every guest it manages (`proxmate-<id>`) and only acts on a guest that carries its own machine's tag. The card lists machines whose VMID holds no guest with their tag — typically machines from before ownership tags that the automatic tagging couldn't match (left in `error` or `creating`, renamed so the Proxmox name differs, or sharing a VMID with another machine). Those machines can't be started, opened, backed up or deleted until you settle them: **Adopt** tags the guest at the VMID as that machine's and, for an `error` or held machine, re-applies network isolation and re-reads its sizes (as a restore does) before clearing that state, **Remove row** deletes only the ProxMate record and leaves the guest alone. Admins are notified once when the automatic tagging leaves machines unmatched.
+- **Machines that can't run.** A machine left in `error`, or held after a create, rebuild or restore that didn't finish (or a restore that left its owner over quota), can't be started and its console and IDE don't open; its page says why. It can be restored, rebuilt, adopted under **Unconfirmed machines**, or deleted. Bulk actions, migrations, the Balancer and node drains also skip a machine while its IDE installs or its cloud-init deploy finishes, and report it.
 - **Deleting a tenant** in **Admin → Users** also destroys their VMs on Proxmox. If any of their machines can't be deleted with its guest (an unconfirmed machine, or a guest that fails to delete), the account is kept and the machines are listed — settle them under **Unconfirmed machines**, then delete again.
 - **Re-configuring Proxmox** later (new host, rotated token) is in **Admin → Settings**; the existing token secret is kept if you leave the field blank.
 
