@@ -25,6 +25,131 @@ async function markVmError(vmId: string, name: string, err: unknown): Promise<vo
   }).catch(() => undefined);
 }
 
+// ─── Guest identity ───────────────────────────────────────────
+//
+// A row's `proxmoxVmId` comes from /cluster/nextid, and Proxmox hands a freed VMID
+// to the next guest anyone creates. So "the guest at this VMID" is not proof that
+// it is the guest ProxMate made for this row. Every guest ProxMate creates carries
+// a Proxmox tag naming its row (`proxmate-<row id>`), and anything that destroys,
+// re-images, backs up, powers or opens a console on a guest checks that tag first.
+
+const MARKER_PREFIX = 'proxmate-';
+
+/** The Proxmox tag that ties a guest to its VirtualMachine row. */
+export function guestMarker(vmId: string): string {
+  return `${MARKER_PREFIX}${vmId.toLowerCase()}`;
+}
+
+function parsePveTags(raw: string | undefined): string[] {
+  return (raw ?? '').split(/[;,\s]+/).map((t) => t.trim()).filter(Boolean);
+}
+
+/** A guest's tag list with this row's marker set (and any other row's marker dropped). */
+export function tagsWithMarker(raw: string | undefined, vmId: string): string {
+  const keep = parsePveTags(raw).filter((t) => !t.toLowerCase().startsWith(MARKER_PREFIX));
+  return [...keep, guestMarker(vmId)].join(';');
+}
+
+/** Write this row's marker onto its guest, keeping the guest's other tags. */
+async function writeGuestMarker(
+  vm: Pick<VirtualMachine, 'id' | 'proxmoxNode' | 'proxmoxVmId' | 'type'>,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+  currentTags?: string,
+): Promise<void> {
+  await client.put(
+    `/nodes/${vm.proxmoxNode}/${kindOf(vm)}/${vm.proxmoxVmId}/config`,
+    new URLSearchParams({ tags: tagsWithMarker(currentTags, vm.id) }),
+  );
+}
+
+/** Replace the tags a fresh clone (or restore) inherited from its source with this row's marker. */
+export async function markClonedGuest(
+  vm: Pick<VirtualMachine, 'id' | 'proxmoxNode' | 'proxmoxVmId' | 'type'>,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<void> {
+  const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, kindOf(vm));
+  await writeGuestMarker(vm, client, cfg['tags']);
+}
+
+/**
+ * Whether the guest at a row's VMID is the one ProxMate created for that row:
+ * 'ours' (it carries this row's marker), 'absent' (no guest at that VMID), or
+ * 'foreign' (some other guest holds it). Guests created before the marker existed
+ * carry none; those are accepted when their Proxmox name still matches the row,
+ * and get the marker written so later checks no longer depend on the name. A guest
+ * carrying ANY other ProxMate marker is never accepted by name.
+ * Throws when Proxmox can't be asked (so callers fail closed).
+ */
+export async function guestIdentity(
+  vm: VirtualMachine,
+  client?: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<'ours' | 'absent' | 'foreign'> {
+  const c = client ?? (await pve.getClient());
+  const kind = kindOf(vm);
+  let cfg: Record<string, string>;
+  try {
+    cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, c, kind);
+  } catch (err) {
+    if (/does not exist|not found/i.test(pve.pveMessage(err))) return 'absent';
+    throw err;
+  }
+  const tags = parsePveTags(cfg['tags']).map((t) => t.toLowerCase());
+  if (tags.includes(guestMarker(vm.id))) return 'ours';
+  if (tags.some((t) => t.startsWith(MARKER_PREFIX))) return 'foreign';
+  const pveName = kind === 'lxc' ? cfg['hostname'] : cfg['name'];
+  if (pveName !== vm.name) return 'foreign';
+  await writeGuestMarker(vm, c, cfg['tags']).catch((err) =>
+    console.warn(`[vm] could not tag guest ${vm.proxmoxVmId} for "${vm.name}": ${pve.pveMessage(err)}`),
+  );
+  return 'ours';
+}
+
+/** Thrown when a row's VMID no longer holds the guest ProxMate created for it. */
+export class GuestIdentityError extends Error {
+  constructor() {
+    super(
+      "The Proxmox guest at this machine's VMID is not the one ProxMate created for it, so it was left untouched. " +
+        'Delete this machine (only its record is removed) or ask an admin to check it.',
+    );
+    this.name = 'GuestIdentityError';
+  }
+}
+
+/** Refuse unless the row's guest is demonstrably ours (or, with `allowAbsent`, gone). */
+export async function assertGuestIsOurs(
+  vm: VirtualMachine,
+  opts: { allowAbsent?: boolean; client?: Awaited<ReturnType<typeof pve.getClient>> } = {},
+): Promise<void> {
+  const identity = await guestIdentity(vm, opts.client);
+  if (identity === 'ours' || (identity === 'absent' && opts.allowAbsent)) return;
+  throw new GuestIdentityError();
+}
+
+/**
+ * Settle a failed create. The row already holds a VMID; if no guest of ours ended
+ * up there, Proxmox will give that VMID to the next guest anyone creates, and the
+ * row would then point at someone else's machine. So the row is dropped unless the
+ * guest exists and is ours (`guestCreated`: our create/clone task finished), in
+ * which case it stays in `error` for the owner to see and delete. When Proxmox
+ * can't be asked, the row is kept — every later action re-checks the guest anyway.
+ */
+export async function settleFailedCreate(vm: VirtualMachine, err: unknown, guestCreated: boolean): Promise<void> {
+  let keep = guestCreated;
+  if (!keep) {
+    keep = await guestIdentity(vm).then((id) => id === 'ours', () => true);
+  }
+  if (keep) {
+    await markVmError(vm.id, vm.name, err).catch(() => undefined);
+    return;
+  }
+  await prisma.virtualMachine.delete({ where: { id: vm.id } }).catch(() => undefined);
+  await notify({
+    event: 'vm.error',
+    title: vm.name,
+    message: `Provisioning of "${vm.name}" failed: ${pve.pveMessage(err)}`,
+  }).catch(() => undefined);
+}
+
 /** Thrown when a VM request would push a user over one of their quota caps. */
 export class QuotaError extends Error {
   constructor(
@@ -34,6 +159,13 @@ export class QuotaError extends Error {
     this.name = 'QuotaError';
   }
 }
+
+/**
+ * Smallest guest RAM (MB) a create or resize may ask for. Proxmox rejects tiny
+ * values outright, and a request it is certain to reject is refused at the schema
+ * instead of reserving a row and a VMID first.
+ */
+export const MIN_RAM_MB = 64;
 
 export interface CreateVmInput {
   name: string;
@@ -174,6 +306,7 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
     },
   });
 
+  let created = false;
   try {
     // Wait for the create task so a real Proxmox failure (e.g. unusable storage)
     // surfaces as an error here instead of a false "created" with a broken VM.
@@ -189,10 +322,12 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
         bridge,
         isoStorage,
         iso: input.os,
+        tags: guestMarker(vm.id),
       },
       client,
     );
     await pve.waitForTask(node, createUpid, client);
+    created = true;
 
     // Lock the VM's firewall down for tenant isolation before it ever boots.
     if (isolate) {
@@ -206,7 +341,7 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
     await pve.waitForTask(node, startUpid, client);
     return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
   } catch (err) {
-    await markVmError(vm.id, input.name, err);
+    await settleFailedCreate(vm, err, created);
     throw err;
   }
 }
@@ -309,6 +444,7 @@ export async function createContainer(user: User, input: CreateContainerInput): 
     },
   });
 
+  let created = false;
   try {
     const createUpid = await pve.createLxc(
       {
@@ -323,10 +459,12 @@ export async function createContainer(user: User, input: CreateContainerInput): 
         ostemplate: input.template,
         password: input.password,
         sshPublicKeys: input.sshKey,
+        tags: guestMarker(vm.id),
       },
       client,
     );
     await pve.waitForTask(node, createUpid, client);
+    created = true;
 
     // Lock the container's firewall down for tenant isolation before it boots.
     if (isolate) {
@@ -339,7 +477,7 @@ export async function createContainer(user: User, input: CreateContainerInput): 
     await pve.waitForTask(node, startUpid, client);
     return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
   } catch (err) {
-    await markVmError(vm.id, input.name, err);
+    await settleFailedCreate(vm, err, created);
     throw err;
   }
 }
@@ -623,6 +761,7 @@ export async function deployFromTemplate(
     },
   });
 
+  let created = false;
   try {
     // Full-vs-linked and the target pool are decided together — see planTemplateClone.
     const plan = await planTemplateClone(node, template, client);
@@ -638,6 +777,8 @@ export async function deployFromTemplate(
       client,
     );
     await pve.waitForTask(node, upid, client, 600_000);
+    created = true;
+    await markClonedGuest(vm, client);
 
     // Autoscale (cores/memory/disk) + cloud-init + tenant isolation on the clone.
     await configureClonedVm(
@@ -662,7 +803,7 @@ export async function deployFromTemplate(
       },
     });
   } catch (err) {
-    await markVmError(vm.id, input.name, err);
+    await settleFailedCreate(vm, err, created);
     throw err;
   }
 }
@@ -717,6 +858,7 @@ export async function duplicateVm(source: VirtualMachine, newName: string): Prom
     },
   });
 
+  let created = false;
   try {
     // Full clone (not linked): storage-agnostic and self-contained, so the copy
     // survives the original being deleted — and, being full, it can be placed on
@@ -730,6 +872,8 @@ export async function duplicateVm(source: VirtualMachine, newName: string): Prom
       client,
     );
     await pve.waitForTask(node, upid, client, 600_000);
+    created = true;
+    await markClonedGuest(vm, client); // the copy inherited the source's marker
 
     // Same as every other clone path: the copy inherited the source's bridge, so the
     // admin's default is applied here (see pve.applyDefaultBridge for why it wins).
@@ -744,7 +888,7 @@ export async function duplicateVm(source: VirtualMachine, newName: string): Prom
     await pve.waitForTask(node, startUpid, client);
     return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
   } catch (err) {
-    await markVmError(vm.id, newName, err);
+    await settleFailedCreate(vm, err, created);
     throw err;
   }
 }
@@ -1268,7 +1412,11 @@ async function stopAndDeleteProxmoxVm(
 export async function destroyVm(vm: VirtualMachine): Promise<void> {
   const currentVm = await syncVmNode(vm);
   const client = await pve.getClient();
-  await stopAndDeleteProxmoxVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client, kindOf(currentVm));
+  // Only a guest that is demonstrably this row's is deleted. If the VMID is empty
+  // or now belongs to another guest, the row is all there is to remove.
+  if ((await guestIdentity(currentVm, client)) === 'ours') {
+    await stopAndDeleteProxmoxVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client, kindOf(currentVm));
+  }
   await prisma.virtualMachine.delete({ where: { id: currentVm.id } });
 }
 
@@ -1349,6 +1497,9 @@ export async function rebuildVm(
     }
   }
 
+  // Never re-image a guest that isn't this row's. An empty VMID is fine to build into.
+  await assertGuestIsOurs(current, { allowAbsent: true, client });
+
   // Point of no return: tear down the existing VM, then mark the row rebuilding.
   await stopAndDeleteProxmoxVm(current.proxmoxNode, vmid, client);
   await prisma.virtualMachine.update({
@@ -1370,6 +1521,7 @@ export async function rebuildVm(
           bridge: bridge!,
           isoStorage: isoStorage!,
           iso: source.os,
+          tags: guestMarker(current.id),
         },
         client,
       );
@@ -1392,6 +1544,7 @@ export async function rebuildVm(
         client,
       );
       await pve.waitForTask(targetNode, upid, client, 600_000);
+      await markClonedGuest({ ...current, proxmoxNode: targetNode }, client);
       await configureClonedVm(
         { node: targetNode, vmid, template, cpu: current.cpu, ram: current.ram, diskGb, isolate, cloud: source.cloud },
         client,
@@ -1448,12 +1601,14 @@ async function assertOwnerAccessActive(vm: VirtualMachine): Promise<void> {
 export async function startVm(vm: VirtualMachine): Promise<void> {
   await assertOwnerAccessActive(vm);
   const currentVm = await syncVmNode(vm);
+  await assertGuestIsOurs(currentVm);
   await pve.startVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kindOf(currentVm));
   await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'running' } });
 }
 
 export async function stopVm(vm: VirtualMachine, force: boolean): Promise<void> {
   const currentVm = await syncVmNode(vm);
+  await assertGuestIsOurs(currentVm);
   const kind = kindOf(currentVm);
   if (force) await pve.stopVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind);
   else await pve.shutdownVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind);
@@ -1463,6 +1618,7 @@ export async function stopVm(vm: VirtualMachine, force: boolean): Promise<void> 
 export async function restartVm(vm: VirtualMachine): Promise<void> {
   await assertOwnerAccessActive(vm); // same owner-window guard as startVm
   const currentVm = await syncVmNode(vm);
+  await assertGuestIsOurs(currentVm);
   await pve.rebootVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kindOf(currentVm));
   await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'running' } });
 }

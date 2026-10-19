@@ -4,6 +4,7 @@ import { getConfig, setConfig } from './config.service.js';
 import { cronMatches } from './power-schedule.service.js';
 import { notify } from './notify.service.js';
 import * as pve from './proxmox.service.js';
+import { assertGuestIsOurs } from './vm.service.js';
 
 /** Rolling retention: only this many MateStates are kept per VM. */
 export const MATESTATE_RETENTION = 2;
@@ -75,6 +76,8 @@ export async function createMateState(
   kind: 'scheduled' | 'manual' = 'manual',
 ): Promise<MateState> {
   const client = await pve.getClient();
+  // Never back up a guest that isn't this row's into this row's backup list.
+  await assertGuestIsOurs(vm, { client });
   const storage = await getBackupStorage();
 
   // Snapshot the set of existing backups for this VM so we can identify the new one.
@@ -135,6 +138,8 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
 
   const client = await pve.getClient();
   const kind: pve.GuestKind = vm.type === 'lxc' ? 'lxc' : 'qemu';
+  // A restore overwrites the guest at this VMID — only ever this row's (or an empty slot).
+  await assertGuestIsOurs(vm, { allowAbsent: true, client });
 
   // Stop first if running — Proxmox refuses to restore over a running guest, and
   // stop is async (same pattern as destroyVm).

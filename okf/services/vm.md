@@ -13,7 +13,9 @@ sources:
 
 # Purpose
 
-The layer between the routers and [proxmox service](/services/proxmox.md) for everything a tenant does to a guest. Every create path follows: quota check → reserve VMID → DB row `creating` → create/clone on Proxmox (waiting for the task) → isolation firewall before first boot → `stopped` → start (waited) → `running`; any failure marks the row `error` and fires `notify({ event: 'vm.error' })`.[^vm]
+The layer between the routers and [proxmox service](/services/proxmox.md) for everything a tenant does to a guest. Every create path follows: quota check → reserve VMID → DB row `creating` → create/clone on Proxmox (waiting for the task) → isolation firewall before first boot → `stopped` → start (waited) → `running`. On failure (`settleFailedCreate`) the row is kept as `error` only when its guest exists and is ours; when no guest of ours holds the VMID, the row is deleted so it cannot point at whichever guest Proxmox gives that VMID next. Either way `notify({ event: 'vm.error' })` fires.[^vm]
+
+Every guest ProxMate creates carries a Proxmox tag `proxmate-<row id>` (`guestMarker`), set in the create call (ISO, LXC) or written right after a clone/restore (`markClonedGuest`, which replaces any marker inherited from the source).[^vm]
 
 # Key functions
 
@@ -35,9 +37,10 @@ The layer between the routers and [proxmox service](/services/proxmox.md) for ev
 | `setPowerSchedule` | `(vm, { startCron, stopCron })` | Stored for [power-schedule](/services/power-schedule.md). |
 | `syncVmNode` | `(vm)` | Corrects `proxmoxNode` from `/cluster/resources`. |
 | `getVmWithLiveStatus` / `refreshVmIps` / `getLiveUsage` | | Live status merge (syncs DB status unless `creating`), agent/LXC IP refresh, per-user live usage. |
-| `destroyVm` | `(vm)` | Hard-stop, wait, delete on Proxmox (already-gone tolerated), delete row. |
-| `rebuildVm` | `(user, vm, source: iso \| template)` | Destructive re-image into the SAME VMID; clears `ideState`; re-arms deploy lock/pending password for cloud-init. |
-| `startVm` / `stopVm(vm, force)` / `restartVm` / `pauseVm` / `resumeVm` | | Power actions; `stopVm` graceful unless `force`; pause/resume QEMU only. |
+| `guestIdentity` / `assertGuestIsOurs` | `(vm[, opts])` | `'ours' \| 'absent' \| 'foreign'` for the guest at the row's VMID: ours when it carries the row's marker; a guest with no ProxMate marker (created before markers existed) counts as ours when its Proxmox name matches the row, and the marker is then written. `assertGuestIsOurs` throws `GuestIdentityError` otherwise (`allowAbsent` also accepts an empty VMID). |
+| `destroyVm` | `(vm)` | When the guest is ours: hard-stop, wait, delete on Proxmox (already-gone tolerated). Always deletes the row; an absent or foreign guest is left untouched. |
+| `rebuildVm` | `(user, vm, source: iso \| template)` | Destructive re-image into the SAME VMID (refused unless the guest is ours or absent); clears `ideState`; re-arms deploy lock/pending password for cloud-init. A failure after teardown keeps the row as `error`. |
+| `startVm` / `stopVm(vm, force)` / `restartVm` / `pauseVm` / `resumeVm` | | Power actions; start/stop/restart require `assertGuestIsOurs`; `stopVm` graceful unless `force`; pause/resume QEMU only. |
 | `generateGuestPassword` / `resetGuestPassword` | | 20-char unambiguous CSPRNG password set via agent; returned once, never stored. |
 | `addGuestSshKey` | `(vm, username, key)` | Validates key, injects via agent, best-effort merges into cloud-init `sshkeys` preserving `ipconfig0`. |
 | `enterRescue` / `exitRescue` | `(vm)` | Snapshot `{ boot, ide3 }` to `rescueBoot`, boot `rescue_iso`; restore on exit. |

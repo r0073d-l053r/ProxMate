@@ -74,6 +74,8 @@ import {
   exitRescue,
   duplicateVm,
   syncVmNode,
+  assertGuestIsOurs,
+  MIN_RAM_MB,
 } from '../services/vm.service.js';
 import { isValidPublicKey } from '../services/ssh-key.service.js';
 import { isIdeInstalling } from '../services/ide-provision.service.js';
@@ -165,10 +167,13 @@ router.get('/live-usage', async (req: Request, res: Response) => {
 
 // ─── POST /api/vms ────────────────────────────────────────────
 
+// Guest RAM floor (see MIN_RAM_MB): refused here, before any row or VMID is reserved.
+const RamMb = z.number().int().min(MIN_RAM_MB, `RAM must be at least ${MIN_RAM_MB} MB`);
+
 const CreateVmSchema = z.object({
   name: z.string().min(1).max(63).regex(/^[a-zA-Z0-9-]+$/, 'Use letters, numbers and hyphens only'),
   cpu: z.number().int().positive().max(64),
-  ram: z.number().int().positive(),
+  ram: RamMb,
   storage: z.number().int().positive(),
   // Restrict to a bare ISO filename so it can't inject extra Proxmox drive options
   // (the value is interpolated into `ide2: <storage>:iso/<os>,media=cdrom`).
@@ -365,7 +370,7 @@ router.post('/restore-upload', async (req: Request, res: Response) => {
 const CreateContainerSchema = z.object({
   name: z.string().min(1).max(63).regex(/^[a-zA-Z0-9-]+$/, 'Use letters, numbers and hyphens only'),
   cpu: z.number().int().positive().max(64),
-  ram: z.number().int().positive(),
+  ram: RamMb,
   storage: z.number().int().positive(),
   // Full Proxmox template volid, e.g. "local:vztmpl/debian-12-standard_….tar.zst".
   // Constrained charset since it's interpolated into the create call's ostemplate.
@@ -578,7 +583,7 @@ const UpdateVmSchema = z.object({
     .optional(),
   // In-place resize. Each is optional; disk can only grow (enforced server-side).
   cpu: z.number().int().positive().max(64).optional(),
-  ram: z.number().int().positive().optional(),
+  ram: RamMb.optional(),
   storage: z.number().int().positive().optional(),
   // Optional labels for grouping/filtering. Pass [] to clear.
   tags: z
@@ -1644,6 +1649,7 @@ router.post('/:id/console', async (req: Request, res: Response) => {
 
   try {
     vm = await syncVmNode(vm);
+    await assertGuestIsOurs(vm);
     const { ticket, port } = await requestVncProxy(vm.proxmoxNode, vm.proxmoxVmId, kindOf(vm));
     res.json({ ticket, port });
   } catch (err) {
@@ -1662,6 +1668,7 @@ router.post('/:id/serial', async (req: Request, res: Response) => {
 
   try {
     vm = await syncVmNode(vm);
+    await assertGuestIsOurs(vm);
     const kind = kindOf(vm);
     // LXC containers always expose a text console (their native console is the
     // termproxy); QEMU VMs need a serial port in their config.

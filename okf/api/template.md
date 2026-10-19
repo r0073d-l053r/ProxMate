@@ -45,7 +45,7 @@ The Template Store: tenants list published templates and deploy VMs from them (c
 
 # Gotchas
 
-- `DeploySchema`: `name` 1..63 `[a-zA-Z0-9-]`, `cpu` int 1..64, `ram`/`storage` positive ints, `sshKey` must start with an OpenSSH key type, `username` matches `^[a-z_][a-z0-9_-]{0,31}$`, `password` 1..128, `install*` booleans, `features` max 20.[^routes]
+- `DeploySchema`: `name` 1..63 `[a-zA-Z0-9-]`, `cpu` int 1..64, `ram` int >= 64 (MB), `storage` positive int, `sshKey` must start with an OpenSSH key type, `username` matches `^[a-z_][a-z0-9_-]{0,31}$`, `password` 1..128, `install*` booleans, `features` max 20.[^routes]
 - Deploying a `cloudInit` template without `sshKey` or `password` gives 400. Unpublished or missing template gives 404.[^routes]
 - `resolveCreateTarget(actor, body)` decides the owner (admin may deploy into another user's account); `adminManaged` is set when owner differs from actor. Template deploys cannot choose a node; the clone stays on the template's node.[^routes]
 - Errors: `CreateOptionError` uses its status, `QuotaError` gives 403 `Quota exceeded` with `details`, Proxmox errors 502.[^routes]

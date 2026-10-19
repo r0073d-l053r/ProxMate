@@ -37,6 +37,7 @@ function fakePve(status = 'stopped') {
     if (url === '/cluster/resources') return ok([{ type: 'qemu', vmid: 120, node: 'pve1' }]);
     if (/\/qemu\/120\/status\/current$/.test(url)) return ok({ status });
     if (url === '/cluster/nextid') return ok('130');
+    if (/\/qemu\/(120|130)\/config$/.test(url)) return ok({ name: 'web' });
     if (/\/tasks\/.*\/status$/.test(url)) return ok({ status: 'stopped', exitstatus: 'OK' });
     return ok(null);
   });

@@ -50,7 +50,11 @@ function fakePve() {
       if (/\/status\/current$/.test(url)) return ok({ status: 'stopped' });
       // getVmConfig (template autoscale) — a primary disk + a cloud-init cdrom.
       if (/\/qemu\/\d+\/config$/.test(url))
-        return ok({ scsi0: 'local-lvm:vm-110-disk-0,size=2G', ide2: 'local-lvm:vm-110-cloudinit,media=cdrom' });
+        return ok({
+          name: 'box', // the row's own guest (pre-marker, matched by name)
+          scsi0: 'local-lvm:vm-110-disk-0,size=2G',
+          ide2: 'local-lvm:vm-110-cloudinit,media=cdrom',
+        });
       if (/\/tasks\/.+\/status/.test(url)) return ok({ status: 'stopped', exitstatus: 'OK' });
       return ok(null);
     }),
@@ -123,6 +127,23 @@ describe('rebuildVm — ISO reinstall', () => {
 
     await expect(rebuildVm(admin, VM, { kind: 'iso', os: 'debian.iso' })).rejects.toThrow('pve create failed');
     expect(update).toHaveBeenCalledWith({ where: { id: 'vm-1' }, data: { status: 'error' } });
+  });
+});
+
+describe('rebuildVm — guest identity', () => {
+  it('refuses (and tears nothing down) when the VMID holds another row\'s guest', async () => {
+    const client = fakePve();
+    const base = client.get.getMockImplementation()!;
+    client.get.mockImplementation((url: string) =>
+      /\/qemu\/110\/config$/.test(url)
+        ? Promise.resolve({ data: { data: { name: 'box', tags: 'proxmate-someotherrow' } } })
+        : base(url),
+    );
+    getClientMock.mockResolvedValue(client as never);
+
+    await expect(rebuildVm(admin, VM, { kind: 'iso', os: 'debian.iso' })).rejects.toThrow(/not the one ProxMate created/);
+    expect(client.delete).not.toHaveBeenCalled();
+    expect(client.post).not.toHaveBeenCalled();
   });
 });
 

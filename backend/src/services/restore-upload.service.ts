@@ -5,7 +5,7 @@ import { prisma } from '../lib/prisma.js';
 import { getConfig } from './config.service.js';
 import { backupDir } from './download.service.js';
 import { getBackupStorage } from './matestate.service.js';
-import { assertWithinQuota } from './vm.service.js';
+import { assertWithinQuota, markClonedGuest, settleFailedCreate } from './vm.service.js';
 import * as pve from './proxmox.service.js';
 
 /**
@@ -202,11 +202,15 @@ export async function restoreFromUpload(
       },
     });
 
+    let created = false;
     try {
       // Remap all volumes onto our default pool: cross-cluster archives name
       // storages this cluster may not have. unique=1 → fresh MACs.
       const upid = await pve.restoreNewGuest({ node, vmid, volid, storage: defaultStorage }, client, kind);
       await pve.waitForTask(node, upid, client, 30 * 60 * 1000);
+      created = true;
+      // The archive's config carries the OLD guest's tags; tie the guest to this row.
+      await markClonedGuest(vm, client);
 
       // The restored config carries the OLD guest's name — apply the chosen one.
       await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
@@ -227,7 +231,7 @@ export async function restoreFromUpload(
       await cleanupArchive(filename, node, storage, volid);
       return done;
     } catch (err) {
-      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'error' } }).catch(() => undefined);
+      await settleFailedCreate(vm, err, created);
       throw err;
     }
   } catch (err) {
