@@ -502,8 +502,17 @@ export async function settleFailedCreate(
     keep = await guestLeftByCreate(vm, opts.cloneSourceId).catch(() => true);
   }
   if (keep) {
-    // A foreign-volume hold is already set and says more than the generic one.
-    if (!(err instanceof ForeignVolumeError)) await markVmError(vm.id, vm.name, err).catch(() => undefined);
+    // A hold already on the row (foreign volumes, over quota) says more than the
+    // generic one, so it is kept.
+    let existing: { holdReason: string | null } | null = null;
+    try {
+      existing = await prisma.virtualMachine.findUnique({ where: { id: vm.id }, select: { holdReason: true } });
+    } catch {
+      /* unreadable — set the generic hold */
+    }
+    if (!(err instanceof ForeignVolumeError) && !existing?.holdReason) {
+      await markVmError(vm.id, vm.name, err).catch(() => undefined);
+    }
     return { following };
   }
   await deleteVmRow(vm.id).catch(() => undefined);

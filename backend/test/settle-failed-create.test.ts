@@ -108,6 +108,14 @@ describe('settleFailedCreate for a clone whose task outlived the wait (C1)', () 
     );
   });
 
+  it('keeps a hold the row already has instead of overwriting it (audit round 3)', async () => {
+    pveWith(guestMarker('rowa'));
+    vi.mocked(prisma.virtualMachine.findUnique).mockResolvedValueOnce({ holdReason: 'Over quota after a restore.' } as never);
+    await settleFailedCreate(row, new Error('quota'), true);
+    expect(prisma.virtualMachine.update).not.toHaveBeenCalled();
+    expect(prisma.virtualMachine.delete).not.toHaveBeenCalled();
+  });
+
   it('a clone task that failed falls back to what is at the VMID', async () => {
     pveWith(null, { status: 'stopped', exitstatus: 'clone failed' });
     await settleFailedCreate(row, err, false, { task: { node: 'pve1', upid: 'UPID:clone' } });
