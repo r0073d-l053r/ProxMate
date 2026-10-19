@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('../src/lib/prisma.js', () => ({
   // findUnique backs the end-of-window check that drops an unapplied login password
   // instead of storing it indefinitely — see abandonPendingCiPassword.
-  prisma: { virtualMachine: { update: vi.fn(), findUnique: vi.fn(async () => null) } },
+  prisma: { virtualMachine: { update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(async () => null) } },
 }));
 vi.mock('../src/services/proxmox.service.js', () => ({
   getClient: vi.fn(async () => ({})),
@@ -18,11 +18,13 @@ vi.mock('../src/services/notify.service.js', () => ({ notify: vi.fn(async () => 
 
 import { prisma } from '../src/lib/prisma.js';
 import { notify } from '../src/services/notify.service.js';
-import { guestAgentPing, guestExecOutput } from '../src/services/proxmox.service.js';
+import { guestAgentPing, guestExecOutput, getVmConfig } from '../src/services/proxmox.service.js';
+import { guestMarker } from '../src/services/vm.service.js';
 import { deployStateOf, isDeploying, refreshDeployState } from '../src/services/deploy-lock.service.js';
 import type { VirtualMachine } from '@prisma/client';
 
 const update = vi.mocked(prisma.virtualMachine.update);
+const updateMany = vi.mocked(prisma.virtualMachine.updateMany);
 const findUnique = vi.mocked(prisma.virtualMachine.findUnique);
 const notified = vi.mocked(notify);
 const ping = vi.mocked(guestAgentPing);
@@ -46,6 +48,9 @@ function cloudInitStatus(status: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   update.mockResolvedValue({} as never);
+  updateMany.mockResolvedValue({ count: 1 } as never);
+  // The guest at the VMID is this row's own unless a test says otherwise.
+  vi.mocked(getVmConfig).mockResolvedValue({ tags: guestMarker('vm-1') } as never);
 });
 
 describe('deployStateOf / isDeploying', () => {
@@ -122,6 +127,15 @@ describe('refreshDeployState', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  it('never probes a guest that is not the row\'s own, leaving the timeout to unlock it', async () => {
+    vi.mocked(getVmConfig).mockResolvedValue({ tags: guestMarker('someone-else') } as never);
+    ping.mockResolvedValue(true);
+    cloudInitStatus('done');
+    expect(await refreshDeployState(vm())).toBe('deploying');
+    expect(ping).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
+  });
+
   it('unlocks after the timeout even with no agent, so it never locks forever', async () => {
     ping.mockResolvedValue(false);
     const stale = new Date(Date.now() - 9 * 60 * 1000); // > 8-min ceiling
@@ -172,7 +186,22 @@ describe('the deploy window closing with the password unapplied', () => {
     expect(payload.message).toContain('qemu-guest-agent');
 
     // The secret is dropped, not carried indefinitely.
-    expect(update.mock.calls.some((c) => (c[0] as { data: Record<string, unknown> }).data['pendingCiPassword'] === null)).toBe(true);
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: 'vm-1', pendingCiPassword: { not: null } },
+      data: { pendingCiPassword: null },
+    });
+  });
+
+  it('notifies once when two polls close the window together', async () => {
+    findUnique.mockResolvedValue({
+      pendingCiPassword: 'enc:whatever', name: 'app-01', description: null, os: 'x', proxmoxVmId: 110,
+    } as never);
+    // The other poll already dropped the secret: this one's conditional clear matches nothing.
+    updateMany.mockResolvedValue({ count: 0 } as never);
+
+    await refreshDeployState(stale());
+
+    expect(notified).not.toHaveBeenCalled();
   });
 
   it('falls back to the OS label when the description is missing', async () => {

@@ -17,7 +17,8 @@ vi.mock('../src/services/proxmox.service.js', () => ({
 vi.mock('../src/services/notify.service.js', () => ({ notify: vi.fn(async () => undefined) }));
 
 import { prisma } from '../src/lib/prisma.js';
-import { guestAgentPing, guestExecOutput } from '../src/services/proxmox.service.js';
+import { guestAgentPing, guestExecOutput, getVmConfig } from '../src/services/proxmox.service.js';
+import { guestMarker } from '../src/services/vm.service.js';
 import { advanceDeployingVms } from '../src/services/deploy-lock.service.js';
 
 const update = vi.mocked(prisma.virtualMachine.update);
@@ -26,6 +27,8 @@ const findMany = vi.mocked(prisma.virtualMachine.findMany);
 beforeEach(() => {
   vi.clearAllMocks();
   update.mockResolvedValue({} as never);
+  // Each row's VMID holds that row's own guest.
+  vi.mocked(getVmConfig).mockResolvedValue({ tags: ['settled', 'running', 'timedout', 'broken', 'ok'].map(guestMarker).join(';') } as never);
 });
 
 const row = (id: string, ageMs: number) => ({
