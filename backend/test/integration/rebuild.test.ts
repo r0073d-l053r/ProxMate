@@ -19,7 +19,7 @@ vi.mock('../../src/services/proxmox.service.js', async (importOriginal) => {
 import { prisma } from '../../src/lib/prisma.js';
 import { getConfig } from '../../src/services/config.service.js';
 import * as pve from '../../src/services/proxmox.service.js';
-import { rebuildVm, QuotaError, type RebuildSource } from '../../src/services/vm.service.js';
+import { rebuildVm, QuotaError, QUOTA_HOLD_MESSAGE, type RebuildSource } from '../../src/services/vm.service.js';
 import { bodyOf, GB } from '../helpers.js';
 import type { Template } from '@prisma/client';
 
@@ -217,6 +217,21 @@ describe('rebuildVm — template / cloud-init redeploy', () => {
 
     expect(client.post).toHaveBeenCalledWith('/nodes/pve-x/qemu/110/status/start');
     expect(result.status).toBe('running');
+  });
+
+  it('on a machine held for being over quota, is judged on the full quota before anything is torn down (audit round 3)', async () => {
+    const client = fakePve();
+    getClientMock.mockResolvedValue(client as never);
+    findMany.mockResolvedValue([] as never);
+    const held = { ...(VM as object), status: 'error', storage: 30, holdReason: QUOTA_HOLD_MESSAGE } as never;
+
+    const tight = { id: 'u1', role: 'user', maxCpu: 8, maxRam: 16384, maxStorage: 20 } as never;
+    await expect(rebuildVm(tight, held, { kind: 'iso', os: 'debian.iso' })).rejects.toBeInstanceOf(QuotaError);
+    expect(client.delete).not.toHaveBeenCalled();
+
+    const roomy = { id: 'u1', role: 'user', maxCpu: 8, maxRam: 16384, maxStorage: 40 } as never;
+    await rebuildVm(roomy, held, { kind: 'iso', os: 'debian.iso' });
+    expect(update).toHaveBeenCalledWith({ where: { id: 'vm-1' }, data: { status: 'stopped', holdReason: null } });
   });
 
   it('rejects (and does NOT tear down) when a larger template disk exceeds quota', async () => {

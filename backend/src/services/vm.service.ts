@@ -2421,6 +2421,17 @@ async function rebuildVmLocked(
     }
   }
 
+  // A successful rebuild clears the row's hold. One held for being over quota is
+  // only cleared when the rebuilt size fits the full quota — otherwise the rebuild
+  // would just hand back a startable machine that is still over it.
+  if (current.holdReason === QUOTA_HOLD_MESSAGE) {
+    await assertResizeWithinQuota(await quotaAccountFor(user, current), current, {
+      cpu: current.cpu,
+      ram: current.ram,
+      storage: diskGb,
+    });
+  }
+
   // Point of no return: tear down the existing VM, then mark the row rebuilding.
   await stopAndDeleteProxmoxVm(current.proxmoxNode, vmid, client);
   await prisma.virtualMachine.update({
