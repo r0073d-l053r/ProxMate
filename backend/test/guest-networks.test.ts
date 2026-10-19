@@ -116,6 +116,18 @@ describe('getGuestNetworks', () => {
     expect(await getGuestNetworks(asClient(c))).toEqual([{ name: 'vmbr0', kind: 'bridge', nodes: ['pve2'] }]);
   });
 
+  it('falls back to the unfiltered interface list when a release rejects any_bridge', async () => {
+    const c = cluster({
+      '/nodes': [{ node: 'pve1', status: 'online' }],
+      '/nodes/pve1/network?type=any_bridge': new Error('400 type: value is not a valid enum'),
+      '/nodes/pve1/network': [
+        { iface: 'eno1', type: 'eth' },
+        { iface: 'vmbr0', type: 'bridge' },
+      ],
+    });
+    expect(await getGuestNetworks(asClient(c))).toEqual([{ name: 'vmbr0', kind: 'bridge', nodes: ['pve1'] }]);
+  });
+
   it('ignores non-bridge interfaces and names a NIC line could not carry', async () => {
     const c = cluster({
       '/nodes': [{ node: 'pve1', status: 'online' }],

@@ -654,7 +654,13 @@ export async function getGuestNetworks(client?: AxiosInstance): Promise<GuestNet
 
   const [perNode, vnetsRes, zonesRes] = await Promise.all([
     Promise.allSettled(
-      nodes.map((node) => c.get<{ data: PveNetworkIface[] }>(`/nodes/${node}/network?type=any_bridge`)),
+      nodes.map((node) =>
+        c
+          .get<{ data: PveNetworkIface[] }>(`/nodes/${node}/network?type=any_bridge`)
+          // A release that rejects the filter must not lose the bridges it always had:
+          // the unfiltered list carries them too, filtered by type below.
+          .catch(() => c.get<{ data: PveNetworkIface[] }>(`/nodes/${node}/network`)),
+      ),
     ),
     c.get<{ data: PveSdnVnet[] }>('/cluster/sdn/vnets').catch(() => null),
     c.get<{ data: PveSdnZone[] }>('/cluster/sdn/zones').catch(() => null),
