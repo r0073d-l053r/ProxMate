@@ -20,6 +20,7 @@ import {
   TooManyLlmKeysError,
   InvalidLlmKeyError,
 } from '../services/tenant-llm-key.service.js';
+import { loadIdeGuestSecret } from '../services/ide-guest-auth.service.js';
 import { recordAudit } from '../services/audit.service.js';
 import { assertSafeOutboundUrl } from '../lib/url-safety.js';
 import type { AuthRequest } from '../types/index.js';
@@ -125,7 +126,11 @@ router.get('/:id/status', async (req: Request, res: Response) => {
     res.status(404).json({ error: 'VM not found' });
     return;
   }
-  res.json({ state: await refreshIdeState(vm) });
+  const state = await refreshIdeState(vm);
+  // An install from before per-VM guest authentication has no secret, so the
+  // proxy refuses it; tell the UI so it can reinstall instead of opening it.
+  const reinstallRequired = state === 'ready' && !(await loadIdeGuestSecret(vm.id));
+  res.json({ state, ...(reinstallRequired ? { reinstallRequired } : {}) });
 });
 
 // ─── Relocate to an AVX-capable node ('node_no_avx' escape hatch) ─────────────

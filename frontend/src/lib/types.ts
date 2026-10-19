@@ -133,6 +133,8 @@ export interface VmDetail extends VirtualMachine {
 /** GET /api/ide/:id/status */
 export interface IdeStatus {
   state: "none" | "installing" | "ready" | "failed";
+  /** A 'ready' install made before per-VM guest authentication; it must be reinstalled to open. */
+  reinstallRequired?: boolean;
 }
 
 /** One 1 s sample from GET /vms/:id/live-stats (cached cluster/resources). */

@@ -1,6 +1,6 @@
 import httpProxy from 'http-proxy';
 import type { Express } from 'express';
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import { STATUS_CODES, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { Socket } from 'node:net';
 import { verifyToken } from './auth.service.js';
@@ -9,6 +9,7 @@ import { getIdeCapability } from './ide.service.js';
 import { SESSION_COOKIE } from '../lib/cookies.js';
 import { logger } from '../lib/logger.js';
 import { isLoopbackOrLinkLocal } from '../lib/url-safety.js';
+import { IDE_GUEST_COOKIE, ideGuestCookieValue, loadIdeGuestSecret, ensureIdeGuestProven } from './ide-guest-auth.service.js';
 
 /**
  * ProxMate IDE transport (Phase 2): reverse-proxy an in-guest code-server (HTTP +
@@ -30,6 +31,13 @@ import { isLoopbackOrLinkLocal } from '../lib/url-safety.js';
  *      TEST-ONLY: it clobbers per-VM routing, so it must NOT be set in a
  *      multi-VM deployment (doing so sends every VM's IDE to the same box).
  *   2. The guest's own LAN `ipAddress:port` (`IDE_GUEST_PORT` overrides 8080).
+ *
+ * Guest authentication (see ide-guest-auth.service): the address comes from the
+ * guest's own agent, so before relaying anything the proxy makes the code-server
+ * there prove it holds THIS VM's per-install secret, then attaches the matching
+ * session cookie to every request. An address that answers without the secret
+ * (another VM, an unrelated service, an install from before guest auth existed)
+ * is never relayed to. This applies to the rig override too.
  *
  * Reaching code-server on the guest requires punching through the per-VM tenant
  * isolation firewall — that is done as a MANAGED, infra-scoped `:8080` pinhole at
@@ -98,13 +106,58 @@ export function resolveIdeTargetUrl(
   return `http://${vm.ipAddress}:${port}`;
 }
 
-/** Resolve the code-server target for a VM, enforcing ownership + the IDE policy. */
-async function resolveTarget(vmId: string, user: { id: string; role: string }): Promise<string | null> {
+type ResolvedTarget =
+  | { ok: true; target: string; guestCookie: string }
+  | { ok: false; status: number; message: string };
+
+const NOT_AVAILABLE: ResolvedTarget = { ok: false, status: 403, message: 'ProxMate IDE is not available for this VM' };
+
+/**
+ * Resolve the code-server target for a VM, enforcing ownership + the IDE policy,
+ * and prove the guest at that address is this VM's install before returning it.
+ */
+async function resolveTarget(vmId: string, user: { id: string; role: string }): Promise<ResolvedTarget> {
   const vm = await getVmWithCap(vmId, user, 'ide');
-  if (!vm) return null;
+  if (!vm) return NOT_AVAILABLE;
   const cap = await getIdeCapability({ role: user.role });
-  if (!cap.available) return null;
-  return resolveIdeTargetUrl(vm);
+  if (!cap.available) return NOT_AVAILABLE;
+  const target = resolveIdeTargetUrl(vm);
+  if (!target) return NOT_AVAILABLE;
+  const secret = await loadIdeGuestSecret(vm.id);
+  if (!secret) {
+    // Installed before guest authentication existed (or the secret is gone):
+    // there is nothing to prove the guest with, so fail closed until reinstalled.
+    return {
+      ok: false,
+      status: 409,
+      message: 'This IDE install is out of date. Reinstall the IDE from the VM page (Console → ProxMate IDE) to open it.',
+    };
+  }
+  if (!(await ensureIdeGuestProven(vm.id, target, secret))) {
+    return {
+      ok: false,
+      status: 502,
+      message: "ProxMate IDE: couldn't verify this VM's IDE. If it was just reinstalled, wait a moment; otherwise reinstall the IDE.",
+    };
+  }
+  return { ok: true, target, guestCookie: ideGuestCookieValue(secret) };
+}
+
+/**
+ * The Cookie header sent to the guest: whatever the browser sent, minus any
+ * code-server session cookie of its own, plus the server-held guest cookie.
+ */
+export function guestCookieHeader(header: string | undefined, guestCookie: string): string {
+  const kept = (header ?? '')
+    .split(';')
+    .map((p) => p.trim())
+    .filter((p) => {
+      if (!p) return false;
+      const name = p.split('=', 1)[0]!.trim();
+      return !name.startsWith(IDE_GUEST_COOKIE);
+    });
+  kept.push(`${IDE_GUEST_COOKIE}=${guestCookie}`);
+  return kept.join('; ');
 }
 
 /**
@@ -135,13 +188,14 @@ export function mountIdeProxy(appInstance: Express): void {
         res.writeHead(401, { 'content-type': 'text/plain' }).end('Unauthorized');
         return;
       }
-      const target = await resolveTarget(vmId, user);
-      if (!target) {
-        res.writeHead(403, { 'content-type': 'text/plain' }).end('ProxMate IDE is not available for this VM');
+      const resolved = await resolveTarget(vmId, user);
+      if (!resolved.ok) {
+        res.writeHead(resolved.status, { 'content-type': 'text/plain' }).end(resolved.message);
         return;
       }
       req.url = rest + query; // strip the /api/ide/:id/proxy prefix
-      proxy.web(req, res, { target });
+      req.headers.cookie = guestCookieHeader(req.headers.cookie, resolved.guestCookie);
+      proxy.web(req, res, { target: resolved.target });
     })().catch(() => {
       if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' }).end('IDE proxy error');
     });
@@ -180,14 +234,15 @@ export function handleIdeUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
       socket.destroy();
       return;
     }
-    const target = await resolveTarget(vmId, user);
-    if (!target) {
-      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    const resolved = await resolveTarget(vmId, user);
+    if (!resolved.ok) {
+      socket.write(`HTTP/1.1 ${resolved.status} ${STATUS_CODES[resolved.status] ?? 'Error'}\r\n\r\n`);
       socket.destroy();
       return;
     }
     req.url = (m[2] ?? '/') + (url.search ?? ''); // strip the prefix
-    proxy.ws(req, socket as unknown as Socket, head, { target });
+    req.headers.cookie = guestCookieHeader(req.headers.cookie, resolved.guestCookie);
+    proxy.ws(req, socket as unknown as Socket, head, { target: resolved.target });
   })().catch(() => socket.destroy());
   return true;
 }

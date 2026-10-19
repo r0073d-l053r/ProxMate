@@ -77,7 +77,7 @@ Maps a ProxMate VM id to a Proxmox guest (`proxmoxVmId` on `proxmoxNode`) and ow
 
 - Belongs to [User](/database/user.md), `onDelete: Cascade`.
 - Has many [MateState](/database/mate-state.md), [VmShare](/database/vm-share.md), [PassthroughRequest](/database/passthrough-request.md), [AlertRule](/database/alert-rule.md), all cascade-deleted with the VM.[^schema]
-- Referenced without FK by [IdeGatewayToken](/database/ide-gateway-token.md).`vmId` and [ResourceSample](/database/resource-sample.md).`vmId`; no link to the [Template](/database/template.md) it was cloned from.[^schema]
+- Referenced without FK by [IdeGatewayToken](/database/ide-gateway-token.md).`vmId`, [IdeGuestSecret](/database/ide-guest-secret.md).`vmId` and [ResourceSample](/database/resource-sample.md).`vmId`; no link to the [Template](/database/template.md) it was cloned from.[^schema]
 
 # Invariants
 

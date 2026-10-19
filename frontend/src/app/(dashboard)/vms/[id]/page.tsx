@@ -178,8 +178,17 @@ export default function VmDetailPage() {
     const popup = () =>
       window.open(`${apiBaseUrl}/ide/${vm.id}/proxy/`, `proxmate-ide-${vm.id}`, "popup,width=1500,height=940");
     if (vm.ideState === "ready") {
-      popup();
-      return;
+      // An install from an older ProxMate has no per-VM guest credential and the
+      // proxy won't open it, so reinstall it (the same flow as a first install).
+      const status = await api
+        .get<IdeStatus>(`/ide/${vm.id}/status`)
+        .then((r) => r.data)
+        .catch(() => null);
+      if (!status?.reinstallRequired) {
+        popup();
+        return;
+      }
+      toast.info("This IDE was installed by an older ProxMate version and needs a reinstall before it can open. Reinstalling now…");
     }
     setIdeInstalling(true);
     try {
