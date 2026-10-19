@@ -48,7 +48,7 @@ OpenCode runs inside the tenant's VM with no ProxMate session cookie. It instead
 # Invariants
 
 - Minting (`issueGatewayToken`, called from IDE provisioning and an IDE route) upserts on `(userId, vmId)` and resets `revokedAt`, `expiresAt`, `lastUsedAt` to null, so re-provisioning rotates the secret.[^gw] [^provision] [^ide-routes]
-- Verification rejects a token whose `vmId` differs from the path VM, revoked or expired tokens, owners with lapsed access, and callers who no longer hold the `ide` capability on the VM or the admin IDE policy.[^gw]
+- Only the VM's owner is issued a token. Verification rejects a token whose `vmId` differs from the path VM, revoked or expired tokens, holders with lapsed access, holders who are not the VM's owner, and callers who no longer hold the `ide` capability on the VM or the admin IDE policy.[^gw]
 
 # Gotchas
 

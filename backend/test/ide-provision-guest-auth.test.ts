@@ -111,6 +111,16 @@ describe('startIdeProvision — per-VM guest credential', () => {
   });
 });
 
+describe('startIdeProvision — owner only', () => {
+  it('refuses to install (and mint a gateway token) for anyone but the VM owner', async () => {
+    await expect(startIdeProvision(vm({ userId: 'owner1' }), { id: 'admin1', role: 'admin' }, 'https://x')).rejects.toThrow(
+      /owner/i,
+    );
+    expect(vi.mocked(guestFileWrite)).not.toHaveBeenCalled();
+    expect(vi.mocked(saveIdeGuestSecret)).not.toHaveBeenCalled();
+  });
+});
+
 describe('refreshIdeState — ready only once the guest proves the secret', () => {
   const installing = () => vm({ ideState: 'installing', ideStateAt: new Date() });
 

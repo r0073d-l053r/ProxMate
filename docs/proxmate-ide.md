@@ -69,7 +69,7 @@ CPU automatically; if it asks you to **reboot and reopen**, that's it enabling A
 needs it). If the node's own hardware can't do AVX, ProxMate offers a **one-click move** to a
 capable node instead — the VM shuts down, moves, starts again, and the IDE opens automatically.
 
-On a VM that's been **shared with you**, the IDE needs the **Manager** share level.
+The IDE opens only on VMs **you own**. On a VM that's been shared with you (or, as an admin, on someone else's VM) use the console instead.
 
 ---
 

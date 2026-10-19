@@ -21,7 +21,7 @@ On first "Open IDE", ProxMate runs a self-contained bootstrap through the guest 
 |---|---|---|
 | `IDE_CODE_SERVER_VERSION` / `IDE_OPENCODE_VERSION` | env override, defaults `4.128.0` / `1.17.18` | Pinned in-guest tool versions. |
 | `ideStateOf` / `isIdeInstalling` | `(vm)` | `none/installing/ready/failed`; the latter gates destructive VM actions. |
-| `startIdeProvision` | `(vm, user, publicApiBaseUrl) => 'installing'` | Guardrails (QEMU, running, agent ping, RAM floor, AVX), managed pinhole, mints gateway token, renders `opencode.json`, generates a fresh guest secret, writes the bootstrap (base64) via `guestFileWrite`, runs it detached with `setsid`, then stores the encrypted secret and sets `ideState`. |
+| `startIdeProvision` | `(vm, user, publicApiBaseUrl) => 'installing'` | Guardrails (caller owns the VM, QEMU, running, agent ping, RAM floor, AVX), managed pinhole, mints gateway token, renders `opencode.json`, generates a fresh guest secret, writes the bootstrap (base64) via `guestFileWrite`, runs it detached with `setsid`, then stores the encrypted secret and sets `ideState`. |
 | `probeIdeReachability` | `(vm) => { ok, target, error? }` | Dials the same target the proxy uses (4 s); a timeout points at `ide_ingress_cidr` / pinhole. |
 | `refreshIdeState` | `(vm)` | `installing` → `ready` when the guest proves the VM's secret (not merely answers), → `failed` after 10 min. |
 | `planIdeRelocate` | `(vm) => targetNode` | Validates (QEMU, no passthrough, not busy, node confirmed no AVX) and picks a confirmed AVX-capable online node via `pickBestNode`. |
@@ -39,6 +39,7 @@ On first "Open IDE", ProxMate runs a self-contained bootstrap through the guest 
 
 # Gotchas
 
+- Only the VM's owner may provision: the gateway token and model list written into the guest are the caller's, and the guest's root user can read them.[^prov]
 - RAM floor: 4 GB OOMs and wedges the VM during install; 8 GB is the proven-safe default.[^prov]
 - AVX: OpenCode's Bun runtime needs it. The service sets the VM CPU to `host` first; if the guest still lacks AVX it returns `reboot_required`, unless the node is known to lack AVX (`node_no_avx`) in which case only a relocate helps.[^prov]
 - Without `ide_ingress_cidr` no pinhole is added and an isolated guest stays unreachable; this only logs a warning.[^prov]

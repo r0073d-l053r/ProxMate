@@ -11,7 +11,10 @@ vi.mock('../src/middleware/auth.js', () => ({
     next();
   }),
 }));
-vi.mock('../src/services/ide.service.js', () => ({ getIdeCapability: vi.fn() }));
+vi.mock('../src/services/ide.service.js', async (orig) => ({
+  ...(await orig<typeof import('../src/services/ide.service.js')>()),
+  getIdeCapability: vi.fn(),
+}));
 vi.mock('../src/services/ide-gateway.service.js', () => ({
   issueGatewayToken: vi.fn(),
   listModelPickerEntries: vi.fn().mockResolvedValue([]),
@@ -38,8 +41,10 @@ vi.mock('../src/services/ide-guest-auth.service.js', () => ({ loadIdeGuestSecret
 vi.mock('../src/services/audit.service.js', () => ({ recordAudit: vi.fn() }));
 vi.mock('../src/lib/url-safety.js', () => ({ assertSafeOutboundUrl: vi.fn() }));
 
-import { getViewableVm } from '../src/services/vm.service.js';
-import { refreshIdeState } from '../src/services/ide-provision.service.js';
+import { getVmWithCap, getViewableVm } from '../src/services/vm.service.js';
+import { getIdeCapability } from '../src/services/ide.service.js';
+import { issueGatewayToken } from '../src/services/ide-gateway.service.js';
+import { refreshIdeState, startIdeProvision } from '../src/services/ide-provision.service.js';
 import { loadIdeGuestSecret } from '../src/services/ide-guest-auth.service.js';
 import ideRouter from '../src/routes/ide.routes.js';
 
@@ -78,5 +83,49 @@ describe('GET /api/ide/:id/status — out-of-date installs', () => {
     vi.mocked(loadIdeGuestSecret).mockResolvedValue('secret');
     const r = await fetch(`${base}/api/ide/vm1/status`);
     expect(await r.json()).toEqual({ state: 'ready' });
+  });
+});
+
+describe('POST /api/ide/:id/provision — VM owner only', () => {
+  const post = () => fetch(`${base}/api/ide/vm1/provision`, { method: 'POST' });
+
+  beforeEach(() => {
+    vi.mocked(getVmWithCap).mockResolvedValue({ id: 'vm1', userId: 'owner1' } as never);
+    vi.mocked(getIdeCapability).mockResolvedValue({ available: true } as never);
+    vi.mocked(startIdeProvision).mockResolvedValue('installing');
+  });
+
+  it('refuses an admin who does not own the VM, with a clear message', async () => {
+    currentUser = { id: 'admin1', role: 'admin' };
+    const r = await post();
+    expect(r.status).toBe(403);
+    expect((await r.json()).error).toMatch(/owner/i);
+    expect(vi.mocked(startIdeProvision)).not.toHaveBeenCalled();
+  });
+
+  it('refuses a sharee who holds the ide capability', async () => {
+    currentUser = { id: 'sharee1', role: 'user' };
+    const r = await post();
+    expect(r.status).toBe(403);
+    expect(vi.mocked(startIdeProvision)).not.toHaveBeenCalled();
+  });
+
+  it('provisions for the owner, as the owner', async () => {
+    currentUser = { id: 'owner1', role: 'user' };
+    const r = await post();
+    expect(r.status).toBe(200);
+    expect(vi.mocked(startIdeProvision).mock.calls[0]![1]).toEqual({ id: 'owner1', role: 'user' });
+  });
+});
+
+describe('POST /api/ide/:id/gateway-token — VM owner only', () => {
+  it('refuses a non-owner with the owner-only message', async () => {
+    currentUser = { id: 'admin1', role: 'admin' };
+    vi.mocked(getVmWithCap).mockResolvedValue({ id: 'vm1', userId: 'owner1' } as never);
+    vi.mocked(issueGatewayToken).mockResolvedValue({ token: 'pmide_x', baseUrl: 'b' });
+    const r = await fetch(`${base}/api/ide/vm1/gateway-token`, { method: 'POST' });
+    expect(r.status).toBe(403);
+    expect((await r.json()).error).toMatch(/owner/i);
+    expect(vi.mocked(issueGatewayToken)).not.toHaveBeenCalled();
   });
 });

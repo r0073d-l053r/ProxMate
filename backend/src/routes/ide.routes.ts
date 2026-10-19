@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.js';
-import { getIdeCapability } from '../services/ide.service.js';
+import { getIdeCapability, isIdeOwner, IDE_OWNER_ONLY_MESSAGE } from '../services/ide.service.js';
 import { issueGatewayToken, listModelPickerEntries, probeModels } from '../services/ide-gateway.service.js';
 import { getVmWithCap, getViewableVm } from '../services/vm.service.js';
 import {
@@ -64,11 +64,16 @@ router.get('/config', async (req: Request, res: Response) => {
 // Mint (or rotate) the per-VM LLM-gateway token that the in-guest AI agent
 // (OpenCode) uses to reach `/api/ide/:id/llm/v1`. The raw token is returned ONCE;
 // provisioning writes it (plus baseUrl + the model list) into the guest's
-// opencode.json. Owner/admin only (issueGatewayToken re-checks ownership + the
+// opencode.json. VM owner only (issueGatewayToken re-checks ownership + the
 // admin IDE policy). Session-authed, so it carries CSRF via requireAuth.
 router.post('/:id/gateway-token', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vmId = req.params['id'] as string;
+  const vm = await getVmWithCap(vmId, user, 'ide');
+  if (vm && !isIdeOwner(vm, user)) {
+    res.status(403).json({ error: IDE_OWNER_ONLY_MESSAGE });
+    return;
+  }
   const publicApiBaseUrl = publicBaseUrl(req);
   const issued = await issueGatewayToken({ id: user.id, role: user.role }, vmId, publicApiBaseUrl);
   if (!issued) {
@@ -89,13 +94,18 @@ router.post('/:id/gateway-token', async (req: Request, res: Response) => {
 
 // ─── In-guest install (lazy provisioning on first "Open IDE") ──
 // POST /:id/provision installs code-server + OpenCode natively into the VM via the
-// guest agent (owner/admin/co-owner). GET /:id/status polls the install state so
-// the UI can show a loading screen and only open the IDE once it's ready.
+// guest agent (VM owner only — see IDE_OWNER_ONLY_MESSAGE). GET /:id/status polls
+// the install state so the UI can show a loading screen and only open the IDE
+// once it's ready.
 router.post('/:id/provision', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getVmWithCap(req.params['id'] as string, user, 'ide');
   if (!vm) {
     res.status(404).json({ error: 'VM not found' });
+    return;
+  }
+  if (!isIdeOwner(vm, user)) {
+    res.status(403).json({ error: IDE_OWNER_ONLY_MESSAGE });
     return;
   }
   const cap = await getIdeCapability({ role: user.role });

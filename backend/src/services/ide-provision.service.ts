@@ -188,6 +188,9 @@ export async function startIdeProvision(
   user: { id: string; role: string },
   publicApiBaseUrl: string,
 ): Promise<IdeState> {
+  // The gateway token and model list below are minted for `user` and written into
+  // the guest, so it must be the VM's owner (the route enforces this too).
+  if (vm.userId !== user.id) throw new IdeProvisionError("Only this VM's owner can install its ProxMate IDE.");
   if (vm.type === 'lxc') throw new IdeProvisionError('The IDE needs a QEMU VM — containers are not supported.');
   if (vm.status !== 'running') throw new IdeProvisionError('Start the VM before installing the IDE.');
 

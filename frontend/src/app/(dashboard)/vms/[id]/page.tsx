@@ -598,7 +598,15 @@ export default function VmDetailPage() {
                   <SquareTerminal />
                   Text — links, copy/paste
                 </DropdownMenuItem>
-                {ideCap?.available && canIde && vm.type !== "lxc" && isDesktop && (
+                {/* The IDE opens only for the VM's owner (the server refuses
+                    admins and sharees), so say so instead of offering a dead end. */}
+                {ideCap?.available && canIde && vm.type !== "lxc" && isDesktop && vm.access !== "owner" && (
+                  <DropdownMenuItem disabled>
+                    <Code2 />
+                    ProxMate IDE — owner only
+                  </DropdownMenuItem>
+                )}
+                {ideCap?.available && canIde && vm.type !== "lxc" && isDesktop && vm.access === "owner" && (
                   <DropdownMenuItem
                     disabled={!running || ideBusy}
                     onClick={() => {

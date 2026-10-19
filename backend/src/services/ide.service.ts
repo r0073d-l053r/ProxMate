@@ -204,6 +204,21 @@ export async function saveIdeConfig(data: {
   }
 }
 
+/**
+ * The IDE runs as root inside the guest, and the guest's root user (the VM's
+ * owner) controls everything it serves and everything handed to it. So it is
+ * opened, provisioned and given a gateway token only for the VM's OWNER: an
+ * admin or a sharee opening it would expose their own session or credentials to
+ * the owner's guest. Everyone else gets this refusal.
+ */
+export const IDE_OWNER_ONLY_MESSAGE =
+  "Only this VM's owner can open its ProxMate IDE. Ask the owner, or use the console instead.";
+
+/** True when `user` owns `vm` (the only principal the IDE serves). */
+export function isIdeOwner(vm: { userId: string }, user: { id: string }): boolean {
+  return vm.userId === user.id;
+}
+
 /** What a given user may do with the IDE — no secrets, safe to hand the client. */
 export interface IdeCapability {
   available: boolean;

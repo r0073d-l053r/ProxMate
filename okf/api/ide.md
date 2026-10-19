@@ -24,15 +24,15 @@ Browser-facing ProxMate IDE management (code-server + OpenCode inside a guest). 
 # Authentication
 
 - `router.use(requireAuth)` (cookie with CSRF, session JWT Bearer, or API token). No `enforceMfaSetup`.[^routes]
-- Per-route checks: VM capability `'ide'` via `getVmWithCap` for mutations, `getViewableVm` for status polls; `getIdeCapability({ role }).available` for provision/relocate; `canManageKeys` (IDE available AND (`allowByoKeys` OR admin)) for BYO key routes.[^routes]
+- Per-route checks: VM capability `'ide'` via `getVmWithCap` for mutations, plus VM ownership for provision and gateway-token (admins and sharees get 403 with an owner-only message), `getViewableVm` for status polls; `getIdeCapability({ role }).available` for provision/relocate; `canManageKeys` (IDE available AND (`allowByoKeys` OR admin)) for BYO key routes.[^routes]
 
 # Endpoints
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/api/ide/config` | user | `getIdeCapability({ role })`: `{ available, allowByoKeys, models (shared:* and visible local:*), sharedModels }`. No gateway URL or secrets. |
-| POST | `/api/ide/:id/gateway-token` | user + `ide` cap + IDE available (checked in `issueGatewayToken`) | Mint/rotate the per-VM gateway token; returns `{ token, baseUrl, models }` once. 403 if IDE not available for the VM. Audited `ide.gateway_token_mint`. |
-| POST | `/api/ide/:id/provision` | user + `ide` cap + IDE available | Start installing code-server + OpenCode via the guest agent; returns `{ state }`. `IdeProvisionError` gives 400 with optional `code`. Audited `ide.provision`. |
+| POST | `/api/ide/:id/gateway-token` | VM owner + `ide` cap + IDE available (checked in `issueGatewayToken`) | Mint/rotate the per-VM gateway token for the owner; returns `{ token, baseUrl, models }` once. 403 for a non-owner or if IDE not available for the VM. Audited `ide.gateway_token_mint`. |
+| POST | `/api/ide/:id/provision` | VM owner + `ide` cap + IDE available | Start installing code-server + OpenCode via the guest agent; returns `{ state }`. 403 with an owner-only message for admins and sharees. `IdeProvisionError` gives 400 with optional `code`. Audited `ide.provision`. |
 | GET | `/api/ide/:id/status` | user + viewable VM | `{ state }` from `refreshIdeState` (install progress poll); adds `reinstallRequired: true` for a `ready` install that has no guest secret, which the UI then reinstalls. |
 | POST | `/api/ide/:id/relocate` | user + `ide` cap + IDE available | Background stop, offline-migrate to an AVX-capable node, start. 202 `{ started, target }`; server picks the node. `IdeProvisionError` gives 409. Audited `vm.ide_relocate`. |
 | GET | `/api/ide/:id/relocate-status` | user + viewable VM | Relocation progress, or `{ state: 'none' }`. |

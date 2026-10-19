@@ -78,6 +78,7 @@ let vmSeq = 0;
 function vm(overrides: Partial<VirtualMachine> = {}): VirtualMachine {
   return {
     id: `vm-${++vmSeq}`,
+    userId: 'u1',
     type: 'qemu',
     status: 'running',
     cpu: 2,
