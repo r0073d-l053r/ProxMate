@@ -41,3 +41,7 @@ Read DEPLOYMENT.md §14.4 before updating. In short:
 
 - Rebuild cloud-image templates to pick up the guest agent. Password-only deploys from templates built before this release produce machines their owner cannot log into. Template Store flags them.
 - Guests created before this release keep their existing storage. `GET /api/admin/storage-pinning` lists any that cannot migrate as a result.
+
+### Development databases
+
+- The migration `20261019140000_vm_status_message` was renamed to `20261019140000_vm_hold_reason` (it adds `VirtualMachine.holdReason`) before any release shipped it. A development database that already applied the old name keeps a stale `statusMessage` column and migration record, and `prisma migrate dev` reports drift; reset it (`npx prisma migrate reset`). Release installs are unaffected.
