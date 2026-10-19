@@ -128,8 +128,11 @@ async function suspendLapsed(now: Date): Promise<{ suspended: number; stopped: n
     let stillRunning = 0;
 
     for (const vm of u.vms) {
-      // Ask Proxmox, not our own DB: stopVm writes status:'stopped' whether or
-      // not the guest actually went down, so the DB can't be trusted here.
+      // Ask Proxmox, not our own DB. stopVm now waits for the task and throws when
+      // it fails, so the row is no longer written over a guest that stayed up — but
+      // the row can still be stale for reasons outside this path (a stop from the
+      // PVE UI, a crash between task and write), and this decides whether to touch
+      // a tenant's guest at all, so read the live state rather than trusting it.
       let live: string | undefined;
       try {
         live = (await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, undefined, kindOf(vm)))?.status;

@@ -2666,11 +2666,45 @@ export async function startVm(vm: VirtualMachine): Promise<void> {
   await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'running' } });
 }
 
+/**
+ * Proxmox runs a stop or shutdown ASYNCHRONOUSLY: the POST returns a task UPID and
+ * nothing more. Firing it and assuming it worked made a graceful shutdown the guest
+ * ignores — `qmshutdown: VM quit/powerdown failed - got timeout`, routine for a
+ * guest with no ACPI handler, mid-boot or hung — report success and write
+ * `status: 'stopped'` over a guest that was still running. The row self-healed on
+ * the next reconcile, but the caller had already been told the machine was off, and
+ * the next action paid for it: a destroy straight after came back
+ * `VM 106 is running - destroy failed`. So wait for the task and let its exit
+ * status decide; on failure nothing is written and the error reaches the user.
+ *
+ * The wait is deliberately BOUNDED and well under a reverse proxy's own ceiling
+ * (the Cloudflare Tunnel in front of production gives up around 100s): this runs
+ * inside the HTTP request, and `POST /api/vms/bulk` loops over it. A guest that has
+ * not gone down by then is the very case this function exists to report, so say so
+ * instead of waiting on it.
+ */
+const STOP_TASK_TIMEOUT_MS = 45_000;
+
 export async function stopVm(vm: VirtualMachine, force: boolean): Promise<void> {
   const currentVm = await requireOurGuest(vm, { allowError: true });
   const kind = kindOf(currentVm);
-  if (force) await pve.stopVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind);
-  else await pve.shutdownVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind);
+  const upid = force
+    ? await pve.stopVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind)
+    : await pve.shutdownVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind);
+  try {
+    await pve.waitForTask(currentVm.proxmoxNode, upid, undefined, STOP_TASK_TIMEOUT_MS);
+  } catch (err) {
+    // Our own deadline, not a Proxmox refusal: the task may yet finish, so leave the
+    // row alone (the reconciler records whatever actually happens) and tell the user
+    // something they can act on rather than "Proxmox task timed out".
+    if (!force && /task timed out/i.test(pve.pveMessage(err))) {
+      throw new Error(
+        'The guest has not shut down yet — it may be ignoring the shutdown request. ' +
+          'Give it a moment, or stop it forcibly.',
+      );
+    }
+    throw err;
+  }
   if (!isHeld(currentVm)) {
     await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'stopped' } });
   }

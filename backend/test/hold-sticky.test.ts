@@ -29,6 +29,9 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
     shutdownVm: vi.fn(async () => 'UPID:shutdown'),
     startVm: vi.fn(async () => 'UPID:start'),
     detachPci: vi.fn(async () => undefined),
+    // stopVm now awaits the power task's outcome; this suite is about whether a
+    // hold survives the stop, so let the task simply succeed.
+    waitForTask: vi.fn(async () => undefined),
   };
 });
 
