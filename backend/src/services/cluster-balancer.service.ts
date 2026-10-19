@@ -4,6 +4,19 @@ import * as pve from './proxmox.service.js';
 import { migrateVmToNode, tagsMarkRow } from './vm.service.js';
 import { getConfig, setConfig } from './config.service.js';
 import { recordAudit, type AuditActor } from './audit.service.js';
+import { isIdeInstalling } from './ide-provision.service.js';
+import { isDeploying } from './deploy-lock.service.js';
+
+/**
+ * Why a machine must not be migrated right now (same lock the VM routes apply to
+ * stop/restart/delete/migrate), or null. Moving a guest mid IDE install or mid
+ * cloud-init leaves it half-built.
+ */
+function migrationLockReason(vm: { ideState: string | null; deployState: string | null }): string | null {
+  if (isIdeInstalling(vm)) return 'The ProxMate IDE is installing on this VM — skipped until it finishes.';
+  if (isDeploying(vm)) return 'Still finishing its cloud-init setup — skipped until it is ready.';
+  return null;
+}
 
 /**
  * Cluster Balancer — a DRS-style workload balancer for ProxMate's API-only model.
@@ -374,7 +387,8 @@ export async function computeClusterPlan(
         v.type === 'lxc' ||
         v.hasPassthrough ||
         exclude.has(v.proxmoxVmId) ||
-        tags.some((t) => PIN_TAGS.has(t)),
+        tags.some((t) => PIN_TAGS.has(t)) ||
+        migrationLockReason(v) !== null,
     };
   });
 
@@ -434,6 +448,12 @@ export async function runMigrations(
       continue;
     }
     const from = vm.proxmoxNode;
+    // Re-checked at apply time: a plan can be minutes old (or hand-crafted).
+    const locked = migrationLockReason(vm);
+    if (locked) {
+      results.push({ vmId: vm.id, name: vm.name, fromNode: from, toNode: mv.toNode, ok: false, error: locked });
+      continue;
+    }
     try {
       // Notify the owner only for admin-initiated moves (manual apply / drain),
       // i.e. when an actor is present — never for routine auto-balancing.
@@ -708,6 +728,11 @@ export async function planNodeDrain(
         name: r.name ?? `VM ${r.vmid}`,
         reason: 'Not confirmed as a ProxMate machine (no ownership tag) — check it, then migrate or power it off manually.',
       });
+      continue;
+    }
+    const locked = migrationLockReason(db);
+    if (locked) {
+      passthroughBlockers.push({ proxmoxVmId: db.proxmoxVmId, name: db.name, reason: locked });
       continue;
     }
     // A VM with a PCI/GPU device attached can't be migrated — flag it instead.
