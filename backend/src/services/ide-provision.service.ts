@@ -113,6 +113,9 @@ function renderOpencodeJson(gatewayUrl: string, models: Array<{ id: string; name
 function buildBootstrap(token: string, opencodeJson: string, guestHash: string): string {
   return `#!/bin/sh
 set -e
+# sh already holds this file open, so drop it (and any leftover encoded copy)
+# now: it carries the gateway token and the guest credential hash.
+rm -f /tmp/pmide-bootstrap.sh /tmp/pmide-bootstrap.b64
 # Detached via the guest agent — the environment is minimal, so set HOME (the
 # code-server installer runs 'set -u' and references $HOME) and a sane PATH.
 export HOME=/root
@@ -278,7 +281,9 @@ export async function startIdeProvision(
     [
       '/bin/sh',
       '-c',
-      'base64 -d /tmp/pmide-bootstrap.b64 > /tmp/pmide-bootstrap.sh && setsid sh /tmp/pmide-bootstrap.sh >/var/log/pmide-provision.log 2>&1 </dev/null & echo started',
+      // umask first: the decoded script carries the gateway token and guest hash,
+      // so it must not be world-readable even briefly.
+      'umask 077 && base64 -d /tmp/pmide-bootstrap.b64 > /tmp/pmide-bootstrap.sh && rm -f /tmp/pmide-bootstrap.b64 && setsid sh /tmp/pmide-bootstrap.sh >/var/log/pmide-provision.log 2>&1 </dev/null & echo started',
     ],
     client,
   );

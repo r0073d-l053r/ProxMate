@@ -47,7 +47,7 @@ On first "Open IDE", ProxMate runs a self-contained bootstrap through the guest 
 - The bootstrap restarts `proxmate-ide.service` (not just enables it), so a reinstall replaces a running code-server and an install made before guest authentication gains its secret.[^prov]
 - Relocation is deliberately OFFLINE: live-migrating a `cpu: host` guest between heterogeneous CPUs is unsafe. Targets must be CONFIRMED AVX-capable (fail-closed). Tenants never choose nodes.[^prov]
 - Relocation status lives in process memory (single-process backend); a restart loses it.[^prov]
-- The bootstrap is shipped base64 because raw non-ASCII/newlines break Proxmox's `agent/file-write` content parameter.[^prov]
+- The bootstrap is shipped base64 because raw non-ASCII/newlines break Proxmox's `agent/file-write` content parameter. It is decoded under `umask 077`, the encoded copy is removed once decoded, and the script deletes itself as soon as it starts, since it carries the gateway token and the guest credential hash.[^prov]
 
 # Relationships
 

@@ -48,7 +48,7 @@ vi.mock('../src/services/ide-guest-auth.service.js', async (orig) => ({
 
 import type { VirtualMachine } from '@prisma/client';
 import { prisma } from '../src/lib/prisma.js';
-import { guestFileWrite } from '../src/services/proxmox.service.js';
+import { guestFileWrite, guestExec } from '../src/services/proxmox.service.js';
 import {
   saveIdeGuestSecret,
   loadIdeGuestSecret,
@@ -108,6 +108,18 @@ describe('startIdeProvision — per-VM guest credential', () => {
   it('restarts the service so a reinstall replaces an already-running code-server', async () => {
     const { script } = await provisionAndReadBootstrap();
     expect(script).toMatch(/systemctl restart proxmate-ide\.service/);
+  });
+});
+
+describe('startIdeProvision — bootstrap files in /tmp', () => {
+  it('decodes under umask 077 and removes both temp files once started', async () => {
+    const { script } = await provisionAndReadBootstrap();
+    const cmd = (vi.mocked(guestExec).mock.calls.at(-1)![2] as string[]).join(' ');
+    expect(cmd.indexOf('umask 077')).toBeGreaterThanOrEqual(0);
+    expect(cmd.indexOf('umask 077')).toBeLessThan(cmd.indexOf('base64 -d'));
+    expect(cmd).toMatch(/rm -f \/tmp\/pmide-bootstrap\.b64/);
+    // The script deletes itself first thing (sh keeps reading the open file).
+    expect(script.split('\n').slice(0, 6).join('\n')).toMatch(/rm -f \/tmp\/pmide-bootstrap\.sh/);
   });
 });
 
