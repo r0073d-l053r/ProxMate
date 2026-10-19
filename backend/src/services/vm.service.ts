@@ -1301,8 +1301,50 @@ async function planTemplateClone(
 }
 
 /**
- * Deploy a new VM from a published template: quota check → linked-clone the
- * template → autoscale (cores/memory + grow disk) → isolate → start.
+ * The node a template deploy lands on.
+ *
+ * A linked clone shares the template's base image, so it stays on the template's
+ * node. A full clone can be placed anywhere Proxmox can reach both ends, which it
+ * allows only when every disk of the template AND the destination pool are shared
+ * storage — then the guest goes where the scheduler would put a new VM, instead of
+ * every deploy piling onto the node that happens to hold the template. Anything this
+ * can't confirm (a node-local disk, an unreadable config, no node that fits) keeps
+ * the template's node, which is what a deploy did before.
+ */
+async function pickTemplateDeployNode(
+  template: Template,
+  plan: { full: boolean; storage?: string },
+  want: { cpu: number; ramMb: number; storageGb: number },
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<string> {
+  const home = template.proxmoxNode;
+  if (!plan.full) return home;
+  try {
+    const [cfg, storages] = await Promise.all([
+      pve.getVmConfig(home, template.proxmoxVmId, client),
+      pve.getNodeImagesStorages(home, client),
+    ]);
+    const shared = new Set(storages.filter((s) => s.shared).map((s) => s.storage));
+    const sources = pve.volumeStoragesOf(cfg);
+    const dest = plan.storage ?? pve.diskStorageOf(cfg);
+    if (!dest || !shared.has(dest) || sources.length === 0 || !sources.every((s) => shared.has(s))) {
+      return home;
+    }
+    const arch = template.arch === 'amd64' || template.arch === 'arm64' ? template.arch : undefined;
+    return await pve.pickBestNode(want, dest, client, undefined, arch);
+  } catch (err) {
+    console.warn(
+      `[vm] could not place a deploy of template ${template.proxmoxVmId} across the cluster ` +
+        `(${pve.pveMessage(err)}) — cloning on its own node "${home}"`,
+    );
+    return home;
+  }
+}
+
+/**
+ * Deploy a new VM from a published template: quota check → clone the template
+ * (onto the best node when its storage allows) → autoscale (cores/memory + grow
+ * disk) → isolate → start.
  */
 export async function deployFromTemplate(
   user: User,
@@ -1340,7 +1382,16 @@ async function deployFromTemplateLocked(
   const client = await pve.getClient();
   const isolate = (await getConfig('isolation_enabled')) !== 'false';
 
-  const node = template.proxmoxNode; // linked clone stays on the template's node
+  const home = template.proxmoxNode; // where the template lives and the clone task runs
+  // Full-vs-linked and the target pool are decided together — see planTemplateClone —
+  // and the plan decides whether the guest may land on another node.
+  const plan = await planTemplateClone(home, template, client);
+  const node = await pickTemplateDeployNode(
+    template,
+    plan,
+    { cpu: input.cpu, ramMb: input.ram, storageGb: diskGb },
+    client,
+  );
   const vmid = await pve.getNextVmId(client);
 
   const vm = await prisma.virtualMachine.create({
@@ -1364,21 +1415,21 @@ async function deployFromTemplateLocked(
   let created = false;
   let cloneTask: { node: string; upid: string } | undefined;
   try {
-    // Full-vs-linked and the target pool are decided together — see planTemplateClone.
-    const plan = await planTemplateClone(node, template, client);
     const upid = await pve.cloneVm(
       {
-        node,
+        node: home,
         templateVmid: template.proxmoxVmId,
         newVmid: vmid,
         name: input.name,
         full: plan.full,
         storage: plan.storage,
+        target: node,
       },
       client,
     );
-    cloneTask = { node, upid };
-    await pve.waitForTask(node, upid, client, 600_000);
+    // The clone task runs on the template's node even when the guest lands elsewhere.
+    cloneTask = { node: home, upid };
+    await pve.waitForTask(home, upid, client, 600_000);
     created = true;
     await markClonedGuest(vm, client);
 

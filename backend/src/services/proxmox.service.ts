@@ -1432,7 +1432,16 @@ export async function convertToTemplate(node: string, vmid: number, client?: Axi
 
 /** Clone a template into a new VM. Returns the Proxmox task UPID. */
 export async function cloneVm(
-  opts: { node: string; templateVmid: number; newVmid: number; name: string; full?: boolean; storage?: string },
+  opts: {
+    node: string;
+    templateVmid: number;
+    newVmid: number;
+    name: string;
+    full?: boolean;
+    storage?: string;
+    /** Node the clone lands on, when not the source's. Proxmox allows it only for shared storage. */
+    target?: string;
+  },
   client?: AxiosInstance,
 ): Promise<string> {
   const c = client ?? (await getClient());
@@ -1442,6 +1451,7 @@ export async function cloneVm(
     full: opts.full ? '1' : '0',
   });
   if (opts.full && opts.storage) params.set('storage', opts.storage);
+  if (opts.target && opts.target !== opts.node) params.set('target', opts.target);
   const res = await c.post<{ data: string }>(
     `/nodes/${opts.node}/qemu/${opts.templateVmid}/clone`,
     params,
@@ -2163,6 +2173,21 @@ export function diskStorageOf(config: Record<string, string>): string | null {
   if (!key) return null;
   const m = /^([^:,\s]+):/.exec(config[key]!);
   return m ? m[1]! : null;
+}
+
+/**
+ * Every storage a guest's drives live on (`tank` and `ceph-vm` for
+ * `scsi0: tank:…` + `ide2: ceph-vm:vm-104-cloudinit,media=cdrom`), deduplicated.
+ * Drives with no volume (`none`, a bare `cdrom`) are skipped.
+ */
+export function volumeStoragesOf(config: Record<string, string>): string[] {
+  const out = new Set<string>();
+  for (const [key, value] of Object.entries(config)) {
+    if (!VOLUME_KEY_RE.test(key)) continue;
+    const m = /^([^:,\s]+):/.exec(value);
+    if (m) out.add(m[1]!);
+  }
+  return [...out];
 }
 
 /**
