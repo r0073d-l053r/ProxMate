@@ -87,6 +87,11 @@ pveum user token add root@pam proxmate --privsep 0
 # → copy the displayed token VALUE now (shown once). Token ID is: root@pam!proxmate
 ```
 
+A privsep-off token covers what ProxMate needs, including setting guest tags
+(`VM.Config.Options` — every managed guest is tagged with its machine) and, on Proxmox VE 8+,
+`SDN.Use` / `SDN.Audit`. A narrower token must hold those too; the connection test warns when
+the SDN privileges are missing.
+
 Tell the operator to keep that secret for the browser wizard in §5 — **do not** have them paste it to you.
 
 ---
@@ -206,7 +211,8 @@ this whole section if the operator doesn't want it; the rest of ProxMate is comp
 
 ### 7.1 Requirements to confirm with the operator
 
-- **The ProxMate host must be able to reach tenant VM IPs on TCP :8080.** On a **flat** network
+- **The ProxMate host must be able to reach tenant VM IPs on TCP :8080** (or `IDE_GUEST_PORT` if
+  set in `.env`). On a **flat** network
   (ProxMate on the same LAN as the guests) this is automatic. On a **non-flat** network (e.g.
   ProxMate in a container whose network can't reach the guest VLAN) the operator must provide
   routing — a **Tailscale subnet route**, a VPN, or a route — so the backend can reach `guest-ip:8080`.
@@ -238,9 +244,11 @@ this whole section if the operator doesn't want it; the rest of ProxMate is comp
 
 ### 7.3 IDE security model (state this to the operator)
 
-- The proxy is **capability-gated** (`getVmWithCap(vmId, user, 'ide')`) and refuses
-  loopback/link-local targets. The owner, an admin, and any **Manager**-level share holder can open
-  the IDE; Viewer and Operator shares cannot.
+- The proxy is **owner-only**: every request is resolved through `getVmWithCap(vmId, user, 'ide')`
+  and must come from the VM's owner — admins and share holders are refused. It refuses
+  loopback/link-local targets, strips ProxMate's cookies from proxied requests, and relays only
+  to a `code-server` that proves the VM's own per-install secret. IDEs installed by 1.0.x
+  reinstall once, automatically, on their owner's next open.
 - The `:8080` pinhole is **infra-scoped only** — the guest keeps `policy_in=DROP`, so tenants stay
   isolated from each other; only ProxMate's address can reach code-server.
 - The LLM gateway enforces an **admin allow-list** (a tenant can't reach an un-shared model or,
