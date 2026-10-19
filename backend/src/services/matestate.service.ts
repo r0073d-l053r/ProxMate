@@ -262,6 +262,28 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
   }
 }
 
+/**
+ * Roll a VM back to one of its Proxmox snapshots. The snapshot holds the whole
+ * guest config as it was then — cores, memory, disks, PCI devices — so it is
+ * refused when that config would grow the guest past its owner's quota, and
+ * afterwards the row is re-synced from the guest and PCI devices not approved
+ * now are removed. Returns the re-synced row.
+ */
+export async function rollbackToSnapshot(vm: VirtualMachine, snapname: string): Promise<VirtualMachine> {
+  const client = await pve.getClient();
+  vm = await requireOurGuest(vm, { client });
+  const snapCfg = await pve.getSnapshotConfig(vm.proxmoxNode, vm.proxmoxVmId, snapname, client);
+  await assertRestoreWithinQuota(vm, snapCfg);
+  const approvedPci = await approvedPciLines(vm, client);
+
+  const upid = await pve.rollbackSnapshot(vm.proxmoxNode, vm.proxmoxVmId, snapname, client);
+  await pve.waitForTask(vm.proxmoxNode, upid, client, 300_000);
+  // A rollback restores the snapshot's config, tags included — re-tag the guest
+  // as this row's (a snapshot from before ownership tags existed has none).
+  await markClonedGuest(vm, client);
+  return syncRestoredGuest(vm, { approvedPci, client });
+}
+
 /** Manually delete one MateState (DB + Proxmox file). */
 export async function deleteMateState(mateState: MateState): Promise<void> {
   try {

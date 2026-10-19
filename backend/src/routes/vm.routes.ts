@@ -17,7 +17,6 @@ import {
   listSnapshots,
   createSnapshot,
   deleteSnapshot,
-  rollbackSnapshot,
   waitForTask,
   listLxcTemplates,
   getPassthroughDevices,
@@ -34,6 +33,7 @@ import {
   serializeMateState,
   createMateState,
   restoreFromMateState,
+  rollbackToSnapshot,
   deleteMateState,
   setBackupPolicy,
 } from '../services/matestate.service.js';
@@ -75,7 +75,6 @@ import {
   duplicateVm,
   requireOurGuest,
   ourGuestOrNull,
-  markClonedGuest,
   tagsMarkRow,
   MIN_RAM_MB,
 } from '../services/vm.service.js';
@@ -1621,18 +1620,15 @@ router.post('/:id/snapshots/:name/rollback', async (req: Request, res: Response)
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Snapshots aren’t available for containers yet.' }); return; }
   try {
-    vm = await requireOurGuest(vm);
-    const upid = await rollbackSnapshot(vm.proxmoxNode, vm.proxmoxVmId, name);
-    await waitForTask(vm.proxmoxNode, upid, undefined, 300_000);
-    // A rollback restores the snapshot's config, tags included — re-tag the guest
-    // as this row's (a snapshot from before ownership tags existed has none).
-    await markClonedGuest(vm);
+    // Re-tags the guest, re-syncs its row and removes unapproved PCI devices.
+    vm = await rollbackToSnapshot(vm, name);
     await recordAudit({
       action: 'snapshot.rollback', actor: user, targetType: 'vm', targetId: vm.id,
       detail: `rolled ${vm.name} back to "${name}"`, req,
     });
     res.json({ success: true });
   } catch (err) {
+    if (err instanceof QuotaError) { res.status(403).json({ error: 'Quota exceeded', details: err.details }); return; }
     res.status(502).json({ error: pveMessage(err) });
   }
 });

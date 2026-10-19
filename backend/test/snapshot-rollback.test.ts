@@ -1,0 +1,152 @@
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
+import express from 'express';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+
+// A snapshot holds the whole guest config of its moment. Rolling back must not
+// hand back CPU/RAM/disks beyond the owner's quota, must re-sync the row, and
+// must not bring back a PCI device that has since been detached.
+
+vi.mock('../src/lib/prisma.js', () => ({
+  prisma: {
+    virtualMachine: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
+    user: { findUnique: vi.fn() },
+  },
+}));
+vi.mock('../src/middleware/auth.js', () => ({
+  requireAuth: (req: { user?: unknown }, _res: unknown, next: () => void) => {
+    req.user = { id: 'u1', role: 'user' };
+    next();
+  },
+  allowExpiredAccess: (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+vi.mock('../src/middleware/mfa.js', () => ({
+  enforceMfaSetup: (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+vi.mock('../src/services/audit.service.js', () => ({
+  recordAudit: vi.fn(async () => undefined),
+  listAuditForTarget: vi.fn(async () => []),
+}));
+vi.mock('../src/services/config.service.js', () => ({
+  getConfig: vi.fn(async () => null),
+  setConfig: vi.fn(),
+}));
+vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/services/proxmox.service.js')>();
+  return { ...actual, getClient: vi.fn() };
+});
+vi.mock('../src/services/vm.service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/services/vm.service.js')>();
+  return { ...actual, getVmWithCap: vi.fn() };
+});
+
+import vmRouter from '../src/routes/vm.routes.js';
+import { prisma } from '../src/lib/prisma.js';
+import * as pve from '../src/services/proxmox.service.js';
+import { getVmWithCap, guestMarker } from '../src/services/vm.service.js';
+import { fakeClient, asClient, bodyOf } from './helpers.js';
+
+const ok = (data: unknown) => Promise.resolve({ data: { data } });
+const marker = guestMarker('rowa');
+const row = (over: Record<string, unknown> = {}) =>
+  ({
+    id: 'rowa', userId: 'u1', name: 'web', type: 'qemu', proxmoxVmId: 100, proxmoxNode: 'pve1',
+    cpu: 1, ram: 1024, storage: 32, hasPassthrough: false, quotaExempt: false, status: 'running', ...over,
+  }) as never;
+
+const LIVE = { name: 'web', tags: marker, cores: '1', memory: '1024', scsi0: 'local-lvm:vm-100-disk-0,size=32G', net0: 'virtio=AA:BB,bridge=vmbr0,firewall=1' };
+const SNAP = { name: 'web', cores: '8', memory: '16384', scsi0: 'local-lvm:vm-100-disk-0,size=32G', scsi1: 'local-lvm:vm-100-disk-1,size=100G', net0: 'virtio=AA:BB,bridge=vmbr0,firewall=1', snaptime: '1700000000' };
+
+/** Stateful fake PVE: guest 100 on pve1 with `live`; rollback to "snap1" swaps in `snap`. */
+function fakePve(live: Record<string, string>, snap: Record<string, string>) {
+  const c = fakeClient();
+  const state = { cfg: { ...live } as Record<string, string>, status: 'stopped' };
+  c.get.mockImplementation((url: string) => {
+    if (url.startsWith('/cluster/resources')) return ok([{ type: 'qemu', vmid: 100, node: 'pve1' }]);
+    if (url === '/nodes/pve1/qemu/100/snapshot/snap1/config') return ok(snap);
+    if (/\/qemu\/100\/config$/.test(url)) return ok(state.cfg);
+    if (/\/qemu\/100\/status\/current$/.test(url)) return ok({ status: state.status });
+    if (/\/tasks\/.*\/status$/.test(url)) return ok({ status: 'stopped', exitstatus: 'OK' });
+    if (/\/firewall\/rules$/.test(url)) return ok([]);
+    return ok(null);
+  });
+  c.post.mockImplementation((url: string) => {
+    if (url === '/nodes/pve1/qemu/100/snapshot/snap1/rollback') {
+      state.cfg = Object.fromEntries(Object.entries(snap).filter(([k]) => k !== 'snaptime' && k !== 'vmstate'));
+      if (snap['vmstate']) state.status = 'running';
+    }
+    return ok('UPID:fake');
+  });
+  c.put.mockImplementation((url: string, body: URLSearchParams) => {
+    if (/\/qemu\/100\/config$/.test(url)) {
+      for (const [k, v] of body) {
+        if (k === 'delete') for (const d of v.split(',')) delete state.cfg[d];
+        else state.cfg[k] = v;
+      }
+    }
+    return ok('');
+  });
+  vi.mocked(pve.getClient).mockResolvedValue(asClient(c));
+  return { c, state };
+}
+
+let server: http.Server;
+let base: string;
+
+beforeAll(async () => {
+  const app = express();
+  app.use(express.json());
+  app.use('/vms', vmRouter);
+  server = http.createServer(app);
+  await new Promise<void>((r) => server.listen(0, r));
+  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+});
+afterAll(() => new Promise<void>((r) => server.close(() => r())));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(getVmWithCap).mockResolvedValue(row());
+  vi.mocked(prisma.virtualMachine.findUnique).mockResolvedValue(row());
+  vi.mocked(prisma.virtualMachine.findMany).mockResolvedValue([] as never);
+  vi.mocked(prisma.virtualMachine.update).mockImplementation(
+    async ({ data }: { data: Record<string, unknown> }) => ({ ...(row() as object), ...data }) as never,
+  );
+  vi.mocked(prisma.user.findUnique).mockResolvedValue({ id: 'u1', role: 'user', maxCpu: 8, maxRam: 16384, maxStorage: 200, accessExpiresAt: null } as never);
+});
+
+const rollback = () => fetch(`${base}/vms/rowa/snapshots/snap1/rollback`, { method: 'POST' });
+const rolledBack = (c: ReturnType<typeof fakeClient>) =>
+  c.post.mock.calls.some((x) => x[0] === '/nodes/pve1/qemu/100/snapshot/snap1/rollback');
+
+describe('snapshot rollback (BUG-039)', () => {
+  it('is refused when the snapshot would grow the guest past the quota spent elsewhere since', async () => {
+    const { c } = fakePve(LIVE, SNAP);
+    vi.mocked(prisma.virtualMachine.findMany).mockResolvedValue([{ id: 'other', cpu: 7, ram: 15360, storage: 20 }] as never);
+    const res = await rollback();
+    expect(res.status).toBe(403);
+    expect(rolledBack(c)).toBe(false);
+  });
+
+  it('re-syncs cpu/ram/storage from the rolled-back guest', async () => {
+    const { c } = fakePve(LIVE, SNAP);
+    const res = await rollback();
+    expect(res.status).toBe(200);
+    expect(rolledBack(c)).toBe(true);
+    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({
+      where: { id: 'rowa' },
+      data: expect.objectContaining({ cpu: 8, ram: 16384, storage: 132 }),
+    });
+  });
+
+  it('removes a PCI device that was detached after the snapshot', async () => {
+    const { c, state } = fakePve(LIVE, { ...LIVE, hostpci0: 'mapping=gpu0,pcie=1' });
+    const res = await rollback();
+    expect(res.status).toBe(200);
+    expect(state.cfg['hostpci0']).toBeUndefined();
+    expect(c.put.mock.calls.some((x) => bodyOf(x)['delete'] === 'hostpci0')).toBe(true);
+    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({
+      where: { id: 'rowa' },
+      data: expect.objectContaining({ hasPassthrough: false }),
+    });
+  });
+});

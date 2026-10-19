@@ -2776,6 +2776,22 @@ export async function deleteSnapshot(
   return res.data.data;
 }
 
+/** The guest config a snapshot holds (what a rollback to it brings back). */
+export async function getSnapshotConfig(
+  node: string,
+  vmid: number,
+  snapname: string,
+  client?: AxiosInstance,
+): Promise<Record<string, string>> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Record<string, unknown> }>(
+    `/nodes/${node}/qemu/${vmid}/snapshot/${encodeURIComponent(snapname)}/config`,
+  );
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(res.data.data ?? {})) out[k] = String(v);
+  return out;
+}
+
 /** Roll the VM back to a snapshot (reverts disk + RAM if captured). Task UPID. */
 export async function rollbackSnapshot(
   node: string,
