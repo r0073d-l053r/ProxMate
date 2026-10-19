@@ -13,7 +13,7 @@ vi.mock('../src/lib/url-safety.js', () => ({
 import { getConfig, setConfig } from '../src/services/config.service.js';
 import { getMailConfig, sendMail } from '../src/services/mail.service.js';
 import { prisma } from '../src/lib/prisma.js';
-import { notify, saveNotifyConfig, sendTestNotification } from '../src/services/notify.service.js';
+import { notify, saveNotifyConfig, sendTestNotification, maskWebhookUrl } from '../src/services/notify.service.js';
 
 const getConfigMock = vi.mocked(getConfig);
 const setConfigMock = vi.mocked(setConfig);
@@ -152,8 +152,25 @@ describe('saveNotifyConfig', () => {
     expect(setConfigMock).toHaveBeenCalledWith('notify_email_enabled', 'true');
   });
 
-  it('stores a cleared webhook as a non-sensitive empty value', async () => {
+  it('keeps the stored webhook when the field is blank', async () => {
     await saveNotifyConfig({ webhookUrl: '', emailEnabled: false, events: [] });
+    await saveNotifyConfig({ emailEnabled: false, events: [] });
+    expect(setConfigMock.mock.calls.filter((c) => c[0] === 'notify_webhook_url')).toEqual([]);
+  });
+
+  it('stores a removed webhook as a non-sensitive empty value', async () => {
+    await saveNotifyConfig({ clearWebhookUrl: true, emailEnabled: false, events: [] });
     expect(setConfigMock).toHaveBeenCalledWith('notify_webhook_url', '', false);
+  });
+});
+
+describe('maskWebhookUrl', () => {
+  it('keeps only the scheme and host', () => {
+    expect(maskWebhookUrl('https://hooks.slack.com/services/T0/B0/SECRET')).toBe('https://hooks.slack.com/…');
+  });
+
+  it('returns empty for no URL and a placeholder for an unparsable one', () => {
+    expect(maskWebhookUrl('')).toBe('');
+    expect(maskWebhookUrl('not a url SECRET')).toBe('…');
   });
 });

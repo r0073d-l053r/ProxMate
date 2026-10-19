@@ -21,7 +21,8 @@ One admin-configured fan-out to two optional channels: a webhook (Discord / Slac
 |---|---|---|
 | `NOTIFY_EVENTS` | `backup.failed, vm.error, auth.lockout, access.expired, deploy.agent_missing` | Event types; labels in `NOTIFY_EVENT_LABEL`. |
 | `getNotifyConfig` | `() => { webhookUrl, emailEnabled, emailTo, events }` | Reads config; missing `notify_events` = all on. |
-| `saveNotifyConfig` | `({ webhookUrl?, emailEnabled, emailTo?, events })` | Webhook URL stored encrypted when non-empty; writes `notify_events_version`. |
+| `saveNotifyConfig` | `({ webhookUrl?, clearWebhookUrl?, emailEnabled, emailTo?, events })` | A non-blank webhook URL is stored encrypted; blank keeps the stored one; `clearWebhookUrl` removes it. Writes `notify_events_version`. |
+| `maskWebhookUrl` | `(url) => string` | Display form `scheme://host/…` (`''` when unset) used by `GET /api/admin/settings`. |
 | `notify` | `(payload: { event, title, message })` | Both enabled channels in parallel, errors swallowed. |
 | `notifyWebhook` | `(payload)` | Webhook only (used where email is handled elsewhere, e.g. lockouts, alerts). |
 | `sendTestNotification` | `() => { ok, results[] }` | Admin "Send test": each channel tried independently, per-channel errors reported; throws if no channel is enabled. |

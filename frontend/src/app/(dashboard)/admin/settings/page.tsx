@@ -117,7 +117,10 @@ export default function SettingsPage() {
   const [testingSmtp, setTestingSmtp] = useState(false);
 
   // Notifications (webhook + email) — optional
-  const [notifyWebhook, setNotifyWebhook] = useState("");
+  const [notifyWebhook, setNotifyWebhook] = useState(""); // a NEW url; blank keeps the stored one
+  const [notifyHasWebhook, setNotifyHasWebhook] = useState(false);
+  const [notifyWebhookMasked, setNotifyWebhookMasked] = useState("");
+  const [notifyClearWebhook, setNotifyClearWebhook] = useState(false);
   const [notifyEmailEnabled, setNotifyEmailEnabled] = useState(false);
   const [notifyEmailTo, setNotifyEmailTo] = useState("");
   const [notifyEvents, setNotifyEvents] = useState<NotifyEvent[]>([]);
@@ -247,7 +250,8 @@ export default function SettingsPage() {
         }
         if (res.data.notify) {
           const n = res.data.notify;
-          setNotifyWebhook(n.webhookUrl);
+          setNotifyHasWebhook(n.hasWebhookUrl);
+          setNotifyWebhookMasked(n.webhookUrlMasked);
           setNotifyEmailEnabled(n.emailEnabled);
           setNotifyEmailTo(n.emailTo);
           setNotifyEvents(n.events);
@@ -390,12 +394,22 @@ export default function SettingsPage() {
     e.preventDefault();
     setSavingNotify(true);
     try {
+      const newWebhook = notifyClearWebhook ? "" : notifyWebhook.trim();
       await api.put("/admin/settings/notifications", {
-        webhookUrl: notifyWebhook.trim() || undefined,
+        webhookUrl: newWebhook || undefined,
+        clearWebhookUrl: notifyClearWebhook,
         emailEnabled: notifyEmailEnabled,
         emailTo: notifyEmailTo.trim() || undefined,
         events: notifyEvents,
       });
+      // Reload so the masked value reflects what the server now stores.
+      if (notifyClearWebhook || newWebhook) {
+        const fresh = await api.get<AdminSettings>("/admin/settings");
+        setNotifyHasWebhook(fresh.data.notify.hasWebhookUrl);
+        setNotifyWebhookMasked(fresh.data.notify.webhookUrlMasked);
+        setNotifyWebhook("");
+        setNotifyClearWebhook(false);
+      }
       toast.success("Notification settings saved.");
     } catch (err) {
       toast.error(apiError(err));
@@ -888,15 +902,31 @@ export default function SettingsPage() {
                 <FormField
                   label="Webhook URL"
                   htmlFor="notifyWebhook"
-                  hint="Paste a Discord/Slack incoming-webhook URL. Leave blank to disable the webhook."
+                  hint={
+                    notifyHasWebhook
+                      ? `A webhook is set (${notifyWebhookMasked}). Leave blank to keep it, or paste a new URL to replace it.`
+                      : "Paste a Discord/Slack incoming-webhook URL. Leave blank for no webhook."
+                  }
                 >
                   <Input
                     id="notifyWebhook"
                     value={notifyWebhook}
                     onChange={(e) => setNotifyWebhook(e.target.value)}
-                    placeholder="https://discord.com/api/webhooks/…"
+                    disabled={notifyClearWebhook}
+                    placeholder={notifyHasWebhook ? notifyWebhookMasked : "https://discord.com/api/webhooks/…"}
                   />
                 </FormField>
+                {notifyHasWebhook && (
+                  <label className="flex items-center gap-2 text-sm select-none">
+                    <input
+                      type="checkbox"
+                      checked={notifyClearWebhook}
+                      onChange={(e) => setNotifyClearWebhook(e.target.checked)}
+                      className="size-4 rounded border-input accent-primary"
+                    />
+                    Remove the webhook
+                  </label>
+                )}
 
                 <label className="flex items-center gap-2 text-sm select-none">
                   <input

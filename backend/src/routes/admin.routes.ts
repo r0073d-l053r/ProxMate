@@ -57,7 +57,13 @@ import {
 import { getMailConfig, saveMailConfig, verifyMailConfig, isMailConfigured, sendMail } from '../services/mail.service.js';
 import { announcementEmail } from '../lib/email-templates.js';
 import { unsubscribeToken } from '../services/broadcast-optout.service.js';
-import { getNotifyConfig, saveNotifyConfig, sendTestNotification, NOTIFY_EVENTS } from '../services/notify.service.js';
+import {
+  getNotifyConfig,
+  saveNotifyConfig,
+  sendTestNotification,
+  maskWebhookUrl,
+  NOTIFY_EVENTS,
+} from '../services/notify.service.js';
 import * as sso from '../services/sso.service.js';
 import { getIdeConfig, saveIdeConfig, isValidIngressCidr } from '../services/ide.service.js';
 import { probeIdeReachability } from '../services/ide-provision.service.js';
@@ -111,6 +117,9 @@ router.get('/settings', async (_req: Request, res: Response) => {
 
   const mail = await getMailConfig();
   const ssoCfg = await sso.getSsoConfig();
+  // The webhook URL carries the receiver's token, so like the other secrets it is
+  // reported only as "is one set" plus a masked form that shows where it points.
+  const { webhookUrl, ...notifyCfg } = await getNotifyConfig();
   res.json({
     proxmox: { host, tokenId, verifySsl: verifySsl === 'true', hasSecret: !!(await getConfig('proxmox_token_secret')) },
     defaults: { storage, bridge, isoStorage, backupStorage },
@@ -119,7 +128,7 @@ router.get('/settings', async (_req: Request, res: Response) => {
     smtp: mail
       ? { configured: true, host: mail.host, port: mail.port, secure: mail.secure, user: mail.user ?? '', from: mail.from, hasPass: !!mail.pass }
       : { configured: false },
-    notify: await getNotifyConfig(),
+    notify: { ...notifyCfg, hasWebhookUrl: !!webhookUrl, webhookUrlMasked: maskWebhookUrl(webhookUrl) },
     sso: ssoCfg
       ? {
           configured: true,
@@ -271,7 +280,8 @@ router.post('/settings/smtp/test', async (_req: Request, res: Response) => {
 // ─── Event notifications (webhook + email) ────────────────────
 
 const NotifySchema = z.object({
-  webhookUrl: z.string().max(2000).optional(), // blank = webhook disabled
+  webhookUrl: z.string().max(2000).optional(), // blank = keep the stored one
+  clearWebhookUrl: z.boolean().default(false), // remove the webhook (disables it)
   emailEnabled: z.boolean().default(false),
   emailTo: z.string().max(200).optional(), // blank = all admins
   events: z.array(z.enum(NOTIFY_EVENTS)).default([]),
@@ -295,6 +305,7 @@ router.put('/settings/notifications', async (req: Request, res: Response) => {
   }
   await saveNotifyConfig({
     webhookUrl: url,
+    clearWebhookUrl: parsed.data.clearWebhookUrl,
     emailEnabled: parsed.data.emailEnabled,
     emailTo: parsed.data.emailTo,
     events: parsed.data.events,

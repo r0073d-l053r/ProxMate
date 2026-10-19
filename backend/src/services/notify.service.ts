@@ -80,16 +80,34 @@ export async function getNotifyConfig(): Promise<NotifyConfig> {
   };
 }
 
+/**
+ * A display form of the webhook URL that names where it points without the
+ * path, which is where Discord/Slack/Mattermost put the token. '' when unset.
+ */
+export function maskWebhookUrl(url: string): string {
+  if (!url) return '';
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}/…`;
+  } catch {
+    return '…';
+  }
+}
+
 export async function saveNotifyConfig(cfg: {
+  /** New URL; blank or omitted keeps the stored one (it is never sent back to the UI). */
   webhookUrl?: string;
+  /** Remove the stored webhook (disables that channel). */
+  clearWebhookUrl?: boolean;
   emailEnabled: boolean;
   emailTo?: string;
   events: NotifyEvent[];
 }): Promise<void> {
   const url = (cfg.webhookUrl ?? '').trim();
   // A webhook URL is effectively a secret (anyone with it can post) → encrypt it
-  // when present; store an empty marker (non-sensitive) when cleared.
-  await setConfig('notify_webhook_url', url, url.length > 0);
+  // when present; store an empty marker (non-sensitive) when removed.
+  if (cfg.clearWebhookUrl) await setConfig('notify_webhook_url', '', false);
+  else if (url) await setConfig('notify_webhook_url', url, true);
   await setConfig('notify_email_enabled', String(cfg.emailEnabled));
   await setConfig('notify_email_to', (cfg.emailTo ?? '').trim());
   await setConfig('notify_events', cfg.events.filter((e) => NOTIFY_EVENTS.includes(e)).join(','));
