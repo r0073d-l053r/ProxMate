@@ -3376,7 +3376,7 @@ export async function ensureHostCpu(
   kind: GuestKind = 'qemu',
 ): Promise<boolean> {
   const c = client ?? (await getClient());
-  const cfg = await getVmConfig(node, vmid, c);
+  const cfg = await getVmConfig(node, vmid, c, kind);
   const current = String((cfg as Record<string, unknown>)['cpu'] ?? '');
   if (current.split(',')[0] === 'host') return false;
   await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams({ cpu: 'host' }));
