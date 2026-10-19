@@ -188,15 +188,24 @@ than out-of-band through the Proxmox API, so it has its own guarantees (full mod
 
 ### Recommended: scope the Proxmox API token
 
-ProxMate works with a `root@pam` token, but for least privilege create a dedicated user
-(e.g. `proxmate@pve`) with only the roles it needs (VM lifecycle, console, storage/audit,
-firewall) on the relevant nodes/pool, and use that token instead. ProxMate needs:
-`VM.Allocate`, `VM.Config.*` (including `VM.Config.Options`, to set the guest ownership tags),
-`VM.Clone`, `VM.Snapshot`, `VM.PowerMgmt`, `VM.Console`, `VM.Audit`, `Datastore.Audit`,
-`Datastore.AllocateSpace`, and `Sys.Audit` (+ firewall management for isolation). On Proxmox
-VE 8+ add `SDN.Use` (checked whenever a guest NIC is attached, plain bridges included;
-`PVESDNUser` carries it) and `SDN.Audit` to list SDN VNets. The connection test warns about
-most missing privileges, these two included.
+ProxMate works with a `root@pam` token, but for least privilege run
+`deploy/proxmox-token.sh` on a Proxmox node. It creates a `proxmate@pve` user with no
+password, a `ProxMate` role and a privilege-separated token, granted on `/` (the cluster
+firewall, cluster status and cloud-image downloads are checked there). The role holds:
+
+- `VM.Allocate`, `VM.Audit`, `VM.Backup`, `VM.Clone`, `VM.Console`, `VM.Migrate`,
+  `VM.PowerMgmt`, `VM.Snapshot`, `VM.Snapshot.Rollback`
+- `VM.Config.CDROM`, `.CPU`, `.Cloudinit`, `.Disk`, `.HWType`, `.Memory`, `.Network`,
+  `.Options` (the guest ownership tags)
+- `Datastore.Allocate`, `Datastore.AllocateSpace`, `Datastore.AllocateTemplate`,
+  `Datastore.Audit`
+- `SDN.Audit`, `SDN.Use`, `Sys.Audit`, `Sys.Modify` (cluster firewall isolation)
+- the guest agent: `VM.Monitor` on Proxmox VE 8; `VM.GuestAgent.Audit` and
+  `VM.GuestAgent.Unrestricted` on 9 (plus `VM.GuestAgent.FileWrite` for the IDE)
+- for GPU/PCI passthrough only: `Mapping.Audit`, `Mapping.Use`
+
+It needs no user, pool or permission management, and never the node shell. The connection
+test warns about each missing privilege.
 
 > Note: Proxmox API tokens default to **Privilege Separation ON**, which gives the token an
 > empty permission set. Either disable privilege separation on the token or grant it a role

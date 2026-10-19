@@ -94,9 +94,23 @@ whenever a guest NIC is attached, plain bridges included) and `SDN.Audit` to lis
 VNets; the connection test warns when either is missing. A privsep-off token has all
 of these.
 
-> Prefer least privilege? You can scope a token with a role on a pool instead — but
-> note the per-tenant Pool/ACL least-privilege model is still being validated
-> (tracked separately). For now a privsep-off token is the supported path.
+**Least privilege.** Instead of a root token, `deploy/proxmox-token.sh` creates a
+dedicated `proxmate@pve` user, a `ProxMate` role holding only the privileges ProxMate
+uses, and a privilege-separated token `proxmate@pve!proxmate` with the role granted on
+`/` to both the user and the token. Copy the script to a Proxmox node, read it, then:
+
+```bash
+bash proxmox-token.sh --dry-run     # show the pveum commands without running them
+bash proxmox-token.sh               # as root; prints the token secret once
+#   --with-ide          Proxmox VE 9: also allow the IDE's guest-agent file writes
+#   --with-passthrough  also allow GPU/PCI passthrough through resource mappings
+```
+
+It picks the guest-agent privileges for your release (`VM.Monitor` on Proxmox VE 8,
+`VM.GuestAgent.Audit` + `VM.GuestAgent.Unrestricted` on 9). Re-running it updates the
+role and ACLs and never re-issues an existing token. The connection test names any
+privilege that is still missing. The grant has to be on `/`: the cluster firewall,
+cluster status and cloud-image downloads are checked there.
 
 ---
 

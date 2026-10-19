@@ -19,7 +19,9 @@ ProxMate talks to Proxmox over its HTTPS REST API on port `8006`. You need:
 
 In Proxmox: **Datacenter → Permissions → API Tokens → Add**.
 
-- **User:** `root@pam` (simplest), or a dedicated `proxmate@pam` user
+- **User:** `root@pam` (simplest). For least privilege, skip this dialog and run
+  `deploy/proxmox-token.sh` on a node instead: it creates a `proxmate@pve` user, a
+  `ProxMate` role with only what ProxMate uses, and the token (see DEPLOYMENT.md §2.2)
 - **Token ID:** `proxmate`
 - **Privilege Separation:** **uncheck this box** — see below
 

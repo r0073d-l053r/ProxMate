@@ -4,7 +4,7 @@ title: Proxmox token privileges
 description: Which Proxmox VE privileges ProxMate's connection test checks, how it reads the token's effective permissions, what breaks without each privilege, and the documented token/ACL setup.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/setup.service.ts
 tags: [proxmate, proxmox, permissions, acl, setup]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-20T12:00:00Z }
 sources:
   - id: setup
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/setup.service.ts
@@ -71,26 +71,32 @@ admin "test connection" action ([setup API](/api/setup.md), [admin API](/api/adm
 | `VM.Console` | Warning | the noVNC and xterm.js consoles |
 | `VM.Clone` | Warning | deploying from a template |
 | `VM.Snapshot` | Warning | snapshots |
+| `VM.Config.Options` | Warning | setting the ownership tag on new guests and renaming them |
+| `VM.Config.CPU` / `VM.Config.Memory` / `VM.Config.HWType` | Warning | creating guests and changing CPU, memory, disk controller, display and serial console |
+| `VM.Config.CDROM` | Warning | ISO installs and rescue mode |
+| `VM.Backup` | Warning | backups and restores |
+| `VM.Migrate` | Warning | migration, the Cluster Balancer and node drains |
 | `Datastore.AllocateSpace` | Warning | creating disks on a storage |
+| `Datastore.Allocate` | Warning | enabling snippets and cleaning up imported cloud images |
+| `Datastore.AllocateTemplate` | Warning | importing cloud images for the Template Store |
 | `Sys.Audit` | Warning | node health and capacity readings; also warned when `/nodes` returns no nodes |
+| `Sys.Modify` | Warning | enforcing isolation on the cluster firewall |
+| `VM.Monitor` | Warning, only when the PVE major version is 8 or lower | the guest agent (guest IPs, login passwords, cloud-init progress) |
+| `VM.GuestAgent.Audit` / `VM.GuestAgent.Unrestricted` | Warning, only on PVE 9 or later | reading guest IPs; applying a deploy's login password and checking cloud-init progress |
 | `SDN.Use` | Warning, only when the PVE major version is 8 or higher | PVE 8+ checks it on `/sdn/zones/<zone>/<bridge>` whenever a guest NIC is attached (plain bridges sit in the implicit `localnetwork` zone), so create/re-network fails with 403. `PVESDNUser` carries it.[^setup] |
 | `SDN.Audit` | Warning | `/cluster/sdn/vnets` is refused, so SDN VNets may be missing from the network picker (a VNet can still be typed by name). See [networking](/proxmox/networking.md).[^setup] |
 
-The warning rows come verbatim from `OPERATIONAL_PRIVILEGES`; the message format is
+The warning rows come verbatim from `OPERATIONAL_PRIVILEGES` and `guestAgentPrivileges`; the message format is
 `<priv> is missing — <reason> will fail.`[^setup]
 
 # Not checked by the connection test
 
-ProxMate also calls endpoints whose privileges are not in the lists above, e.g. the cluster
-firewall (`PUT /cluster/firewall/options`, `POST /cluster/firewall/rules`), per-guest firewall
-rules, `POST .../migrate`, `POST /nodes/{node}/vzdump`, `download-url`, guest-agent endpoints, and
-PCI resource mappings.[^pve] SECURITY.md summarises the need as `VM.Allocate`, `VM.Config.*`,
-`VM.PowerMgmt`, `VM.Console`, `VM.Audit`, `Datastore.Audit`, `Datastore.AllocateSpace`,
-`Sys.Audit` "(+ firewall management for isolation)".[^security] A token that passes the test can
-therefore still get 403 on migration, backups, isolation enforcement or the IDE/agent features;
-those surface as `pveMessage` errors at the call site. Writing ProxMate's ownership tag onto a
-guest needs `VM.Config.Options`, which the test does not check either; the privilege-separation-off
-token and the Administrator role include it.[^pve]
+- `VM.Snapshot.Rollback` (rollback also accepts `VM.Snapshot`, which is checked).
+- `VM.GuestAgent.FileWrite` (PVE 9, the IDE's bootstrap file only).
+- `Mapping.Audit` / `Mapping.Use` (GPU/PCI passthrough through resource mappings).
+
+A token that passes the test can still get 403 on those features; it surfaces as a `pveMessage`
+error at the call site. The script below grants all of them.[^pve]
 
 # Recommended setup (from the docs)
 
@@ -99,11 +105,14 @@ token and the Administrator role include it.[^pve]
 - Keeping privsep on: grant the token a role explicitly, e.g.
   `pveum acl modify / --tokens 'root@pam!proxmate' --roles Administrator` (admin guide), or
   `--roles PVEAdmin` (the connection-test error text).[^adminguide][^setup]
-- Least privilege: a dedicated user (e.g. `proxmate@pve`) with only the roles above on the relevant
-  nodes/pool. DEPLOYMENT.md states the per-tenant Pool/ACL least-privilege model is "still being
-  validated" and the privsep-off token is the supported path for now.[^deploy][^security] ROADMAP
-  notes an earlier pool-scoping failure was likely an ACL naming `users=` where a privsep token
-  needs `tokens=`.[^roadmap]
+- Least privilege: `deploy/proxmox-token.sh` (run as root on a node) creates user `proxmate@pve`,
+  role `ProxMate` (the privileges in the table, with the guest-agent ones chosen by PVE major) and a
+  privsep token, and grants the role on `/` with propagate to **both** the user and the token (a
+  privsep token's effective set is the intersection). `/` is required: the cluster firewall,
+  `/cluster/status` and `download-url` are checked there. `--with-ide` adds
+  `VM.GuestAgent.FileWrite` (PVE 9), `--with-passthrough` adds `Mapping.Audit`/`Mapping.Use`,
+  `--dry-run` prints the commands. Re-running updates the role and ACLs and never re-issues an
+  existing token.[^deploy][^security]
 - Troubleshooting row: "Proxmox storage empty / VM create 403" → privilege separation on.[^deploy]
 
 # Gotchas
