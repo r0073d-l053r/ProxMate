@@ -197,9 +197,9 @@ git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null 2>&1 || fail "unk
 # below would then bring the stack up without them. Local compose changes belong
 # in docker-compose.override.yml (untracked, merged automatically by compose).
 STEP="Checking for local changes"
-dirty="$(git status --porcelain --untracked-files=no | sed -E 's/^.{3}//' | tr '\n' ' ')"
+dirty="$(git status --porcelain --untracked-files=no | sed -E 's/^.{3}//' | tr '\n' ' ' | sed 's/ $//')"
 if [[ -n "$dirty" ]]; then
-  fail "local changes to tracked files: ${dirty}— move compose customisations into docker-compose.override.yml (see DEPLOYMENT.md), then revert or commit the rest and retry"
+  fail "local changes to tracked files: ${dirty} — move compose customisations into docker-compose.override.yml (see DEPLOYMENT.md), then revert the rest (git checkout -- ${dirty}) and retry"
 fi
 
 echo "==> Updating ProxMate to $TAG"
@@ -218,6 +218,19 @@ docker compose up -d
 # Prune the now-dangling previous image layers (best effort).
 docker image prune -f >/dev/null 2>&1 || true
 
+# Self-update switched on but the backend has no /control mount: the in-app
+# "Install update" button is then broken. The usual cause is an update by an
+# older updater, which force-checked-out the release over a docker-compose.yml
+# that carried the mount. Say so (the update itself still succeeded).
+WARNING=""
+if compose_cfg="$(docker compose config 2>/dev/null)" &&
+   grep -Eq '^[[:space:]]*SELF_UPDATE_ENABLED:[[:space:]]*"?true"?[[:space:]]*$' <<<"$compose_cfg" &&
+   ! grep -Eq '^[[:space:]]*target:[[:space:]]*/control[[:space:]]*$' <<<"$compose_cfg"; then
+  WARNING=" — warning: SELF_UPDATE_ENABLED is true but the backend has no /control mount, so in-app updates cannot be requested; add it to docker-compose.override.yml (DEPLOYMENT.md §14.3) and run docker compose up -d"
+  echo "WARNING: SELF_UPDATE_ENABLED=true but no /control mount is configured for the backend." >&2
+  echo "         Add - ./deploy/update-control:/control to docker-compose.override.yml (see DEPLOYMENT.md §14.3), then: docker compose up -d" >&2
+fi
+
 FINISHED=1
-status "success" "Updated to $TAG" "$TAG"
+status "success" "Updated to $TAG$WARNING" "$TAG"
 echo "==> ProxMate is now on $TAG"

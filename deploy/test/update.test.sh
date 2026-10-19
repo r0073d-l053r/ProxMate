@@ -312,9 +312,46 @@ t_edited_tracked_file_blocks_update() {
   assert_ne "$RC" 0 "exit code" &&
     assert_eq "$(status_field state)" error "state" &&
     assert_match "$(status_field message)" "docker-compose.override.yml" "message says where local edits belong" &&
+    assert_match "$(status_field message)" "git checkout -- docker-compose.yml" "message says how to revert" &&
+    assert_no_match "$(status_field message)" "commit" "message must not suggest committing" &&
     assert_eq "$(cat "$CHECKOUT/docker-compose.yml")" "$(cat "$T/compose.expected")" "local edit preserved" &&
     assert_eq "$(version)" 1.0.0 "checkout must not move" &&
     assert_no_grep "compose build" "$T/docker.log"
+}
+
+# An update made by an OLDER updater (which force-checked-out the release) can
+# have discarded a /control mount added to docker-compose.yml. The next run of
+# this updater says so instead of leaving the in-app button silently broken.
+compose_config() { # <self_update true|false> <with_control_mount yes|no>
+  {
+    printf 'services:\n  backend:\n    environment:\n      SELF_UPDATE_ENABLED: "%s"\n    volumes:\n' "$1"
+    printf '      - type: volume\n        source: proxmate-data\n        target: /data\n'
+    [ "$2" = yes ] && printf '      - type: bind\n        source: %s\n        target: /control\n' "$CONTROL"
+  } > "$T/compose-config.yml"
+}
+
+t_warns_when_self_update_enabled_but_control_not_mounted() {
+  new_case
+  compose_config true no
+  STUB_COMPOSE_CONFIG="$T/compose-config.yml" run_update v1.1.0
+  assert_eq "$RC" 0 "exit code" &&
+    assert_eq "$(status_field state)" success "state" &&
+    assert_match "$(status_field message)" "/control" "status names the missing mount" &&
+    assert_grep "docker-compose.override.yml" "$T/out"
+}
+
+t_no_mount_warning_when_control_mounted() {
+  new_case
+  compose_config true yes
+  STUB_COMPOSE_CONFIG="$T/compose-config.yml" run_update v1.1.0
+  assert_eq "$(status_field message)" "Updated to v1.1.0" "message"
+}
+
+t_no_mount_warning_when_self_update_disabled() {
+  new_case
+  compose_config false no
+  STUB_COMPOSE_CONFIG="$T/compose-config.yml" run_update v1.1.0
+  assert_eq "$(status_field message)" "Updated to v1.1.0" "message"
 }
 
 # ── BUG-066: a control dir the updater creates is writable by the app ────────

@@ -543,6 +543,60 @@ applies DB migrations on boot (`docker-entrypoint.sh`). **Back up the DB first**
 > the host's systemd. Leave `SELF_UPDATE_ENABLED=false` (the default) to keep the apply
 > path entirely manual.
 
+If an update reports *"SELF_UPDATE_ENABLED is true but the backend has no /control
+mount"*, the mount went missing (see §14.4): add it to `docker-compose.override.yml` and
+run `docker compose up -d`.
+
+### 14.4 Upgrading from 1.0.x and earlier
+
+The update into this release is performed by the updater **already on your host** — the
+1.0.x `deploy/update.sh`, which force-checks-out the new release. Anything you changed in
+`docker-compose.yml` (typically the uncommented `/control`, private-CA, snippets or
+backup-download mounts) is **silently discarded** by that run, and the stack restarts
+without those mounts. The new updater refuses to run over such edits, but it only takes
+over after this update. So, **before** you update:
+
+1. **Move your compose edits into the override file.** See what you changed, copy those
+   lines into `docker-compose.override.yml`, then restore the stock file:
+   ```bash
+   cd /opt/proxmate
+   git diff docker-compose.yml                     # your local edits
+   cp docker-compose.override.example.yml docker-compose.override.yml
+   nano docker-compose.override.yml                # uncomment the same mounts
+   git checkout -- docker-compose.yml
+   docker compose config >/dev/null && echo ok     # the merged file still parses
+   ```
+   `docker-compose.override.example.yml` only exists from this release on; on a 1.0.x
+   checkout write the override by hand (a `services:` → `backend:` → `volumes:` block
+   listing the same mount lines). The old updater's `docker compose up -d` also reads the
+   override, so the mounts survive this update — whether you use the in-app button or not.
+2. **Update** as usual (**Install update**, or `./deploy/update.sh <tag>`).
+3. **Re-install the systemd units** — the service now marks killed runs as failed
+   (`ExecStopPost`):
+   ```bash
+   sudo cp deploy/proxmate-updater.service deploy/proxmate-updater.path /etc/systemd/system/
+   sudo systemctl daemon-reload
+   ```
+   (Re-apply your `PROXMATE_DIR` / path edits if your checkout isn't `/opt/proxmate`.)
+
+Also changed in this release:
+
+- **Images move to Node 22.** The first build pulls `node:22-alpine`, so it needs network
+  access and takes a little longer than a normal update.
+- **`TRUST_PROXY` ≥ 1 is now required for the real-IP header.** The audit log only
+  believes `REAL_IP_HEADER` (`cf-connecting-ip` by default) when a proxy is trusted, and
+  resolves `x-forwarded-for` through `TRUST_PROXY`'s hop count. Behind Caddy, nginx or a
+  Cloudflare Tunnel keep `TRUST_PROXY=1`; with it unset or `0` the audit log records the
+  socket address.
+- **The backend refuses to start in production without `ENCRYPTION_KEY`.** Docker installs
+  already require it (compose fails without it); this affects bare `node`/`npm start` runs,
+  which previously generated a key they could lose on restart.
+
+**If the old updater already dropped your mounts** (the in-app button now fails, or the
+Proxmox CA / snippets / downloads stopped working): put the mounts in
+`docker-compose.override.yml` as in step 1 and run `docker compose up -d`. The next run of
+the new `update.sh` also warns when self-update is enabled but `/control` is not mounted.
+
 ---
 
 ## 15. Rack kiosk mode (touch panel)

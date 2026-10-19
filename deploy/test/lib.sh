@@ -37,6 +37,7 @@ assert_regular_file() { [ -f "$1" ] && [ ! -L "$1" ] || fail_msg "$1 should be a
 # make_stubs <dir>: a fake `docker` that records every call in $STUB_LOG.
 #   STUB_DOCKER_FAIL=<text>  calls whose arguments contain <text> exit 1
 #   STUB_VOLUMES="a b"       `docker volume inspect <name>` succeeds for these
+#   STUB_COMPOSE_CONFIG=<f>  `docker compose config` prints file <f>
 make_stubs() {
   mkdir -p "$1"
   cat > "$1/docker" <<'EOF'
@@ -47,6 +48,7 @@ if [ -n "${STUB_DOCKER_FAIL:-}" ]; then
 fi
 case "$1 ${2:-}" in
   "compose version") [ "${3:-}" = "--short" ] && echo 2.29.0 || echo "Docker Compose version v2.29.0" ;;
+  "compose config") [ -n "${STUB_COMPOSE_CONFIG:-}" ] && cat "$STUB_COMPOSE_CONFIG" ;;
   "volume inspect")
     for v in ${STUB_VOLUMES:-}; do [ "$v" = "${3:-}" ] && { echo '[{}]'; exit 0; }; done
     echo "Error response from daemon: get ${3:-}: no such volume" >&2; exit 1 ;;
