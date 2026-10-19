@@ -40,7 +40,7 @@ that network once, as the **default network**, stored in the `default_bridge` ke
 | Step | Proxmox call | Contributes |
 |------|--------------|-------------|
 | 1 | `GET /nodes` | Online nodes. Offline nodes are not asked. |
-| 2 | `GET /nodes/{node}/network?type=any_bridge`, once per online node | `bridge` (Linux) and `OVSBridge` interfaces, plus `vnet` entries on Proxmox VE 8+ |
+| 2 | `GET /nodes/{node}/network?type=any_bridge`, once per online node | `bridge` (Linux) and `OVSBridge` interfaces, plus any `vnet` entries (the code comment says Proxmox VE 8+ lists applied VNets here) |
 | 2b | `GET /nodes/{node}/network` (unfiltered), only if 2 is rejected | The same bridge types, filtered client-side, so a release without `any_bridge` keeps its bridges |
 | 3 | `GET /cluster/sdn/vnets` | Every SDN VNet, with its `zone` and `alias` |
 | 4 | `GET /cluster/sdn/zones` | Each zone's optional `nodes` restriction, which becomes the VNet's node set |
@@ -74,8 +74,8 @@ flag a network that is missing from some nodes.[^setup]
   offers one. Both save routes (`POST /api/setup/defaults`,
   `PUT /api/admin/settings/defaults`) trim the name and validate it against
   `NETWORK_NAME_RE`.[^picker]
-- **The default overrides inherited NICs.** Template deploys, duplicates and restores are
-  clones, which inherit `net0` from their source. `applyDefaultBridge` rewrites every
+- **The default overrides inherited NICs.** Template deploys and duplicates are clones, and an
+  uploaded-backup restore carries the archive's NICs, so all three inherit `net0` from their source. `applyDefaultBridge` rewrites every
   `netN` onto the default network, keeping the rest of the NIC line. It is idempotent:
   a NIC already on the target network is skipped.[^pve]
 
@@ -89,9 +89,11 @@ flag a network that is missing from some nodes.[^setup]
   bridges too, which live in the implicit `localnetwork` zone. Listing VNets needs
   `SDN.Audit`. The connection test warns about both (it doesn't block); see
   [privileges](/proxmox/privileges.md).[^setup]
-- **VNets must be applied.** `/cluster/sdn/vnets` returns the configured VNets, which can
-  include pending ones. A VNet that hasn't been applied (Datacenter → SDN → Apply) does
-  not exist on the nodes yet, and guests attached to it fail to start.
+- **VNets must be applied** (Proxmox VE behaviour, not checked by ProxMate). `/cluster/sdn/vnets`
+  returns the configured VNets, which can include pending ones. A VNet that hasn't been applied
+  (Datacenter → SDN → Apply) does not exist on the nodes yet, and guests attached to it fail to
+  start. ProxMate does not filter pending VNets out; the picker's empty-list hint only reminds the
+  admin to apply the SDN configuration.[^picker]
 - **Node coverage.** A Linux bridge is defined per node. The picker warns when the chosen
   network is on fewer nodes than `nodeCount`, because a guest placed on a node without it
   fails to start.[^picker]

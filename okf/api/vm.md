@@ -27,7 +27,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 - Per-VM authorization helpers (from the vm service), all returning 404 `VM not found` when the caller lacks access:[^routes]
   - `getViewableVm`: any access including read-only shares (reads).
   - `getVmWithCap(id, user, cap)`: capability `configure`, `power`, `backups` or `console`.
-  - `getOwnedVm`: owner/admin/co-owner (delete, bulk, rebuild, shares, migrate, convert).
+  - `getOwnedVm`: owner or admin only; shares never qualify (delete, bulk, rebuild, shares, migrate, convert).
   - `resolveVmAccess`: detail view; returns `access` badge and `caps`.
 - Admin-only (role check in handler, 403): `migrate-targets`, `migrate`, `convert-template`; `node`, `forUserId`, `quotaExempt` on create (enforced in `resolveCreateTarget`); `backupKeep` (silently forced to `null` for non-admins).[^routes]
 
@@ -40,8 +40,8 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | POST | `/api/vms` | user | Create a QEMU VM from an ISO. 201 `{ vm, status }`. Audited `vm.create`. |
 | GET | `/api/vms/lxc-templates` | user | LXC vztmpl templates on the cluster. |
 | GET | `/api/vms/restore-capability` | user | `{ enabled }` for restore-from-upload. |
-| POST | `/api/vms/restore-upload` | user | multipart `file` (vzdump archive) + `name`; restore as a new guest. Audited `vm.restore_upload`. |
-| POST | `/api/vms/containers` | user | Create an LXC container from a vztmpl volid. Audited `vm.create`. |
+| POST | `/api/vms/restore-upload` | user | multipart `file` (vzdump archive) + `name`; restore as a new guest; 201 `{ vm, status }`. Audited `vm.restore_upload`. |
+| POST | `/api/vms/containers` | user | Create an LXC container from a vztmpl volid; 201 `{ vm, status }`. Audited `vm.create`. |
 | POST | `/api/vms/bulk` | user (`getOwnedVm` per id) | `{ action: start/stop/restart/delete, ids (1..50) }`; per-VM results. Audited `vm.bulk_<action>`. |
 | GET | `/api/vms/:id` | any access | Detail + live status, `deployState`, `access`, `caps`, `rescueAvailable`. |
 | GET | `/api/vms/:id/metrics` | viewable | RRD history `?timeframe=hour/day/week/month/year` (default hour). |
@@ -56,7 +56,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | POST | `/api/vms/:id/disks` | `configure` + size lock | Add data disk `{ sizeGb 1..4096 }`; 201. Audited `vm.disk_add`. |
 | PATCH | `/api/vms/:id/disks/:slot` | `configure` + size lock | Grow data disk. Audited `vm.disk_resize`. |
 | DELETE | `/api/vms/:id/disks/:slot` | `configure` + size lock | Remove data disk. Audited `vm.disk_remove`. |
-| GET | `/api/vms/:id/migrate-targets` | admin | `{ current, targets, blockers, localDisks }` from Proxmox preflight intersected with online nodes. |
+| GET | `/api/vms/:id/migrate-targets` | admin | `{ current, targets, blockers, localDisks }` from Proxmox preflight intersected with online nodes; LXC and passthrough guests get an empty `targets` list with a `*` blocker. |
 | POST | `/api/vms/:id/migrate` | admin | `{ targetNode }`; migrates and notifies owner. Audited `vm.migrate`. |
 | GET | `/api/vms/:id/shares` | owned | List shares. |
 | POST | `/api/vms/:id/shares` | owned | `{ email, role }` share with another user; 201. Audited `vm.share`. |
@@ -93,7 +93,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 # Gotchas
 
 - Static paths (`live-usage`, `lxc-templates`, `restore-capability`, `restore-upload`, `containers`, `bulk`) are declared before `/:id` so they are not read as ids.[^routes]
-- **Lock (409)** via `rejectIfLocked`: stop, restart, pause, delete and console are refused while the IDE is installing or cloud-init is still deploying. Start, resume, serial and migrate do not call it.[^routes]
+- **Lock (409)** via `rejectIfLocked`: stop, restart, pause, delete and console are refused while the IDE is installing or cloud-init is still deploying. Start, resume, serial and migrate do not call it, and neither does `POST /bulk`, so bulk stop/restart/delete bypass the lock.[^routes]
 - **Size lock (403)** via `rejectIfSizeLocked`: on `adminManaged` or `quotaExempt` VMs only admins may resize, add/resize/remove disks, or rebuild (closes a quota bypass). Rename/tags stay open to the owner.[^routes]
 - Validation (zod): names `^[a-zA-Z0-9-]+$` max 63; `cpu` 1..64; ISO `os` must be a bare `*.iso`/`*.img` filename (prevents Proxmox drive-option injection); node names `^[a-zA-Z0-9][a-zA-Z0-9._-]*$`; LXC `template` must match `<storage>:vztmpl/<file>`; containers need `password` (min 5) or `sshKey`; tags max 20 each `^[a-zA-Z0-9][a-zA-Z0-9 _-]{0,30}$`; crons max 120 chars then `isValidCron`; disk slot `^(scsi|virtio|sata|ide)\d+$`; snapshot names `^[a-zA-Z][a-zA-Z0-9_-]*$` max 40; share role accepts `SHARE_ROLES` plus legacy `co-owner`/`read-only` normalized.[^routes]
 - Max 12 snapshots per VM (409). Snapshots, disks, rebuild, convert, duplicate, pause, password reset, SSH key injection and rescue are QEMU-only.[^routes]

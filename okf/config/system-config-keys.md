@@ -25,7 +25,7 @@ The key list was built by grepping every `getConfig('…')` / `setConfig('…')`
 
 # Encryption
 
-When `sensitive=true`, `setConfig` stores `encrypt(value)`: AES-256-GCM with a random 12-byte IV and a 16-byte auth tag, serialized as `ivHex:tagHex:ciphertextHex`. The key is `ENCRYPTION_KEY`, which must be 64 hex chars. `getConfig` decrypts whenever the row's `sensitive` flag is set.[^crypto] Secrets are never returned by the admin settings API, which exposes only `has*` booleans. Write paths for secrets keep the existing value when the submitted field is blank. See [backend environment](/env/backend-environment.md) for key handling.
+When `sensitive=true`, `setConfig` stores `encrypt(value)`: AES-256-GCM with a random 12-byte IV and a 16-byte auth tag, serialized as `ivHex:tagHex:ciphertextHex`. The key is `ENCRYPTION_KEY`, which must be 64 hex chars. `getConfig` decrypts whenever the row's `sensitive` flag is set.[^crypto] `GET /api/admin/settings` returns booleans (`hasSecret`, `hasPass`, `hasGatewayKey`, `kiosk.pinSet`) instead of the Proxmox token secret, SMTP password, SSO client secret, IDE gateway key and kiosk PIN. The decrypted `notify_webhook_url` is the exception: it is returned as `notify.webhookUrl`. The write paths for those four secrets keep the existing value when the submitted field is blank; `kiosk_exit_pin` and `notify_webhook_url` are cleared by `''`. See [backend environment](/env/backend-environment.md) for key handling.
 
 # Schema
 
