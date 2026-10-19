@@ -59,8 +59,8 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
 });
 
 import * as pve from '../src/services/proxmox.service.js';
-import { createVm, QuotaError } from '../src/services/vm.service.js';
-import { addDataDisk } from '../src/services/disk.service.js';
+import { createVm, resizeVm, QuotaError } from '../src/services/vm.service.js';
+import { addDataDisk, removeDataDisk } from '../src/services/disk.service.js';
 import { fakeClient, asClient } from './helpers.js';
 
 let c: ReturnType<typeof fakeClient>;
@@ -99,5 +99,30 @@ describe('concurrent data-disk adds against one quota', () => {
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(2);
     expect(results.filter((r) => r.status === 'rejected' && r.reason instanceof QuotaError)).toHaveLength(1);
     expect(rows[0]!['storage']).toBe(50);
+  });
+});
+
+describe('resize and disk changes overlapping on one VM', () => {
+  it('a resize is judged on the row as it is under the lock, not the copy the caller loaded', async () => {
+    rows.push({ id: 'vm-a', userId: 'u1', storage: 10, cpu: 1, ram: 512, quotaExempt: false });
+    const stale = { ...rows[0] } as never; // the caller loaded storage = 10
+    // A 20 GB data disk lands first; the resize then asks for a 45 GB total.
+    await Promise.all([addDataDisk(stale, 20), resizeVm(USER, stale, { storage: 45 })]);
+    // 10 → 30 (disk) → 45 (resize): the root grows by 15 GB, not by 35.
+    const resize = c.put.mock.calls.find((x) => /\/resize$/.test(String(x[0])));
+    expect(Object.fromEntries(resize![1] as URLSearchParams)).toEqual({ disk: 'scsi0', size: '25G' });
+    expect(rows[0]!['storage']).toBe(45);
+  });
+
+  it('removing a data disk frees exactly its size even when the caller\'s copy is stale', async () => {
+    rows.push({ id: 'vm-a', userId: 'u1', storage: 10, cpu: 1, ram: 512, quotaExempt: false });
+    const stale = { ...rows[0] } as never;
+    vi.mocked(pve.getVmConfig).mockImplementation(async () => ({
+      tags: 'proxmate-vm-a',
+      scsi0: 'local-lvm:vm-1-disk-0,size=10G',
+      scsi1: 'local-lvm:vm-1-disk-1,size=20G',
+    }));
+    await Promise.all([addDataDisk(stale, 15), removeDataDisk(stale, 'scsi1')]);
+    expect(rows[0]!['storage']).toBe(5); // 10 + 15 - 20 (the stale copy would have written 10 - 20 → 0)
   });
 });

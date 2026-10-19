@@ -127,8 +127,12 @@ async function resizeDataDiskLocked(row: VirtualMachine, slot: string, sizeGb: n
   await prisma.virtualMachine.update({ where: { id: vm.id }, data: { storage: { increment: sizeGb - current } } });
 }
 
-/** Detach + destroy a data disk. Refuses the root disk. Frees the quota it used. */
-export async function removeDataDisk(row: VirtualMachine, slot: string): Promise<void> {
+/** Detach + destroy a data disk. Refuses the root disk. Frees the quota it used (under the owner's lock). */
+export function removeDataDisk(vm: VirtualMachine, slot: string): Promise<void> {
+  return withQuotaLock(vm.userId, () => removeDataDiskLocked(vm, slot));
+}
+
+async function removeDataDiskLocked(row: VirtualMachine, slot: string): Promise<void> {
   const vm = await requireOurGuest(row);
   const config = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId);
   if (!(slot in config)) throw new Error('Disk not found.');
@@ -136,8 +140,5 @@ export async function removeDataDisk(row: VirtualMachine, slot: string): Promise
   const freed = diskSizeGb(String(config[slot]));
 
   await pve.removeDisk(vm.proxmoxNode, vm.proxmoxVmId, slot);
-  await prisma.virtualMachine.update({
-    where: { id: vm.id },
-    data: { storage: Math.max(0, vm.storage - freed) },
-  });
+  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { storage: { decrement: freed } } });
 }

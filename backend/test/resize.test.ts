@@ -89,7 +89,7 @@ describe('resizeVm', () => {
 
     const resizePut = client.put.mock.calls.find((c) => /\/resize$/.test(c[0] as string));
     expect(bodyOf(resizePut!)).toEqual({ disk: 'scsi0', size: '20G' });
-    expect(update).toHaveBeenCalledWith({ where: { id: 'db-1' }, data: { storage: 20 } });
+    expect(update).toHaveBeenCalledWith({ where: { id: 'db-1' }, data: { storage: { increment: 10 } } });
     expect(result).toMatchObject({ storage: 20 });
   });
 
@@ -163,7 +163,7 @@ describe('resizeVm', () => {
 
     const resizePut = client.put.mock.calls.find((c) => /\/resize$/.test(c[0] as string));
     expect(bodyOf(resizePut!)).toEqual({ disk: 'scsi0', size: '30G' });
-    expect(update).toHaveBeenCalledWith({ where: { id: 'db-1' }, data: { storage: 130 } });
+    expect(update).toHaveBeenCalledWith({ where: { id: 'db-1' }, data: { storage: { increment: 10 } } });
   });
 
   it('grows an LXC rootfs by the delta too', async () => {

@@ -1372,9 +1372,13 @@ export async function resizeVm(
 
 async function resizeVmLocked(
   user: User,
-  vm: VirtualMachine,
+  staleVm: VirtualMachine,
   input: ResizeVmInput,
 ): Promise<VirtualMachine> {
+  // Judge the request against the row as it is NOW (under the lock), not as the
+  // caller loaded it — a data-disk change may have landed in between.
+  const vm = await prisma.virtualMachine.findUnique({ where: { id: staleVm.id } });
+  if (!vm) throw new ResizeError('This machine no longer exists.');
   const targetCpu = input.cpu ?? vm.cpu;
   const targetRam = input.ram ?? vm.ram;
   const targetStorage = input.storage ?? vm.storage;
@@ -1425,7 +1429,7 @@ async function resizeVmLocked(
     await pve.resizeDisk(current.proxmoxNode, current.proxmoxVmId, diskKey, rootTargetGb, client, kind);
     current = await prisma.virtualMachine.update({
       where: { id: current.id },
-      data: { storage: targetStorage },
+      data: { storage: { increment: targetStorage - vm.storage } },
     });
   }
 
