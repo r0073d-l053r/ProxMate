@@ -84,7 +84,9 @@ router.post('/', async (req: Request, res: Response) => {
       token,
       createdById: (req as any).user.id,
       label: parsed.data.label,
-      email: parsed.data.email ?? null,
+      // Bound only after the link has actually been emailed (below): an address
+      // the link never reached must not decide who may register with it.
+      email: null,
       maxCpu: parsed.data.maxCpu,
       maxRam: parsed.data.maxRam,
       maxStorage: parsed.data.maxStorage,
@@ -104,6 +106,10 @@ router.post('/', async (req: Request, res: Response) => {
   let emailError: string | null = null;
   if (parsed.data.email) {
     emailError = await emailInvite(parsed.data.email, invite, (req as any).user.displayName);
+    if (!emailError) {
+      invite.email = parsed.data.email;
+      await prisma.inviteToken.update({ where: { id: invite.id }, data: { email: parsed.data.email } });
+    }
   }
 
   res.status(201).json({
@@ -149,9 +155,24 @@ router.post('/:id/send', async (req: Request, res: Response) => {
     return;
   }
 
-  const emailError = await emailInvite(parsed.data.email, invite, (req as any).user.displayName);
+  // `invite.email` is the address registration binds the account to, so it must
+  // only ever name an address the CURRENT link was delivered to. Sending to a new
+  // address therefore issues a new token: whoever holds the old link (an earlier
+  // recipient, or anyone it was copied to) can no longer register under the new
+  // address. Resending to the same address keeps the link.
+  const to = parsed.data.email.toLowerCase();
+  const readdressed = to !== (invite.email?.toLowerCase().trim() ?? null);
+  const outgoing = readdressed ? { ...invite, token: generateToken() } : invite;
+
+  let emailError = await emailInvite(parsed.data.email, outgoing, (req as any).user.displayName);
   if (!emailError) {
-    await prisma.inviteToken.update({ where: { id: invite.id }, data: { email: parsed.data.email } });
+    // Conditional on the old token still being live and unredeemed, so a
+    // registration racing this send can't be overwritten.
+    const updated = await prisma.inviteToken.updateMany({
+      where: { id: invite.id, token: invite.token, usedById: null },
+      data: { email: parsed.data.email, token: outgoing.token },
+    });
+    if (updated.count === 0) emailError = 'This invite was used while sending — the emailed link will not work.';
   }
 
   // Return 200 with a structured result rather than a 5xx an upstream proxy might
