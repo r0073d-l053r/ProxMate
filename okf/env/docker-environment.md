@@ -49,7 +49,7 @@ sources:
 | `BACKEND_PUBLIC_URL` | `${BACKEND_PUBLIC_URL:-http://localhost:4000}` | prod / SSO: yes | Used to build the SSO callback. |
 | `COOKIE_SECURE` | `${COOKIE_SECURE:-false}` | prod: `true` | Secure cookies. Passkeys need a secure context. |
 | `TRUST_PROXY` | `${TRUST_PROXY:-0}` | prod: `1` behind one proxy | Proxy hops. |
-| `REAL_IP_HEADER` | `${REAL_IP_HEADER-cf-connecting-ip}` (note: `-`, not `:-`) | no | An explicitly empty value is passed through and disables the header. |
+| `REAL_IP_HEADER` | `${REAL_IP_HEADER-cf-connecting-ip}` (note: `-`, not `:-`) | no | An explicitly empty value is passed through and disables the header (`install.sh --local` writes it empty). Only honoured when `TRUST_PROXY` ≥ 1. |
 | `WEBAUTHN_RP_ID` / `WEBAUTHN_ORIGIN` | `${…:-}` (empty) | prod: recommended | Passkey RP id and origin. |
 | `AUTH_RATE_LIMIT_MAX` / `AUTH_RATE_LIMIT_WINDOW_MS` | `20` / `900000` | no | Auth limiter. |
 | `AUTH_LOCKOUT_MAX` / `AUTH_LOCKOUT_MINUTES` | `10` / `15` | no | Account lockout. |

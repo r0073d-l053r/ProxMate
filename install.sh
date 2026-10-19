@@ -703,6 +703,9 @@ CSP_CONNECT_SRC="'self' $API_ORIGIN ws://$HTTP_HOST:4000"
 # Plain HTTP: Secure cookies would never be sent back, so they stay off here.
 COOKIE_SECURE=false
 TRUST_PROXY=0
+# Clients reach the API directly here, with no proxy in front to set a real-IP
+# header, so none is trusted: the audit log records the socket address.
+REAL_IP_HEADER=
 # Published on all interfaces so you can reach it from another machine.
 BIND_ADDR=0.0.0.0
 BACKEND_PORT=4000

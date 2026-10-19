@@ -47,7 +47,9 @@ services:
       # "cf-connecting-ip" (Cloudflare); behind a plain Caddy/nginx proxy set
       # REAL_IP_HEADER=x-forwarded-for in .env. Deliberately `-` not `:-`: an
       # explicitly-EMPTY value must pass through (it means "disable, use the raw
-      # socket IP"); only a fully unset var takes the Cloudflare default.
+      # socket IP"); only a fully unset var takes the Cloudflare default. The
+      # header is only honoured when TRUST_PROXY >= 1, and x-forwarded-for is
+      # resolved through TRUST_PROXY's hop count rather than read verbatim.
       REAL_IP_HEADER: ${REAL_IP_HEADER-cf-connecting-ip}
       # Public base URL of the API — used to build the SSO (OIDC) callback URL
       # (${BACKEND_PUBLIC_URL}/api/auth/sso/callback). Set to your public origin.
