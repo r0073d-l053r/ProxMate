@@ -116,6 +116,10 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 
 Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
 
+- **v1.1.1 — follow-up.** Personal API tokens of an account whose access window has ended answer
+  `403 access_expired`; Compose forwards `ALERT_COOLDOWN_MIN` and the public-token rate-limit
+  settings; non-numeric `PORT` / `RESTORE_UPLOAD_MAX_GB` fall back to defaults; the access-expiry
+  sweep is covered by tests.
 - **v1.1.0 (2026-10-19) — security and reliability release.** A full code review, every finding closed:
   **guest ownership tags** gate every guest action (existing guests tagged on upgrade, admin
   **Unconfirmed machines** card for the rest); **owner-only IDE** with per-machine guest proof;

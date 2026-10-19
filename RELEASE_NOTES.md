@@ -1,6 +1,21 @@
+ProxMate 1.1.1 is a small follow-up to 1.1.0. **Coming from 1.0.x?** Read the 1.1.0 notes below first: they include the upgrade steps.
+
+## Changes in 1.1.1
+
+- **API tokens and ended access.** A personal API token whose owner's compute access window has ended now answers **403** with `code: "access_expired"`, the same as a browser session. It used to answer 401, which looked like a bad token. Unknown, revoked or expired tokens still answer 401.
+- **Docker Compose settings.** `ALERT_COOLDOWN_MIN`, `PUBLIC_TOKEN_RATE_LIMIT_MAX` and `PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS` are now passed through to the backend, so setting them in `.env` takes effect.
+- **Settings that aren't numbers.** `PORT` and `RESTORE_UPLOAD_MAX_GB` fall back to their defaults when set to something that isn't a number. A bad `RESTORE_UPLOAD_MAX_GB` used to turn the upload size limit off.
+- **Docs.** The README, deployment guide, admin guide, API and IDE docs, and the security guide are updated for 1.1.0. `SECURITY.md` now says which versions get security fixes and how to report a problem privately.
+
+No configuration changes are needed to upgrade from 1.1.0.
+
+---
+
+## 1.1.0
+
 ProxMate 1.1.0 is a security and reliability release. It follows a full review of the codebase and closes every issue that review found, and it fixes the setup wizard on SDN-only clusters (#126). Every 1.0.x install should upgrade. Read **Upgrading** below first: a few changes need a step from the admin, and some behaviour changes on purpose.
 
-## Security
+### Security
 
 - **Guest ownership.** Every guest ProxMate manages now carries a Proxmox tag naming its machine. Start, stop, console, IDE, backups, restores, resize and delete act only on a guest carrying its own machine's tag, so a stale or reused VMID can never point an action at someone else's guest. Existing guests are tagged on first start; see **Upgrading**.
 - **ProxMate IDE.** The IDE opens only for the machine's owner. Before connecting, ProxMate confirms it is talking to that machine's own guest using a per-machine secret, and ProxMate's cookies are never passed to the guest or accepted back from it.
@@ -14,7 +29,7 @@ ProxMate 1.1.0 is a security and reliability release. It follows a full review o
 - **Admin settings and the audit log.** Settings changes are audited without recording secret values, the notification webhook URL is shown only masked, and the audit log trusts a client-IP header only behind a configured proxy.
 - **Deployment.** App-database snapshots are created readable by their owner only. The host updater no longer leaves root-owned files in the checkout and keeps its control files out of the app's reach. The backend refuses to start in production without a saved `ENCRYPTION_KEY`, and images move to Node 22.
 
-## Fixes
+### Fixes
 
 - **SDN and OVS networks (#126).** The setup wizard and network settings list SDN VNets and Open vSwitch bridges, not only Linux bridges. A network name can be typed in when discovery finds nothing, and the connection test warns when the token lacks `SDN.Use` or `SDN.Audit`.
 - **Stop reports what Proxmox did.** Stop waits for Proxmox to confirm the guest is down (up to 45 seconds). A guest that ignores a shutdown now returns an error asking you to wait or force-stop, instead of being marked stopped while it keeps running. Bulk and scheduled stops run side by side, so several slow guests don't add up.
@@ -28,9 +43,9 @@ ProxMate 1.1.0 is a security and reliability release. It follows a full review o
 - **Settings.** Numeric settings that aren't numbers fall back to their defaults instead of breaking. The Docker backend receives every setting documented in `.env`. code-server listens on `IDE_GUEST_PORT`.
 - **Updater.** Local `docker-compose.yml` changes now live in `docker-compose.override.yml`, and the updater refuses to run over local edits instead of discarding them.
 
-## Upgrading
+### Upgrading
 
-### Upgrading from 1.0.x and earlier
+#### Upgrading from 1.0.x and earlier
 
 Read DEPLOYMENT.md §14.4 before updating. In short:
 
@@ -40,7 +55,7 @@ Read DEPLOYMENT.md §14.4 before updating. In short:
 - **`TRUST_PROXY` ≥ 1 is required for the audit log's real-IP header** (`REAL_IP_HEADER`, default `cf-connecting-ip`); `x-forwarded-for` is resolved through the trusted hop count. Behind Caddy, nginx or a Cloudflare Tunnel keep `TRUST_PROXY=1`.
 - **The backend refuses to start in production without `ENCRYPTION_KEY`.** Docker installs already require it; bare `node`/`npm start` runs no longer generate a key in memory.
 
-### What changes for admins and users after upgrading from 1.0.x
+#### What changes for admins and users after upgrading from 1.0.x
 
 **Guest ownership tags and the Unconfirmed machines card**
 
@@ -81,7 +96,7 @@ Read DEPLOYMENT.md §14.4 before updating. In short:
 - `DELETE /api/users/:id` answers **409** and keeps the account when any of its machines can't be deleted together with its guest: an unmatched machine, a guest whose location can't be confirmed, or a guest that fails to delete. The response lists those machines (`vms`); adopt or remove them, then try again.
 - The notification webhook URL is no longer shown in admin settings, only a masked form of it. Leave the field blank to keep the stored URL.
 
-### Also
+#### Also
 
 - SSO links to an existing local account only when the IdP sends `email_verified: true` and the account's email was bound by an emailed invite (or is the setup-wizard admin). After upgrading, local accounts registered with a self-typed address, and every account when the IdP omits `email_verified`, no longer auto-link on first SSO login; those users keep signing in with their password. Accounts already linked are unaffected.
 
