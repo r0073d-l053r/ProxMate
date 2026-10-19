@@ -1,5 +1,5 @@
 /**
- * The admin quota dialog edits RAM in whole GB, but the stored quota is MB and need
+ * The quota dialogs (admin edit, user request) edit RAM in whole GB, but the stored quota is MB and need
  * not be a GB multiple (an approved quota request can grant e.g. 1536 MB).
  */
 
