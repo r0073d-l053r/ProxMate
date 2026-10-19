@@ -402,11 +402,26 @@ async function deleteVmRow(vmId: string): Promise<void> {
  * guest exists and is ours (`guestCreated`: our create/clone task finished), in
  * which case it stays in `error` for the owner to see and delete. When Proxmox
  * can't be asked, the row is kept — every later action re-checks the guest anyway.
+ *
+ * A clone or restore only gets the row's tag after its task finishes, so a task
+ * that outlived our wait leaves a guest carrying the source's tags (a template's
+ * or source machine's ProxMate tag, or none). `task` lets that be settled from the
+ * task itself: finished after all → the guest is ours and is tagged now; still
+ * running → the row is kept and the guest is tagged when the task completes.
+ * Without a verdict from the task, a guest that carries no OTHER machine's tag
+ * (`cloneSourceId` names the duplicate's source, whose tag a copy inherits) keeps
+ * the row in `error` rather than leaving a late clone unowned.
  */
-export async function settleFailedCreate(vm: VirtualMachine, err: unknown, guestCreated: boolean): Promise<void> {
+export async function settleFailedCreate(
+  vm: VirtualMachine,
+  err: unknown,
+  guestCreated: boolean,
+  opts: { task?: { node: string; upid: string }; cloneSourceId?: string } = {},
+): Promise<void> {
   let keep = guestCreated;
+  if (!keep && opts.task) keep = await settleCreateTask(vm, opts.task);
   if (!keep) {
-    keep = await guestIdentity(vm).then((id) => id === 'ours', () => true);
+    keep = await guestLeftByCreate(vm, opts.cloneSourceId).catch(() => true);
   }
   if (keep) {
     await markVmError(vm.id, vm.name, err).catch(() => undefined);
@@ -418,6 +433,52 @@ export async function settleFailedCreate(vm: VirtualMachine, err: unknown, guest
     title: vm.name,
     message: `Provisioning of "${vm.name}" failed: ${pve.pveMessage(err)}`,
   }).catch(() => undefined);
+}
+
+/** How long a create/clone task that outlived its wait is still followed. */
+const LATE_TASK_FOLLOW_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Whether the create task behind a failed create produced (or is still producing)
+ * this row's guest. A task that finished OK did; it is tagged now. A task still
+ * running is followed in the background and its guest tagged once it completes.
+ */
+async function settleCreateTask(vm: VirtualMachine, task: { node: string; upid: string }): Promise<boolean> {
+  try {
+    const client = await pve.getClient();
+    const st = await pve.getTaskStatus(task.node, task.upid, client);
+    if (st.status === 'stopped') {
+      if (st.exitstatus && st.exitstatus !== 'OK' && !st.exitstatus.startsWith('WARNINGS')) return false;
+      await markClonedGuest(vm, client);
+      return true;
+    }
+    void pve
+      .waitForTask(task.node, task.upid, client, LATE_TASK_FOLLOW_MS)
+      .then(() => markClonedGuest(vm, client))
+      .catch((e) => console.warn(`[vm] late create task for "${vm.name}" did not complete: ${pve.pveMessage(e)}`));
+    return true;
+  } catch {
+    return false; // no verdict from the task — fall back to what is at the VMID
+  }
+}
+
+/**
+ * Whether the guest at a failed create's VMID may be what that create left behind:
+ * it exists and carries no ProxMate tag of another machine (this row's, a
+ * template's, the clone source's, or none at all).
+ */
+async function guestLeftByCreate(vm: VirtualMachine, cloneSourceId?: string): Promise<boolean> {
+  let cfg: Record<string, string>;
+  try {
+    cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, await pve.getClient(), kindOf(vm));
+  } catch (err) {
+    if (/does not exist|not found/i.test(pve.pveMessage(err))) return false;
+    throw err;
+  }
+  const allowed = new Set([guestMarker(vm.id), ...(cloneSourceId ? [guestMarker(cloneSourceId)] : [])]);
+  return !parsePveTags(cfg['tags']).some(
+    (t) => t.startsWith(MARKER_PREFIX) && !t.startsWith(`${MARKER_PREFIX}template-`) && !allowed.has(t),
+  );
 }
 
 /** Thrown when a VM request would push a user over one of their quota caps. */
@@ -1115,6 +1176,7 @@ async function deployFromTemplateLocked(
   release(); // usage now includes this row
 
   let created = false;
+  let cloneTask: { node: string; upid: string } | undefined;
   try {
     // Full-vs-linked and the target pool are decided together — see planTemplateClone.
     const plan = await planTemplateClone(node, template, client);
@@ -1129,6 +1191,7 @@ async function deployFromTemplateLocked(
       },
       client,
     );
+    cloneTask = { node, upid };
     await pve.waitForTask(node, upid, client, 600_000);
     created = true;
     await markClonedGuest(vm, client);
@@ -1156,7 +1219,7 @@ async function deployFromTemplateLocked(
       },
     });
   } catch (err) {
-    await settleFailedCreate(vm, err, created);
+    await settleFailedCreate(vm, err, created, { task: cloneTask });
     throw err;
   }
 }
@@ -1238,6 +1301,7 @@ async function duplicateVmLocked(
   release(); // usage now includes this row
 
   let created = false;
+  let cloneTask: { node: string; upid: string } | undefined;
   try {
     // Full clone (not linked): storage-agnostic and self-contained, so the copy
     // survives the original being deleted — and, being full, it can be placed on
@@ -1250,6 +1314,7 @@ async function duplicateVmLocked(
       { node, templateVmid: current.proxmoxVmId, newVmid: vmid, name: newName, full: true, storage },
       client,
     );
+    cloneTask = { node, upid };
     await pve.waitForTask(node, upid, client, 600_000);
     created = true;
     await markClonedGuest(vm, client); // the copy inherited the source's marker
@@ -1267,7 +1332,7 @@ async function duplicateVmLocked(
     await pve.waitForTask(node, startUpid, client);
     return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
   } catch (err) {
-    await settleFailedCreate(vm, err, created);
+    await settleFailedCreate(vm, err, created, { task: cloneTask, cloneSourceId: current.id });
     throw err;
   }
 }

@@ -258,10 +258,12 @@ async function restoreFromUploadLocked(
     release(); // usage now includes this row
 
     let created = false;
+    let restoreTask: { node: string; upid: string } | undefined;
     try {
       // Remap all volumes onto our default pool: cross-cluster archives name
       // storages this cluster may not have. unique=1 → fresh MACs.
       const upid = await pve.restoreNewGuest({ node, vmid, volid, storage: defaultStorage }, client, kind);
+      restoreTask = { node, upid };
       await pve.waitForTask(node, upid, client, 30 * 60 * 1000);
       created = true;
       // The archive's config carries the OLD guest's tags; tie the guest to this row.
@@ -289,7 +291,7 @@ async function restoreFromUploadLocked(
       await cleanupArchive(filename, node, storage, volid);
       return done;
     } catch (err) {
-      await settleFailedCreate(vm, err, created);
+      await settleFailedCreate(vm, err, created, { task: restoreTask });
       throw err;
     }
   } catch (err) {

@@ -1448,6 +1448,19 @@ export async function cloneVm(
   return res.data.data;
 }
 
+/** A task's current status (`running` / `stopped`, with `exitstatus` once stopped). */
+export async function getTaskStatus(
+  node: string,
+  upid: string,
+  client?: AxiosInstance,
+): Promise<{ status: string; exitstatus?: string }> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: { status: string; exitstatus?: string } }>(
+    `/nodes/${node}/tasks/${encodeURIComponent(upid)}/status`,
+  );
+  return res.data.data;
+}
+
 /** Poll a Proxmox task (UPID) until it finishes; throws if it failed. */
 export async function waitForTask(
   node: string,

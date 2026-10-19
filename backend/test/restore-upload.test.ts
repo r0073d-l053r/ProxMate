@@ -250,7 +250,7 @@ describe('restoreFromUpload', () => {
     await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(
       'restore failed on node',
     );
-    expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, err, false);
+    expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, err, false, { task: { node: 'pve-0', upid: 'UPID:1' } });
   });
 
   it('settles a failure after the restore landed as "guest created", and tags the guest first', async () => {
@@ -258,7 +258,7 @@ describe('restoreFromUpload', () => {
     vi.mocked(pve.startVm).mockRejectedValue(err);
     await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow('start failed');
     expect(markClonedGuest).toHaveBeenCalledWith({ id: 'vm1' }, expect.anything());
-    expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, err, true);
+    expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, err, true, { task: { node: 'pve-0', upid: 'UPID:1' } });
   });
 
   it('never restores an archive carrying a host device, and drops it (BUG-027)', async () => {
