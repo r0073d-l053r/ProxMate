@@ -1863,8 +1863,12 @@ export async function enterRescue(vm: VirtualMachine): Promise<VirtualMachine> {
   const iso = await getConfig('rescue_iso');
   if (!iso) throw new Error('No rescue ISO is configured — an admin can set one under Admin → Settings');
 
+  // Rescue ends in a boot, so the owner's window is checked before anything is
+  // stopped or rewritten — a refusal must leave the guest exactly as it was.
+  await assertOwnerAccessActive(vm);
   const client = await pve.getClient();
   const current = await syncVmNode(vm);
+  await assertGuestIsOurs(current, { client });
   const cfg = await pve.getVmConfig(current.proxmoxNode, current.proxmoxVmId, client);
   const snap: pve.RescueSnapshot = { boot: cfg['boot'] ?? null, ide3: cfg['ide3'] ?? null };
 
@@ -1879,7 +1883,6 @@ export async function enterRescue(vm: VirtualMachine): Promise<VirtualMachine> {
     where: { id: current.id },
     data: { rescueBoot: JSON.stringify(snap), status: 'running' },
   });
-  await assertOwnerAccessActive(vm); // booting the guest — gate on the owner's window
   await pve.startVm(current.proxmoxNode, current.proxmoxVmId, client);
   return updated;
 }
@@ -1889,8 +1892,11 @@ export async function exitRescue(vm: VirtualMachine): Promise<VirtualMachine> {
   if (!vm.rescueBoot) throw new Error('Not in rescue mode');
   const snap = JSON.parse(vm.rescueBoot) as pve.RescueSnapshot;
 
+  // Same ordering as enterRescue: refuse before the guest is stopped or rewritten.
+  await assertOwnerAccessActive(vm);
   const client = await pve.getClient();
   const current = await syncVmNode(vm);
+  await assertGuestIsOurs(current, { client });
   const status = await pve.getVmStatus(current.proxmoxNode, current.proxmoxVmId, client).catch(() => null);
   if (status?.status === 'running') {
     const upid = await pve.stopVm(current.proxmoxNode, current.proxmoxVmId, client);
@@ -1902,7 +1908,6 @@ export async function exitRescue(vm: VirtualMachine): Promise<VirtualMachine> {
     where: { id: current.id },
     data: { rescueBoot: null, status: 'running' },
   });
-  await assertOwnerAccessActive(vm); // booting the guest — gate on the owner's window
   await pve.startVm(current.proxmoxNode, current.proxmoxVmId, client);
   return updated;
 }
