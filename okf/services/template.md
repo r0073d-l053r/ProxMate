@@ -65,7 +65,7 @@ Templates are Proxmox template VMs registered as [Template](/database/template.m
 - The bake uses DHCP on the admin's configured bridge deliberately; baking elsewhere would misstate provenance and could cross an isolation boundary.[^tpl]
 - `cloud-init clean` is non-optional (else the bake boot's user-data/instance state leaks into every clone); journal vacuum was added after a deployed guest was seen holding the bake VM's DHCP address (2026-08-11). `machine-id` is truncated, not deleted, because a missing file breaks some images' early boot.[^tpl]
 - `register` only updates `notes` / `guestAgent` when supplied, so re-registering never wipes admin credentials notes or a builder measurement.[^tpl]
-- Comments disagree on clone type: `unregister` says ProxMate deploys are linked clones (so deletion fails while clones exist), while `refreshTemplate` says cloud-init templates are FULL-cloned (so the old template can be deleted). Treat cloud-image templates as full-cloned and other templates as possibly linked.[^tpl]
+- Comments disagree on clone type: `unregister` says ProxMate deploys are linked clones (so deletion fails while clones exist), while `refreshTemplate` says cloud-init templates are FULL-cloned (so the old template can be deleted). The deploy path ([vm service](/services/vm.md) `planTemplateClone`) settles it: `cloudInit` templates are always full-cloned; other templates are linked-cloned unless the configured disk pool differs from where the template lives.[^tpl]
 - Fedora and Oracle curated URLs pin specific builds and may need bumping.[^tpl]
 - Bundles enumerate all feature combinations only up to 8 offered features (2^n); beyond that singles only.[^tpl]
 

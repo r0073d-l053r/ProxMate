@@ -49,7 +49,7 @@ SystemConfig `matestate_last_run` (ISO timestamp) and `template_refresh_enabled`
 - The per-VM backup lock is separate from the power lock so a slow vzdump never blocks start/stop.[^sch]
 - An invalid `MATESTATE_CRON` logs a warning and falls back to the default; other overrides silently fall back if `cron.validate` fails.[^sch]
 - node-cron uses server local time; cron matching inside services (`cronMatches`) also uses local time.[^sch]
-- Errors inside each tick are logged and swallowed; the 15-minute balancer and access sweep log only when they acted.[^sch]
+- Errors inside each periodic tick are logged and swallowed, and ticks log only when they acted. The exception is the weekly backup job: its cron callback is `void runWeeklyBackups('scheduled')` with only a `finally`, so an error outside the per-VM loop (per-VM failures are caught in [matestate](/services/matestate.md)) is an unhandled rejection. The boot-time catch-up does have a `.catch`.[^sch]
 - Access sweep is hourly because sign-in refusal is already instant; the sweep exists to stop a lapsed tenant's guests burning resources. `:20` avoids the 02:30 app-db snapshot and Sunday 03:00 backups.[^sch]
 
 # Relationships

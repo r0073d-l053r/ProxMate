@@ -69,7 +69,7 @@ No router-level middleware; each route picks its own:[^routes]
 | GET | `/api/auth/sso/login` | public | Sets `proxmate_sso` cookie (state/nonce/PKCE, 10 min) and 302s to the IdP. |
 | GET | `/api/auth/sso/callback` | public (SSO cookie) | Completes OIDC, sets session cookies, redirects to `FRONTEND_URL/`; errors redirect to `/login?sso_error=…`. |
 | GET | `/api/auth/invite/:token` | public + publicTokenLimiter | Validate an invite; returns quotas, expiry, label, `require2fa`; 404 if used/expired. |
-| POST | `/api/auth/forgot-password` | public + authLimiter | Email a reset link if SMTP is configured, else file an admin request; generic response either way. |
+| POST | `/api/auth/forgot-password` | public + authLimiter | `{ email }`. Email a reset link if SMTP is configured, else file an admin request; returns `{ method: 'email' or 'admin', message }`, where `method` reflects SMTP config only and the message does not reveal whether the account exists. |
 | POST | `/api/auth/reset-password` | public + authLimiter | `{ token, password (min 8) }`. Audited `auth.password_reset`. |
 
 # Gotchas
@@ -78,7 +78,7 @@ No router-level middleware; each route picks its own:[^routes]
 - Login hardening: locked accounts get the same generic 401 after a dummy bcrypt; failed logins call `registerFailedLogin`; correct passwords clear the streak; bcrypt always runs so timing does not reveal account existence.[^routes]
 - Compute-access gate (`loginRefusal`, admins exempt) runs on every session-minting path: password login (before 2FA/enrollment branches), 2FA verify, passkey login and SSO callback.[^routes]
 - A `require2fa` user whose only factor is a passkey (`twoFactorEnabled=false`, no `ssoSubject`) cannot log in with a password alone (401 `passkey_required`).[^routes]
-- Register claims the invite atomically (`updateMany where usedById: null`) and deletes the just-created user if the claim loses a race. Access window starts at redemption. Email is lowercased.[^routes]
+- Register claims the invite atomically (`updateMany where usedById: null`) and deletes the just-created user if the claim loses a race. Access window starts at redemption. Email is lowercased and trimmed.[^routes]
 - 2FA challenge JWT lives 5 min; enrollment token 15 min.[^authsvc]
 - Kiosk passkey exit never mints a session, so another person's passkey cannot swap the kiosk session.[^routes]
 

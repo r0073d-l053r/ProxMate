@@ -26,8 +26,8 @@ The balancer reads node memory load and recommends or applies live migrations to
 | Key | Value format | Default / when unset | Written by | Read by | Description |
 |---|---|---|---|---|---|
 | `balancer_mode` | `off` \| `recommend` \| `auto` | `off` (any other value reads as `off`) | `saveBalancerSettings` ← `PUT /api/admin/balancer` | `getBalancerSettings`; `runAutoBalance` (scheduler) | `auto` lets the scheduled tick apply migrations. `recommend` only computes plans. |
-| `balancer_threshold` | integer percent string | `15`, clamped to 5–50 | same | `getBalancerSettings` | Imbalance threshold (`thresholdPct`). |
-| `balancer_max_moves` | integer string | `5`, clamped to 1–20 | same | `getBalancerSettings` | Maximum migrations per pass (`maxMoves`). |
+| `balancer_threshold` | integer percent string | `DEFAULTS` says `15`, but a missing or empty row reads as `5`: `clampInt` turns `Number(null)` (0) into the 5 floor. Stored values are clamped to 5–50 | same | `getBalancerSettings` | Imbalance threshold (`thresholdPct`). |
+| `balancer_max_moves` | integer string | `DEFAULTS` says `5`, but a missing or empty row reads as `1` (same `clampInt` path). Stored values are clamped to 1–20 | same | `getBalancerSettings` | Maximum migrations per pass (`maxMoves`). |
 | `balancer_exclude` | CSV of positive integer VMIDs | `''`, meaning no exclusions; parsing de-duplicates and drops invalid entries | same (`exclude.join(',')`) | `getBalancerSettings` (`parseVmidCsv`) | Proxmox VMIDs the balancer never moves. |
 
 # Validation
@@ -36,6 +36,7 @@ The balancer reads node memory load and recommends or applies live migrations to
 
 # Gotchas
 
+- On a fresh install (no `PUT /balancer` yet) `GET /balancer` reports threshold 5 and max moves 1, not the `DEFAULTS` values. The first save writes all four keys explicitly.[^balancer]
 - The scheduled tick runs on `BALANCER_CRON`, default `*/15 * * * *`, but it only acts in `auto` mode. An overlapping tick is skipped while a previous pass is still running.[^scheduler] See [backend environment](/env/backend-environment.md).
 
 [^balancer]: backend/src/services/cluster-balancer.service.ts (`DEFAULTS`, `clampInt`, `parseVmidCsv`, `getBalancerSettings`, `saveBalancerSettings`)

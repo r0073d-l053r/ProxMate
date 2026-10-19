@@ -38,8 +38,8 @@ No JWT is ever put in the URL. No API-token support (cookie only).
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET (WS upgrade) | `/api/vms/:id/console?vncticket=…&port=…` | session cookie + Origin + `console` cap | Graphical console; relays to `connectVncTarget` (Proxmox vncproxy). |
-| GET (WS upgrade) | `/api/vms/:id/serial?vncticket=…&port=…` | session cookie + Origin + `console` cap | Text console; relays to `connectSerialTarget` (Proxmox termproxy). |
+| GET (WS upgrade) | `/api/vms/:id/console?vncticket=…&port=…` | session cookie + Origin + `console` cap | Graphical console; relays via `connectVncTarget` to the node's `vncwebsocket` for a `vncproxy` ticket. |
+| GET (WS upgrade) | `/api/vms/:id/serial?vncticket=…&port=…` | session cookie + Origin + `console` cap | Text console; relays via `connectSerialTarget` to the node's `vncwebsocket` for a `termproxy` ticket. |
 
 The ticket/port are minted first by `POST /api/vms/:id/console` or `POST /api/vms/:id/serial` in the [VM router](/api/vm.md).[^vm]
 

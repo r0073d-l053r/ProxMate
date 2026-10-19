@@ -30,8 +30,8 @@ Browser-facing ProxMate IDE management (code-server + OpenCode inside a guest). 
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/api/ide/config` | user | What the caller may do: availability, BYO allowed, shared models. No secrets. |
-| POST | `/api/ide/:id/gateway-token` | user (owner/admin re-checked in service) | Mint/rotate the per-VM gateway token; returns `{ token, baseUrl, models }` once. 403 if IDE not available for the VM. Audited `ide.gateway_token_mint`. |
+| GET | `/api/ide/config` | user | `getIdeCapability({ role })`: `{ available, allowByoKeys, models (shared:* and visible local:*), sharedModels }`. No gateway URL or secrets. |
+| POST | `/api/ide/:id/gateway-token` | user + `ide` cap + IDE available (checked in `issueGatewayToken`) | Mint/rotate the per-VM gateway token; returns `{ token, baseUrl, models }` once. 403 if IDE not available for the VM. Audited `ide.gateway_token_mint`. |
 | POST | `/api/ide/:id/provision` | user + `ide` cap + IDE available | Start installing code-server + OpenCode via the guest agent; returns `{ state }`. `IdeProvisionError` gives 400 with optional `code`. Audited `ide.provision`. |
 | GET | `/api/ide/:id/status` | user + viewable VM | `{ state }` from `refreshIdeState` (install progress poll). |
 | POST | `/api/ide/:id/relocate` | user + `ide` cap + IDE available | Background stop, offline-migrate to an AVX-capable node, start. 202 `{ started, target }`; server picks the node. `IdeProvisionError` gives 409. Audited `vm.ide_relocate`. |

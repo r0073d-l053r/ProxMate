@@ -25,7 +25,7 @@ A single fan-out of admin events to two optional channels: a webhook (Discord, S
 | `notify_webhook_url` | URL or `''` (zod `max(2000)`). **Encrypted when non-empty**: `setConfig(..., url.length > 0)`; an empty value is stored as a plain marker | `''`: webhook disabled | `saveNotifyConfig` ← `PUT /api/admin/settings/notifications` | `getNotifyConfig`, `postWebhook` | Outgoing webhook URL. It is treated as a secret because anyone holding it can post. |
 | `notify_email_enabled` | `"true"` / `"false"` | zod default false; a missing row reads as false | same | `getNotifyConfig` | Email channel on/off. |
 | `notify_email_to` | address or `''` (zod `max(200)`), trimmed | `''`: all admins | same | `getNotifyConfig` | Email recipient. |
-| `notify_events` | CSV of event ids, filtered to `NOTIFY_EVENTS` | **Unset (row missing): all events enabled.** An empty string means none | same | `getNotifyConfig` → `parseEvents` | Which events fire. |
+| `notify_events` | CSV of event ids, filtered to `NOTIFY_EVENTS` | **Unset (row missing): all events enabled.** An empty string means none, apart from the version rule in the next row | same | `getNotifyConfig` → `parseEvents` | Which events fire. |
 | `notify_events_version` | string; the current `EVENTS_VERSION` is `'3'` | Unset or different: the events in `EVENTS_ADDED_LATER` (`access.expired`, `deploy.agent_missing`) are force-enabled on top of the CSV | same (always written as the current version on save) | `parseEvents` | Marks that the CSV was saved by a UI that knew every current event, so an explicit opt-out of later-added events is respected. |
 
 # Validation

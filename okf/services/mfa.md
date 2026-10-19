@@ -32,7 +32,7 @@ Reads [User](/database/user.md) (`twoFactorEnabled`, `require2fa`, `ssoSubject`)
 
 # Relationships
 
-- Called by the [auth router](/api/auth.md) and the `mfa`/`enrollment` middleware.
+- `isMfaSetupRequired` is called by the [auth router](/api/auth.md) and the `mfa`/`enrollment` middleware; `hasMfaMethod` currently has no caller in `backend/src` (only tests).
 - Related: [twofactor](/services/twofactor.md), [passkey](/services/passkey.md), enrollment tokens in [auth service](/services/auth.md).
 
 [^mfa]: backend/src/services/mfa.service.ts

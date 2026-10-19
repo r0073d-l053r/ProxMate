@@ -22,7 +22,7 @@ sources:
 
 # Purpose
 
-Per-VM alerts managed under `/api/vms/:id/alerts`. Listing needs view access. Creating needs the `configure` capability. Deleting is scoped to the VM.[^vm-routes] See [vm router](/api/vm.md) and [notifications config](/config/notifications.md).
+Per-VM alerts managed under `/api/vms/:id/alerts`. Listing needs view access. Creating and deleting need the `configure` capability, and a delete is scoped to the VM.[^vm-routes] See [vm router](/api/vm.md) and [notifications config](/config/notifications.md).
 
 # Schema
 

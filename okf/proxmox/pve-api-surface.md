@@ -33,13 +33,22 @@ sources:
   - id: security
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/SECURITY.md
     title: SECURITY.md
+  - id: matestate
+    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/matestate.service.ts
+    title: backend/src/services/matestate.service.ts
+  - id: restoreupload
+    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/restore-upload.service.ts
+    title: backend/src/services/restore-upload.service.ts
+  - id: verifypools
+    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/_verify_pools.ts
+    title: backend/_verify_pools.ts
 ---
 
 # Purpose
 
 Every call ProxMate makes to Proxmox VE goes through an axios client built in
 `proxmox.service.ts` (the only exception is the console WebSocket, opened directly by
-`vnc-proxy.service.ts`). Most callers import the module as `pve` and pass an optional
+`vnc-proxy.service.ts`). Many callers import the module as `pve` and pass an optional
 `client` so one request can reuse a single client. The token never reaches the browser.[^security]
 
 Related: [privileges](/proxmox/privileges.md), [storage](/proxmox/storage.md),
@@ -70,7 +79,7 @@ Attempts: `PROXMOX_RETRIES` (default `2`), backoff `min(2000, 250 * 2^(attempt-1
 POST/PUT/DELETE are never retried, so a VM create cannot be double-submitted. A request can opt
 out with `_noRetry: true` (used by `guestAgentPing` and `getVmIps`). Every transient failure
 increments the Prometheus counter `proxmate_proxmox_api_errors_total{kind}` with `kind` in
-`timeout | network | http | other`; expected 4xx errors are not counted.[^pve][^metrics]
+`timeout | network | http | other` (`classifyError` never actually returns `other`); expected 4xx errors are not counted.[^pve][^metrics]
 
 # Credential redaction
 
@@ -101,11 +110,12 @@ Guest placement never uses it; it uses `pickBestNode` (see [guest lifecycle](/pr
 Mutating calls that Proxmox runs as a task return the UPID string (`res.data.data`).
 `waitForTask(node, upid, client?, timeoutMs = 180_000)` polls
 `GET /nodes/{node}/tasks/{upid}/status` every 1.5 s until `status === 'stopped'`. Success is
-`exitstatus` absent, `OK`, or starting with `WARNINGS` (non-fatal warnings, common for LXC
-creates and vzdump); anything else throws `Proxmox task failed: <exitstatus>`. Deadline expiry
-throws `Proxmox task timed out` (the Proxmox task keeps running). The UPID is URL-encoded in the
-path.[^pve] Caller timeouts: clones 600 000 ms, cloud-image download 900 000 ms, backup and
-restore 30 min, migration 1 800 000 ms by default.[^vm][^template]
+`exitstatus` absent, `OK`, or starting with `WARNINGS` (Proxmox's marker for a task that finished
+with non-fatal warnings; the code comment notes it is common for LXC creates and vzdump); anything else throws `Proxmox task failed: <exitstatus>`. Deadline expiry
+throws `Proxmox task timed out` (ProxMate stops polling; nothing cancels the Proxmox task). The UPID is URL-encoded in the
+path.[^pve] Caller timeouts: clones and the cloud-init template VM create 600 000 ms, cloud-image
+download 900 000 ms, migration 1 800 000 ms by default;[^vm][^template] vzdump backup and restore
+30 min.[^matestate][^restoreupload]
 
 # Schema
 
@@ -143,7 +153,8 @@ literal path segment); rows marked qemu use the `qemu` segment only. Paths are r
 | GET | `/nodes/{node}/storage/{storage}/content?content=backup` | `listBackups`, `getBackupNodes` | vzdump archives per node |
 | POST | `/nodes/{node}/storage/{storage}/download-url` | `downloadUrlToStorage` | Server-side download of a cloud image (`content=import`), optional checksum; returns UPID |
 | DELETE | `/nodes/{node}/storage/{storage}/content/{volid}` | `deleteStorageVolume`, `deleteBackup` | Delete a volume (volid URL-encoded) |
-| GET | `/nodes/{node}/network?type=any_bridge` | `getGuestNetworks` | Linux/OVS bridges (and VNets on PVE 8+) per online node |
+| GET | `/nodes/{node}/network?type=any_bridge` | `getGuestNetworks` | Linux/OVS bridges per online node (the code comment says PVE 8+ also lists applied VNets here); nodes queried in parallel, per-node failure tolerated |
+| GET | `/nodes/{node}/network` | `getGuestNetworks` | Unfiltered fallback when the `any_bridge` request fails; filtered to `bridge`/`OVSBridge`/`vnet` types in code |
 | GET | `/nodes/{node}/network/{bridge}` | `getBridgeGateway`, `getBridgeNetwork` | Bridge `gateway` and `cidr` |
 | POST | `/nodes/{node}/qemu` | `createVm`, `createCloudInitVm`, `restoreBackup` (qemu), `restoreNewGuest` (qemu) | Create VM, or restore with `archive=` |
 | POST | `/nodes/{node}/lxc` | `createLxc`, `restoreBackup` (lxc), `restoreNewGuest` (lxc) | Create container, or restore with `ostemplate=` + `restore=1` |
@@ -189,8 +200,11 @@ literal path segment); rows marked qemu use the `qemu` segment only. Paths are r
 | POST | `/nodes/{node}/{kind}/{vmid}/termproxy` | `requestTermProxy` (vnc-proxy.service) | One-time serial ticket + port + user |
 | WSS | `/nodes/{node}/{kind}/{vmid}/vncwebsocket?port=…&vncticket=…` | `connectConsoleTarget` (vnc-proxy.service) | Console byte stream, relayed to the browser |
 
-ProxMate never calls `/pools`, `/access/users`, `/access/acl` or any token-management endpoint;
-`/access/permissions` is its only `/access` call.[^pve][^vnc]
+The application code under `backend/src` never calls `/pools`, `/access/users`, `/access/acl` or any
+token-management endpoint; `/access/permissions` is its only `/access` call.[^pve][^vnc] The exception
+is the committed one-off proof-of-concept script `backend/_verify_pools.ts` (not part of the server),
+which creates and deletes `/pools`, `/access/acl` grants and `/access/users/{user}/token/{id}` tokens
+to test pool-scoped token isolation.[^verifypools]
 
 # Gotchas
 
@@ -215,4 +229,7 @@ ProxMate never calls `/pools`, `/access/users`, `/access/acl` or any token-manag
 [^balancer]: backend/src/services/cluster-balancer.service.ts
 [^alert]: backend/src/services/alert.service.ts
 [^metrics]: backend/src/lib/metrics.ts
+[^matestate]: backend/src/services/matestate.service.ts
+[^restoreupload]: backend/src/services/restore-upload.service.ts
+[^verifypools]: backend/_verify_pools.ts
 [^security]: SECURITY.md

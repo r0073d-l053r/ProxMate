@@ -27,7 +27,7 @@ Mounted at `/api/ide` **before** helmet, CORS, cookie-parser, the 1 MB JSON pars
 
 - **No router-level middleware**, so non-`/llm/` paths fall through to the session-authed [IDE router](/api/ide.md).[^routes]
 - Each handler chains `gatewayAuthLimiter` (IP-keyed, default 600 req / 60 s, env `IDE_GATEWAY_RATE_LIMIT_MAX` / `IDE_GATEWAY_RATE_LIMIT_WINDOW_MS`) then `requireGatewayToken`.[^ratelimit]
-- `requireGatewayToken` verifies `Authorization: Bearer <gateway token>` scoped to the `:id` VM (`verifyGatewayToken(bearer, vmId)`); failure is 401 in OpenAI error shape.[^routes]
+- `requireGatewayToken` verifies `Authorization: Bearer <gateway token>` scoped to the `:id` VM (`verifyGatewayToken(bearer, vmId)`); failure is 401 in OpenAI error shape.[^routes] The service also rejects revoked/expired tokens, a lapsed owner access window, a VM without the `ide` capability, and an IDE tier that excludes the user's role.
 - Then an in-memory per-VM fixed window: 120 requests / 60 s, 429 `rate_limit_error` beyond.[^routes]
 - No cookies, therefore no CSRF.
 
@@ -35,8 +35,8 @@ Mounted at `/api/ide` **before** helmet, CORS, cookie-parser, the 1 MB JSON pars
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/api/ide/:id/llm/v1/models` | gateway token (VM-scoped) | `{ object: 'list', data }` of models the token's user may use (`shared:*`, plus `byo:*` when BYO keys are on). Never leaks upstream URLs, keys or real model names. |
-| POST | `/api/ide/:id/llm/v1/chat/completions` | gateway token (VM-scoped) | Resolves `body.model` with `resolveModelRoute` (403 `Model not available` if not allowed), replaces `model` with the upstream name, POSTs to `<route.url>/chat/completions` with `Bearer route.apiKey`. Streams SSE through when `stream: true`. |
+| GET | `/api/ide/:id/llm/v1/models` | gateway token (VM-scoped) | `{ object: 'list', data }` of models the token's user may use (admin `shared:*` and visibility-filtered `local:*` models, plus `byo:*` when BYO keys are on; empty when the IDE is unavailable to the user's role). Never leaks upstream URLs, keys or real model names. |
+| POST | `/api/ide/:id/llm/v1/chat/completions` | gateway token (VM-scoped) | Resolves `body.model` with `resolveModelRoute` (403 `Model not available` if not allowed), replaces `model` with the upstream name, POSTs to `<route.url>/chat/completions` with `Bearer route.apiKey` (header omitted when the route has no key). Streams SSE through when `stream: true`. |
 
 # Gotchas
 

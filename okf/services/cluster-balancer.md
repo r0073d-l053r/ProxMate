@@ -25,7 +25,7 @@ Reads each node's memory load and live-migrates running ProxMate-managed guests 
 | `planBalance` | `(input: { nodes, vms, thresholdPct, maxMoves }) => BalancePlan` | Pure greedy planner: repeatedly moves the best candidate from hottest to coldest node, only if it strictly lowers the peak, until spread <= threshold, no improving move, or `maxMoves`. Needs >= 2 online nodes. |
 | `getBalancerSettings` | `() => { mode, thresholdPct, maxMoves, exclude }` | Defaults `off`, 15, 5, `[]`; threshold clamped 5..50, maxMoves 1..20. |
 | `saveBalancerSettings` | `(s)` | Persists and returns re-read settings. |
-| `computeClusterPlan` | `(settings?, client?)` | Gathers `getNodesHealth`, `getNodeArchMap`, `/cluster/resources?type=vm`, all DB VMs, and per-VM `migratableTargets`; calls `planBalance`. |
+| `computeClusterPlan` | `(settings?, client?)` | Gathers `getNodesHealth`, `getNodeArchMap`, `/cluster/resources?type=vm`, all DB VMs, and `migratableTargets` for each running, non-excluded VM; calls `planBalance`. |
 | `runMigrations` | `(moves: { vmId, toNode }[], actor?)` | Sequential; each via `vm.service.migrateVmToNode` (re-validates); audits `balancer.migrate` / `balancer.migrate_failed` with Proxmox's real error. |
 | `runAutoBalance` | `() => { applied, reason }` | Scheduler entry; no-op unless mode `auto`; audits `balancer.auto_run`. |
 | `planDrain` | `(input: DrainInput) => DrainPlan` | Pure: bin-packs the drained node's guests largest-first onto best-fit nodes (fits first, then most free memory); explicit `targetNode` forces all there. |

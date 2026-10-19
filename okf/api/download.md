@@ -37,7 +37,7 @@ Serves backup archives from emailed download links. Links are requested via `POS
 - The token must match `/^[a-f0-9]{64}$/` before any DB lookup; otherwise 404.[^routes]
 - Any invalid, expired or spent token returns a generic 404 so the endpoint is not a guessing oracle; non-`DownloadError` failures return 500.[^routes]
 - Consuming the token happens before streaming, so a failed/aborted transfer still spends it (inferred from call order).
-- `pruneDownloadTokens()` runs opportunistically after each request, fire-and-forget.[^routes]
+- `pruneDownloadTokens()` runs opportunistically after each successful token consumption, fire-and-forget.[^routes]
 - On client abort the file read stream is destroyed so multi-GB vzdumps are not read into a closed socket.[^routes]
 - The filename header uses `path.basename(filename)`.
 

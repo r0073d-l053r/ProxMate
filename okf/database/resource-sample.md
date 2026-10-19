@@ -41,7 +41,7 @@ Usage history ("who consumed what last week"). It complements the live-only admi
 
 # Invariants
 
-- Every 5 minutes (`*/5 * * * *`) the scheduler samples every VM that Proxmox `/cluster/resources` reports `running` (qemu and lxc), using `createMany`. It then prunes and evaluates [AlertRule](/database/alert-rule.md)s in the same tick.[^sched] [^svc]
+- Every 5 minutes (`*/5 * * * *`) the scheduler samples every ProxMate-managed VM that Proxmox `/cluster/resources` reports `running` (qemu and lxc), using `createMany`. It then prunes and evaluates [AlertRule](/database/alert-rule.md)s in the same tick.[^sched] [^svc]
 - Retention is `RESOURCE_HISTORY_DAYS` (default 14, minimum 1). Rows with older `createdAt` are deleted every tick.[^svc]
 - `getUsageByUser(days)` clamps the window to 1..90 days and returns per-user average CPU %, average memory and peak memory, sorted by average CPU descending.[^svc]
 

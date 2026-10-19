@@ -26,7 +26,7 @@ Tenant side of the GPU/PCI passthrough workflow. Admins approve/deny under `/api
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/passthrough-requests` | user + MFA-enrolled | Body `{ vmId, reason? }`. Caller must be able to operate the VM (`getOwnedVm`: owner/admin/co-owner) else 404. Creates the request; 201 `{ success: true }`. Audited `passthrough.request`. |
+| POST | `/api/passthrough-requests` | user + MFA-enrolled | Body `{ vmId, reason? }`. Caller must own the VM or be an admin (`getOwnedVm`; shares do not qualify) else 404. Creates the request; 201 `{ success: true }`. Audited `passthrough.request`. |
 | GET | `/api/passthrough-requests/mine` | user + MFA-enrolled | Caller's requests: `id, vmId, vmName, reason, status, mapping, createdAt, resolvedAt`. |
 
 # Gotchas
@@ -37,7 +37,7 @@ Tenant side of the GPU/PCI passthrough workflow. Admins approve/deny under `/api
 # Relationships
 
 - Persists [PassthroughRequest](/database/passthrough-request.md) linked to [VirtualMachine](/database/virtual-machine.md) and [User](/database/user.md) via the [passthrough-request service](/services/passthrough-request.md).
-- VM authorization via the [vm service](/services/vm.md); audit via the [audit service](/services/audit.md).
+- VM authorization via the [vm service](/services/vm.md) (`getOwnedVm`; the route comment's "co-owner" is not what the function checks); audit via the [audit service](/services/audit.md).
 - Approval and attach logic: [admin router](/api/admin.md).
 
 [^routes]: backend/src/routes/passthrough-request.routes.ts

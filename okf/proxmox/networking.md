@@ -41,6 +41,7 @@ that network once, as the **default network**, stored in the `default_bridge` ke
 |------|--------------|-------------|
 | 1 | `GET /nodes` | Online nodes. Offline nodes are not asked. |
 | 2 | `GET /nodes/{node}/network?type=any_bridge`, once per online node | `bridge` (Linux) and `OVSBridge` interfaces, plus `vnet` entries on Proxmox VE 8+ |
+| 2b | `GET /nodes/{node}/network` (unfiltered), only if 2 is rejected | The same bridge types, filtered client-side, so a release without `any_bridge` keeps its bridges |
 | 3 | `GET /cluster/sdn/vnets` | Every SDN VNet, with its `zone` and `alias` |
 | 4 | `GET /cluster/sdn/zones` | Each zone's optional `nodes` restriction, which becomes the VNet's node set |
 

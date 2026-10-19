@@ -26,7 +26,7 @@ Exposes the cluster data the VM create wizard and settings pages need. All GET; 
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/api/proxmox/resources` | user + MFA-enrolled | Storages, bridges and ISO-capable storages (`getProxmoxResources` from the setup service). |
+| GET | `/api/proxmox/resources` | user + MFA-enrolled | `getProxmoxResources` from the setup service: `{ storages (image-capable), bridges (guest networks from `getGuestNetworks`: Linux/OVS bridges and SDN VNets with their nodes), nodeCount, isoStorages, backupStorages }`. |
 | GET | `/api/proxmox/nodes` | user + MFA-enrolled | Nodes projected to `node, status, maxcpu, maxmem, cpu, mem`. |
 | GET | `/api/proxmox/isos` | user + MFA-enrolled | Installable ISOs (`getIsos`). Listed in the OpenAPI doc. |
 | GET | `/api/proxmox/storage` | user + MFA-enrolled | Storages projected to `name, type, content`. |

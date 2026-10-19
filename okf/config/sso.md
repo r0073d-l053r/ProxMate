@@ -30,9 +30,9 @@ These keys configure OIDC login through `openid-client`. `getSsoConfig()` return
 | `sso_client_id` | string min 1, trimmed | Unset: unconfigured | same | `getSsoConfig`, discovery | OIDC client id. |
 | `sso_client_secret` | string. **Secret, stored encrypted** (`sensitive=true`) | Unset: discovery throws `SSO client secret is not set.` | same, but only when `clientSecret` is non-blank (blank keeps the existing value) | `getOidcConfig` only. Admin settings expose just `sso.hasSecret` | OIDC client secret. |
 | `sso_scopes` | space-separated scopes | `openid profile email` (written as the default when blank, and used as the fallback when the row is empty) | same | `getSsoConfig` | Requested scopes. |
-| `sso_groups_claim` | claim name | `groups` | same | `getSsoConfig` | ID-token claim that group membership is read from. |
-| `sso_admin_group` | group name or `''` | `''`: no group-to-admin mapping | same | `getSsoConfig`; admin-role check (`!!cfg.adminGroup && claims.groups.includes(cfg.adminGroup)`) | Membership in this group maps to the admin role. |
-| `sso_allow_signup` | `"true"` / `"false"` | `false` (`data.allowSignup ?? false`) | same | `getSsoConfig`; `completeLogin` refuses unknown users when it is false | JIT-provision brand-new users. Off means invite/link-only. |
+| `sso_groups_claim` | claim name | `groups` | same | `getSsoConfig`, `completeLogin` (array or single string accepted) | ID-token claim that group membership is read from. |
+| `sso_admin_group` | group name or `''` | `''`: no group-to-admin mapping | same | `getSsoConfig`; admin-role check `isAdminByGroup` (`!!cfg.adminGroup && (claims.groups ?? []).includes(cfg.adminGroup)`) | Membership in this group promotes the user to the admin role; it never demotes. |
+| `sso_allow_signup` | `"true"` / `"false"` | `false` (`data.allowSignup ?? false`) | same | `getSsoConfig`; `upsertSsoUser` (called from `completeLogin`) refuses unknown users when it is false | JIT-provision brand-new users. Off means invite/link-only. |
 | `sso_button_label` | string | `Sign in with SSO` | same | `getSsoConfig`, `getPublicSsoInfo` (public login page) | Text on the login button. |
 
 # Validation
@@ -42,7 +42,7 @@ These keys configure OIDC login through `openid-client`. `getSsoConfig()` return
 # Gotchas
 
 - Every save calls `resetOidcCache()`. The discovery cache is keyed on issuer plus client id. `POST /api/admin/settings/sso/test` runs `verifyDiscovery()` and fails if the issuer, secret or network is wrong.[^sso]
-- The callback URL does **not** come from SystemConfig. It is `${BACKEND_PUBLIC_URL || http://localhost:${PORT}}/api/auth/sso/callback`, and that URL must be registered in the IdP. `GET /api/admin/settings` returns it as `sso.callbackUrl`.[^sso] See [backend environment](/env/backend-environment.md).
+- The callback URL does **not** come from SystemConfig. It is `${BACKEND_PUBLIC_URL || http://localhost:${PORT || 4000}}/api/auth/sso/callback`, and that URL must be registered in the IdP. `GET /api/admin/settings` returns it as `sso.callbackUrl`.[^sso] See [backend environment](/env/backend-environment.md).
 - `GET /api/admin/settings` never returns the client secret.[^admin-routes]
 
 [^sso]: backend/src/services/sso.service.ts (`getSsoConfig`, `saveSsoConfig`, `getOidcConfig`, `callbackUrl`, `DEFAULTS`)

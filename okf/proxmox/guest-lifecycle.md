@@ -130,7 +130,8 @@ before `startVm`.[^vm][^pve]
    to 600 s.
 3. `configureClonedVm`: `setVmResources`; grow primary disk if larger than the template's; for
    cloud-init templates resolve a vendor snippet (offered features ∩ selection, plus admin base when
-   snippet writing is configured, plus `guest-agent` when a password was requested), then
+   snippet writing is configured, plus `guest-agent` when a password was requested, dropped again
+   if no snippet can be produced for it), then
    `setCloudInitConfig` (`ciuser` default `debian`, `sshkeys` URL-encoded, `ipconfig0=ip=dhcp`,
    `cicustom=vendor=<snippet>`) and force `vga=std`; then `applyDefaultBridge`; then if isolating
    `ensureNicFirewall` + `configureVmIsolation`.
@@ -157,8 +158,8 @@ See [cloud-init config](/config/cloud-init.md).
 
 - Start/shutdown/stop/reboot: `POST /nodes/{node}/{kind}/{vmid}/status/<action>`. ProxMate `stopVm`
   with `force=false` calls `shutdown`; `force=true` calls `stop`. Pause/resume are QEMU-only
-  (`suspend`/`resume`). Every power-on path calls `assertOwnerAccessActive` first (the owner's compute
-  access window, not the caller's). All power actions run `syncVmNode` first, which re-reads
+  (`suspend`/`resume`). Every power-on path (start, reboot, resume, rescue enter/exit) calls
+  `assertOwnerAccessActive` before powering on (the owner's compute access window, not the caller's). All power actions run `syncVmNode` first, which re-reads
   `/cluster/resources` and updates `proxmoxNode` if the guest moved.[^vm]
 - Rescue (QEMU only, needs SystemConfig `rescue_iso`): stores `{boot, ide3}` in
   `VirtualMachine.rescueBoot`, stops, sets `ide3=<iso>,media=cdrom` and `boot=order=ide3`, starts;
@@ -195,7 +196,7 @@ Progress for the admin bar: find the running `qmigrate` task in `/cluster/tasks`
   `storage` → wait 30 min → `ensureNicFirewall` only (not `configureVmIsolation`) → start.[^matestate][^pve]
 - Restore as new guest (uploaded archive): `restoreNewGuest` with a new VMID, `unique=1` (fresh MACs)
   and `storage=default_storage` → `setVmName` → `applyDefaultBridge` → `configureVmIsolation` → start.[^restore]
-- Snapshots (QEMU only; routes refuse LXC): list/create (`vmstate` optional)/delete/rollback under
+- Snapshots (QEMU only; for LXC the list route returns `[]` and create/delete/rollback answer 400): list/create (`vmstate` optional)/delete/rollback under
   `.../qemu/{vmid}/snapshot`; a per-VM cap `MAX_SNAPSHOTS_PER_VM = 12` is enforced in the route.[^vmroutes]
 
 # Delete
@@ -246,7 +247,7 @@ Network discovery is in [networking](/proxmox/networking.md); config keys are in
 
 # Invariants
 
-- Isolation is applied before a guest's first boot on every create/deploy/duplicate/upload-restore path.[^vm][^restore]
+- When isolation is enabled, it is applied before a guest's first boot on every create/deploy/duplicate/rebuild/upload-restore path.[^vm][^restore]
 - POST/PUT/DELETE to Proxmox are never retried by the client.[^pve]
 - A create that fails at any Proxmox step leaves the DB row in `error`; the Proxmox guest may remain.[^vm]
 
@@ -257,7 +258,8 @@ Network discovery is in [networking](/proxmox/networking.md); config keys are in
 - Changing `isolation_vlan_tag` or `default_bridge` does not touch existing guests until their next
   isolation/configuration run.[^adminroutes]
 - DEPLOYMENT.md §2 says "mac/ip-filter on, DNS to the gateway allowed", but the code sets
-  `ipfilter=0` and allows DNS to configured servers or anywhere; SECURITY.md §3a matches the code.[^deploy][^security][^pve]
+  `ipfilter=0` and allows DNS to configured servers or anywhere; SECURITY.md §3a matches the code on
+  both points (it does not list the DHCP-reply and router-advertisement DROP rules).[^deploy][^security][^pve]
 - Changing the `ProxMate isolation` comment string would orphan deployed rules (not reconciled).[^pve]
 - `ensureHostCpu` reads the config with the default `qemu` kind regardless of `kind`.[^pve]
 - Template deploys pile onto the template's node; ROADMAP tracks this.[^vm]

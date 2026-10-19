@@ -27,7 +27,7 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/api/admin/audit` | admin | Audit log page (`?limit` default 100, `?offset` default 0). |
-| GET | `/api/admin/settings` | admin | Aggregated settings: proxmox (`hasSecret`, no secret), defaults, rescueIso, templateRefresh, smtp (`hasPass`), notify, sso (`hasSecret`, `callbackUrl`), ide, appdbBackup, kiosk `pinSet`. |
+| GET | `/api/admin/settings` | admin | Aggregated settings: proxmox (`hasSecret`, no secret), defaults, rescueIso, templateRefreshEnabled, smtp (`hasPass`), notify, sso (`hasSecret`, `callbackUrl`), ide (`hasGatewayKey`), appdbBackup (plus `mountedDir`), kiosk `pinSet`. |
 | PUT | `/api/admin/settings/kiosk` | admin | `{ pin }` 4-12 digits or `''` to clear. Audited `admin.kiosk_config`. |
 | PUT | `/api/admin/settings/appdb-backup` | admin | `{ dir, keep (1..365, default 7) }`; probes the dir is writable. Audited `admin.appdb_backup_config`. |
 | POST | `/api/admin/settings/appdb-backup/run` | admin | Run an app-DB backup now; `{ ok, file, pruned }`. Audited `admin.appdb_backup_run`. |
@@ -38,14 +38,14 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 | PUT | `/api/admin/settings/ide` | admin | IDE policy `{ enabled: off/admin/tenants, allowByoKeys, localModels?, sharedModels?, gatewayUrl?, gatewayKey?, ingressCidr? }`. Audited `admin.ide_config`. |
 | GET | `/api/admin/ide/sources` | admin | Admin's own saved LLM keys (model sources). |
 | POST | `/api/admin/ide/test-source` | admin | `{ keyId }`; probe that key's endpoint models. |
-| POST | `/api/admin/ide/test-reachability` | admin | `{ vmId? }`; probe IDE reachability on a VM (auto-picks a running QEMU VM with an IP if omitted). |
+| POST | `/api/admin/ide/test-reachability` | admin | `{ vmId? }`; probe IDE reachability on a VM (if omitted, auto-picks a running QEMU VM with an IP, preferring one whose IDE is ready; 404 if none). |
 | PUT | `/api/admin/settings/sso` | admin | OIDC config `{ enabled, issuer (URL), clientId, clientSecret?, scopes?, groupsClaim?, adminGroup?, allowSignup?, buttonLabel? }`. Audited `admin.sso_config`. |
 | POST | `/api/admin/settings/sso/test` | admin | OIDC discovery check. |
 | GET | `/api/admin/password-requests` | admin | Pending password reset requests (no-SMTP flow). |
 | POST | `/api/admin/users/:id/reset-password` | admin | Set `{ password (min 8) }` for a user. Audited `admin.reset_password`. |
 | PUT | `/api/admin/settings/proxmox` | admin | `{ host, tokenId, tokenSecret?, verifySsl }`; secret only replaced if non-blank and stored encrypted. |
 | POST | `/api/admin/settings/proxmox/test` | admin | Test Proxmox connection. |
-| PUT | `/api/admin/settings/defaults` | admin | `{ storage, bridge, isoStorage, backupStorage? }`. Audited `admin.settings_defaults` with a before/after diff. |
+| PUT | `/api/admin/settings/defaults` | admin | `{ storage, bridge, isoStorage, backupStorage? }`; `bridge` must match `NETWORK_NAME_RE`, `backupStorage: ''` clears the override. Audited `admin.settings_defaults` with a before/after diff. |
 | PUT | `/api/admin/settings/rescue` | admin | `{ iso }` sets `rescue_iso`. |
 | PUT | `/api/admin/settings/template-refresh` | admin | `{ enabled }` sets `template_refresh_enabled`. |
 | GET | `/api/admin/cluster-stats` | admin | Cluster totals (disk pool = `default_storage`). |
@@ -81,7 +81,7 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 
 - All bodies are zod-validated; failures are 400 with `details` (some return a short fixed message instead).[^routes]
 - SSRF guard: `webhookUrl` must pass `assertPublicHttpUrlShape`.[^routes]
-- Secrets are never returned by `GET /settings` (only `hasSecret` / `hasPass`), and blank secret fields on PUT keep the stored value.[^routes]
+- Secrets are never returned by `GET /settings` (only `hasSecret` / `hasPass` / `hasGatewayKey`), and blank secret fields on PUT keep the stored value.[^routes]
 - Not audited: `PUT /settings/smtp`, `PUT /settings/proxmox`, `PUT /settings/rescue`, `PUT /settings/template-refresh`, `PUT /isolation`, isolation enforce/unenforce.[^routes]
 - Passthrough approve and balancer apply return 202 and run asynchronously (`void ... .catch(console.error)`); errors after 202 only reach the log.[^routes]
 - `GET /isolation` treats `isolation_enabled` as on unless it is exactly `'false'`.[^routes]

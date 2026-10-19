@@ -30,7 +30,7 @@ These keys control whether ProxMate locks each tenant guest down with a Proxmox 
 |---|---|---|---|---|---|
 | `isolation_enabled` | `"true"` / `"false"` | **On by default**: every reader tests `!== 'false'`, so a missing row means enabled | `PUT /api/admin/isolation` (`enabled`, required boolean) | `vm.service` (`createVm`, `createContainer`, `deployFromTemplate`, `duplicateVm`, `rebuildVm`), `matestate.service` (restore re-asserts the NIC firewall), `restore-upload.service.restoreFromUpload`, `GET /api/admin/isolation` | Whether ProxMate applies per-guest isolation firewall rules.[^vm-svc][^matestate] |
 | `isolation_dns_servers` | comma- or whitespace-separated IPs (zod `z.string().optional()`, trimmed) | Unset or empty: DNS is allowed to **any** resolver | `PUT /api/admin/isolation` (only when `dnsServers` is present) | `proxmox.service.readIsolationOptions` (split on `/[,\s]+/`), `GET /api/admin/isolation` | DNS allow-list for the isolation rules. When set, tenant DNS is limited to these IPs. |
-| `isolation_vlan_tag` | integer string `1`–`4094`, or `''` | Unset, empty or invalid: `vlanTag` is `undefined`, which means the NIC tag is left alone (not stripped) | `PUT /api/admin/isolation` (only when `vlanTag` is present; `''` clears it) | `readIsolationOptions`, `GET /api/admin/isolation` | VLAN tag set on tenant NICs. This is the control that contains L2 attacks (ARP, DHCP, IPv6-RA). It takes effect on a guest's next isolation run (deploy, rebuild, duplicate, restore); existing guests keep their current tag until then.[^admin-routes] |
+| `isolation_vlan_tag` | integer string `1`–`4094`, or `''` | Unset, empty or invalid: `vlanTag` is `undefined`, which means the NIC tag is left alone (not stripped) | `PUT /api/admin/isolation` (only when `vlanTag` is present; `''` clears it) | `readIsolationOptions`, `GET /api/admin/isolation` | VLAN tag set on tenant NICs. This is the control that contains L2 attacks (ARP, DHCP, IPv6-RA). It takes effect on a guest's next isolation run (create, deploy, rebuild, duplicate, restore-from-upload); existing guests keep their current tag until then.[^admin-routes] |
 
 # Validation
 
@@ -49,7 +49,7 @@ vlanTag: z.union([z.literal(''), z.coerce.number().int().min(1).max(4094)]).opti
 - Isolation is only **enforced** when the Proxmox cluster firewall is on as well. `GET /api/admin/isolation` returns `enforced = isolationEnabled && clusterFirewallEnabled`. `POST /api/admin/isolation/enforce` (`{ managementCidr }`) adds management allow-rules first and then enables the cluster firewall. That state lives in Proxmox, not in SystemConfig.[^admin-routes]
 - The admin isolation page suggests a management CIDR derived from the [default network](/config/provisioning-defaults.md) (`default_bridge`) of the default node.
 - `readIsolationOptions` deliberately returns `undefined`, not `null`, for an unset tag. `null` would strip existing tags on every deploy.[^pve]
-- The IDE pinhole (`ide_ingress_cidr`, see [IDE](/config/ide.md)) is an exception the isolation firewall allows for the code-server port.
+- The IDE pinhole (`ide_ingress_cidr`, see [IDE](/config/ide.md)) is a managed allow-rule added to the guest firewall for the code-server port (`IDE_GUEST_PORT`, default 8080) from that source only.
 
 # Relationships
 

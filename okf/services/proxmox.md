@@ -14,8 +14,9 @@ sources:
 # Purpose
 
 `proxmox.service.ts` is about 3,700 lines and exports roughly 130 functions. It is the
-only module that builds Proxmox API requests. Every exported function takes an optional
-`client?: AxiosInstance`, so tests can pass a fake client instead of a real one.[^pve]
+only module that builds Proxmox API requests. Most exported functions that call Proxmox take an
+optional `client?: AxiosInstance` (falling back to `getClient()`), so tests can pass a fake client
+instead of a real one.[^pve]
 The detail lives in the [Proxmox integration](/proxmox/) section; this concept is the map.
 
 # Sections of the file
@@ -27,7 +28,7 @@ The detail lives in the [Proxmox integration](/proxmox/) section; this concept i
 | Placement diagnostics | Which nodes satisfy each placement constraint (e.g. a non-shared ISO storage) and the remedy when one pins placement | [guest lifecycle](/proxmox/guest-lifecycle.md) |
 | Storage / network / ISO listing | `getStorages`, `getGuestNetworks`, `NETWORK_NAME_RE`, ISO listing | [storage](/proxmox/storage.md), [networking](/proxmox/networking.md) |
 | VM lifecycle, LXC containers | Create, power, delete, config | [guest lifecycle](/proxmox/guest-lifecycle.md) |
-| Cloud-init extras | Snippets that install Docker or Tailscale on first boot | [cloud-init config](/config/cloud-init.md) |
+| Cloud-init extras | First-boot snippets built from a feature catalog (`CLOUD_INIT_CATALOG`: Docker, Tailscale, guest agent, Cockpit, code-server and more) | [cloud-init config](/config/cloud-init.md) |
 | Templates & cloning, migration progress | Clone, template bake, migrate with progress | [guest lifecycle](/proxmox/guest-lifecycle.md) |
 | PCI / GPU passthrough | Mappings and host-readiness preflight | [passthrough requests](/api/passthrough-request.md) |
 | Backups, snapshots | vzdump, restore, snapshot CRUD | [storage](/proxmox/storage.md) |

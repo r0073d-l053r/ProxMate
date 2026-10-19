@@ -30,7 +30,7 @@ Admins mint invite links that carry a tenant's starting quota, 2FA requirement a
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | POST | `/api/invites` | admin | Create an invite; optionally email it. 201 with `token`, `inviteUrl`, quotas, `require2fa`, `accessDuration`, `expiresAt`, `emailed`, `emailError?`. |
-| POST | `/api/invites/:id/send` | admin | (Re)send a still-valid invite to `{ email }`; 409 if used or expired. Always 200 `{ ok, email, error? }`. |
+| POST | `/api/invites/:id/send` | admin | (Re)send a still-valid invite to `{ email }`; 400 on a bad email, 404 if unknown, 409 if used or expired; otherwise 200 `{ ok, email, error? }` even when the send fails. On success the invite's `email` is updated. |
 | GET | `/api/invites` | admin | All invites (newest first) with `used`, `usedBy`, `expired`. |
 | DELETE | `/api/invites/:id` | admin | Revoke an unused invite; 409 if already used. |
 
