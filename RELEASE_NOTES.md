@@ -27,5 +27,7 @@ With no module configured no import is attempted and no route is added. See `bac
 
 No configuration changes required.
 
+- SSO links to an existing local account only when the IdP sends `email_verified: true` and the account's email was bound by an emailed invite (or is the setup-wizard admin). After upgrading, local accounts registered with a self-typed address, and every account when the IdP omits `email_verified`, no longer auto-link on first SSO login; those users keep signing in with their password. Accounts already linked are unaffected.
+
 - Rebuild cloud-image templates to pick up the guest agent. Password-only deploys from templates built before this release produce machines their owner cannot log into. Template Store flags them.
 - Guests created before this release keep their existing storage. `GET /api/admin/storage-pinning` lists any that cannot migrate as a result.
