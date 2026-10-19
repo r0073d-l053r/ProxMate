@@ -195,16 +195,18 @@ router.post('/login', authLimiter, async (req: Request, res: Response) => {
 
   // Required 2FA but no factor enrolled yet → no session. Hand back an enrollment
   // token so an interrupted setup resumes here (a correct password never yields a
-  // session until a second factor exists).
-  if (await isMfaSetupRequired(user.id)) {
+  // session until a second factor exists). No SSO exemption: an SSO-linked
+  // account keeps its local password, and this login never involves the IdP.
+  if (await isMfaSetupRequired(user.id, { ssoExempt: false })) {
     res.json({ mfaEnrollmentRequired: true, enrollmentToken: await signEnrollment(user.id) });
     return;
   }
 
   // A require2fa user whose only factor is a passkey has twoFactorEnabled=false;
   // a password alone must not be sufficient for them — they sign in passwordless
-  // with the passkey (which is strong MFA on its own).
-  if (user.require2fa && !user.ssoSubject && !user.twoFactorEnabled) {
+  // with the passkey (which is strong MFA on its own). Applies to SSO-linked
+  // accounts too, for the same reason as above.
+  if (user.require2fa && !user.twoFactorEnabled) {
     res.status(401).json({ code: 'passkey_required', error: 'Use your passkey to sign in.' });
     return;
   }

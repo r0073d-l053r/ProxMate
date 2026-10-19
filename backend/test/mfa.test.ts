@@ -44,6 +44,14 @@ describe('isMfaSetupRequired', () => {
     expect(await isMfaSetupRequired('u1')).toBe(false);
     expect(passkeyCount).not.toHaveBeenCalled();
   });
+
+  it('does not exempt SSO-linked users for the local password login (ssoExempt: false)', async () => {
+    findUser.mockResolvedValue({ require2fa: true, ssoSubject: 'sub-1', twoFactorEnabled: false } as never);
+    passkeyCount.mockResolvedValue(0 as never);
+    expect(await isMfaSetupRequired('u1', { ssoExempt: false })).toBe(true);
+    passkeyCount.mockResolvedValue(1 as never);
+    expect(await isMfaSetupRequired('u1', { ssoExempt: false })).toBe(false);
+  });
 });
 
 describe('hasMfaMethod', () => {

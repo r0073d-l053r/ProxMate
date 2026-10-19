@@ -20,7 +20,7 @@ Small read-only helpers behind the MFA and enrollment middleware.[^mfa]
 | Function | Signature summary | What it does |
 |---|---|---|
 | `hasMfaMethod` | `(userId) => Promise<boolean>` | `twoFactorEnabled` OR at least one passkey. |
-| `isMfaSetupRequired` | `(userId) => Promise<boolean>` | True when `require2fa` is set, the user is not SSO-linked (`ssoSubject` null), TOTP is not enabled, and there are zero passkeys. |
+| `isMfaSetupRequired` | `(userId, { ssoExempt = true }) => Promise<boolean>` | True when `require2fa` is set, TOTP is not enabled, and there are zero passkeys. With `ssoExempt` (the default) an SSO-linked user (`ssoSubject` set) is exempt; the password login and the enrollment-token middleware pass `ssoExempt: false`. |
 
 # Data
 
@@ -28,7 +28,7 @@ Reads [User](/database/user.md) (`twoFactorEnabled`, `require2fa`, `ssoSubject`)
 
 # Gotchas
 
-- SSO-linked users are exempt from mandated setup: the IdP handles the second factor.[^mfa]
+- SSO-linked users are exempt from mandated setup for sessions that came through the IdP, which handles the second factor. The local password login is not exempt: an SSO-linked account keeps its password, so required 2FA still applies there.[^mfa]
 
 # Relationships
 
