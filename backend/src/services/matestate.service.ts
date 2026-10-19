@@ -4,7 +4,14 @@ import { getConfig, setConfig } from './config.service.js';
 import { cronMatches } from './power-schedule.service.js';
 import { notify } from './notify.service.js';
 import * as pve from './proxmox.service.js';
-import { requireOurGuest, markClonedGuest } from './vm.service.js';
+import {
+  requireOurGuest,
+  markClonedGuest,
+  approvedPciLines,
+  assertRestoreWithinQuota,
+  syncRestoredGuest,
+} from './vm.service.js';
+import { parseGuestConfigText } from '../lib/guest-config.js';
 
 /** Rolling retention: only this many MateStates are kept per VM. */
 export const MATESTATE_RETENTION = 2;
@@ -141,6 +148,15 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
   // A restore overwrites the guest at this VMID — only ever this row's (or an empty slot).
   vm = await requireOurGuest(vm, { allowAbsent: true, client });
 
+  // The archive brings back the guest's whole config as it was at backup time.
+  // Refuse one that would grow the guest past its owner's quota, and note which PCI
+  // devices are approved now (a device detached since the backup must not return).
+  await assertRestoreWithinQuota(
+    vm,
+    parseGuestConfigText(await pve.extractBackupConfig(vm.proxmoxNode, mateState.volid, client)),
+  );
+  const approvedPci = await approvedPciLines(vm, client);
+
   // Stop first if running — Proxmox refuses to restore over a running guest, and
   // stop is async (same pattern as destroyVm).
   try {
@@ -186,6 +202,9 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
     // before ownership tags existed has none) — tag it as this row's again.
     await markClonedGuest(vm, client);
     await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'ready' } });
+    // Re-sync the row from the restored config (and strip unapproved PCI devices)
+    // before anything can start the guest.
+    vm = await syncRestoredGuest(vm, { approvedPci, client });
     // Restore creates a fresh config; re-assert tenant isolation on the NIC.
     const isolate = (await getConfig('isolation_enabled')) !== 'false';
     if (isolate) {

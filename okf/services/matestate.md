@@ -28,7 +28,7 @@ A MateState is ProxMate's name for a Proxmox vzdump backup of a tenant guest, tr
 | `serializeMateState` | `(ms)` | Converts BigInt `size` to Number for JSON. |
 | `pruneOldMateStates` | `(vmId, keep = 2)` | Deletes older `ready` rows and their Proxmox files (file-delete errors only logged). |
 | `createMateState` | `(vm, kind = 'manual' \| 'scheduled')` | Refused unless the guest is the row's own (`requireOurGuest`). Placeholder row `creating` (volid `pending:...`), `startBackup` mode `snapshot`, waits up to 30 min, diffs the backup list to find the new volid, marks `ready`, prunes with `vm.backupKeep ?? 2`. On error → `status: 'error'`. |
-| `restoreFromMateState` | `(vm, ms)` | Stops guest (waits up to 30 s), marks `restoring`, restore-in-place into the same VMID (LXC targets current rootfs pool or `default_storage`), re-applies NIC firewall if isolation on, starts guest. |
+| `restoreFromMateState` | `(vm, ms)` | Refuses an archive whose config would grow the guest past the owner's quota (`assertRestoreWithinQuota`), stops guest (waits up to 30 s), marks `restoring`, restore-in-place into the same VMID (LXC targets current rootfs pool or `default_storage`), re-syncs the row from the restored config (`syncRestoredGuest`), re-applies NIC firewall if isolation on, starts guest. |
 | `deleteMateState` | `(ms)` | Deletes the Proxmox file (ignores "not exist/not found") and the row. |
 | `runScheduledBackups` | `() => { ran, failed }` | Weekly: all VMs not `creating` with `backupCron: null`. |
 | `isBackupDue` / `runDueBackups` | `(vm, now)` / `(now)` | Per-minute: VMs whose own `backupCron` matches this minute. |
@@ -54,6 +54,7 @@ On first boot the catch-up adopts the last window as satisfied instead of backin
 
 - VMs with their own `backupCron` are excluded from the weekly run so they are never double-backed-up.[^ms]
 - Restore is in place into the SAME VMID so identity, NIC and isolation stay intact; it is refused when that VMID holds a guest that is not the row's (an empty VMID is allowed), and the restored guest is re-tagged as the row's (`markClonedGuest`). A restore error resets the row to `ready` and rethrows.[^ms]
+- The archive brings back the backup-time config (cores, memory, disks, PCI devices). Afterwards the row's `cpu`/`ram`/`storage`/`hasPassthrough` are re-read from the guest under the owner's quota lock; `hostpciN` lines that were not attached (and approved) right before the restore are removed before the guest starts; CPU/RAM that no longer fit the quota are set back to the row's size.[^ms]
 - Backups run sequentially; one VM's failure is isolated and fires `notify({ event: 'backup.failed' })`.[^ms]
 - `size` is BigInt in the DB; returning a raw row via `res.json` throws, which is why `serializeMateState` exists.[^ms]
 

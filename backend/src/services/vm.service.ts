@@ -11,6 +11,7 @@ import * as pve from './proxmox.service.js';
 import { getOfferedFeatureIds, getBaseFeatureIds } from './template.service.js';
 import { isValidPublicKey } from './ssh-key.service.js';
 import { diskSizeGb } from './disk.service.js';
+import { guestConfigSizes, pciLines } from '../lib/guest-config.js';
 import { ALL_CAPS, CAPS_BY_ROLE, normalizeShareRole, type ShareRole, type VmCap } from './vm-share.service.js';
 
 /** The Proxmox guest kind for a VM row (defaults to QEMU for legacy/unset rows). */
@@ -1513,6 +1514,114 @@ export async function assertResizeWithinQuota(
     violations['storage'] = { used: usedStorage, requested: target.storage, max: user.maxStorage };
 
   if (Object.keys(violations).length > 0) throw new QuotaError(violations);
+}
+
+// ─── Restored guests ──────────────────────────────────────────
+//
+// A MateState restore, a snapshot rollback and a restore-from-upload all bring
+// back a whole earlier guest config: cores, memory, disks and PCI devices
+// included. Quota is summed from the rows, so after each one the row is re-read
+// from the guest, and the earlier config is never allowed to hand back more than
+// the owner's quota or a PCI device an admin has since taken away.
+
+/**
+ * The quota violations a size change would cause, counting only the dimensions it
+ * GROWS — a restore that keeps a dimension as it is never fails on it, even when an
+ * admin has since lowered the cap below what the owner already uses.
+ */
+async function growthViolations(
+  vm: VirtualMachine,
+  target: { cpu: number; ram: number; storage: number },
+): Promise<QuotaError['details']> {
+  const owner = await prisma.user.findUnique({ where: { id: vm.userId } });
+  if (!owner) return {};
+  try {
+    await assertResizeWithinQuota(owner, vm, target);
+    return {};
+  } catch (err) {
+    if (!(err instanceof QuotaError)) throw err;
+    const grows: Record<string, boolean> = {
+      cpu: target.cpu > vm.cpu,
+      ram: target.ram > vm.ram,
+      storage: target.storage > vm.storage,
+    };
+    return Object.fromEntries(Object.entries(err.details).filter(([k]) => grows[k]));
+  }
+}
+
+/**
+ * Refuse to restore or roll a guest back to a config that would grow it past its
+ * owner's quota. `cfg` is the config the guest will have afterwards (the archive's
+ * or the snapshot's).
+ */
+export async function assertRestoreWithinQuota(vm: VirtualMachine, cfg: Record<string, string>): Promise<void> {
+  const sizes = guestConfigSizes(cfg, kindOf(vm));
+  const violations = await growthViolations(vm, { cpu: sizes.cpu ?? vm.cpu, ram: sizes.ram, storage: sizes.storage });
+  if (Object.keys(violations).length > 0) throw new QuotaError(violations);
+}
+
+/**
+ * The PCI lines a guest may keep through a restore or rollback: the ones attached
+ * to it right now, and only while the row says a device is approved. Read before
+ * the restore, since the restore replaces them.
+ */
+export async function approvedPciLines(
+  vm: VirtualMachine,
+  client?: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<string[]> {
+  if (!vm.hasPassthrough || kindOf(vm) !== 'qemu') return [];
+  const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu').catch(() => ({}) as Record<string, string>);
+  return pciLines(cfg).map((l) => l.value);
+}
+
+/**
+ * After a restore or rollback: drop PCI devices that aren't approved for this VM,
+ * then re-read cpu/ram/storage from the guest into its row (under the owner's quota
+ * lock). A CPU or RAM size that no longer fits the owner's quota is set back to the
+ * row's current size; a disk total that doesn't fit is recorded as it is (disks
+ * can't shrink) and refused with a QuotaError so the caller leaves the guest off.
+ */
+export async function syncRestoredGuest(
+  vm: VirtualMachine,
+  opts: { approvedPci: string[]; client?: Awaited<ReturnType<typeof pve.getClient>> },
+): Promise<VirtualMachine> {
+  return withQuotaLock(vm.userId, async () => {
+    const client = opts.client ?? (await pve.getClient());
+    const fresh = await prisma.virtualMachine.findUnique({ where: { id: vm.id } });
+    const row = fresh ? { ...fresh, proxmoxNode: vm.proxmoxNode } : vm;
+    const kind = kindOf(row);
+    const path = `/nodes/${row.proxmoxNode}/${kind}/${row.proxmoxVmId}/config`;
+    const cfg = await pve.getVmConfig(row.proxmoxNode, row.proxmoxVmId, client, kind);
+
+    const approved = new Set(opts.approvedPci);
+    const unapproved = pciLines(cfg).filter((l) => !approved.has(l.value)).map((l) => l.key);
+    if (unapproved.length > 0) {
+      await client.put(path, new URLSearchParams({ delete: unapproved.join(',') }));
+      for (const k of unapproved) delete cfg[k];
+    }
+
+    const sizes = guestConfigSizes(cfg, kind);
+    // A container with no `cores` line may use every host core; pin it to the row's.
+    let setResources = sizes.cpu === null;
+    let cpu = sizes.cpu ?? row.cpu;
+    let ram = sizes.ram;
+    const violations = await growthViolations(row, { cpu, ram, storage: sizes.storage });
+    if (violations['cpu']) { cpu = row.cpu; setResources = true; }
+    if (violations['ram']) { ram = row.ram; setResources = true; }
+    if (setResources) await pve.setVmResources(row.proxmoxNode, row.proxmoxVmId, cpu, ram, client, kind);
+
+    const updated = await prisma.virtualMachine.update({
+      where: { id: row.id },
+      data: {
+        cpu,
+        ram,
+        storage: sizes.storage,
+        ...(kind === 'qemu' ? { hasPassthrough: pciLines(cfg).length > 0 } : {}),
+      },
+    });
+    if (violations['storage']) throw new QuotaError({ storage: violations['storage'] });
+    return updated;
+  });
 }
 
 export interface ResizeVmInput {
