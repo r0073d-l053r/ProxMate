@@ -25,7 +25,17 @@ With no module configured no import is attempted and no route is added. See `bac
 
 ## Upgrading
 
-No configuration changes required.
+### Upgrading from 1.0.x and earlier
+
+Read DEPLOYMENT.md §14.4 before updating. In short:
+
+- **Before updating, move local `docker-compose.yml` edits into `docker-compose.override.yml`.** The update into this release is run by the updater already on the host, which force-checks-out the release and discards edits to tracked files — including uncommented `/control`, private-CA, snippets and backup-download mounts. Copy those mounts into `docker-compose.override.yml` (after `git fetch --tags`, take the template with `git show <new-tag>:docker-compose.override.example.yml`), run `git checkout -- docker-compose.yml`, then update. From this release on, optional mounts live only in the override, and the updater refuses to run over local edits instead of discarding them.
+- **Re-install the updater units** after updating: copy `deploy/proxmate-updater.service` and `deploy/proxmate-updater.path` to `/etc/systemd/system/` and run `systemctl daemon-reload`.
+- **Images move to Node 22** (`node:22-alpine`); Node 20 is end-of-life.
+- **`TRUST_PROXY` ≥ 1 is required for the audit log's real-IP header** (`REAL_IP_HEADER`, default `cf-connecting-ip`); `x-forwarded-for` is resolved through the trusted hop count. Behind Caddy, nginx or a Cloudflare Tunnel keep `TRUST_PROXY=1`.
+- **The backend refuses to start in production without `ENCRYPTION_KEY`.** Docker installs already require it; bare `node`/`npm start` runs no longer generate a key in memory.
+
+### Also
 
 - SSO links to an existing local account only when the IdP sends `email_verified: true` and the account's email was bound by an emailed invite (or is the setup-wizard admin). After upgrading, local accounts registered with a self-typed address, and every account when the IdP omits `email_verified`, no longer auto-link on first SSO login; those users keep signing in with their password. Accounts already linked are unaffected.
 

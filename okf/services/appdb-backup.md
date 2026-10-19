@@ -44,6 +44,7 @@ Cron `30 2 * * *` (nightly 02:30), overridable with env `APPDB_BACKUP_CRON`; gua
 # Gotchas
 
 - The snapshot contains the same AES-256-GCM-encrypted secrets as the live DB; restoring needs the SAME `ENCRYPTION_KEY`, which must be backed up separately.[^appdb]
+- The snapshot file is created empty with mode `0600` before `VACUUM INTO` fills it (SQLite keeps an existing empty file's mode), so it is owner-only for its whole life; it holds the session table in plaintext. A failed VACUUM removes the placeholder so it never counts toward retention.[^appdb]
 - A writability probe (`.proxmate-write-test-<pid>`) runs before the VACUUM so a misconfigured dir fails with an explanation instead of a raw SQLite errno.[^appdb]
 - It deliberately never widens permissions or falls back to a container-internal path: a backup in the container layer would vanish on rebuild.[^appdb]
 - The path is embedded in a SQL literal via `$executeRawUnsafe` with single quotes doubled; the path is admin-configured.[^appdb]

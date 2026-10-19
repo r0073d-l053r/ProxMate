@@ -53,7 +53,7 @@ The backend loads `.env` with `import 'dotenv/config'` (the first line of `src/i
 | `FRONTEND_URL` | `http://localhost:3000` | no (set it in production) | `app.ts` (CORS `origin`), auth/invite/console/vm/admin routes, `passkey.service`, `ide-proxy.service`, `alert.service`, `access-sweep.service` | Public frontend origin. Used for the CORS allow-list, the console and IDE WebSocket origin check, invite and auth links, and as the WebAuthn origin fallback. The SystemConfig key `frontend_url` overrides it for alert and email links only (see [platform secrets](/config/platform-secrets.md)). |
 | `BACKEND_PUBLIC_URL` | `http://localhost:${PORT}` (SSO) | no (needed for SSO) | `sso.service.callbackUrl`, `ide.routes`, broadcast and backup-download link builders | Public API origin. The SSO callback is `${BACKEND_PUBLIC_URL}/api/auth/sso/callback` (see [SSO](/config/sso.md)). |
 | `TRUST_PROXY` | `0` | no | `app.ts` (`app.set('trust proxy', Number(...))`) | Number of reverse-proxy hops to trust when resolving the client IP. |
-| `REAL_IP_HEADER` | `cf-connecting-ip` | no | `audit.service.clientIp` | Header holding the real client IP for audit entries. An empty string disables it and falls back to `req.ip`. |
+| `REAL_IP_HEADER` | `cf-connecting-ip` | no | `audit.service.clientIp` | Header holding the real client IP for audit entries. An empty string disables it and falls back to `req.ip`. Only honoured when `TRUST_PROXY` ≥ 1; `x-forwarded-for` resolves to `req.ip` (trusted hop count applied). |
 | `COOKIE_SECURE` | unset, meaning `NODE_ENV === 'production'` | no | `lib/cookies.ts` | Explicit `"true"` / `"false"` for the cookie `Secure` flag. |
 | `WEBAUTHN_ORIGIN` | `FRONTEND_URL`, then `http://localhost:3000` | no | `passkey.service` | Passkey expected origin. |
 | `WEBAUTHN_RP_ID` | hostname of the WebAuthn origin | no | `passkey.service` | Passkey relying-party id. |
@@ -124,14 +124,14 @@ All schedules are read in `scheduler.service.ts`.[^scheduler]
 
 # Gotchas
 
-- **ENCRYPTION_KEY auto-generation:** when the variable is unset, `index.ts` generates `randomBytes(32).toString('hex')`, sets it on the process and writes it into `.env` in the current working directory, but **only if that `.env` file already exists**. Without a `.env`, a new key is generated on every start and previously encrypted secrets become undecryptable. Never change the key after setup.[^index][^env-example]
+- **ENCRYPTION_KEY auto-generation:** when the variable is unset or empty, `index.ts` (via `lib/encryption-key.ts`) generates `randomBytes(32).toString('hex')` only outside production and only when a `.env` exists in the current working directory: it writes the key there (filling an existing `ENCRYPTION_KEY=` line or appending one), sets the file to mode 0600 and logs the path. In production, or with no `.env`, the server exits at boot with instructions instead of running on a key that would be lost on restart. Never change the key after setup.[^index][^env-example]
 - `config/env.ts` is dead code. Changing its defaults has no effect.[^env-ts]
 - The logger header comment mentions `LOG_PRETTY=1`, but no code reads that variable.
 - Numeric variables are parsed with `Number(...)`, so a non-numeric value becomes `NaN`. Some readers clamp the result with `Math.max` (lockout, retries, cooldown), but `Math.max` returns `NaN` for a `NaN` input, so the clamp does not catch a non-numeric value. The rate-limit values are not clamped at all.[^rate-limit]
 
 [^env-example]: .env.example
 [^env-ts]: backend/src/config/env.ts
-[^index]: backend/src/index.ts (dotenv load, ENCRYPTION_KEY auto-generation, PORT/BIND_ADDR)
+[^index]: backend/src/index.ts and backend/src/lib/encryption-key.ts (dotenv load, ENCRYPTION_KEY auto-generation, PORT/BIND_ADDR)
 [^app]: backend/src/app.ts (trust proxy, CORS, /metrics)
 [^crypto]: backend/src/lib/crypto.ts (`getKey`)
 [^rate-limit]: backend/src/middleware/rate-limit.ts

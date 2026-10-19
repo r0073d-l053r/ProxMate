@@ -27,12 +27,12 @@ Records dotted-verb audit events (e.g. `vm.create`, `auth.login`) and serves the
 
 Writes/reads [AuditLog](/database/audit-log.md) (`userId`, `actorEmail`, `action`, `targetType`, `targetId`, `detail`, `ip`); reads admin ids from [User](/database/user.md).[^audit]
 
-Env: `REAL_IP_HEADER` (default `cf-connecting-ip`; set empty to disable) and indirectly `TRUST_PROXY` via `req.ip` — see [backend environment](/env/backend-environment.md).[^audit]
+Env: `REAL_IP_HEADER` (default `cf-connecting-ip`; set empty to disable) and `TRUST_PROXY` (the header is only honoured when it is ≥ 1; `req.ip` applies its hop count) — see [backend environment](/env/backend-environment.md).[^audit]
 
 # Gotchas
 
 - Failures are logged and swallowed: auditing must not break the action being recorded.[^audit]
-- Client IP prefers the edge header (`CF-Connecting-IP`) because behind a proxy `req.ip` is the same for every request unless `TRUST_PROXY` is configured. Falls back to `req.ip`, then the socket address.[^audit]
+- Client IP prefers the edge header (`CF-Connecting-IP`) because behind a proxy `req.ip` is the same for every request unless `TRUST_PROXY` is configured. The header is only read when `TRUST_PROXY` ≥ 1 (with no proxy, a client could set it itself); with `REAL_IP_HEADER=x-forwarded-for` the address is `req.ip`, which Express derives from XFF using the trusted hop count. Otherwise falls back to `req.ip`, then the socket address.[^audit]
 - Tenant VM feed (owner decision 2026-07-11): admin interventions are filtered out at read time; rows kept when actor is null, non-admin, or the admin who is the owner. Retroactive, and the write path is untouched.[^audit]
 
 # Relationships

@@ -133,10 +133,38 @@ describe('appdb-backup — runAppDbBackup', () => {
     const sql = String(rawExec.mock.calls[0]?.[0]);
     expect(sql.startsWith('VACUUM INTO ')).toBe(true);
     expect(sql).toContain('proxmate-appdb-20260712-023000.db');
-    // The mocked VACUUM wrote no real file, so 2 snapshots exist on disk;
-    // keep=1 prunes the older one and the newest survives.
-    expect(r.pruned).toBe(1);
-    expect(await fsp.readdir(dir)).toEqual(['proxmate-appdb-20260102-000000.db']);
+    // The new snapshot's file is created before the VACUUM fills it, so 3
+    // snapshots exist on disk; keep=1 prunes the two older ones.
+    expect(r.pruned).toBe(2);
+    expect(await fsp.readdir(dir)).toEqual(['proxmate-appdb-20260712-023000.db']);
+  });
+
+  it('writes the snapshot owner-only (0600), already before the VACUUM fills it', async () => {
+    const dir = await tmpDir();
+    store.set('appdb_backup_dir', dir);
+    const file = path.join(dir, 'proxmate-appdb-20260712-023000.db');
+    let modeDuringVacuum: number | null = null;
+    rawExec.mockImplementation((async () => {
+      modeDuringVacuum = (await fsp.stat(file)).mode & 0o777;
+      return 0;
+    }) as never);
+    const oldMask = process.umask(0o022);
+    try {
+      const r = await runAppDbBackup(new Date('2026-07-12T02:30:00Z'));
+      expect(r.ran).toBe(true);
+    } finally {
+      process.umask(oldMask);
+    }
+    expect(modeDuringVacuum).toBe(0o600);
+    expect((await fsp.stat(file)).mode & 0o777).toBe(0o600);
+  });
+
+  it('removes the placeholder when the VACUUM fails, so no empty snapshot is kept', async () => {
+    const dir = await tmpDir();
+    store.set('appdb_backup_dir', dir);
+    rawExec.mockRejectedValueOnce(new Error('disk I/O error'));
+    await expect(runAppDbBackup(new Date('2026-07-12T02:30:00Z'))).rejects.toThrow(/disk I\/O/);
+    expect(await fsp.readdir(dir)).toEqual([]);
   });
 
   it("escapes single quotes in the path so the SQL literal can't break", async () => {

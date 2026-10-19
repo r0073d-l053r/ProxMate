@@ -135,9 +135,9 @@ Fill in the **PRODUCTION** block (replace the domain). The key values:
 
 > **`SNIPPET_DIR` and `BACKUP_DOWNLOAD_DIR` are CONTAINER paths.** Setting the variable is only
 > half the job — the host directory must also be **mounted into the backend container**, or the
-> path simply won't exist inside it. `docker-compose.yml` ships both mounts commented out next to
-> the `proxmate-data` volume; uncomment the one you need and keep its container-side path identical
-> to the variable. (This is the same container-boundary trap described for `PROXMATE_BACKUP_DIR`
+> path simply won't exist inside it. Add the mount to a `docker-compose.override.yml` next to
+> `docker-compose.yml` (copy `docker-compose.override.example.yml`, which has both lines ready to
+> uncomment) and keep its container-side path identical to the variable. (This is the same container-boundary trap described for `PROXMATE_BACKUP_DIR`
 > in §12.)
 
 > **Restore from old build (upload a MateState backup).** When `BACKUP_DOWNLOAD_DIR` is
@@ -192,7 +192,10 @@ Start it (`auto_https off`), then in the Cloudflare Zero Trust dashboard point t
 hostname (`proxmate.example.com`) at `http://<host>:8184`. WebSockets (the noVNC console)
 pass through automatically on proxied hostnames. The `.env` values are identical to the
 reverse-proxy setup above (single HTTPS origin), and **no inbound ports** are exposed on
-the host.
+the host. In particular keep **`TRUST_PROXY=1`**: the audit log only uses Cloudflare's
+`CF-Connecting-IP` header (the `REAL_IP_HEADER` default) when a proxy is trusted, so with
+`TRUST_PROXY` unset or `0` every entry records the merge-proxy's address instead of the
+client's.
 
 ---
 
@@ -369,7 +372,7 @@ app: the mount has to exist before the container starts.
    (uid 1000), then recreate the backend so the mount is picked up:
 
    ```bash
-   sudo mkdir -p /mnt/backups/proxmate && sudo chown 1000:1000 /mnt/backups/proxmate
+   sudo install -d -m 0700 -o 1000 -g 1000 /mnt/backups/proxmate
    docker compose up -d backend
    ```
 
@@ -380,6 +383,13 @@ app: the mount has to exist before the container starts.
 
 Snapshots are named `proxmate-appdb-YYYYMMDD-HHMMSS.db`. Retention only ever
 deletes files matching that pattern, so anything else in the directory is safe.
+
+Each snapshot is written mode `0600`, owned by uid 1000 (the container's `node` user),
+so on the host only root and the account with uid 1000 can read it — use `sudo` to
+copy one if your own account has a different uid. Treat the files as secret:
+besides the encrypted secrets they contain the session table, so anyone who can
+read a recent snapshot can act as a signed-in user. Keep the directory (and any
+share it lives on) restricted to uid 1000 and root.
 
 Schedule override: `APPDB_BACKUP_CRON` (default nightly 02:30).
 
@@ -499,10 +509,24 @@ The script checks out the tag, runs `docker compose build` + `up -d`, and the ba
 applies DB migrations on boot (`docker-entrypoint.sh`). **Back up the DB first** (the
 `proxmate-data` volume) so you can roll back. Rollback = `./deploy/update.sh <previous-tag>`.
 
+> **Keep local changes out of tracked files.** Extra mounts and any other compose
+> customisation go in `docker-compose.override.yml` (untracked, merged automatically by
+> `docker compose`; start from `docker-compose.override.example.yml`). Settings go in `.env`.
+> The script refuses to update — and reports which files — when a tracked file such as
+> `docker-compose.yml` has local edits, rather than discarding them. Move those edits into
+> the override, `git checkout -- docker-compose.yml`, and run it again.
+
 ### 14.3 Enabling the one-click "Install update" button
 
-1. **Mount the control dir + enable the flag** — in `docker-compose.yml`, uncomment
-   `- ./deploy/update-control:/control` under the backend `volumes`, and in `.env` set:
+1. **Mount the control dir + enable the flag** — create the directory owned by the
+   backend's unprivileged user (uid 1000), so the app can write its request there:
+   ```bash
+   sudo install -d -m 0775 -o 1000 -g 1000 deploy/update-control
+   ```
+   (the backend's entrypoint also hands an existing `/control` mount to that user on
+   start). Then in `docker-compose.override.yml` (copy
+   `docker-compose.override.example.yml`), uncomment `- ./deploy/update-control:/control`
+   under the backend `volumes`, and in `.env` set:
    ```
    SELF_UPDATE_ENABLED=true
    ```
@@ -515,12 +539,72 @@ applies DB migrations on boot (`docker-entrypoint.sh`). **Back up the DB first**
    systemctl enable --now proxmate-updater.path
    ```
 3. Now **Install update** in the UI drops a request flag the unit picks up; the card polls
-   the host's status file and shows progress, then a **Reload** when it's done.
+   the host's status file and shows progress, then a **Reload** when it's done. If any
+   step fails (fetch, checkout, build, restart — or the run is killed), the card shows an
+   error naming the step; the full output is in `journalctl -u proxmate-updater`.
+   The updater runs git (including the fetch) as the checkout's owner, not root, so if you
+   track a private fork its credentials must work for that account without a prompt.
 
 > **Security note:** the app itself never runs Docker or git — it only writes one JSON
 > flag in the bind-mounted control dir. All privileged work lives in `update.sh`, run by
 > the host's systemd. Leave `SELF_UPDATE_ENABLED=false` (the default) to keep the apply
 > path entirely manual.
+
+If an update reports *"SELF_UPDATE_ENABLED is true but the backend has no /control
+mount"*, the mount went missing (see §14.4): add it to `docker-compose.override.yml` and
+run `docker compose up -d`.
+
+### 14.4 Upgrading from 1.0.x and earlier
+
+The update into this release is performed by the updater **already on your host** — the
+1.0.x `deploy/update.sh`, which force-checks-out the new release. Anything you changed in
+`docker-compose.yml` (typically the uncommented `/control`, private-CA, snippets or
+backup-download mounts) is **silently discarded** by that run, and the stack restarts
+without those mounts. The new updater refuses to run over such edits, but it only takes
+over after this update. So, **before** you update:
+
+1. **Move your compose edits into the override file.** See what you changed, copy those
+   lines into `docker-compose.override.yml`, then restore the stock file:
+   ```bash
+   cd /opt/proxmate
+   git diff docker-compose.yml                     # your local edits
+   # The template is new in this release, so take it from the release tag:
+   git fetch --tags
+   git show <new-tag>:docker-compose.override.example.yml > docker-compose.override.yml
+   nano docker-compose.override.yml                # uncomment the same mounts
+   git checkout -- docker-compose.yml
+   sudo docker compose config >/dev/null && echo ok   # the merged file still parses
+   ```
+   The old updater's `docker compose up -d` also reads the override, so the mounts survive
+   this update — whether you use the in-app button or not.
+2. **Update** as usual (**Install update**, or `sudo ./deploy/update.sh <new-tag>`). If the
+   card stays on *queued*, run `sudo ./deploy/update.sh <new-tag>` by hand; files that an
+   earlier `sudo` run left owned by root are handed back to the checkout's owner first.
+3. **Re-install the systemd units** — the service now marks killed runs as failed
+   (`ExecStopPost`):
+   ```bash
+   sudo cp deploy/proxmate-updater.service deploy/proxmate-updater.path /etc/systemd/system/
+   sudo systemctl daemon-reload
+   ```
+   (Re-apply your `PROXMATE_DIR` / path edits if your checkout isn't `/opt/proxmate`.)
+
+Also changed in this release:
+
+- **Images move to Node 22.** The first build pulls `node:22-alpine`, so it needs network
+  access and takes a little longer than a normal update.
+- **`TRUST_PROXY` ≥ 1 is now required for the real-IP header.** The audit log only
+  believes `REAL_IP_HEADER` (`cf-connecting-ip` by default) when a proxy is trusted, and
+  resolves `x-forwarded-for` through `TRUST_PROXY`'s hop count. Behind Caddy, nginx or a
+  Cloudflare Tunnel keep `TRUST_PROXY=1`; with it unset or `0` the audit log records the
+  socket address.
+- **The backend refuses to start in production without `ENCRYPTION_KEY`.** Docker installs
+  already require it (compose fails without it); this affects bare `node`/`npm start` runs,
+  which previously generated a key they could lose on restart.
+
+**If the old updater already dropped your mounts** (the in-app button now fails, or the
+Proxmox CA / snippets / downloads stopped working): put the mounts in
+`docker-compose.override.yml` as in step 1 and run `docker compose up -d`. The next run of
+the new `update.sh` also warns when self-update is enabled but `/control` is not mounted.
 
 ---
 
@@ -620,7 +704,7 @@ then read `/var/backups/proxmate`. See §12.
 | SSO: "redirect_uri mismatch" | The redirect URI in Keycloak must be **exactly** `${BACKEND_PUBLIC_URL}/api/auth/sso/callback`. |
 | SSO: discovery/Test fails | Issuer must serve `/.well-known/openid-configuration`; check the client secret and that the realm name is right. |
 | Proxmox storage empty / VM create 403 | Token has **Privilege Separation ON** — recreate with `--privsep 0` (§2.2). |
-| Rate-limit/audit shows the proxy IP, not the client | Set `TRUST_PROXY=1` (already in the production `.env`). |
+| Rate-limit/audit shows the proxy IP, not the client | Set `TRUST_PROXY=1` (already in the production `.env`); the audit log ignores `REAL_IP_HEADER` without it. |
 | Console (noVNC) won't connect | Ensure the reverse proxy forwards WebSocket upgrades on `/api/*` (Caddy does automatically). |
 | Changed `NEXT_PUBLIC_API_URL` but the browser still calls the old URL | Rebuild the frontend image: `docker compose up -d --build frontend`. |
 
