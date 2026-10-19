@@ -13,6 +13,7 @@ The Prisma/SQLite schema: one concept per model.
 * [AuditLog](audit-log.md) - An append-only record of who did what, deliberately not foreign-keyed to User so the trail outlives deleted accounts.
 * [DownloadToken](download-token.md) - A single-use one-hour token, emailed to a tenant, that streams one MateState backup file off an admin-mounted backup share.
 * [IdeGatewayToken](ide-gateway-token.md) - Per-user per-VM token (pmide_ prefix) that authenticates the in-guest IDE AI agent to the ProxMate LLM gateway.
+* [IdeGuestSecret](ide-guest-secret.md) - Per-VM encrypted credential that the IDE reverse proxy uses to prove a guest's code-server is that VM's own install and to authenticate every proxied request.
 * [InviteToken](invite-token.md) - An admin-minted registration link that carries the new tenant's quotas, 2FA requirement and compute access duration.
 * [MateState](mate-state.md) - A point-in-time Proxmox vzdump backup of a VM ("MateState"), with rolling per-VM retention.
 * [Passkey](passkey.md) - A WebAuthn credential that serves as a passwordless login and counts as a second factor.

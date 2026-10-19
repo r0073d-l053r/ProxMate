@@ -35,7 +35,7 @@ The layer between the routers and [proxmox service](/services/proxmox.md) for ev
 | `setPowerSchedule` | `(vm, { startCron, stopCron })` | Stored for [power-schedule](/services/power-schedule.md). |
 | `syncVmNode` | `(vm)` | Corrects `proxmoxNode` from `/cluster/resources`. |
 | `getVmWithLiveStatus` / `refreshVmIps` / `getLiveUsage` | | Live status merge (syncs DB status unless `creating`), agent/LXC IP refresh, per-user live usage. |
-| `destroyVm` | `(vm)` | Hard-stop, wait, delete on Proxmox (already-gone tolerated), delete row. |
+| `destroyVm` | `(vm)` | Hard-stop, wait, delete on Proxmox (already-gone tolerated), then delete the row and its IDE credential rows in one transaction. |
 | `rebuildVm` | `(user, vm, source: iso \| template)` | Destructive re-image into the SAME VMID; clears `ideState`; re-arms deploy lock/pending password for cloud-init. |
 | `startVm` / `stopVm(vm, force)` / `restartVm` / `pauseVm` / `resumeVm` | | Power actions; `stopVm` graceful unless `force`; pause/resume QEMU only. |
 | `generateGuestPassword` / `resetGuestPassword` | | 20-char unambiguous CSPRNG password set via agent; returned once, never stored. |

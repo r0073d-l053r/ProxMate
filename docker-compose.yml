@@ -47,7 +47,9 @@ services:
       # "cf-connecting-ip" (Cloudflare); behind a plain Caddy/nginx proxy set
       # REAL_IP_HEADER=x-forwarded-for in .env. Deliberately `-` not `:-`: an
       # explicitly-EMPTY value must pass through (it means "disable, use the raw
-      # socket IP"); only a fully unset var takes the Cloudflare default.
+      # socket IP"); only a fully unset var takes the Cloudflare default. The
+      # header is only honoured when TRUST_PROXY >= 1, and x-forwarded-for is
+      # resolved through TRUST_PROXY's hop count rather than read verbatim.
       REAL_IP_HEADER: ${REAL_IP_HEADER-cf-connecting-ip}
       # Public base URL of the API — used to build the SSO (OIDC) callback URL
       # (${BACKEND_PUBLIC_URL}/api/auth/sso/callback). Set to your public origin.
@@ -65,14 +67,15 @@ services:
       AUTH_LOCKOUT_MAX: ${AUTH_LOCKOUT_MAX:-10}
       AUTH_LOCKOUT_MINUTES: ${AUTH_LOCKOUT_MINUTES:-15}
       # Keep Proxmox TLS verification ON against a PRIVATE CA instead of disabling
-      # it: mount the CA PEM (see volumes) and point this at it.
+      # it: mount the CA PEM (docker-compose.override.yml) and point this at it.
       PROXMOX_CA_CERT_FILE: ${PROXMOX_CA_CERT_FILE:-}
       # Which GitHub repo the in-app "Check for updates" reads releases from.
       UPDATE_REPO: ${UPDATE_REPO:-r0073d-l053r/ProxMate}
       # ── Opt-in one-click self-update ──
       # The admin "Install update" button only works when this is "true" AND the
       # host updater (deploy/update.sh + the systemd path unit) is installed.
-      # When enabled, also mount the control dir below. See DEPLOYMENT.md.
+      # When enabled, also mount the control dir (docker-compose.override.yml).
+      # See DEPLOYMENT.md.
       SELF_UPDATE_ENABLED: ${SELF_UPDATE_ENABLED:-false}
       # /metrics auth: in production the endpoint returns 404 unless this is set;
       # scrapers must send `Authorization: Bearer <token>`.
@@ -82,12 +85,12 @@ services:
       ALLOW_PRIVATE_OUTBOUND_URLS: ${ALLOW_PRIVATE_OUTBOUND_URLS:-false}
       # Let ProxMate WRITE cloud-init "extras" snippets on demand instead of an
       # admin pre-placing every combination. SNIPPET_DIR must ALSO be mounted in
-      # (see volumes) — it's a path inside the container, on a shared Proxmox
+      # (docker-compose.override.yml) — a path inside the container, on a shared Proxmox
       # storage's snippets/ dir; SNIPPET_STORAGE is that storage's id.
       SNIPPET_DIR: ${SNIPPET_DIR:-}
       SNIPPET_STORAGE: ${SNIPPET_STORAGE:-}
       # Let tenants download a guest backup through the browser. Like the snippet
-      # dir this is a CONTAINER path and must be mounted in (see volumes).
+      # dir this is a CONTAINER path and must be mounted in (docker-compose.override.yml).
       BACKUP_DOWNLOAD_DIR: ${BACKUP_DOWNLOAD_DIR:-}
       # Cap on a restore-from-upload (GB). Unset uses the built-in default.
       RESTORE_UPLOAD_MAX_GB: ${RESTORE_UPLOAD_MAX_GB:-}
@@ -95,6 +98,20 @@ services:
       # defaults: guest backups Sundays 03:00, access-expiry sweep hourly at :20.
       MATESTATE_CRON: ${MATESTATE_CRON:-}
       ACCESS_EXPIRY_CRON: ${ACCESS_EXPIRY_CRON:-}
+      # Same, for app-database snapshots (default nightly 02:30), the cluster
+      # balancer and the cloud-image template refresh. Invalid or unset values
+      # fall back to the built-in schedules.
+      APPDB_BACKUP_CRON: ${APPDB_BACKUP_CRON:-}
+      BALANCER_CRON: ${BALANCER_CRON:-}
+      TEMPLATE_REFRESH_CRON: ${TEMPLATE_REFRESH_CRON:-}
+      # Comma-separated optional modules to enable (see backend/src/modules/).
+      PROXMATE_MODULES: ${PROXMATE_MODULES:-}
+      # Log verbosity (pino level: fatal, error, warn, info, debug, trace).
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Optional GitHub token for the "Check for updates" call (higher API rate limit).
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      # Port code-server listens on inside tenant VMs for the ProxMate IDE.
+      IDE_GUEST_PORT: ${IDE_GUEST_PORT:-}
     # Report healthy only once /api/health passes (DB reachable + migrations run),
     # so the frontend can wait for a genuinely-ready backend (see depends_on below).
     healthcheck:
@@ -111,16 +128,13 @@ services:
       # path is fixed; PROXMATE_BACKUP_DIR in .env chooses where on the HOST the
       # snapshots actually land (default: ./backups next to this file).
       - ${PROXMATE_BACKUP_DIR:-./backups}:/var/backups/proxmate
-      # Uncomment to enable on-demand cloud-init snippet writing. The host side
-      # must be the snippets/ dir of a SHARED Proxmox storage; keep the container
-      # path in step with SNIPPET_DIR above.
-      # - /mnt/pve/shared/snippets:/snippets
-      # Uncomment to let tenants download guest backups (match BACKUP_DOWNLOAD_DIR):
-      # - /mnt/pve/backups/dump:/backups:ro
-      # Uncomment to enable one-click updates (the host updater watches this dir):
-      # - ./deploy/update-control:/control
-      # Uncomment to trust a private Proxmox CA (set PROXMOX_CA_CERT_FILE=/certs/pve-ca.pem):
-      # - ./deploy/pve-ca.pem:/certs/pve-ca.pem:ro
+      # Optional mounts (shared snippets dir, guest-backup downloads, the
+      # one-click-update control dir, a private Proxmox CA) do NOT go in this
+      # file: an update checks the new release out over it. Put them in an
+      # untracked docker-compose.override.yml next to this file, which compose
+      # merges in automatically — copy docker-compose.override.example.yml and
+      # uncomment what you need. Don't edit this file locally; the updater
+      # refuses to run over local changes to it rather than discard them.
     ports:
       # Bind to 127.0.0.1 in production (BIND_ADDR=127.0.0.1) so only the local
       # reverse proxy can reach the API; default 0.0.0.0 for simple/dev use.

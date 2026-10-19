@@ -20,6 +20,13 @@ import { migrateVmToNode, startVm as startVmService, getVmWithLiveStatus } from 
 import { issueGatewayToken, listModelPickerEntries } from './ide-gateway.service.js';
 import { getConfig } from './config.service.js';
 import {
+  newIdeGuestSecret,
+  ideGuestCookieValue,
+  saveIdeGuestSecret,
+  loadIdeGuestSecret,
+  proveIdeGuestTarget,
+} from './ide-guest-auth.service.js';
+import {
   IDE_SETTINGS_JSON,
   IDE_AUTOSTART_PACKAGE_JSON,
   IDE_AUTOSTART_EXTENSION_JS,
@@ -41,7 +48,10 @@ export type IdeState = 'none' | 'installing' | 'ready' | 'failed';
 // doesn't lock the VM forever.
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 
-/** Port code-server listens on inside the guest (and the isolation pinhole target). */
+/**
+ * Port code-server listens on inside the guest: its --bind-addr, the isolation
+ * pinhole, the readiness probe and (via the same env var) the reverse proxy.
+ */
 const IDE_GUEST_PORT = Number(process.env['IDE_GUEST_PORT'] || 8080);
 
 /**
@@ -92,11 +102,20 @@ function renderOpencodeJson(gatewayUrl: string, models: Array<{ id: string; name
 /**
  * The self-contained POSIX-sh bootstrap the guest agent runs as root. Each embedded
  * file uses a quoted heredoc so nothing inside is expanded. `token` is base64url
- * (no quotes) so it's safe single-quoted.
+ * and `guestHash` is hex (no quotes) so both are safe single-quoted.
+ *
+ * code-server runs with `--auth password` and `HASHED_PASSWORD=<guestHash>` (the
+ * SHA-256 of this VM's guest secret): only the backend, which holds the secret,
+ * can authenticate to it, and it can prove itself to the backend in return (see
+ * ide-guest-auth.service). code-server drops HASHED_PASSWORD from its own
+ * environment at startup, so terminals inside the IDE don't inherit it.
  */
-function buildBootstrap(token: string, opencodeJson: string): string {
+function buildBootstrap(token: string, opencodeJson: string, guestHash: string): string {
   return `#!/bin/sh
 set -e
+# sh already holds this file open, so drop it (and any leftover encoded copy)
+# now: it carries the gateway token and the guest credential hash.
+rm -f /tmp/pmide-bootstrap.sh /tmp/pmide-bootstrap.b64
 # Detached via the guest agent — the environment is minimal, so set HOME (the
 # code-server installer runs 'set -u' and references $HOME) and a sane PATH.
 export HOME=/root
@@ -122,7 +141,7 @@ cat > /root/.config/opencode/opencode.json <<'PMEOF_OC'
 ${opencodeJson}
 PMEOF_OC
 umask 077
-printf 'PROXMATE_IDE_TOKEN=%s\\n' '${token}' > /etc/proxmate-ide.env
+printf 'PROXMATE_IDE_TOKEN=%s\\nHASHED_PASSWORD=%s\\n' '${token}' '${guestHash}' > /etc/proxmate-ide.env
 cat > /etc/systemd/system/proxmate-ide.service <<'PMEOF_SVC'
 [Unit]
 Description=ProxMate IDE (code-server, opened at /)
@@ -132,14 +151,17 @@ Wants=network-online.target
 Type=simple
 User=root
 EnvironmentFile=/etc/proxmate-ide.env
-ExecStart=/usr/bin/code-server --app-name "ProxMate IDE" --auth none --disable-telemetry --bind-addr 0.0.0.0:8080 /
+ExecStart=/usr/bin/code-server --app-name "ProxMate IDE" --auth password --disable-telemetry --bind-addr 0.0.0.0:${IDE_GUEST_PORT} /
 Restart=on-failure
 RestartSec=3
 [Install]
 WantedBy=multi-user.target
 PMEOF_SVC
 systemctl daemon-reload
-systemctl enable --now proxmate-ide.service
+systemctl enable proxmate-ide.service
+# restart, not just start: on a reinstall the previous code-server is still
+# running and must pick up the new unit and credential.
+systemctl restart proxmate-ide.service
 echo "[proxmate-ide] done"
 `;
 }
@@ -148,9 +170,10 @@ echo "[proxmate-ide] done"
  * Machine-readable reason for a provision refusal, so the UI can offer the right
  * next step: 'reboot_required' → a cpu-model change needs one reboot to land;
  * 'node_no_avx' → the NODE's physical CPU lacks AVX, so no reboot will ever help —
- * offer the one-click relocate to a capable node instead.
+ * offer the one-click relocate to a capable node instead; 'install_in_progress'
+ * → an install is already running (409).
  */
-export type IdeProvisionErrorCode = 'reboot_required' | 'node_no_avx';
+export type IdeProvisionErrorCode = 'reboot_required' | 'node_no_avx' | 'install_in_progress';
 
 export class IdeProvisionError extends Error {
   constructor(
@@ -172,6 +195,18 @@ export async function startIdeProvision(
   user: { id: string; role: string },
   publicApiBaseUrl: string,
 ): Promise<IdeState> {
+  // The gateway token and model list below are minted for `user` and written into
+  // the guest, so it must be the VM's owner (the route enforces this too).
+  if (vm.userId !== user.id) throw new IdeProvisionError("Only this VM's owner can install its ProxMate IDE.");
+  // One install at a time: a second run would rotate the guest secret under the
+  // first one. A stuck install may be retried once it has timed out.
+  if (
+    vm.ideState === 'installing' &&
+    vm.ideStateAt &&
+    Date.now() - vm.ideStateAt.getTime() <= INSTALL_TIMEOUT_MS
+  ) {
+    throw new IdeProvisionError('The IDE is already being installed on this VM — wait for it to finish.', 'install_in_progress');
+  }
   if (vm.type === 'lxc') throw new IdeProvisionError('The IDE needs a QEMU VM — containers are not supported.');
   if (vm.status !== 'running') throw new IdeProvisionError('Start the VM before installing the IDE.');
 
@@ -241,7 +276,9 @@ export async function startIdeProvision(
 
   const models = await listModelPickerEntries(user);
   const opencodeJson = renderOpencodeJson(issued.baseUrl, models, models[0]?.id);
-  const script = buildBootstrap(issued.token, opencodeJson);
+  // Fresh guest credential on every (re)provision. The guest only gets its hash.
+  const guestSecret = newIdeGuestSecret();
+  const script = buildBootstrap(issued.token, opencodeJson, ideGuestCookieValue(guestSecret));
 
   // Ship the bootstrap as base64 (pure ASCII — the raw script has non-ASCII/newlines
   // that break Proxmox's agent/file-write content param) and decode it in the guest.
@@ -254,19 +291,32 @@ export async function startIdeProvision(
     [
       '/bin/sh',
       '-c',
-      'base64 -d /tmp/pmide-bootstrap.b64 > /tmp/pmide-bootstrap.sh && setsid sh /tmp/pmide-bootstrap.sh >/var/log/pmide-provision.log 2>&1 </dev/null & echo started',
+      // umask first: the decoded script carries the gateway token and guest hash,
+      // so it must not be world-readable even briefly.
+      'umask 077 && base64 -d /tmp/pmide-bootstrap.b64 > /tmp/pmide-bootstrap.sh && rm -f /tmp/pmide-bootstrap.b64 && setsid sh /tmp/pmide-bootstrap.sh >/var/log/pmide-provision.log 2>&1 </dev/null & echo started',
     ],
     client,
   );
 
+  // Record the secret only once the bootstrap carrying it is running, together
+  // with the 'installing' lock. From here the proxy will relay only to a guest
+  // that proves this secret, so a previous install stays closed until the new
+  // one is serving.
+  await saveIdeGuestSecret(vm.id, guestSecret);
   await prisma.virtualMachine.update({ where: { id: vm.id }, data: { ideState: 'installing', ideStateAt: new Date() } });
   logger.info({ vmId: vm.id, vmid: vm.proxmoxVmId }, 'ide install started');
   return 'installing';
 }
 
-/** Is the guest's code-server serving yet? (probe the IDE target, fail-fast). */
+/**
+ * Is THIS install's code-server serving yet? Ready means the guest proves the
+ * per-VM secret (see ide-guest-auth.service), not merely that something answers
+ * at its address — during a reinstall the previous code-server may still be up.
+ */
 async function probeIdeUp(vm: VirtualMachine): Promise<boolean> {
-  return (await probeIdeReachability(vm)).ok;
+  const secret = await loadIdeGuestSecret(vm.id);
+  if (!secret) return false;
+  return (await proveIdeGuestTarget(vm, secret)) !== null;
 }
 
 /**

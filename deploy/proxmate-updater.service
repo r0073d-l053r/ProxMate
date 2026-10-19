@@ -5,7 +5,8 @@
 #   systemctl daemon-reload
 #   systemctl enable --now proxmate-updater.path
 #
-# Adjust PROXMATE_DIR below if your checkout isn't /opt/proxmate.
+# Adjust PROXMATE_DIR and the /opt/proxmate paths below if your checkout isn't
+# /opt/proxmate.
 [Unit]
 Description=ProxMate updater — applies an in-app update request
 After=docker.service
@@ -16,3 +17,7 @@ Type=oneshot
 Environment=PROXMATE_DIR=/opt/proxmate
 WorkingDirectory=/opt/proxmate
 ExecStart=/opt/proxmate/deploy/update.sh --from-request
+# If the run is killed before update.sh can report (OOM, timeout, reboot), turn
+# a status still reading queued/running into a visible error. $SERVICE_RESULT is
+# set by systemd; --mark-failed leaves a finished (success/error) status alone.
+ExecStopPost=/opt/proxmate/deploy/update.sh --mark-failed

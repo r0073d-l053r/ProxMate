@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { pathToFileURL } from 'node:url';
 import { prisma } from './src/lib/prisma.js';
 import { getClient, getConnectionConfig, buildClient, getNodes, getNextVmId } from './src/services/proxmox.service.js';
 import type { AxiosInstance } from 'axios';
@@ -24,17 +25,24 @@ async function status(p: Promise<unknown>): Promise<number> {
   }
 }
 
-async function main() {
-  const admin = await getClient();
-  const conn = await getConnectionConfig();
-  const node = (await getNodes(admin)).find((n) => n.status === 'online')!.node;
+/**
+ * The proof itself, against an already-built admin client. Kept separate from
+ * `main` (and exported) so its create/cleanup bookkeeping can be unit-tested.
+ */
+export async function runPoolIsolationProof(
+  admin: AxiosInstance,
+  conn: { host: string; tokenId: string; verifySsl: boolean },
+  node: string,
+): Promise<void> {
   console.log(`using node ${node}, parent token ${conn.tokenId}`);
 
   // Pre-clean any leftovers from a prior run.
   await admin.delete(`/access/users/${PARENT_USER}/token/${TOKEN}`).catch(ignore);
 
-  const vmA = await getNextVmId(admin);
-  const vmB = vmA + 1;
+  // Only VMIDs this run actually created are removed in `finally`. Cleanup must
+  // never assume an ID is ours: a create can fail precisely because the ID
+  // already belongs to somebody else's guest.
+  const created: number[] = [];
 
   try {
     // 1. Two tenant pools.
@@ -42,9 +50,16 @@ async function main() {
       await admin.post('/pools', new URLSearchParams({ poolid, comment: 'ProxMate isolation proof' })).catch(ignore);
     }
 
-    // 2. A minimal VM in each pool (no disk needed for a permission test).
+    // 2. A minimal VM in each pool (no disk needed for a permission test). Each
+    //    ID comes from its own /cluster/nextid call made after the previous VM
+    //    exists: nextid is the lowest FREE id, while nextid+1 is often an
+    //    existing guest on a cluster with gaps.
+    const vmA = await getNextVmId(admin);
     await admin.post(`/nodes/${node}/qemu`, new URLSearchParams({ vmid: String(vmA), name: 'verify-a', memory: '512', pool: POOL_A }));
+    created.push(vmA);
+    const vmB = await getNextVmId(admin);
     await admin.post(`/nodes/${node}/qemu`, new URLSearchParams({ vmid: String(vmB), name: 'verify-b', memory: '512', pool: POOL_B }));
+    created.push(vmB);
     console.log(`created VM ${vmA} in ${POOL_A}, VM ${vmB} in ${POOL_B}`);
 
     // 3. A privilege-separated token (no rights of its own), granted PVEVMUser ONLY on pool A.
@@ -82,8 +97,7 @@ async function main() {
     // Cleanup — order matters: VMs before pools, ACL+token regardless.
     await admin.put('/access/acl', new URLSearchParams({ path: `/pool/${POOL_A}`, roles: 'PVEVMUser', tokens: `${PARENT_USER}!${TOKEN}`, delete: '1' })).catch(ignore);
     await admin.delete(`/access/users/${PARENT_USER}/token/${TOKEN}`).catch(ignore);
-    await admin.delete(`/nodes/${node}/qemu/${vmA}`).catch(ignore);
-    await admin.delete(`/nodes/${node}/qemu/${vmB}`).catch(ignore);
+    for (const vmid of created) await admin.delete(`/nodes/${node}/qemu/${vmid}`).catch(ignore);
     // pools delete only once empty; give the VM deletes a moment.
     await new Promise((r) => setTimeout(r, 3000));
     await admin.delete(`/pools/${POOL_A}`).catch(ignore);
@@ -92,4 +106,15 @@ async function main() {
   }
 }
 
-main().catch((e) => console.error('ERR', e?.response?.data ?? e?.message ?? e)).finally(() => prisma.$disconnect());
+async function main() {
+  const admin = await getClient();
+  const conn = await getConnectionConfig();
+  const node = (await getNodes(admin)).find((n) => n.status === 'online')!.node;
+  await runPoolIsolationProof(admin, conn, node);
+}
+
+// Only touch the cluster when run directly (`npx tsx _verify_pools.ts`), never
+// when imported by the tests.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => console.error('ERR', e?.response?.data ?? e?.message ?? e)).finally(() => prisma.$disconnect());
+}

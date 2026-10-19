@@ -149,6 +149,19 @@ model IdeGatewayToken {
   @@index([vmId])
 }
 
+// Per-VM credential for the in-guest IDE (code-server). The guest holds only its
+// SHA-256 (as code-server's HASHED_PASSWORD); the backend keeps the secret itself,
+// AES-256-GCM encrypted under ENCRYPTION_KEY, to prove the guest before proxying
+// and to authenticate every proxied request. Rotated on every (re)provision.
+// Keyed by VM id (no relation, like IdeGatewayToken). No row = an install that
+// predates guest authentication: the proxy refuses it until it is reinstalled.
+model IdeGuestSecret {
+  vmId      String   @id
+  secretEnc String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 // A tenant's own LLM provider API key (bring-your-own), used ONLY through the
 // ProxMate gateway (single controlled egress + audit + rate-limit). The key is
 // AES-256-GCM encrypted at rest (keyEnc) under ENCRYPTION_KEY and only decrypted

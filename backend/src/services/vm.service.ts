@@ -1269,7 +1269,12 @@ export async function destroyVm(vm: VirtualMachine): Promise<void> {
   const currentVm = await syncVmNode(vm);
   const client = await pve.getClient();
   await stopAndDeleteProxmoxVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, client, kindOf(currentVm));
-  await prisma.virtualMachine.delete({ where: { id: currentVm.id } });
+  // The IDE credential rows are keyed by VM id without a relation, so remove them with the VM.
+  await prisma.$transaction([
+    prisma.virtualMachine.delete({ where: { id: currentVm.id } }),
+    prisma.ideGuestSecret.deleteMany({ where: { vmId: currentVm.id } }),
+    prisma.ideGatewayToken.deleteMany({ where: { vmId: currentVm.id } }),
+  ]);
 }
 
 /**

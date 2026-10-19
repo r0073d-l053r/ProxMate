@@ -35,7 +35,7 @@ flowchart LR
 
 - **Editor transport:** the browser talks to ProxMate over your one HTTPS origin; ProxMate
   reverse-proxies to the guest's own `code-server` on `:8080`. Auth is the ProxMate session
-  cookie + VM ownership — the same gate as the noVNC console.
+  cookie + VM ownership: only the VM's owner can open it (admins and sharees can't).
 - **AI transport:** the in-guest OpenCode agent calls ProxMate's OpenAI-compatible **LLM
   gateway** with a **per-VM bearer token**. The gateway enforces the admin's model allow-list
   and forwards to the real upstream. The tenant never sees the upstream endpoint or key.
@@ -69,7 +69,7 @@ CPU automatically; if it asks you to **reboot and reopen**, that's it enabling A
 needs it). If the node's own hardware can't do AVX, ProxMate offers a **one-click move** to a
 capable node instead — the VM shuts down, moves, starts again, and the IDE opens automatically.
 
-On a VM that's been **shared with you**, the IDE needs the **Manager** share level.
+The IDE opens only on VMs **you own**. On a VM that's been shared with you (or, as an admin, on someone else's VM) use the console instead.
 
 ---
 
@@ -112,7 +112,7 @@ than out-of-band via the Proxmox API. So:
   infrastructure address only — the guest keeps `policy_in=DROP`, so **tenants remain isolated
   from each other**. The IDE reuses your isolation firewall; it doesn't open the guest to the LAN.
 - **Ownership-gated transport.** The reverse proxy resolves each request (HTTP *and* WebSocket)
-  through the per-VM capability gate — owner/admin, or a **Manager**-level share — and refuses
+  through the per-VM capability gate, serves the VM's **owner only**, and refuses
   loopback/link-local targets, so a spoofed guest-reported IP can't point the proxy at the host.
 - **Gateway-enforced model access.** A per-VM token maps to `(user, VM)` and is re-checked live on
   every request (ownership + policy). `resolveModelRoute` is the single allow-list choke point: a

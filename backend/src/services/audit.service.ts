@@ -25,17 +25,28 @@ export interface AuditInput {
  * `REAL_IP_HEADER`, or set it empty to disable and fall back to `req.ip`). In a
  * tunnel deploy that header is only reachable through the edge, so it isn't
  * client-spoofable; for direct/dev connections it's absent and we use `req.ip`.
+ *
+ * The header is only believed when a proxy is actually configured
+ * (`TRUST_PROXY` ≥ 1). Without one the API is reached directly, so the header —
+ * if present at all — was written by the client and would let it put any
+ * address it likes in the audit trail. X-Forwarded-For is never read by hand:
+ * its first element is whatever the client sent whenever a proxy appends to it,
+ * so we use `req.ip`, where Express has already applied the trusted hop count.
  */
 function clientIp(req?: Request): string | null {
   if (!req) return null;
+  const socketIp = req.ip ?? req.socket?.remoteAddress ?? null;
+  const trustedHops = Number(process.env['TRUST_PROXY'] ?? 0);
+  if (!(trustedHops > 0)) return socketIp;
   const headerName = (process.env['REAL_IP_HEADER'] ?? 'cf-connecting-ip').toLowerCase();
+  if (headerName === 'x-forwarded-for') return socketIp;
   if (headerName) {
     const raw = req.headers?.[headerName];
     const value = Array.isArray(raw) ? raw[0] : raw;
     const ip = value?.split(',')[0]?.trim();
     if (ip) return ip;
   }
-  return req.ip ?? req.socket?.remoteAddress ?? null;
+  return socketIp;
 }
 
 /**
