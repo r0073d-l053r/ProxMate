@@ -84,6 +84,28 @@ describe('duplicateVm', () => {
     expect(createVm).not.toHaveBeenCalled();
   });
 
+  it('refuses a source flagged with PCI/GPU passthrough (no clone, no row)', async () => {
+    const c = fakePve('stopped');
+    getClient.mockResolvedValue(asClient(c));
+    await expect(duplicateVm(source({ hasPassthrough: true }), 'web-copy')).rejects.toThrow(/passthrough/i);
+    expect(c.post.mock.calls.some((x) => String(x[0]).includes('/clone'))).toBe(false);
+    expect(createVm).not.toHaveBeenCalled();
+  });
+
+  it('refuses a source whose config carries a hostpci device even if the flag is unset', async () => {
+    const c = fakePve('stopped');
+    const base = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) =>
+      /\/qemu\/120\/config$/.test(url)
+        ? Promise.resolve({ data: { data: { name: 'web', hostpci0: 'mapping=gpu,pcie=1' } } })
+        : base(url),
+    );
+    getClient.mockResolvedValue(asClient(c));
+    await expect(duplicateVm(source(), 'web-copy')).rejects.toThrow(/passthrough/i);
+    expect(c.post.mock.calls.some((x) => String(x[0]).includes('/clone'))).toBe(false);
+    expect(createVm).not.toHaveBeenCalled();
+  });
+
   it('refuses containers', async () => {
     await expect(duplicateVm(source({ type: 'lxc' }), 'x')).rejects.toThrow(/containers/i);
   });

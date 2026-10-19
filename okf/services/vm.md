@@ -28,7 +28,7 @@ Every guest ProxMate creates carries a Proxmox tag `proxmate-<row id>` (`guestMa
 | `createVm` | `(user, input)` | ISO install; only nodes holding the ISO on `iso_storage`; auto-placement amd64 via `pickBestNode`. |
 | `createContainer` | `(user, input)` | LXC; only nodes holding the OS template; arch guessed from template filename. |
 | `deployFromTemplate` | `(user, template, input)` | Clone (see `planTemplateClone`), `configureClonedVm`, start; cloud-init templates set `deployState='deploying'` and store `pendingCiPassword` encrypted. |
-| `duplicateVm` | `(source, newName)` | QEMU only, source must be stopped; full clone on same node onto `default_storage` if available; quota charged to owner. |
+| `duplicateVm` | `(source, newName)` | QEMU only, source must be stopped and have no PCI/GPU passthrough (`hasPassthrough` or any `hostpciN` in its config); full clone on same node onto `default_storage` if available; quota charged to owner. |
 | `getOwnedVm` | `(vmId, user)` | Owner or admin only (delete, shares, convert, migrate, passthrough, rebuild). |
 | `resolveVmAccess` / `getVmWithCap` / `getViewableVm` | `(vmId, user[, cap])` | THE per-VM gate: owner/admin → all caps; share → preset caps; returns null when not permitted (no existence oracle). |
 | `listVms` / `annotateAccess` | `(user)` / `(vms, user)` | Owned + shared (all for admins); adds `access` and `caps`. |

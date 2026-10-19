@@ -929,6 +929,15 @@ async function duplicateVmLocked(
     throw new Error('Stop the machine first — a duplicate is made from a stopped VM');
   }
 
+  // A full clone copies every `hostpciN` line, so a copy would get passthrough that
+  // was approved for the source only — and, unflagged, would be treated as freely
+  // movable by the balancer and drains. Checked on the live config too, since the
+  // flag is only ProxMate's record of what is attached.
+  const sourceCfg = await pve.getVmConfig(current.proxmoxNode, current.proxmoxVmId, client);
+  if (current.hasPassthrough || Object.keys(sourceCfg).some((k) => /^hostpci\d+$/.test(k))) {
+    throw new Error('A VM with PCI/GPU passthrough can’t be duplicated. Detach the device first.');
+  }
+
   // Quota is charged to the source's owner (the duplicate belongs to them too).
   const owner = await prisma.user.findUnique({ where: { id: current.userId } });
   if (!owner) throw new Error('VM owner not found');
