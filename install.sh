@@ -779,12 +779,13 @@ if [ ! -d "$backup_dir" ]; then
     # This directory is bind-mounted into the backend, which runs as uid 1000
     # (`node`). Created by root it lands root-owned and every nightly app-database
     # backup fails silently — the service warns and returns, the scheduler only
-    # logs successes, and the admin UI shows no last-run status. The container
-    # entrypoint now chowns it too, which covers hand-rolled installs; this hands
-    # it to the invoking human as well so they can read their own snapshots.
+    # logs successes, and the admin UI shows no last-run status. Under sudo this
+    # hands it to the invoking human; either way the container entrypoint chowns
+    # it to uid 1000 on every start, which covers hand-rolled installs too.
     chown_to_invoker "$backup_dir"
-    # Snapshots hold live session tokens, so nobody but the owner should even be
-    # able to list them.
+    # Snapshots hold live session tokens. They are written 0600 by uid 1000, so
+    # only uid 1000 (the container's `node`, and whichever host account has that
+    # uid) and root can read them — and with 0700 only they can list them.
     chmod 0700 "$backup_dir" 2>/dev/null || warn "could not chmod 0700 $backup_dir"
     ok "created $backup_dir for app-database backups"
   else

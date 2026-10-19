@@ -384,10 +384,12 @@ app: the mount has to exist before the container starts.
 Snapshots are named `proxmate-appdb-YYYYMMDD-HHMMSS.db`. Retention only ever
 deletes files matching that pattern, so anything else in the directory is safe.
 
-Each snapshot is written mode `0600` (owner only). Treat the files as secret:
+Each snapshot is written mode `0600`, owned by uid 1000 (the container's `node` user),
+so on the host only root and the account with uid 1000 can read it — use `sudo` to
+copy one if your own account has a different uid. Treat the files as secret:
 besides the encrypted secrets they contain the session table, so anyone who can
 read a recent snapshot can act as a signed-in user. Keep the directory (and any
-share it lives on) restricted to the backup owner.
+share it lives on) restricted to uid 1000 and root.
 
 Schedule override: `APPDB_BACKUP_CRON` (default nightly 02:30).
 
