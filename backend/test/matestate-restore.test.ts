@@ -29,7 +29,7 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
 
 import { prisma } from '../src/lib/prisma.js';
 import * as pve from '../src/services/proxmox.service.js';
-import { guestMarker, QuotaError, syncRestoredGuest } from '../src/services/vm.service.js';
+import { guestMarker, QuotaError, syncRestoredGuest, resizeVm } from '../src/services/vm.service.js';
 import { restoreFromMateState } from '../src/services/matestate.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
 
@@ -231,6 +231,23 @@ describe('MateState restore and the owner\'s compute-access window (BUG-067)', (
     const { c } = fakePve(LIVE, LIVE);
     await restoreFromMateState(row(), ms);
     expect(c.post.mock.calls.some((x) => /status\/start$/.test(String(x[0])))).toBe(true);
+  });
+});
+
+describe('CPU layout after a restore (audit MAJOR 3)', () => {
+  it('a restored sockets=4/cores=8 guest is rewritten as one socket, and a resize to 8 leaves sockets 1 / cores 8 / no vcpus', async () => {
+    const { state } = fakePve(LIVE, { ...LIVE, sockets: '4', cores: '8', vcpus: '32' });
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({ id: 'u1', role: 'user', maxCpu: 64, maxRam: 65536, maxStorage: 500, accessExpiresAt: null } as never);
+    await restoreFromMateState(row(), ms);
+    expect(state.cfg['sockets']).toBe('1');
+    expect(state.cfg['cores']).toBe('32');
+    expect(state.cfg['vcpus']).toBeUndefined();
+
+    vi.mocked(prisma.virtualMachine.findUnique).mockResolvedValue(row({ cpu: 32 }));
+    await resizeVm({ id: 'u1', role: 'user', maxCpu: 64, maxRam: 65536, maxStorage: 500 } as never, row({ cpu: 32 }), { cpu: 8 });
+    expect(state.cfg['sockets']).toBe('1');
+    expect(state.cfg['cores']).toBe('8');
+    expect(state.cfg['vcpus']).toBeUndefined();
   });
 });
 

@@ -1670,6 +1670,12 @@ export async function syncRestoredGuest(
     const sizes = guestConfigSizes(cfg, kind);
     // A container with no `cores` line may use every host core; pin it to the row's.
     let setResources = sizes.cpu === null;
+    // ProxMate's cpu is the total vCPU count, written as one socket of that many
+    // cores (see pve.setVmResources); a restored multi-socket or `vcpus` layout is
+    // rewritten in that form so later resizes act on the total.
+    if (kind === 'qemu' && ((cfg['sockets'] ?? '1') !== '1' || cfg['vcpus'] !== undefined || !/^\d+$/.test(cfg['memory'] ?? '0'))) {
+      setResources = true;
+    }
     let cpu = sizes.cpu ?? row.cpu;
     let ram = sizes.ram;
     const violations = await growthViolations(row, { cpu, ram, storage: sizes.storage });

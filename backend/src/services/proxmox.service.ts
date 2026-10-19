@@ -1500,10 +1500,14 @@ export async function setVmResources(
   kind: GuestKind = 'qemu',
 ): Promise<void> {
   const c = client ?? (await getClient());
-  await c.put(
-    `/nodes/${node}/${kind}/${vmid}/config`,
-    new URLSearchParams({ cores: String(cores), memory: String(memory) }),
-  );
+  // A QEMU guest runs sockets × cores vCPUs (or `vcpus` of them). ProxMate's `cpu`
+  // is the total, so it is always written as one socket of that many cores —
+  // otherwise a restored config's `sockets: 4` would multiply every later resize.
+  const params: Record<string, string> =
+    kind === 'qemu'
+      ? { sockets: '1', cores: String(cores), memory: String(memory), delete: 'vcpus' }
+      : { cores: String(cores), memory: String(memory) };
+  await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams(params));
 }
 
 /** Set a VM's display name (the Proxmox `name`/hostname config field). */
