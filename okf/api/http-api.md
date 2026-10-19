@@ -93,7 +93,7 @@ All are `SameSite=Lax`, `path=/`; `Secure` defaults to on when `NODE_ENV=product
 
 **`requireAuth`** order of checks:[^mw-auth]
 
-1. If there is no session cookie and the Bearer value starts with `pm_`, it is a personal API token: `verifyApiToken` (HMAC-SHA256 keyed by `ENCRYPTION_KEY`, token-expiry check, owner access-window check, best-effort `lastUsedAt` update). 401 if invalid, expired, or the owner's access window has lapsed.[^tokensvc]
+1. If there is no session cookie and the Bearer value starts with `pm_`, it is a personal API token: `verifyApiToken` (HMAC-SHA256 keyed by `ENCRYPTION_KEY`, token-expiry check, owner access-window check, best-effort `lastUsedAt` update). 401 if invalid or expired; 403 with `code` `ACCESS_EXPIRED_CODE` if the owner's access window has lapsed, on every route (a token gets no `allowExpiredAccess` leniency).[^tokensvc]
 2. Otherwise cookie, else Bearer, must be a valid session (JWT verified with algorithm pinned to HS256 and a non-expired `Session` row). Missing gives 401; invalid gives 401.
 3. Lapsed compute-access window (non-admins): 403 with `code` `ACCESS_EXPIRED_CODE`, unless the route set `allowExpiredAccess` (only `GET /api/auth/me` and `POST /api/auth/logout`).
 4. CSRF: cookie-authenticated POST/PUT/PATCH/DELETE must send `x-csrf-token` equal to the session's CSRF token, else 403. Bearer clients are exempt.

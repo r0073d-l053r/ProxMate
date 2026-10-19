@@ -14,11 +14,6 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 ### Still open from v1.0.0 verification
 
-- **Expired-access API tokens return the wrong status.** A `pm_…` token whose account's compute
-  access window has lapsed gets a generic `401`, not the `403 access_expired` the session paths
-  return — API callers can't distinguish "bad token" from "access lapsed."
-- **Access-expiry sweep has no test coverage.** `suspendLapsed` and the graceful→force stop
-  escalation are untested, which blocks refactoring the scheduler with confidence.
 - **A genuine least-privilege Proxmox role.** Document (and ideally automate) a scoped token instead
   of `root@pam`. Prior investigation suggests the earlier pool-scoping failure was an ACL naming
   `users=` where a privilege-separated token needs `tokens=`; needs a working recipe incl. `VM.Audit`.
@@ -37,9 +32,6 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
   is SQLite-locked (`migration_lock.toml`), and the built-in app-DB backup uses SQLite's
   `VACUUM INTO`. Postgres today means `db push` + `pg_dump`; proper support wants a migration
   history and a backup path of its own. SQLite stays the default.
-- **Forward the remaining tuning vars in Docker Compose.** `ALERT_COOLDOWN_MIN` and
-  `PUBLIC_TOKEN_RATE_LIMIT_*` are read by the backend but not passed through by the shipped
-  `docker-compose.yml`, so setting them in `.env` silently does nothing under Compose.
 
 ### Production hardening & ops
 

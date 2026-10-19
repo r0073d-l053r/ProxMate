@@ -16,6 +16,10 @@ A token acts as the user who created it (same quotas and ownership). Tokens are 
 as an HMAC-SHA256 hash — ProxMate can't recover the secret, only revoke it. A password
 reset revokes all of the account's tokens.
 
+An unknown, revoked or expired token answers **401**. A valid token whose owner's compute
+access window has ended answers **403** with `code: "access_expired"`, so a script can tell
+the two apart.
+
 ### Session-only routes
 
 Routes that change how an account signs in or is secured accept only a browser
