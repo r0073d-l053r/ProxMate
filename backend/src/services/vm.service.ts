@@ -181,6 +181,44 @@ export interface CreateVmInput {
   adminManaged?: boolean;
 }
 
+// ─── Per-owner quota lock ─────────────────────────────────────
+//
+// A quota check only means something if no other request for the same owner can
+// add usage between the check and the write that records it. Creates make several
+// Proxmox round-trips before their row exists, so overlapping requests would each
+// see the same old usage. Quota-affecting work therefore runs one at a time per
+// owner. An in-process lock is enough: the API is a single Node process (index.ts
+// starts one http server; there is no cluster or worker pool).
+
+const quotaLocks = new Map<string, Promise<void>>();
+
+/** Wait for the owner's quota lock; resolves to a release function (idempotent). */
+export async function acquireQuotaLock(ownerId: string): Promise<() => void> {
+  const prev = quotaLocks.get(ownerId) ?? Promise.resolve();
+  let open!: () => void;
+  const mine = new Promise<void>((r) => (open = r));
+  const tail = prev.then(() => mine);
+  quotaLocks.set(ownerId, tail);
+  await prev;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    open();
+    if (quotaLocks.get(ownerId) === tail) quotaLocks.delete(ownerId);
+  };
+}
+
+/** Run `fn` holding the owner's quota lock. */
+export async function withQuotaLock<T>(ownerId: string, fn: () => Promise<T>): Promise<T> {
+  const release = await acquireQuotaLock(ownerId);
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
 /** Check the requested resources against the user's remaining quota. */
 export async function assertWithinQuota(user: User, input: CreateVmInput): Promise<void> {
   // Admins (cluster owners) are not quota-limited; neither is an admin-granted
@@ -242,6 +280,17 @@ export async function resolveCreateTarget(
  * create on Proxmox → start → reflect final status.
  */
 export async function createVm(user: User, input: CreateVmInput): Promise<VirtualMachine> {
+  // Quota check -> row insert runs under the owner's lock (see acquireQuotaLock);
+  // the lock is released as soon as the row exists, before the slow Proxmox work.
+  const release = await acquireQuotaLock(user.id);
+  try {
+    return await createVmLocked(user, input, release);
+  } finally {
+    release();
+  }
+}
+
+async function createVmLocked(user: User, input: CreateVmInput, release: () => void): Promise<VirtualMachine> {
   await assertWithinQuota(user, input);
 
   const client = await pve.getClient();
@@ -306,6 +355,7 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
       adminManaged: input.adminManaged ?? false,
     },
   });
+  release(); // usage now includes this row
 
   let created = false;
   try {
@@ -376,6 +426,21 @@ function archFromTemplate(volid: string): pve.Arch | undefined {
  * create on Proxmox → lock the firewall down for tenant isolation → start.
  */
 export async function createContainer(user: User, input: CreateContainerInput): Promise<VirtualMachine> {
+  // Quota check -> row insert runs under the owner's lock (see acquireQuotaLock);
+  // the lock is released as soon as the row exists, before the slow Proxmox work.
+  const release = await acquireQuotaLock(user.id);
+  try {
+    return await createContainerLocked(user, input, release);
+  } finally {
+    release();
+  }
+}
+
+async function createContainerLocked(
+  user: User,
+  input: CreateContainerInput,
+  release: () => void,
+): Promise<VirtualMachine> {
   await assertWithinQuota(user, {
     name: input.name,
     cpu: input.cpu,
@@ -444,6 +509,7 @@ export async function createContainer(user: User, input: CreateContainerInput): 
       adminManaged: input.adminManaged ?? false,
     },
   });
+  release(); // usage now includes this row
 
   let created = false;
   try {
@@ -727,6 +793,22 @@ export async function deployFromTemplate(
   template: Template,
   input: DeployTemplateInput,
 ): Promise<VirtualMachine> {
+  // Quota check -> row insert runs under the owner's lock (see acquireQuotaLock);
+  // the lock is released as soon as the row exists, before the slow Proxmox work.
+  const release = await acquireQuotaLock(user.id);
+  try {
+    return await deployFromTemplateLocked(user, template, input, release);
+  } finally {
+    release();
+  }
+}
+
+async function deployFromTemplateLocked(
+  user: User,
+  template: Template,
+  input: DeployTemplateInput,
+  release: () => void,
+): Promise<VirtualMachine> {
   // Can't deploy a disk smaller than the template's base image.
   const diskGb = Math.max(input.storage, template.diskGb || input.storage);
   await assertWithinQuota(user, {
@@ -761,6 +843,7 @@ export async function deployFromTemplate(
       adminManaged: input.adminManaged ?? false,
     },
   });
+  release(); // usage now includes this row
 
   let created = false;
   try {
@@ -819,6 +902,21 @@ export async function deployFromTemplate(
  * clone endpoint); the new VM is owned by the same user as the source.
  */
 export async function duplicateVm(source: VirtualMachine, newName: string): Promise<VirtualMachine> {
+  // Quota check -> row insert runs under the owner's lock (see acquireQuotaLock);
+  // the lock is released as soon as the row exists, before the slow Proxmox work.
+  const release = await acquireQuotaLock(source.userId);
+  try {
+    return await duplicateVmLocked(source, newName, release);
+  } finally {
+    release();
+  }
+}
+
+async function duplicateVmLocked(
+  source: VirtualMachine,
+  newName: string,
+  release: () => void,
+): Promise<VirtualMachine> {
   // The copy inherits the source's owner and is started — same owner gate.
   await assertOwnerAccessActive(source);
   if (kindOf(source) === 'lxc') throw new Error('Containers (LXC) can\'t be duplicated');
@@ -858,6 +956,7 @@ export async function duplicateVm(source: VirtualMachine, newName: string): Prom
       status: 'creating',
     },
   });
+  release(); // usage now includes this row
 
   let created = false;
   try {
@@ -1156,6 +1255,16 @@ export async function resizeVm(
   vm: VirtualMachine,
   input: ResizeVmInput,
 ): Promise<VirtualMachine> {
+  // Check and the DB write that records the new size run under the owner's quota
+  // lock, so a concurrent create or resize can't both pass on the old usage.
+  return withQuotaLock(vm.userId, () => resizeVmLocked(user, vm, input));
+}
+
+async function resizeVmLocked(
+  user: User,
+  vm: VirtualMachine,
+  input: ResizeVmInput,
+): Promise<VirtualMachine> {
   const targetCpu = input.cpu ?? vm.cpu;
   const targetRam = input.ram ?? vm.ram;
   const targetStorage = input.storage ?? vm.storage;
@@ -1445,6 +1554,22 @@ export async function rebuildVm(
   vm: VirtualMachine,
   source: RebuildSource,
 ): Promise<VirtualMachine> {
+  // A template rebuild can grow the disk: its quota check and the row update that
+  // records the new size run under the owner's lock (released once that is written).
+  const release = await acquireQuotaLock(vm.userId);
+  try {
+    return await rebuildVmLocked(user, vm, source, release);
+  } finally {
+    release();
+  }
+}
+
+async function rebuildVmLocked(
+  user: User,
+  vm: VirtualMachine,
+  source: RebuildSource,
+  release: () => void,
+): Promise<VirtualMachine> {
   const client = await pve.getClient();
   const current = await syncVmNode(vm);
   const vmid = current.proxmoxVmId;
@@ -1510,6 +1635,7 @@ export async function rebuildVm(
     where: { id: current.id },
     data: { status: 'creating', ipAddress: null, proxmoxNode: targetNode, os: osLabel, storage: diskGb },
   });
+  release(); // usage now reflects the rebuilt size
 
   try {
     if (source.kind === 'iso') {

@@ -25,6 +25,7 @@ vi.mock('../src/services/download.service.js', () => ({ backupDir: vi.fn() }));
 vi.mock('../src/services/matestate.service.js', () => ({ getBackupStorage: vi.fn() }));
 vi.mock('../src/services/vm.service.js', () => ({
   assertWithinQuota: vi.fn(),
+  acquireQuotaLock: vi.fn(async () => () => undefined),
   markClonedGuest: vi.fn(async () => undefined),
   settleFailedCreate: vi.fn(async () => undefined),
 }));

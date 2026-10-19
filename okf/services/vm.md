@@ -23,6 +23,7 @@ Every guest ProxMate creates carries a Proxmox tag `proxmate-<row id>` (`guestMa
 |---|---|---|
 | `kindOf` | `(vm) => 'qemu' \| 'lxc'` | Defaults to qemu for legacy rows. |
 | `assertWithinQuota` | `(user, input)` | Sums non-exempt VMs; throws `QuotaError(details)` per cpu/ram/storage violation. Admins and `quotaExempt` skip. |
+| `acquireQuotaLock` / `withQuotaLock` | `(ownerId[, fn])` | In-process per-owner lock (the API is one Node process). Every create path (and restore-upload) holds it from the quota check until its row is inserted; resize, rebuild and data-disk changes hold it across their check and usage write. |
 | `resolveCreateTarget` | `(reqUser, { forUserId?, quotaExempt?, node? }) => User` | Those three options are admin-only (`CreateOptionError` 403); returns the owning user (quota charged to them). |
 | `createVm` | `(user, input)` | ISO install; only nodes holding the ISO on `iso_storage`; auto-placement amd64 via `pickBestNode`. |
 | `createContainer` | `(user, input)` | LXC; only nodes holding the OS template; arch guessed from template filename. |
