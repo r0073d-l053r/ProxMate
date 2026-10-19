@@ -40,6 +40,8 @@ export async function createAdmin(data: {
       passwordHash,
       displayName: data.displayName.trim(),
       role: 'admin',
+      // Entered by the operator installing ProxMate, so SSO may link to it.
+      emailBound: true,
     },
   });
 

@@ -63,6 +63,16 @@ router.post('/register', authLimiter, async (req: Request, res: Response) => {
     return;
   }
 
+  // An invite sent to an address is for that address only. Registering it under
+  // a different email would leave an account whose address nobody vouched for,
+  // and SSO links IdP identities to accounts by email. Unaddressed invites
+  // still accept any email, but the account is not marked as bound.
+  const invitedEmail = invite.email?.toLowerCase().trim() || null;
+  if (invitedEmail && email.toLowerCase().trim() !== invitedEmail) {
+    res.status(400).json({ error: 'This invite was sent to a different email address — register with that address.' });
+    return;
+  }
+
   const existing = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
   if (existing) {
     res.status(409).json({ error: 'Email already registered' });
@@ -73,6 +83,7 @@ router.post('/register', authLimiter, async (req: Request, res: Response) => {
   const user = await prisma.user.create({
     data: {
       email: email.toLowerCase().trim(),
+      emailBound: !!invitedEmail,
       passwordHash,
       displayName: displayName.trim(),
       maxCpu: invite.maxCpu,
@@ -622,6 +633,8 @@ router.get('/invite/:token', publicTokenLimiter, async (req: Request, res: Respo
     expiresAt: invite.expiresAt.toISOString(),
     label: invite.label,
     require2fa: invite.require2fa,
+    // The address registration must use, if the invite was sent to one.
+    email: invite.email,
   });
 });
 

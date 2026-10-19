@@ -206,6 +206,15 @@ export async function upsertSsoUser(claims: SsoClaims, cfg: SsoConfig): Promise<
   if (!user && email) {
     const byEmail = await prisma.user.findUnique({ where: { email } });
     if (byEmail) {
+      // Linking hands the IdP identity (and any admin-group promotion below) to
+      // whoever holds the local account, so it is only safe when ProxMate knows
+      // the account's address is really theirs. A self-typed address proves
+      // nothing; that user signs in with their password instead.
+      if (!byEmail.emailBound) {
+        throw new Error(
+          'An account with this email already exists. Sign in with your password instead.',
+        );
+      }
       user = await prisma.user.update({ where: { id: byEmail.id }, data: { ssoSubject: claims.sub } });
     }
   }

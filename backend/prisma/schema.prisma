@@ -16,6 +16,11 @@ model User {
 
   // SSO (OIDC) link — the provider's stable `sub` claim, set on first SSO login.
   ssoSubject    String?   @unique
+  // True when ProxMate knows the address belongs to this person: it was bound
+  // by an addressed invite (registration must use that address), entered by the
+  // operator at setup, or asserted verified by the IdP at SSO sign-up. SSO links
+  // an IdP identity to an existing account by email only when this is set.
+  emailBound    Boolean   @default(false)
 
   // Two-factor auth (TOTP). `twoFactorSecret` is the AES-encrypted base32 secret.
   twoFactorEnabled Boolean  @default(false)

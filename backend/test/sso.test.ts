@@ -49,8 +49,21 @@ describe('upsertSsoUser', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  it('refuses to link a local account whose email was never bound', async () => {
+    // Self-typed at registration (unaddressed invite): nothing ties the address
+    // to the person holding the account, so the IdP identity must not attach to it.
+    const local = { id: 'u7', email: 'jo@b.c', role: 'user', ssoSubject: null, emailBound: false };
+    whenLookedUp({ byEmail: local });
+
+    await expect(
+      upsertSsoUser({ sub: 'sub-7', email: 'jo@b.c', groups: ['admins'] }, { ...baseCfg, adminGroup: 'admins', allowSignup: true }),
+    ).rejects.toThrow(/sign in with your password/i);
+    expect(update).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('links an existing local account by email on first SSO login', async () => {
-    const local = { id: 'u2', email: 'jo@b.c', role: 'user', ssoSubject: null };
+    const local = { id: 'u2', email: 'jo@b.c', role: 'user', ssoSubject: null, emailBound: true };
     whenLookedUp({ byEmail: local });
     update.mockResolvedValue({ ...local, ssoSubject: 'sub-2' } as never);
 

@@ -46,7 +46,7 @@ No router-level middleware; each route picks its own:[^routes]
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/auth/register` | public + authLimiter | Redeem invite `{ email, password (min 8), displayName, inviteToken }`. 201 with user + cookies, or `{ mfaEnrollmentRequired, enrollmentToken }` when the invite requires 2FA (no session). |
+| POST | `/api/auth/register` | public + authLimiter | Redeem invite `{ email, password (min 8), displayName, inviteToken }`. When the invite has an `email`, the registration email must match it (case-insensitive), else 400; the account then gets `emailBound`. 201 with user + cookies, or `{ mfaEnrollmentRequired, enrollmentToken }` when the invite requires 2FA (no session). |
 | POST | `/api/auth/login` | public + authLimiter | `{ email, password }`. Returns user + cookies, or `{ twoFactorRequired, challenge }`, or `{ mfaEnrollmentRequired, enrollmentToken }`, or 401 `passkey_required`, or 403 access-expired. |
 | POST | `/api/auth/2fa/verify` | public + authLimiter | Exchange `{ challenge, code }` (TOTP or recovery code) for a session. |
 | POST | `/api/auth/logout` | allowExpiredAccess + requireAuth | Deletes the `Session` row, clears cookies. |
@@ -69,7 +69,7 @@ No router-level middleware; each route picks its own:[^routes]
 | GET | `/api/auth/sso/info` | public | Whether to show an SSO button and its label. |
 | GET | `/api/auth/sso/login` | public | Sets `proxmate_sso` cookie (state/nonce/PKCE, 10 min) and 302s to the IdP. |
 | GET | `/api/auth/sso/callback` | public (SSO cookie) | Completes OIDC, sets session cookies, redirects to `FRONTEND_URL/`; errors redirect to `/login?sso_error=…`. |
-| GET | `/api/auth/invite/:token` | public + publicTokenLimiter | Validate an invite; returns quotas, expiry, label, `require2fa`; 404 if used/expired. |
+| GET | `/api/auth/invite/:token` | public + publicTokenLimiter | Validate an invite; returns quotas, expiry, label, `require2fa`, `email` (the invited address or null); 404 if used/expired. |
 | POST | `/api/auth/forgot-password` | public + authLimiter | `{ email }`. Email a reset link if SMTP is configured, else file an admin request; returns `{ method: 'email' or 'admin', message }`, where `method` reflects SMTP config only and the message does not reveal whether the account exists. |
 | POST | `/api/auth/reset-password` | public + authLimiter | `{ token, password (min 8) }`. Audited `auth.password_reset`. |
 
