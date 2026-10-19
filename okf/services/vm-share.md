@@ -31,9 +31,10 @@ Owners and admins hold `ALL_CAPS` (= manager set).[^share] The `ide` capability 
 |---|---|---|
 | `normalizeShareRole` | `(role) => ShareRole` | Known presets pass; legacy `co-owner` → `manager`; anything else (incl. legacy `read-only`) → `viewer`. |
 | `capsForShareRole` | `(role) => Set<VmCap>` | Capability set for a stored role. |
-| `listShares` | `(vmId) => ShareView[]` | Oldest first; each `{ id, email, role, createdAt }` — the sharee's account id and display name are not exposed. |
-| `addShare` | `(vm, email, role) => ShareView \| null` | `null` when no account has that address (the route answers that exactly like a success); the owner's own address is a 400; upsert on `(vmId, userId)` so re-sharing updates the preset. |
-| `removeShare` | `(vmId, shareId) => boolean` | False if the share is not on this VM. |
+| `listShares` | `(vmId) => ShareView[]` | Live and pending shares, oldest first, in the same shape `{ id, email, role, createdAt }` — no account id, display name or pending flag. |
+| `addShare` | `(vm, email, role) => ShareView` | An address with no account gets a [PendingVmShare](/database/pending-vm-share.md) (the route answers exactly as for a live share); the owner's own address is a 400; upsert on `(vmId, userId)` so re-sharing updates the preset; at most `MAX_SHARES_PER_VM` (100) per VM, checked before the account lookup (409). |
+| `claimPendingShares` | `(user) => number` | Turns pending shares for a new account's address into live ones, only when `user.emailBound`. Called after registration and SSO sign-up. |
+| `removeShare` | `(vmId, shareId) => boolean` | Revokes a live or pending share; false if neither is on this VM. |
 | `ShareError` | `(message, status = 400)` | Route-surfaced error. |
 
 # Data

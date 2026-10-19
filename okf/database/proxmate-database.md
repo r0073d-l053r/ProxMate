@@ -1,7 +1,7 @@
 ---
 type: Database
 title: ProxMate database
-description: The single Prisma-managed SQLite database behind the ProxMate backend, with its 23 core models, migration history and the module schema seam.
+description: The single Prisma-managed SQLite database behind the ProxMate backend, with its 24 core models, migration history and the module schema seam.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/schema.prisma
 tags: [proxmate, database, prisma, sqlite, migrations]
 generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
@@ -61,8 +61,8 @@ ProxMate keeps all of its own state in one relational database: accounts, VM own
 
 # Migrations
 
-- Core migrations live in `backend/prisma/migrations/` (51 directories, from `20260623035652_init` to `20261019140000_vm_hold_reason`).[^migrations]
-- The 1.1.0 migrations (`20261019*`) add `User.emailBound` (backfilled for accounts that registered through an invite addressed to their email, and for the setup-wizard admin), the `IdeGuestSecret` table, `User.twoFactorFailedAttempts` and `User.twoFactorPendingSecret`, make `InviteToken.createdById` nullable with `ON DELETE SET NULL`, and add `VirtualMachine.holdReason`.[^migrations]
+- Core migrations live in `backend/prisma/migrations/` (52 directories, from `20260623035652_init` to `20261020120000_pending_vm_share`).[^migrations]
+- The 1.1.0 migrations (`20261019*`) add `User.emailBound` (backfilled for accounts that registered through an invite addressed to their email, and for the setup-wizard admin), the `IdeGuestSecret` table, `User.twoFactorFailedAttempts` and `User.twoFactorPendingSecret`, make `InviteToken.createdById` nullable with `ON DELETE SET NULL`, and add `VirtualMachine.holdReason`. `20261020120000_pending_vm_share` adds the `PendingVmShare` table.[^migrations]
 - The container entrypoint runs `npx prisma migrate deploy` on every boot, then the module migration step when `PROXMATE_MODULES` is set.[^entrypoint]
 - npm scripts: `db:generate` (`prisma generate`), `db:migrate` (`prisma migrate dev`), `db:push`, `db:studio`, `db:migrate:modules` (`tsx src/scripts/migrate-modules.ts`).[^package]
 - App-DB snapshots are taken with SQLite `VACUUM INTO` by the app-DB backup service (see [app-DB backup config](/config/appdb-backup.md)).[^appdb-backup]
@@ -92,6 +92,7 @@ Optional compiled-in modules (`backend/src/modules/<name>/`, enabled by `PROXMAT
 | VirtualMachine | [virtual-machine](/database/virtual-machine.md) | Tenant guests (qemu/lxc) |
 | PassthroughRequest | [passthrough-request](/database/passthrough-request.md) | GPU/PCI requests + apply progress |
 | VmShare | [vm-share](/database/vm-share.md) | Preset-level VM sharing |
+| PendingVmShare | [pending-vm-share](/database/pending-vm-share.md) | A share to an address with no account yet |
 | MateState | [mate-state](/database/mate-state.md) | vzdump backups |
 | SystemConfig | [system-config](/database/system-config.md) | Key/value settings and secrets |
 | DownloadToken | [download-token](/database/download-token.md) | Single-use backup download links |

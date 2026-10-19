@@ -98,8 +98,12 @@ curl -H "$AUTH" -H 'content-type: application/json' -X POST \
   is `"*"` when the reason covers every node, e.g. a container or an attached PCI device).
 - **Shares.** `POST /vms/:id/shares` answers **202** with the same message whether or not
   the address has an account, and is limited per signed-in user (30 per hour by default;
-  `SHARE_RATE_LIMIT_MAX`, `SHARE_RATE_LIMIT_WINDOW_MS`). `GET /vms/:id/shares` lists
-  `{ id, email, role, createdAt }` per share; `DELETE /vms/:id/shares/:shareId` revokes one.
+  `SHARE_RATE_LIMIT_MAX`, `SHARE_RATE_LIMIT_WINDOW_MS`). An address with no account yet
+  gets a pending share that starts once someone registers with it through an invite sent
+  to that address (or signs up by SSO with a verified email). `GET /vms/:id/shares` lists
+  `{ id, email, role, createdAt }` per share, pending ones included and shown the same way;
+  `DELETE /vms/:id/shares/:shareId` revokes either kind. A VM holds at most 100 shares
+  (a new address past that answers **409**).
 - **Sizes.** Creates, template deploys and resizes asking for less than 64 MB of RAM
   answer **400**. A resize grows the root disk by the difference between the requested
   total and the current total.

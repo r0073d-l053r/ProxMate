@@ -31,3 +31,4 @@ The Prisma/SQLite schema: one concept per model.
 * [User](user.md) - A ProxMate account (admin or tenant) holding credentials, 2FA state, lockout counters, resource quotas and the compute access window.
 * [VirtualMachine](virtual-machine.md) - ProxMate's record of a tenant-owned Proxmox guest (QEMU VM or LXC container) with sizing, status, lifecycle locks, schedules and quota flags.
 * [VmShare](vm-share.md) - Grants another user access to a VM they do not own at a preset level of viewer, operator or manager.
+* [PendingVmShare](pending-vm-share.md) - A share to an email address that has no account yet; it starts when an account is created with that address and the address is confirmed.

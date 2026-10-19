@@ -47,7 +47,7 @@ The Template Store: tenants list published templates and deploy VMs from them (c
 
 - `DeploySchema`: `name` 1..63 `[a-zA-Z0-9-]`, `cpu` int 1..64, `ram` int >= 64 (MB), `storage` positive int, `sshKey` must start with an OpenSSH key type, `username` matches `^[a-z_][a-z0-9_-]{0,31}$`, `password` 1..128, `install*` booleans, `features` max 20.[^routes]
 - Deploying a `cloudInit` template without `sshKey` or `password` gives 400. Unpublished or missing template gives 404.[^routes]
-- `resolveCreateTarget(actor, body)` decides the owner (admin may deploy into another user's account); `adminManaged` is set when owner differs from actor. Template deploys cannot choose a node; the clone stays on the template's node.[^routes]
+- `resolveCreateTarget(actor, body)` decides the owner (admin may deploy into another user's account); `adminManaged` is set when owner differs from actor. Template deploys cannot choose a node: a full clone on shared storage goes to the least-loaded node, anything else stays on the template's node.[^routes]
 - Errors: `CreateOptionError` uses its status, `QuotaError` gives 403 `Quota exceeded` with `details`, Proxmox errors 502.[^routes]
 - `CloudImageSchema.imageUrl` must be http(s) and end in `.qcow2`, `.img` or `.raw`; `assertPublicHttpUrlShape` additionally blocks private/loopback/metadata targets (SSRF), returning 400.[^routes]
 - `icon` must be a raster data URI (`png|jpeg|webp|gif`), max 400,000 chars; SVG is excluded because it can carry script.[^routes]

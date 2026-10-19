@@ -88,7 +88,7 @@ builds) or paste a custom cloud-image URL (`.qcow2`/`.img`), give it a store nam
 
 When a tenant deploys a cloud-init template, the wizard asks for their **SSH public key** (and optional username/password). On first boot the VM applies the user + key + DHCP and is **ready to SSH into in ~60s — no installer**. The template carries a "Cloud-init" badge in the store.
 
-> Notes: deploys of a cloud-init template are **full clones** (small cloud images, fast) that stay on the template's node. Cloud genericcloud/cloudimg images don't ship the QEMU guest agent, so ProxMate's IP display may be blank until the guest agent is installed (the tenant can `apt install qemu-guest-agent`); reaching the box is the [Tailscale guide](./tailscale-ssh.md).
+> Notes: deploys of a cloud-init template are **full clones** (small cloud images, fast). When the template's disks and the default storage are shared (Ceph, NFS), each deploy goes to the node with the most free capacity; otherwise it stays on the template's node. Cloud genericcloud/cloudimg images don't ship the QEMU guest agent, so ProxMate's IP display may be blank until the guest agent is installed (the tenant can `apt install qemu-guest-agent`); reaching the box is the [Tailscale guide](./tailscale-ssh.md).
 
 #### Cloud-init extras (first-boot installs)
 
@@ -168,7 +168,7 @@ Once the VM is powered off:
 
 It now appears in the **Template Store** for everyone. When a tenant deploys it, ProxMate **linked-clones** it and autoscales (sets cores/RAM, grows the disk to the size the tenant picked, never below the template's base).
 
-> **Linked clones** are fast and space-efficient (no full disk copy), so deploys take seconds. Two trade-offs to know: a clone stays on the **template's node**, and the template can't be deleted while clones still reference it. Tenants don't choose a node for custom (ISO) VMs either — ProxMate auto-places those on the node with the most free capacity.
+> **Linked clones** are fast and space-efficient (no full disk copy), so deploys take seconds. Two trade-offs to know: a linked clone stays on the **template's node** (full clones on shared storage are spread across nodes), and the template can't be deleted while clones still reference it. Tenants don't choose a node for custom (ISO) VMs either — ProxMate auto-places those on the node with the most free capacity.
 
 ### 3.4 Container (LXC) OS templates
 
@@ -213,7 +213,8 @@ As an admin, the New-VM wizard shows an **Admin options** block:
   excluded from every usage calculation and stays exempt even when resized. Use it for loaners,
   classroom machines, or comped capacity.
 - **Node** — pin the target node, or leave **Auto-select** (best capacity, same placement tenants
-  get). Template deploys always stay on the template's node (linked clone), so the picker only
+  get). Template deploys don't use the picker: a full clone on shared storage goes to the
+  least-loaded node and anything else stays on the template's node, so the picker only
   applies to ISO and container builds.
 
 A VM you deploy for a tenant is **admin-managed**: the tenant can operate it (start/stop, console,

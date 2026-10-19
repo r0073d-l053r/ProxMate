@@ -20,11 +20,6 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 ### Placement & reliability
 
-- **Template deploys ignore the scheduler — spread full clones across nodes.** `deployFromTemplate`
-  clones onto whichever node holds the template; `pickBestNode` is never consulted on this path, so
-  template deploys pile onto one node. When the clone is full (cloud-init templates) and both the
-  base disk and `default_storage` are shared, pick a node and pass `target`. Linked clones must stay
-  with their base volume and are exempt.
 - **Background reconciler for Proxmox tasks.** Async UPIDs are reconciled opportunistically on read;
   a backend restart mid-operation can leave rows stuck in `creating`/`restoring`. A worker that polls
   tasks to completion and sweeps stuck rows at startup would make state authoritative.

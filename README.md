@@ -31,7 +31,7 @@ Proxmox admin panel.
 
 - **Invite-only multi-tenancy** — invite links carry CPU/RAM/disk quotas; a per-VM firewall keeps tenants off your LAN, your other guests, and the host **once the Proxmox cluster firewall is enabled** (ProxMate walks you through that in-app)
 - **VMs & LXC containers** — create from an ISO, the Template Store, or 20 curated cloud images (16 x86-64 + 4 ARM64); resize, rebuild, rename, snapshots, power schedules, tags & bulk actions
-- **Share a VM** — hand another tenant access at one of three preset levels (Viewer / Operator / Manager); no share level can delete, rebuild, migrate, or re-share
+- **Share a VM** — hand another tenant access at one of three preset levels (Viewer / Operator / Manager), even before they've signed up; no share level can delete, rebuild, migrate, or re-share
 - **In-browser consoles** — graphical (noVNC) *and* a text console with clickable links, real copy/paste, and scrollback — no SSH, no open ports
 - **ProxMate IDE (beta)** — a per-VM **browser IDE** (VS Code / code-server) opened inside the tenant's own VM (owner-only), with an **in-guest AI coding agent** (OpenCode) wired to admin-controlled models; reuses your tenant-isolation firewall — [docs](docs/proxmate-ide.md)
 - **Serious auth** — TOTP 2FA, passkeys (WebAuthn), bring-your-own OIDC SSO, SMTP password resets, optional invite-enforced 2FA

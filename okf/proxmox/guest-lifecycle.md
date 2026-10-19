@@ -295,7 +295,7 @@ Network discovery is in [networking](/proxmox/networking.md); config keys are in
   both points (it does not list the DHCP-reply and router-advertisement DROP rules).[^deploy][^security][^pve]
 - Changing the `ProxMate isolation` comment string would orphan deployed rules (not reconciled).[^pve]
 - `ensureHostCpu` reads and writes the config of the same guest `kind`.[^pve]
-- Template deploys pile onto the template's node; ROADMAP tracks this.[^vm]
+- Template deploys only spread across nodes when the clone is full and everything is on shared storage; linked clones and node-local templates still land on the template's node.[^vm]
 
 [^pve]: backend/src/services/proxmox.service.ts
 [^vm]: backend/src/services/vm.service.ts

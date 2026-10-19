@@ -4,7 +4,7 @@ title: VmShare
 description: Grants another user access to a VM they do not own at a preset level of viewer, operator or manager.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/schema.prisma
 tags: [proxmate, database, prisma, vm, sharing, authorization]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-20T12:00:00Z }
 sources:
   - id: schema
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/schema.prisma
@@ -52,7 +52,8 @@ Per-VM sharing. The row stores only the preset *name*. Capabilities come from `C
   | manager | view, power, console, configure, backups, ide |
 
 - No share can delete, migrate, rebuild, manage shares or request passthrough. Those actions stay owner/admin-only via `getOwnedVm`.[^svc]
-- `addShare` looks the target up by email (lowercased), refuses the VM's owner, and upserts on `(vmId, userId)`, so re-sharing just changes the role.[^svc]
+- `addShare` looks the target up by email (lowercased), refuses the VM's owner, and upserts on `(vmId, userId)`, so re-sharing just changes the role. An address with no account gets a [PendingVmShare](/database/pending-vm-share.md) instead, and the owner's list shows both kinds the same way.[^svc]
+- A VM holds at most `MAX_SHARES_PER_VM` (100) shares, live and pending together; a new address past that answers 409.[^svc]
 - Shared VMs appear in the recipient's VM list alongside their own.[^vm-svc]
 
 # Gotchas

@@ -66,7 +66,7 @@ Every guest ProxMate creates carries a Proxmox tag `proxmate-<row id>` (`guestMa
 
 - Placement is constrained to nodes that physically hold the ISO / LXC template (node-local storage is the #1 cause of async Proxmox failures). ISO installs and uploads are kept on amd64 nodes.[^vm]
 - `planTemplateClone`: cloud-image templates always full-clone (onto `default_storage` if the node sees it); regular templates stay linked if already on the default pool, otherwise full-clone so the guest is not pinned to node-local storage (the 2026-08-01 migratability fix). If the default pool is not visible on the template node, the template's own storage is used with a warning.[^vm]
-- Template deploys run on the template's node.[^vm]
+- `pickTemplateDeployNode`: a template deploy that is a full clone, with every template disk and the destination pool on shared storage, goes where `pickBestNode` would put a new VM (the clone task still runs on the template's node, with `target=`). A linked clone, any node-local disk, or a failed probe keeps the template's node.[^vm]
 - `cipassword` is never given to cloud-init (hash readable on `/dev/sr0` and `/var/lib/cloud`, pentest 2026-07-18, verified 2026-08-11). The password is stored encrypted and applied by [deploy-lock](/services/deploy-lock.md). When a password is requested, `guest-agent` is added to the snippet as a "belt"; if no snippet can be produced for it the deploy continues with a warning.[^vm]
 - Only cloud-init feature ids the admin OFFERS are accepted; the always-on base applies only when on-demand snippet writing (`snippetWriteConfig`) is configured. A missing snippet for a chosen feature is a hard error.[^vm]
 - Cloud-image VMs get `vga: std` so noVNC is not stuck on the serial placeholder.[^vm]
