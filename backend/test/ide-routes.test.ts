@@ -44,7 +44,7 @@ vi.mock('../src/lib/url-safety.js', () => ({ assertSafeOutboundUrl: vi.fn() }));
 import { getVmWithCap, getViewableVm } from '../src/services/vm.service.js';
 import { getIdeCapability } from '../src/services/ide.service.js';
 import { issueGatewayToken } from '../src/services/ide-gateway.service.js';
-import { refreshIdeState, startIdeProvision } from '../src/services/ide-provision.service.js';
+import { refreshIdeState, startIdeProvision, startIdeRelocate } from '../src/services/ide-provision.service.js';
 import { loadIdeGuestSecret } from '../src/services/ide-guest-auth.service.js';
 import ideRouter from '../src/routes/ide.routes.js';
 
@@ -127,5 +127,34 @@ describe('POST /api/ide/:id/gateway-token — VM owner only', () => {
     expect(r.status).toBe(403);
     expect((await r.json()).error).toMatch(/owner/i);
     expect(vi.mocked(issueGatewayToken)).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/ide/:id/relocate — VM owner only', () => {
+  const post = () => fetch(`${base}/api/ide/vm1/relocate`, { method: 'POST' });
+
+  beforeEach(() => {
+    vi.mocked(getVmWithCap).mockResolvedValue({ id: 'vm1', userId: 'owner1' } as never);
+    vi.mocked(getIdeCapability).mockResolvedValue({ available: true } as never);
+    vi.mocked(startIdeRelocate).mockResolvedValue('n2');
+  });
+
+  it('refuses an admin or sharee who does not own the VM', async () => {
+    for (const u of [
+      { id: 'admin1', role: 'admin' },
+      { id: 'sharee1', role: 'user' },
+    ]) {
+      currentUser = u;
+      const r = await post();
+      expect(r.status).toBe(403);
+      expect((await r.json()).error).toMatch(/owner/i);
+    }
+    expect(vi.mocked(startIdeRelocate)).not.toHaveBeenCalled();
+  });
+
+  it('relocates for the owner', async () => {
+    currentUser = { id: 'owner1', role: 'user' };
+    const r = await post();
+    expect(r.status).toBe(202);
   });
 });

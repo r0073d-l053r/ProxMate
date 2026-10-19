@@ -146,12 +146,17 @@ router.get('/:id/status', async (req: Request, res: Response) => {
 // ─── Relocate to an AVX-capable node ('node_no_avx' escape hatch) ─────────────
 // POST kicks off the background stop → offline-migrate → start (202; long disk
 // copies outlast any HTTP request) and GET polls it. The SERVER picks the target
-// node — tenants never choose nodes (recorded design decision).
+// node — tenants never choose nodes (recorded design decision). VM owner only,
+// like the rest of the IDE flow it belongs to.
 router.post('/:id/relocate', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getVmWithCap(req.params['id'] as string, user, 'ide');
   if (!vm) {
     res.status(404).json({ error: 'VM not found' });
+    return;
+  }
+  if (!isIdeOwner(vm, user)) {
+    res.status(403).json({ error: IDE_OWNER_ONLY_MESSAGE });
     return;
   }
   const cap = await getIdeCapability({ role: user.role });
