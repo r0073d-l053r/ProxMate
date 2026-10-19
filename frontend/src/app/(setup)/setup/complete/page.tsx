@@ -46,8 +46,8 @@ export default function SetupCompletePage() {
       <CardHeader>
         <CardTitle>Review &amp; finish</CardTitle>
         <CardDescription>
-          Confirm everything looks right. Finishing generates the server&apos;s signing secret and
-          signs you in as the administrator.
+          Confirm everything looks right. Finishing marks setup as done and takes you to the
+          dashboard, signed in as the administrator you created.
         </CardDescription>
       </CardHeader>
       <CardContent>
