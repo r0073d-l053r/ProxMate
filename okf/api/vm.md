@@ -61,7 +61,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | GET | `/api/vms/:id/shares` | owned | List shares. |
 | POST | `/api/vms/:id/shares` | owned | `{ email, role }` share with another user; 201. Audited `vm.share`. |
 | DELETE | `/api/vms/:id/shares/:shareId` | owned | Remove share. Audited `vm.unshare`. |
-| DELETE | `/api/vms/:id` | owned + not locked | Destroy the guest. Audited `vm.delete`. |
+| DELETE | `/api/vms/:id` | owned + not locked | Destroy the guest. `?rowOnly=true` (admin only, else 403) removes just the record and leaves the guest untouched. Audited `vm.delete` / `vm.delete_row`. |
 | POST | `/api/vms/:id/start` | `power` | Start. Audited `vm.start`. |
 | POST | `/api/vms/:id/stop` | `power` + not locked | Graceful stop; `?force=true` kills. Audited `vm.stop` / `vm.stop_force`. |
 | POST | `/api/vms/:id/restart` | `power` + not locked | Restart. Audited `vm.restart`. |

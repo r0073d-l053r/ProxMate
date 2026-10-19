@@ -20,7 +20,7 @@ import { handleConsoleUpgrade } from './routes/console.routes.js';
 import { handleIdeUpgrade } from './services/ide-proxy.service.js';
 import { startScheduler } from './services/scheduler.service.js';
 import { reconcileInterruptedPassthroughApplies } from './services/passthrough-request.service.js';
-import { backfillGuestMarkers } from './services/vm.service.js';
+import { runGuestMarkerBackfill } from './services/vm.service.js';
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 // Default to 0.0.0.0 so the port is reachable by the reverse proxy and sibling
@@ -70,8 +70,9 @@ server.listen(PORT, BIND_ADDR, () => {
     logger.error({ err }, 'passthrough startup reconcile failed'),
   );
   // Tag guests created before ProxMate's ownership tag existed (idempotent; only
-  // unambiguous matches are tagged, the rest are logged for an admin).
-  void backfillGuestMarkers()
-    .then((r) => logger.info({ tagged: r.tagged, unmatched: r.unmatched }, 'guest ownership tag backfill done'))
+  // unambiguous matches are tagged, the rest are listed for an admin). The
+  // scheduler repeats this until a pass completes without a Proxmox error.
+  void runGuestMarkerBackfill()
+    .then((r) => logger.info(r, 'guest ownership tag backfill done'))
     .catch((err) => logger.error({ err }, 'guest ownership tag backfill failed'));
 });

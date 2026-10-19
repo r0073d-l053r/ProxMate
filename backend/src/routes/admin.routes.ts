@@ -45,7 +45,7 @@ import {
   detachPassthrough,
   PassthroughRequestError,
 } from '../services/passthrough-request.service.js';
-import { getOwnedVm } from '../services/vm.service.js';
+import { getOwnedVm, listUnmatchedVms, adoptGuest, AdoptError } from '../services/vm.service.js';
 import {
   checkForUpdate,
   getUpdateStatus,
@@ -928,6 +928,37 @@ router.post('/passthrough-requests/:id/deny', async (req: Request, res: Response
 });
 
 const DetachPassthroughSchema = z.object({ index: z.number().int().min(0).max(15).optional() });
+
+// ─── Machines whose guest can't be confirmed as their own ─────
+// Rows whose VMID holds no guest carrying their ProxMate tag (typically created
+// before tags existed and not matched by the startup backfill). Every action on
+// them is refused until an admin adopts the guest or removes the row
+// (DELETE /api/vms/:id?rowOnly=true).
+
+router.get('/vms/unmatched', async (_req: Request, res: Response) => {
+  try {
+    res.json(await listUnmatchedVms());
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+router.post('/vms/:id/adopt', async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getOwnedVm(req.params['id'] as string, user);
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  try {
+    await adoptGuest(vm);
+    await recordAudit({
+      action: 'vm.adopt', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `${vm.name} (vmid ${vm.proxmoxVmId}) tagged as this machine's guest`, req,
+    });
+    res.json({ success: true });
+  } catch (err) {
+    if (err instanceof AdoptError) { res.status(409).json({ error: err.message }); return; }
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
 
 router.post('/vms/:id/passthrough/detach', async (req: Request, res: Response) => {
   const parsed = DetachPassthroughSchema.safeParse(req.body ?? {});

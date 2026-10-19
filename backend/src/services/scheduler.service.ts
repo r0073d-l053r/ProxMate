@@ -8,6 +8,7 @@ import { runAutoBalance } from './cluster-balancer.service.js';
 import { runAppDbBackup } from './appdb-backup.service.js';
 import { runAccessExpiryTick } from './access-sweep.service.js';
 import { getConfig, setConfig } from './config.service.js';
+import { runGuestMarkerBackfill } from './vm.service.js';
 
 /** SystemConfig key: ISO timestamp of the last successful weekly backup run. */
 const LAST_RUN_KEY = 'matestate_last_run';
@@ -28,6 +29,8 @@ let templateTask: ReturnType<typeof cron.schedule> | null = null;
 let appDbTask: ReturnType<typeof cron.schedule> | null = null;
 let accessTask: ReturnType<typeof cron.schedule> | null = null;
 let accessRunning = false;
+let markerTask: ReturnType<typeof cron.schedule> | null = null;
+let markerRunning = false;
 let running = false;
 let powerRunning = false;
 let backupRunning = false;
@@ -97,8 +100,29 @@ export async function catchUpMissedBackups(now: Date = new Date()): Promise<{ ca
   return { caughtUp: false, reason: 'up to date' };
 }
 
+/**
+ * One guest-ownership-tag backfill tick (every 15 min). A no-op once a pass has
+ * completed without a Proxmox error; until then each tick retries, so guests the
+ * boot pass couldn't reach still get tagged. Exported for tests.
+ */
+export async function guestMarkerBackfillTick(): Promise<void> {
+  if (markerRunning) return;
+  markerRunning = true;
+  try {
+    const r = await runGuestMarkerBackfill();
+    if (r.ran && (r.tagged || r.errors)) {
+      console.log(`[scheduler] ownership tags: ${r.tagged} tagged, ${r.unmatched} unmatched, ${r.errors} Proxmox error(s)`);
+    }
+  } catch (err) {
+    console.error('[scheduler] ownership tag backfill failed:', err);
+  } finally {
+    markerRunning = false;
+  }
+}
+
 export function startScheduler(): void {
   if (task) return; // already started
+  markerTask = cron.schedule('*/15 * * * *', () => void guestMarkerBackfillTick());
   const expr = resolveSchedule();
 
   task = cron.schedule(expr, () => void runWeeklyBackups('scheduled'));

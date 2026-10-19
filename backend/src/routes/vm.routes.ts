@@ -986,13 +986,20 @@ router.delete('/:id', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getOwnedVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  // `?rowOnly=true` removes just ProxMate's record and leaves whatever guest sits at
+  // the VMID alone — for a row whose guest can't be confirmed as its own. Admin only.
+  const rowOnly = req.query['rowOnly'] === 'true';
+  if (rowOnly && user.role !== 'admin') {
+    res.status(403).json({ error: 'Only an admin can remove a machine record without its guest.' });
+    return;
+  }
   if (rejectIfLocked(vm, res)) return;
 
   try {
-    await destroyVm(vm);
+    await destroyVm(vm, { rowOnly });
     await recordAudit({
-      action: 'vm.delete', actor: user, targetType: 'vm', targetId: vm.id,
-      detail: `${vm.name} (vmid ${vm.proxmoxVmId})`, req,
+      action: rowOnly ? 'vm.delete_row' : 'vm.delete', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `${vm.name} (vmid ${vm.proxmoxVmId})${rowOnly ? ' — record only, guest left untouched' : ''}`, req,
     });
     res.json({ success: true });
   } catch (err) {

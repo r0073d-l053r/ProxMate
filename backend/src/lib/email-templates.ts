@@ -335,7 +335,8 @@ export function vmRebuildFailedEmail(opts: { vmName: string; kept: boolean; reas
   const { vmName, kept, reason } = opts;
   const subject = `[ProxMate] Rebuild of "${vmName}" failed`;
   const next = kept
-    ? 'The machine is still listed in an error state: you can restore it from one of its backups, or delete it.'
+    ? 'The machine is still listed in an error state. Its backups are kept, and one can be restored while the VM slot is ' +
+      'empty — or you can delete the machine.'
     : 'The old disk had already been wiped and nothing was created in its place, so the machine has been removed from your list.';
   const text = `Rebuilding your VM "${vmName}" failed: ${reason}\n\n${next}`;
   const bodyRows =

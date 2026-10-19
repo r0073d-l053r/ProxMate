@@ -1,0 +1,214 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Rows whose guest carries no ProxMate tag (created before tags existed and not
+// matched by the backfill): deletes are refused rather than silently orphaning the
+// guest, an admin can adopt the guest or remove just the row, the backfill keeps
+// retrying until a clean pass, and status/IP/usage are never taken from a guest
+// that isn't the row's own.
+
+vi.mock('../src/lib/prisma.js', () => ({
+  prisma: {
+    virtualMachine: {
+      findMany: vi.fn(),
+      findUnique: vi.fn(),
+      update: vi.fn(async () => ({})),
+      delete: vi.fn(async () => ({})),
+      count: vi.fn(async () => 0),
+    },
+    resourceSample: { createMany: vi.fn(async () => ({})) },
+    ideGuestSecret: { deleteMany: vi.fn(async () => ({})) },
+    ideGatewayToken: { deleteMany: vi.fn(async () => ({})) },
+    $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops)),
+  },
+}));
+vi.mock('../src/services/notify.service.js', () => ({ notify: vi.fn(async () => undefined) }));
+vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/services/proxmox.service.js')>();
+  return { ...actual, getClient: vi.fn() };
+});
+
+import { prisma } from '../src/lib/prisma.js';
+import * as pve from '../src/services/proxmox.service.js';
+import {
+  destroyVm,
+  adoptGuest,
+  AdoptError,
+  listUnmatchedVms,
+  runGuestMarkerBackfill,
+  resetGuestMarkerBackfill,
+  settleFailedCreate,
+  getVmWithLiveStatus,
+  refreshVmIps,
+  getLiveUsage,
+  guestMarker,
+  GuestIdentityError,
+} from '../src/services/vm.service.js';
+import { sampleResourceUsage } from '../src/services/resource-history.service.js';
+import { fakeClient, asClient, bodyOf } from './helpers.js';
+
+const row = (over: Record<string, unknown> = {}) =>
+  ({ id: 'rowa', userId: 'u1', name: 'web', type: 'qemu', proxmoxVmId: 100, proxmoxNode: 'pve1', status: 'running', ...over }) as never;
+
+const ok = (data: unknown) => Promise.resolve({ data: { data } });
+
+/** Guest 100 with `cfg` (null = no guest). Resource listings carry its tags. */
+function pveWith(cfg: Record<string, string> | null, extra: Record<string, unknown> = {}) {
+  const c = fakeClient();
+  c.get.mockImplementation((url: string) => {
+    if (url.startsWith('/cluster/resources')) {
+      return ok(cfg ? [{ type: 'qemu', vmid: 100, node: 'pve1', name: cfg['name'], tags: cfg['tags'], status: 'running', cpu: 0.5, maxcpu: 2, mem: 5, maxmem: 10, ...extra }] : []);
+    }
+    if (/\/qemu\/100\/config$/.test(url)) {
+      return cfg ? ok(cfg) : Promise.reject(new Error("Configuration file 'nodes/pve1/qemu-server/100.conf' does not exist"));
+    }
+    if (/\/qemu\/100\/status\/current$/.test(url)) return ok({ status: 'stopped' });
+    if (/agent\/network-get-interfaces$/.test(url)) {
+      return ok({ result: [{ name: 'eth0', 'ip-addresses': [{ 'ip-address-type': 'ipv4', 'ip-address': '10.9.9.9' }] }] });
+    }
+    return ok(null);
+  });
+  vi.mocked(pve.getClient).mockResolvedValue(asClient(c));
+  return c;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  resetGuestMarkerBackfill();
+  vi.mocked(prisma.virtualMachine.findMany).mockResolvedValue([] as never);
+  vi.mocked(prisma.virtualMachine.count).mockResolvedValue(0 as never);
+});
+
+describe('deleting a machine whose guest carries no ProxMate tag', () => {
+  it('is refused (nothing destroyed, row kept) with an ask-an-admin message', async () => {
+    const c = pveWith({ name: 'web' });
+    await expect(destroyVm(row())).rejects.toBeInstanceOf(GuestIdentityError);
+    await expect(destroyVm(row())).rejects.toThrow(/predates ProxMate's ownership tags — ask an admin/);
+    expect(c.delete).not.toHaveBeenCalled();
+    expect(prisma.virtualMachine.delete).not.toHaveBeenCalled();
+  });
+
+  it('an admin row-only delete removes just the row (and its IDE credentials), touching no guest', async () => {
+    const c = pveWith({ name: 'web' });
+    await destroyVm(row(), { rowOnly: true });
+    expect(c.delete).not.toHaveBeenCalled();
+    expect(c.post).not.toHaveBeenCalled();
+    expect(prisma.virtualMachine.delete).toHaveBeenCalledWith({ where: { id: 'rowa' } });
+    expect(prisma.ideGuestSecret.deleteMany).toHaveBeenCalledWith({ where: { vmId: 'rowa' } });
+    expect(prisma.ideGatewayToken.deleteMany).toHaveBeenCalledWith({ where: { vmId: 'rowa' } });
+  });
+});
+
+describe('adoptGuest (admin)', () => {
+  it('tags an untagged guest as this row\'s, keeping its other tags', async () => {
+    const c = pveWith({ name: 'web', tags: 'prod' });
+    await adoptGuest(row());
+    const put = c.put.mock.calls.find((x) => String(x[0]) === '/nodes/pve1/qemu/100/config');
+    expect(bodyOf(put!)['tags']).toBe(`prod;${guestMarker('rowa')}`);
+  });
+
+  it('refuses a guest carrying another row\'s tag', async () => {
+    const c = pveWith({ name: 'web', tags: guestMarker('rowb') });
+    await expect(adoptGuest(row())).rejects.toBeInstanceOf(AdoptError);
+    expect(c.put).not.toHaveBeenCalled();
+  });
+
+  it('refuses when another row references the same VMID', async () => {
+    const c = pveWith({ name: 'web' });
+    vi.mocked(prisma.virtualMachine.count).mockResolvedValue(1 as never);
+    await expect(adoptGuest(row())).rejects.toThrow(/Another machine also references this VMID/);
+    expect(c.put).not.toHaveBeenCalled();
+  });
+
+  it('refuses when there is no guest at the VMID', async () => {
+    pveWith(null);
+    await expect(adoptGuest(row())).rejects.toThrow(/no Proxmox guest/);
+  });
+});
+
+describe('listUnmatchedVms (admin)', () => {
+  it('lists only rows without a guest carrying their tag, with what is at the VMID', async () => {
+    pveWith({ name: 'web' });
+    vi.mocked(prisma.virtualMachine.findMany).mockResolvedValue([
+      row(),
+      row({ id: 'rowz', name: 'gone', proxmoxVmId: 555 }),
+    ] as never);
+    const list = await listUnmatchedVms();
+    expect(list.map((r) => [r.id, r.guest.present, r.guest.name])).toEqual([
+      ['rowa', true, 'web'],
+      ['rowz', false, null],
+    ]);
+  });
+});
+
+describe('runGuestMarkerBackfill keeps retrying until a clean pass', () => {
+  it('re-runs after a pass with Proxmox errors, then stops once a pass is clean', async () => {
+    vi.mocked(prisma.virtualMachine.findMany).mockResolvedValue([row()] as never);
+    const c = pveWith({ name: 'web' });
+    const base = c.get.getMockImplementation()!;
+    // First pass: the guest's config can't be read.
+    c.get.mockImplementation((url: string) =>
+      /\/config$/.test(url) ? Promise.reject(new Error('pveproxy timeout')) : base(url),
+    );
+    expect(await runGuestMarkerBackfill()).toMatchObject({ ran: true, errors: 1, tagged: 0 });
+    // Second pass succeeds and tags it.
+    c.get.mockImplementation(base);
+    expect(await runGuestMarkerBackfill()).toMatchObject({ ran: true, errors: 0, tagged: 1 });
+    // Done: later ticks are no-ops.
+    expect(await runGuestMarkerBackfill()).toEqual({ ran: false });
+  });
+
+  it('retries after the listing itself failed', async () => {
+    const c = pveWith({ name: 'web' });
+    c.get.mockRejectedValueOnce(new Error('cluster down'));
+    await expect(runGuestMarkerBackfill()).rejects.toThrow('cluster down');
+    expect(await runGuestMarkerBackfill()).toMatchObject({ ran: true });
+  });
+});
+
+describe('failed-create cleanup', () => {
+  it('drops the row together with its IDE credential rows', async () => {
+    pveWith(null);
+    await settleFailedCreate(row({ status: 'creating' }), new Error('boom'), false);
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(prisma.ideGuestSecret.deleteMany).toHaveBeenCalledWith({ where: { vmId: 'rowa' } });
+  });
+});
+
+describe('status, IP and usage are only taken from the row\'s own tagged guest', () => {
+  it('detail status writes nothing for another guest', async () => {
+    pveWith({ name: 'x', tags: guestMarker('rowb') });
+    const r = await getVmWithLiveStatus(row({ status: 'stopped' }));
+    expect(r.live).toBeNull();
+    expect(prisma.virtualMachine.update).not.toHaveBeenCalled();
+  });
+
+  it('IP refresh skips another guest', async () => {
+    const c = pveWith({ name: 'x', tags: guestMarker('rowb') });
+    const [vm] = await refreshVmIps([row({ ipAddress: null })] as never[]);
+    expect((vm as { ipAddress: unknown }).ipAddress).toBeNull();
+    expect(c.get.mock.calls.some((x) => /agent/.test(String(x[0])))).toBe(false);
+    expect(prisma.virtualMachine.update).not.toHaveBeenCalled();
+  });
+
+  it('IP refresh still works for the row\'s own guest', async () => {
+    pveWith({ name: 'web', tags: guestMarker('rowa') });
+    const [vm] = await refreshVmIps([row({ ipAddress: null })] as never[]);
+    expect((vm as { ipAddress: unknown }).ipAddress).toBe('10.9.9.9');
+  });
+
+  it('live usage counts only tagged guests', async () => {
+    vi.mocked(prisma.virtualMachine.findMany).mockResolvedValue([{ id: 'rowa', proxmoxVmId: 100 }] as never);
+    pveWith({ name: 'x', tags: guestMarker('rowb') });
+    expect(await getLiveUsage({ id: 'u1' })).toEqual({ cpu: 0, mem: 0, maxMem: 0, running: 0 });
+    pveWith({ name: 'web', tags: guestMarker('rowa') });
+    expect((await getLiveUsage({ id: 'u1' })).running).toBe(1);
+  });
+
+  it('resource history samples only tagged guests', async () => {
+    vi.mocked(prisma.virtualMachine.findMany).mockResolvedValue([{ id: 'rowa', userId: 'u1', proxmoxVmId: 100 }] as never);
+    pveWith({ name: 'x', tags: guestMarker('rowb') });
+    expect(await sampleResourceUsage()).toEqual({ sampled: 0 });
+    pveWith({ name: 'web', tags: guestMarker('rowa') });
+    expect(await sampleResourceUsage()).toEqual({ sampled: 1 });
+  });
+});

@@ -292,7 +292,7 @@ describe('backfillGuestMarkers (one-time startup tagging of pre-marker guests)',
       100: { name: 'web', tags: guestMarker('rowa') },
     });
     const r = await backfillGuestMarkers();
-    expect(r).toEqual({ tagged: 0, unmatched: [] });
+    expect(r).toEqual({ tagged: 0, unmatched: [], errors: 0 });
     expect(c.put).not.toHaveBeenCalled();
   });
 });
