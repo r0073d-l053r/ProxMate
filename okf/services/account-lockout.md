@@ -21,7 +21,7 @@ Protects a targeted account from distributed password guessing (MITRE T1110), co
 |---|---|---|
 | `isAccountLocked` | `(user: {lockedUntil}) => boolean` | True while `lockedUntil` is in the future. |
 | `clearFailedLogins` | `(user) => Promise<void>` | Resets `failedLoginAttempts` to 0 and `lockedUntil` to null after a correct password (no-op if already clear). |
-| `registerFailedLogin` | `(user, ip: string \| null) => Promise<boolean>` | Increments the counter; at the threshold sets `lockedUntil`, resets the counter, audits `auth.account_locked`, emails admins and fires the `auth.lockout` webhook. Returns true if this attempt locked the account. |
+| `registerFailedLogin` | `(user, ip: string \| null) => Promise<boolean>` | Increments the counter atomically in the database and reads the new value back; at the threshold claims the lock with a conditional write (so concurrent failures lock exactly once), sets `lockedUntil`, resets the counter, audits `auth.account_locked`, emails admins and fires the `auth.lockout` webhook. Returns true if this attempt locked the account. |
 
 # Data
 

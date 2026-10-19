@@ -34,37 +34,48 @@ export async function clearFailedLogins(user: LockFields): Promise<void> {
 /**
  * Record a failed password attempt. Locks the account (and alerts admins) once
  * the threshold is reached. Returns true if this attempt triggered a lock.
+ *
+ * The count is incremented IN the database and read back, never computed from
+ * the caller's copy of the row: the login handler read that copy before a slow
+ * bcrypt, so parallel failures would otherwise all write the same "N+1" and the
+ * counter would barely move. The lock itself is claimed with a conditional write,
+ * so when several concurrent failures cross the threshold together exactly one
+ * of them locks, audits and alerts.
  */
 export async function registerFailedLogin(user: LockFields, ip: string | null): Promise<boolean> {
-  const attempts = user.failedLoginAttempts + 1;
-  if (attempts >= MAX) {
-    const lockedUntil = new Date(Date.now() + LOCK_MINUTES * 60_000);
-    // Reset the counter as we lock, so the next failed attempt after auto-unlock
-    // starts a fresh window rather than instantly re-locking.
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { failedLoginAttempts: 0, lockedUntil },
-    });
-    await recordAudit({
-      action: 'auth.account_locked',
-      actor: { id: user.id, email: user.email },
-      targetType: 'user',
-      targetId: user.id,
-      detail: `locked ${LOCK_MINUTES}m after ${attempts} failed logins${ip ? ` from ${ip}` : ''}`,
-    });
-    await alertAdmins(user, attempts, ip, lockedUntil).catch(() => {});
-    // Webhook-only here — admins are already emailed by alertAdmins above.
-    await notifyWebhook({
-      event: 'auth.lockout',
-      title: user.email,
-      message:
-        `Account "${user.email}" was locked after ${attempts} failed login attempts` +
-        `${ip ? ` from ${ip}` : ''}. Unlocks at ${lockedUntil.toISOString()}.`,
-    }).catch(() => {});
-    return true;
-  }
-  await prisma.user.update({ where: { id: user.id }, data: { failedLoginAttempts: attempts } });
-  return false;
+  const { failedLoginAttempts: attempts } = await prisma.user.update({
+    where: { id: user.id },
+    data: { failedLoginAttempts: { increment: 1 } },
+    select: { failedLoginAttempts: true },
+  });
+  if (attempts < MAX) return false;
+
+  const lockedUntil = new Date(Date.now() + LOCK_MINUTES * 60_000);
+  // Reset the counter as we lock, so the next failed attempt after auto-unlock
+  // starts a fresh window rather than instantly re-locking.
+  const { count } = await prisma.user.updateMany({
+    where: { id: user.id, failedLoginAttempts: { gte: MAX } },
+    data: { failedLoginAttempts: 0, lockedUntil },
+  });
+  if (count === 0) return false; // a concurrent failure already applied this lock
+
+  await recordAudit({
+    action: 'auth.account_locked',
+    actor: { id: user.id, email: user.email },
+    targetType: 'user',
+    targetId: user.id,
+    detail: `locked ${LOCK_MINUTES}m after ${attempts} failed logins${ip ? ` from ${ip}` : ''}`,
+  });
+  await alertAdmins(user, attempts, ip, lockedUntil).catch(() => {});
+  // Webhook-only here — admins are already emailed by alertAdmins above.
+  await notifyWebhook({
+    event: 'auth.lockout',
+    title: user.email,
+    message:
+      `Account "${user.email}" was locked after ${attempts} failed login attempts` +
+      `${ip ? ` from ${ip}` : ''}. Unlocks at ${lockedUntil.toISOString()}.`,
+  }).catch(() => {});
+  return true;
 }
 
 /**
