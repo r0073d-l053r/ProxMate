@@ -62,6 +62,11 @@ sources:
 | `BACKUP_DOWNLOAD_DIR` | `${…:-}` | no | Tenant backup downloads. Needs the `/backups` mount. |
 | `RESTORE_UPLOAD_MAX_GB` | `${…:-}` | no | An empty value falls back to the built-in 50. |
 | `MATESTATE_CRON` / `ACCESS_EXPIRY_CRON` | `${…:-}` | no | Schedule overrides. Empty means the defaults. |
+| `APPDB_BACKUP_CRON` / `BALANCER_CRON` / `TEMPLATE_REFRESH_CRON` | `${…:-}` | no | Schedule overrides for app-DB snapshots, the balancer and template refresh. Empty or invalid means the defaults. |
+| `PROXMATE_MODULES` | `${…:-}` | no | Comma-separated optional modules; empty enables none. |
+| `LOG_LEVEL` | `info` | no | pino log level. |
+| `GITHUB_TOKEN` | `${…:-}` | no | Optional token for the release check. |
+| `IDE_GUEST_PORT` | `${…:-}` | no | code-server port in guests; empty means the built-in 8080. |
 
 ## Host-side and frontend variables (`.env`)
 
@@ -78,7 +83,7 @@ sources:
 
 - `NEXT_PUBLIC_*` values are inlined at **build** time (`frontend/Dockerfile` `ARG`/`ENV`). Changing them in the runtime environment without a rebuild has no effect.[^fe-dockerfile][^compose]
 - The entrypoint starts as root, runs `chown -R node:node /data`, and does a non-recursive `chown` of `$APPDB_BACKUP_DIR` (failure there is non-fatal). It then re-execs as `node` through `su-exec`, runs `npx prisma migrate deploy`, applies migrations for any modules in `PROXMATE_MODULES`, and starts the server.[^entrypoint]
-- Many backend variables are **not** forwarded by docker-compose.yml, so setting them in `.env` alone does nothing. Examples: `BALANCER_CRON`, `TEMPLATE_REFRESH_CRON`, `APPDB_BACKUP_CRON`, `LOG_LEVEL`, `PROXMOX_TIMEOUT_MS`, `PROXMOX_RETRIES`, `API_WRITE_RATE_LIMIT_*`, `PROXMATE_MODULES`, `GITHUB_TOKEN`, `IDE_*`. To use them, add them to the `backend.environment` block. `PROXMATE_MODULES` is documented only in `.env.example`, not in `.env.docker.example`.[^compose]
+- Only the variables listed in the `backend.environment` block reach the container; there is no `env_file`. The numeric tuning knobs (`PROXMOX_TIMEOUT_MS`, `PROXMOX_RETRIES`, `API_WRITE_RATE_LIMIT_*`, `PUBLIC_TOKEN_RATE_LIMIT_*`, `MODULE_RATE_LIMIT_*`, `RESOURCE_HISTORY_DAYS`, `ALERT_COOLDOWN_MIN`, `LIVE_FEED_INTERVAL_MS`) and `IDE_*_VERSION` are not forwarded; their readers use `??`, so forwarding an empty value would not fall back to the default. To use one, add it with an explicit default (`${VAR:-<default>}`), e.g. in `docker-compose.override.yml`.[^compose]
 - Because `ENCRYPTION_KEY` is required by compose (`:?`), the backend's auto-generate-and-write-to-`.env` path never runs in Docker. Back the key up together with the `proxmate-data` volume.
 
 # Relationships

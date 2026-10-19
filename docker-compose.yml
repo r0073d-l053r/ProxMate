@@ -98,6 +98,20 @@ services:
       # defaults: guest backups Sundays 03:00, access-expiry sweep hourly at :20.
       MATESTATE_CRON: ${MATESTATE_CRON:-}
       ACCESS_EXPIRY_CRON: ${ACCESS_EXPIRY_CRON:-}
+      # Same, for app-database snapshots (default nightly 02:30), the cluster
+      # balancer and the cloud-image template refresh. Invalid or unset values
+      # fall back to the built-in schedules.
+      APPDB_BACKUP_CRON: ${APPDB_BACKUP_CRON:-}
+      BALANCER_CRON: ${BALANCER_CRON:-}
+      TEMPLATE_REFRESH_CRON: ${TEMPLATE_REFRESH_CRON:-}
+      # Comma-separated optional modules to enable (see backend/src/modules/).
+      PROXMATE_MODULES: ${PROXMATE_MODULES:-}
+      # Log verbosity (pino level: fatal, error, warn, info, debug, trace).
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Optional GitHub token for the "Check for updates" call (higher API rate limit).
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      # Port code-server listens on inside tenant VMs for the ProxMate IDE.
+      IDE_GUEST_PORT: ${IDE_GUEST_PORT:-}
     # Report healthy only once /api/health passes (DB reachable + migrations run),
     # so the frontend can wait for a genuinely-ready backend (see depends_on below).
     healthcheck:
