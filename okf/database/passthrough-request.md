@@ -50,7 +50,7 @@ Mirrors [QuotaRequest](/database/quota-request.md) for PCI passthrough. An admin
 - Creation is refused for LXC guests (400), VMs that already have `hasPassthrough` (409), and VMs with an existing pending request (409).[^svc]
 - In-flight states are `queued`, `stopping`, `migrating`, `attaching`; approval and denial are refused while a row is in flight.[^svc]
 - On success, one `$transaction` sets the VM's `hasPassthrough = true` and marks the request `approved`, `applyState='done'`.[^svc]
-- At boot, `reconcileInterruptedPassthroughApplies` loads pending rows stuck in an in-flight state. If the Proxmox migration is still running it leaves the row alone. Otherwise it re-syncs the VM's node, restores any `ciDropped` cloud-init drives (only when Proxmox is reachable), and sets `applyState='failed'` with `ciDropped` cleared. It never auto-resumes the remaining steps.[^svc] [^index]
+- At boot, `reconcileInterruptedPassthroughApplies` loads pending rows stuck in an in-flight state. If the Proxmox migration is still running it leaves the row alone. Otherwise it re-syncs the VM's node, restores any `ciDropped` cloud-init drives, and sets `applyState='failed'` with `ciDropped` cleared. When drives are recorded but Proxmox is unreachable, the row is left untouched (still in flight, `ciDropped` kept) for the next start to retry. It never auto-resumes the remaining steps.[^svc] [^index]
 
 [^schema]: backend/prisma/schema.prisma
 [^svc]: backend/src/services/passthrough-request.service.ts

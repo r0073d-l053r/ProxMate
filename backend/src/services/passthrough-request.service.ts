@@ -605,6 +605,14 @@ export async function reconcileInterruptedPassthroughApplies(): Promise<number> 
         }
       }
 
+      // `ciDropped` is the only record of which cloud-init drives the apply removed.
+      // Without Proxmox they can't be restored now, so leave the row as it is (still
+      // in flight) and let the next start retry, rather than clearing that record.
+      if (row.ciDropped && !client) {
+        console.warn(`[passthrough] ${row.id}: Proxmox unreachable — cloud-init drives left to restore next restart`);
+        continue;
+      }
+
       // Only ever regenerate drives on this row's own guest.
       if (row.ciDropped && client && (await guestIdentity(vm, client)) === 'ours') {
         const drives = JSON.parse(row.ciDropped) as Array<{ slot: string; storage: string }>;
