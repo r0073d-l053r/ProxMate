@@ -197,6 +197,18 @@ describe('IDE proxy — guest authentication', () => {
     expect(g.seen).toHaveLength(0);
   });
 
+  it('refuses a held VM even when its recorded status is running, without contacting it (audit round 3)', async () => {
+    const g = fakeGuest({ secret: 'vm1-secret' });
+    process.env['IDE_TARGET_OVERRIDE'] = await start(g.server);
+    vi.mocked(prisma.ideGuestSecret.findUnique).mockResolvedValue({ vmId: 'vm1', secretEnc: 'enc:vm1-secret' } as never);
+    vi.mocked(getVmWithCap).mockResolvedValue({ ...VM, status: 'running', holdReason: 'Over quota after a restore.' } as never);
+
+    const r = await get(await proxyApp());
+    expect(r.status).toBe(409);
+    expect(await r.text()).toMatch(/Over quota/);
+    expect(g.seen).toHaveLength(0);
+  });
+
   it('fails closed with a reinstall message when the install has no guest secret', async () => {
     const g = fakeGuest({ mode: 'none' });
     process.env['IDE_TARGET_OVERRIDE'] = await start(g.server);

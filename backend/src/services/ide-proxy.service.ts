@@ -157,6 +157,11 @@ async function resolveTarget(vmId: string, user: { id: string; role: string }): 
   if (vm.status !== 'running') {
     return { ok: false, status: 409, message: 'Start the VM to open its ProxMate IDE.' };
   }
+  // A held machine (vm.service isHeld: `holdReason` set, or `error`) may be
+  // neither started nor handed over — whatever status a sync last recorded.
+  if (vm.holdReason) {
+    return { ok: false, status: 409, message: vm.holdReason };
+  }
   const secret = await loadIdeGuestSecret(vm.id);
   if (!secret) {
     // Installed before guest authentication existed (or the secret is gone):
