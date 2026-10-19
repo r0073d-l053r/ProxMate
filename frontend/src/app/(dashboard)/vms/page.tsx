@@ -8,6 +8,7 @@ import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import type { VirtualMachine, UserGroup } from "@/lib/types";
 import { formatRam, formatDate } from "@/lib/format";
+import { visibleSelection } from "@/lib/selection";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { OwnerGroupHeader } from "@/components/dashboard/owner-group-header";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
@@ -45,7 +46,8 @@ export function parseTags(csv: string | null): string[] {
  * gates it behind a *typed* confirmation: the Delete button stays disabled until
  * the user types the exact number of selected VMs.
  */
-function BulkDeleteDialog({ count, busy, onConfirm }: { count: number; busy: boolean; onConfirm: () => void }) {
+function BulkDeleteDialog({ names, busy, onConfirm }: { names: string[]; busy: boolean; onConfirm: () => void }) {
+  const count = names.length;
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const ready = text.trim() === String(count);
@@ -66,6 +68,11 @@ function BulkDeleteDialog({ count, busy, onConfirm }: { count: number; busy: boo
             Type <strong>{count}</strong> below to confirm.
           </AlertDialogDescription>
         </AlertDialogHeader>
+        <ul className="max-h-40 list-disc overflow-y-auto pl-5 text-sm">
+          {names.map((n, i) => (
+            <li key={`${i}-${n}`} className="break-all">{n}</li>
+          ))}
+        </ul>
         <Input
           autoFocus
           inputMode="numeric"
@@ -220,6 +227,8 @@ function OwnVmList({ vms, reload }: { vms: VirtualMachine[]; reload: () => Promi
   }, [vms]);
 
   const shown = activeTag ? vms.filter((v) => parseTags(v.tags).includes(activeTag)) : vms;
+  // Bulk actions only ever touch selected VMs that are on screen under the current filter.
+  const picked = visibleSelection(selected, shown);
 
   const toggle = useCallback((id: string) => {
     setSelected((prev) => {
@@ -231,7 +240,7 @@ function OwnVmList({ vms, reload }: { vms: VirtualMachine[]; reload: () => Promi
   }, []);
 
   async function runBulk(action: "start" | "stop" | "restart" | "delete") {
-    const ids = [...selected];
+    const ids = picked.map((v) => v.id);
     if (ids.length === 0) return;
     setBusy(true);
     try {
@@ -275,9 +284,9 @@ function OwnVmList({ vms, reload }: { vms: VirtualMachine[]; reload: () => Promi
         </div>
       )}
 
-      {selected.size > 0 && (
+      {picked.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 p-2 text-sm">
-          <span className="font-medium">{selected.size} selected</span>
+          <span className="font-medium">{picked.length} selected</span>
           <Button size="sm" variant="outline" disabled={busy} onClick={() => runBulk("start")}>
             <Play /> Start
           </Button>
@@ -287,7 +296,7 @@ function OwnVmList({ vms, reload }: { vms: VirtualMachine[]; reload: () => Promi
           <Button size="sm" variant="outline" disabled={busy} onClick={() => runBulk("restart")}>
             <RotateCw /> Restart
           </Button>
-          <BulkDeleteDialog count={selected.size} busy={busy} onConfirm={() => runBulk("delete")} />
+          <BulkDeleteDialog names={picked.map((v) => v.name)} busy={busy} onConfirm={() => runBulk("delete")} />
           <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
             Clear
           </Button>
