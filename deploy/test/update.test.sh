@@ -27,8 +27,10 @@ new_case() {
     cd "$T/seed" || exit 1
     printf 'services:\n  backend:\n    image: proxmate-backend\n' > docker-compose.yml
     echo 1.0.0 > VERSION
+    mkdir -p app && echo 1.0.0 > app/data.txt
     git add -A && git commit -qm v1.0.0 && git tag v1.0.0
     echo 1.1.0 > VERSION
+    echo 1.1.0 > app/data.txt
     git commit -qam v1.1.0 && git tag v1.1.0
     git push -q origin HEAD:refs/heads/main --tags
   ) || { echo "fixture setup failed"; exit 2; }
@@ -125,6 +127,89 @@ t_git_runs_as_checkout_owner() {
   assert_eq "$RC" 0 "exit code" &&
     assert_eq "$(version)" 1.1.0 "checked-out version" &&
     assert_eq "$root_owned" "" "root-owned paths left in the checkout"
+}
+
+# owner_case: a checkout owned by uid 1000 that the owner can reach.
+owner_case() {
+  [ "$(id -u)" -eq 0 ] || skip "needs root"
+  getent passwd 1000 >/dev/null 2>&1 || skip "needs a named user with uid 1000"
+  command -v runuser >/dev/null 2>&1 || skip "needs runuser"
+  new_case
+  chmod 0755 "$WORK" "$T"
+  chown -R 1000:1000 "$T/origin.git"   # a real origin is remote; here the owner must read it
+  chown -R 1000:1000 "$CHECKOUT"
+}
+root_owned_in_checkout() { find "$CHECKOUT" -path "$CONTROL" -prune -o -user 0 -print | head -5; }
+
+t_root_owned_fetch_head_left_by_sudo_run() {
+  # A previous `sudo ./deploy/update.sh` (1.0.x) or `sudo git pull` leaves
+  # root-owned files in .git that the owner cannot overwrite.
+  owner_case
+  printf '' > "$CHECKOUT/.git/FETCH_HEAD"
+  chown 0:0 "$CHECKOUT/.git/FETCH_HEAD"
+  chmod 0644 "$CHECKOUT/.git/FETCH_HEAD"
+  request v1.1.0
+  run_update --from-request
+  assert_eq "$RC" 0 "exit code" &&
+    assert_eq "$(status_field state)" success "state" &&
+    assert_eq "$(version)" 1.1.0 "checked-out version" &&
+    assert_eq "$(root_owned_in_checkout)" "" "root-owned paths left in the checkout"
+}
+
+t_root_owned_tracked_dir_updated_correctly() {
+  # A root-owned directory of tracked files that change between the tags: the
+  # owner cannot replace them, so without care the checkout "succeeds" with
+  # HEAD at the new tag and the old files on disk.
+  owner_case
+  chown -R 0:0 "$CHECKOUT/app"
+  request v1.1.0
+  run_update --from-request
+  assert_eq "$RC" 0 "exit code" &&
+    assert_eq "$(status_field state)" success "state" &&
+    assert_eq "$(cat "$CHECKOUT/app/data.txt")" 1.1.0 "tracked file content" &&
+    assert_eq "$(root_owned_in_checkout)" "" "root-owned paths left in the checkout"
+}
+
+t_untracked_files_ownership_untouched() {
+  owner_case
+  printf 'x\n' > "$CHECKOUT/docker-compose.override.yml"
+  printf 'K=v\n' > "$CHECKOUT/.env"
+  chown 0:0 "$CHECKOUT/docker-compose.override.yml" "$CHECKOUT/.env"
+  chown -R 0:0 "$CHECKOUT/app"
+  request v1.1.0
+  run_update --from-request
+  assert_eq "$(stat -c %u "$CHECKOUT/docker-compose.override.yml")" 0 "override owner" &&
+    assert_eq "$(stat -c %u "$CHECKOUT/.env")" 0 ".env owner"
+}
+
+t_reclaim_never_follows_links_out_of_checkout() {
+  owner_case
+  make_victim
+  rm -f "$CHECKOUT/app/data.txt"
+  ln -s "$VICTIM" "$CHECKOUT/app/data.txt"
+  chown -h 0:0 "$CHECKOUT/app/data.txt"
+  ln -s "$T" "$CHECKOUT/.git/outside-link"
+  chown -h 0:0 "$CHECKOUT/.git/outside-link"
+  request v1.1.0
+  run_update --from-request
+  assert_victim_untouched &&
+    assert_eq "$(stat -c %u "$T")" 0 "directory outside the checkout keeps its owner"
+}
+
+t_stale_checkout_reported_not_built() {
+  # Run as the (non-root) owner, nothing can reclaim a root-owned directory:
+  # the update must stop with a clear error, never build a mixed tree.
+  owner_case
+  chown -R 0:0 "$CHECKOUT/app"
+  chmod 0755 "$T/bin"
+  touch "$T/docker.log" "$T/out" && chown 1000:1000 "$T/docker.log" "$T/out"
+  runuser -u "$(getent passwd 1000 | cut -d: -f1)" -- env PATH="$T/bin:$PATH" STUB_LOG="$T/docker.log" HOME=/ \
+    PROXMATE_DIR="$CHECKOUT" UPDATE_CONTROL_DIR="$CONTROL" bash "$UPDATE_SH" v1.1.0 >"$T/out" 2>&1
+  RC=$?
+  assert_ne "$RC" 0 "exit code" &&
+    assert_eq "$(status_field state)" error "state" &&
+    assert_match "$(status_field message)" "app/data.txt" "message names the stale file" &&
+    assert_no_grep "compose build" "$T/docker.log"
 }
 
 t_git_falls_back_without_runuser() {

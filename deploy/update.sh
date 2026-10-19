@@ -114,13 +114,52 @@ trap 'exit 130' INT
 # (or for an owner with no account name) fall back to running as root. Either
 # way the checkout is declared safe — git otherwise refuses to work in a
 # repository owned by someone else — for this script's git calls only.
+#
+# reclaim_for_owner <uid> <gid>: hand back to the owner whatever in .git, and
+# among the tracked files and their parent directories, belongs to someone else.
+# Root-owned leftovers (an earlier `sudo ./deploy/update.sh`, a `sudo git pull`)
+# would otherwise make the owner's fetch fail, or make the checkout skip files
+# it cannot replace while still moving HEAD. Untracked files (.env,
+# docker-compose.override.yml, backups, the control dir) are never touched, and
+# `chown -h` / `find` without -L never follow a link out of the checkout.
+reclaim_for_owner() {
+  local uid="$1" gid="$2"
+  [[ -d "$PROXMATE_DIR/.git" && ! -L "$PROXMATE_DIR/.git" ]] || return 1
+  find "$PROXMATE_DIR/.git" ! -user "$uid" -exec chown -h "$uid:$gid" {} + || return 1
+  # pipefail (set above) makes a failing ls-files fail this too.
+  command git -c safe.directory="$PROXMATE_DIR" -C "$PROXMATE_DIR" ls-files -z |
+    reclaim_paths "$uid" "$gid"
+}
+# reclaim_paths <uid> <gid>: NUL-separated tracked paths on stdin; each path and
+# its parent directories, when owned by someone else, go to <uid>:<gid>.
+reclaim_paths() {
+  local uid="$1" gid="$2" f p
+  declare -A seen=()
+  while IFS= read -r -d '' f; do
+    p="$f"
+    while [[ -n "$p" && -z "${seen[$p]:-}" ]]; do
+      seen[$p]=1
+      if [[ -e "$PROXMATE_DIR/$p" || -L "$PROXMATE_DIR/$p" ]] &&
+         [[ "$(stat -c %u "$PROXMATE_DIR/$p")" != "$uid" ]]; then
+        chown -h "$uid:$gid" "$PROXMATE_DIR/$p" || return 1
+      fi
+      [[ "$p" == */* ]] || break
+      p="${p%/*}"
+    done
+  done
+}
+
 GIT_OWNER=""
 if [[ $(id -u) -eq 0 ]] && command -v runuser >/dev/null 2>&1; then
   _owner_uid="$(stat -c %u "$PROXMATE_DIR" 2>/dev/null || echo 0)"
+  _owner_gid="$(stat -c %g "$PROXMATE_DIR" 2>/dev/null || echo 0)"
   _owner="$(stat -c %U "$PROXMATE_DIR" 2>/dev/null || true)"
   # ...and only when the owner can actually reach and write the repository
-  # (a checkout under a directory they cannot enter stays root's job).
+  # (a checkout under a directory they cannot enter stays root's job), and
+  # everything git will touch could be handed back to them first. Otherwise
+  # this run uses git as root, as before.
   if [[ "$_owner_uid" != 0 && -n "$_owner" && "$_owner" != "UNKNOWN" ]] &&
+     reclaim_for_owner "$_owner_uid" "$_owner_gid" 2>/dev/null &&
      runuser -u "$_owner" -- test -w "$PROXMATE_DIR/.git" 2>/dev/null; then
     GIT_OWNER="$_owner"
     GIT_OWNER_HOME="$(getent passwd "$_owner" 2>/dev/null | cut -d: -f6)"
@@ -206,6 +245,20 @@ echo "==> Updating ProxMate to $TAG"
 STEP="Checking out $TAG"
 status "running" "$STEP" "$TAG"
 git checkout -q "refs/tags/$TAG"
+
+# git can move HEAD and still exit 0 when it could not replace some files (for
+# example in a directory it may not write to), leaving the old release's files
+# on disk. Never build such a mixed tree: the checkout must be exactly the tag.
+STEP="Verifying the checkout of $TAG"
+head_commit="$(git rev-parse -q --verify HEAD)"
+tag_commit="$(git rev-parse -q --verify "refs/tags/$TAG^{commit}")"
+if [[ "$head_commit" != "$tag_commit" ]]; then
+  fail "checkout of $TAG did not complete (HEAD is not the release commit) — $LOG_HINT"
+fi
+stale="$(git status --porcelain --untracked-files=no | sed -E 's/^.{3}//' | head -n 5 | tr '\n' ' ' | sed 's/ $//')"
+if [[ -n "$stale" ]]; then
+  fail "checkout of $TAG left files that do not match the release: ${stale} — check their ownership and permissions (they must be writable by the checkout owner), then retry; nothing was built"
+fi
 
 STEP="Building images"
 status "running" "$STEP" "$TAG"
