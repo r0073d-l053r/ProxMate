@@ -251,6 +251,17 @@ describe('CPU layout after a restore (audit MAJOR 3)', () => {
   });
 });
 
+describe('unusedN volumes after a restore (audit minor)', () => {
+  it('deletes a volume the restored config left detached, before the guest starts', async () => {
+    const { c, state } = fakePve(LIVE, { ...LIVE, unused0: 'local-lvm:vm-100-disk-7' });
+    await restoreFromMateState(row(), ms);
+    expect(state.cfg['unused0']).toBeUndefined();
+    const del = c.put.mock.calls.findIndex((x) => bodyOf(x)['delete'] === 'unused0');
+    const start = c.post.mock.calls.findIndex((x) => /status\/start$/.test(String(x[0])));
+    expect(c.put.mock.invocationCallOrder[del]!).toBeLessThan(c.post.mock.invocationCallOrder[start]!);
+  });
+});
+
 describe('syncRestoredGuest', () => {
   it('pins a restored container with no cores line to the row\'s cores (BUG-028)', async () => {
     const { state } = fakePve({ hostname: 'ct', tags: marker, memory: '1024', rootfs: 'local-lvm:vm-100-disk-0,size=8G' }, {});

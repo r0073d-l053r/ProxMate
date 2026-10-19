@@ -1795,6 +1795,21 @@ export async function syncRestoredGuest(
       for (const k of unapproved) delete cfg[k];
     }
 
+    // A disk the earlier config doesn't have (added after the backup or snapshot)
+    // comes back detached, as an `unusedN` volume. ProxMate can neither reattach
+    // nor remove such a volume, so it would be storage the owner pays for and can
+    // never use or free; it is deleted, as removeDisk does with the volume a
+    // detach leaves behind. Proxmox refuses for a volume an existing snapshot still
+    // uses — that one stays until the snapshot is deleted.
+    for (const key of Object.keys(cfg).filter((k) => /^unused\d+$/.test(k))) {
+      try {
+        await client.put(path, new URLSearchParams({ delete: key }));
+        delete cfg[key];
+      } catch (err) {
+        console.warn(`[vm] kept ${key} of "${row.name}": ${pve.pveMessage(err)}`);
+      }
+    }
+
     const sizes = guestConfigSizes(cfg, kind);
     // A container with no `cores` line may use every host core; pin it to the row's.
     let setResources = sizes.cpu === null;
