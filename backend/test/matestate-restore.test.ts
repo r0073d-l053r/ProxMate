@@ -13,7 +13,7 @@ vi.mock('../src/lib/prisma.js', () => ({
   },
 }));
 vi.mock('../src/services/config.service.js', () => ({
-  getConfig: vi.fn(async (key: string) => ({ default_bridge: 'vmbr0', isolation_enabled: 'true' })[key] ?? null),
+  getConfig: vi.fn(async (key: string) => ({ default_bridge: 'vmbr0', isolation_enabled: 'true', ide_ingress_cidr: '10.0.0.5/32' })[key] ?? null),
   setConfig: vi.fn(),
 }));
 vi.mock('../src/services/notify.service.js', () => ({ notify: vi.fn(async () => undefined) }));
@@ -161,6 +161,35 @@ describe('MateState restore: resources come back only within quota (BUG-024)', (
       where: { id: 'rowa' },
       data: expect.objectContaining({ hasPassthrough: true }),
     });
+  });
+});
+
+describe('MateState restore re-applies the network placement and isolation of now (BUG-059)', () => {
+  it('moves the NIC back to the current bridge, re-runs isolation with the current VLAN, and re-opens the IDE pinhole — all before start', async () => {
+    const { c, state } = fakePve(LIVE, { ...LIVE, net0: 'virtio=AA:BB,bridge=vmbr9' });
+    vi.mocked(prisma.virtualMachine.findUnique).mockResolvedValue(row({ ideState: 'ready' }));
+    vi.mocked(prisma.virtualMachine.update).mockImplementation(
+      async ({ data }: { data: Record<string, unknown> }) => ({ ...(row({ ideState: 'ready' }) as object), ...data }) as never,
+    );
+    await restoreFromMateState(row({ ideState: 'ready' }), ms);
+
+    expect(state.cfg['net0']).toContain('bridge=vmbr0');
+    expect(state.cfg['net0']).toContain('firewall=1');
+    expect(pve.configureVmIsolation).toHaveBeenCalledWith('pve1', 100, { dnsServers: [], vlanTag: 42 }, expect.anything(), 'qemu');
+    const pinhole = c.post.mock.calls.findIndex(
+      (x) => x[0] === '/nodes/pve1/qemu/100/firewall/rules' && bodyOf(x)['comment']?.includes('IDE'),
+    );
+    const start = c.post.mock.calls.findIndex((x) => /status\/start$/.test(String(x[0])));
+    expect(pinhole).toBeGreaterThanOrEqual(0);
+    expect(c.post.mock.invocationCallOrder[pinhole]!).toBeLessThan(c.post.mock.invocationCallOrder[start]!);
+    expect(vi.mocked(pve.configureVmIsolation).mock.invocationCallOrder[0]!).toBeLessThan(c.post.mock.invocationCallOrder[start]!);
+  });
+
+  it('does not start the guest when isolation cannot be re-applied', async () => {
+    const { c } = fakePve(LIVE, LIVE);
+    vi.mocked(pve.configureVmIsolation).mockRejectedValueOnce(new Error('firewall API down'));
+    await expect(restoreFromMateState(row(), ms)).rejects.toThrow(/firewall API down/);
+    expect(c.post.mock.calls.some((x) => /status\/start$/.test(String(x[0])))).toBe(false);
   });
 });
 

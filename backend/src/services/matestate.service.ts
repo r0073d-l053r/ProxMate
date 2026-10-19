@@ -176,6 +176,31 @@ async function abandonBackup(
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * Put a restored guest back on the network placement and isolation it has NOW.
+ * An in-place restore (and a rollback) brings back the NIC line — bridge, VLAN
+ * tag — and the firewall as they were when the backup or snapshot was taken, so
+ * a bridge, VLAN or rule change made since would otherwise be undone. Mirrors the
+ * restore-from-upload path; the IDE's firewall pinhole is re-added while the IDE
+ * is installed.
+ */
+async function reapplyIsolation(
+  vm: VirtualMachine,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<void> {
+  const kind: pve.GuestKind = vm.type === 'lxc' ? 'lxc' : 'qemu';
+  await pve.applyDefaultBridge(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
+  if ((await getConfig('isolation_enabled')) === 'false') return;
+  await pve.configureVmIsolation(vm.proxmoxNode, vm.proxmoxVmId, await pve.readIsolationOptions(), client, kind);
+  await pve.ensureNicFirewall(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
+  const ingress = (await getConfig('ide_ingress_cidr'))?.trim();
+  if (vm.ideState === 'ready' && ingress) {
+    // Same port the IDE installer opens (ide-provision.service).
+    const port = Number(process.env['IDE_GUEST_PORT'] || 8080);
+    await pve.ensureIdePinhole(vm.proxmoxNode, vm.proxmoxVmId, { port, source: ingress }, client, kind);
+  }
+}
+
+/**
  * Restore a VM from one of its MateStates. Stops the VM (if running), waits
  * for it to be stopped, and runs a Proxmox restore-in-place (force=1) into
  * the SAME VMID — so the VM's identity, NIC, and isolation stay intact.
@@ -246,15 +271,8 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
     // Re-sync the row from the restored config (and strip unapproved PCI devices)
     // before anything can start the guest.
     vm = await syncRestoredGuest(vm, { approvedPci, client });
-    // Restore creates a fresh config; re-assert tenant isolation on the NIC.
-    const isolate = (await getConfig('isolation_enabled')) !== 'false';
-    if (isolate) {
-      try {
-        await pve.ensureNicFirewall(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
-      } catch {
-        /* not fatal */
-      }
-    }
+    // The restore brought back the backup-time NIC and firewall too.
+    await reapplyIsolation(vm, client);
     await pve.startVm(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
   } catch (err) {
     await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'ready' } });
@@ -281,7 +299,10 @@ export async function rollbackToSnapshot(vm: VirtualMachine, snapname: string): 
   // A rollback restores the snapshot's config, tags included — re-tag the guest
   // as this row's (a snapshot from before ownership tags existed has none).
   await markClonedGuest(vm, client);
-  return syncRestoredGuest(vm, { approvedPci, client });
+  const synced = await syncRestoredGuest(vm, { approvedPci, client });
+  // The snapshot's NIC line (bridge, VLAN tag) came back with it.
+  await reapplyIsolation(synced, client);
+  return synced;
 }
 
 /** Manually delete one MateState (DB + Proxmox file). */
