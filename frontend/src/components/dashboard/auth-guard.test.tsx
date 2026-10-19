@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, fireEvent, act } from "@testing-library/react";
 import { AxiosError, AxiosHeaders, type InternalAxiosRequestConfig } from "axios";
 
 const replace = vi.fn();
@@ -72,6 +72,38 @@ describe("AuthGuard", () => {
     );
     fireEvent.click(retry);
     expect(await screen.findByText("secret")).toBeTruthy();
+  });
+
+  it("says the API is unavailable and retries on its own with backoff", async () => {
+    vi.useFakeTimers();
+    try {
+      get.mockRejectedValue(networkError());
+      render(<AuthGuard>secret</AuthGuard>);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(screen.getByText(/The ProxMate API is unavailable/)).toBeTruthy();
+      expect(screen.getByRole("button", { name: /retry/i })).toBeTruthy();
+      expect(get).toHaveBeenCalledTimes(1);
+
+      // First automatic retry after 5s.
+      await act(() => vi.advanceTimersByTimeAsync(4999));
+      expect(get).toHaveBeenCalledTimes(1);
+      await act(() => vi.advanceTimersByTimeAsync(1));
+      expect(get).toHaveBeenCalledTimes(2);
+
+      // Second failure waits 10s; the API is back by then.
+      get.mockImplementation((url: string) =>
+        url === "/setup/status"
+          ? Promise.resolve({ data: { setupComplete: true } })
+          : Promise.resolve({ data: { user: { ...cachedUser } } }),
+      );
+      await act(() => vi.advanceTimersByTimeAsync(9999));
+      expect(screen.queryByText("secret")).toBeNull();
+      await act(() => vi.advanceTimersByTimeAsync(1));
+      expect(screen.getByText("secret")).toBeTruthy();
+      expect(replace).not.toHaveBeenCalledWith("/login");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("sends a signed-out session to /login", async () => {

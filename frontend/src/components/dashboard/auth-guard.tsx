@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Loader2, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
-import { authFailure } from "@/lib/auth-failure";
+import { authFailure, retryDelayMs } from "@/lib/auth-failure";
 import { useAuthStore, useHydrated } from "@/lib/auth-store";
 import { Button } from "@/components/ui/button";
 import type { MeResponse } from "@/lib/types";
@@ -22,6 +22,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   // The API couldn't be reached (or errored) — show a retry state, not /login.
   const [unavailable, setUnavailable] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // Consecutive "unavailable" results, for the automatic retry backoff.
+  const [failures, setFailures] = useState(0);
 
   // The session lives in an httpOnly cookie, so we can't read it here — `/auth/me`
   // (cookie sent automatically) is the source of truth.
@@ -39,6 +41,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
         clear();
         router.replace("/login");
       } else {
+        setFailures((n) => n + 1);
         setUnavailable(true);
       }
     };
@@ -58,6 +61,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
             const u = res.data.user;
             setUser({ id: u.id, email: u.email, role: u.role, displayName: u.displayName });
             setMfaSetupRequired(!!u.mfaSetupRequired);
+            setFailures(0);
             setValidated(true);
           })
           .catch(fail);
@@ -68,6 +72,19 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       active = false;
     };
   }, [hydrated, router, setUser, setMfaSetupRequired, clear, attempt]);
+
+  const retry = useCallback(() => {
+    setUnavailable(false);
+    setAttempt((n) => n + 1);
+  }, []);
+
+  // While the API is unavailable, retry on a backoff (5s, 10s, 20s… up to 60s) so an
+  // unattended screen such as a kiosk panel recovers by itself; Retry skips the wait.
+  useEffect(() => {
+    if (!unavailable || validated) return;
+    const t = setTimeout(retry, retryDelayMs(failures));
+    return () => clearTimeout(t);
+  }, [unavailable, validated, failures, retry]);
 
   // If a mid-session 401 clears the user (interceptor), bounce to login.
   useEffect(() => {
@@ -85,15 +102,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   if (unavailable && !validated) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
-        <p>Cannot reach the ProxMate API. Is the backend running?</p>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            setUnavailable(false);
-            setAttempt((n) => n + 1);
-          }}
-        >
+        <p>The ProxMate API is unavailable. Retrying automatically…</p>
+        <Button variant="outline" size="sm" onClick={retry}>
           <RefreshCw /> Retry
         </Button>
       </div>
