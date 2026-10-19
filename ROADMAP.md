@@ -12,19 +12,13 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 ## 🔜 Open — up next (pulled to the top)
 
-### Found while verifying v1.0.0
+### Still open from v1.0.0 verification
 
 - **Expired-access API tokens return the wrong status.** A `pm_…` token whose account's compute
   access window has lapsed gets a generic `401`, not the `403 access_expired` the session paths
   return — API callers can't distinguish "bad token" from "access lapsed."
-- **Rescue-mode guard fires too late.** The owner-window check on entering rescue mode runs *after*
-  the guest is force-stopped and its boot config mutated — a refusal should leave the VM untouched.
 - **Access-expiry sweep has no test coverage.** `suspendLapsed` and the graceful→force stop
   escalation are untested, which blocks refactoring the scheduler with confidence.
-- **Connection test should assert visibility, not just permissions.** v1.0.0 made
-  `testProxmoxConnection` reject a privilege-separated token with an empty permission set; it still
-  doesn't assert the token can actually *see* a non-empty VM + storage list, which would have caught
-  both historical token misconfigurations.
 - **A genuine least-privilege Proxmox role.** Document (and ideally automate) a scoped token instead
   of `root@pam`. Prior investigation suggests the earlier pool-scoping failure was an ACL naming
   `users=` where a privilege-separated token needs `tokens=`; needs a working recipe incl. `VM.Audit`.
@@ -39,17 +33,13 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 - **Background reconciler for Proxmox tasks.** Async UPIDs are reconciled opportunistically on read;
   a backend restart mid-operation can leave rows stuck in `creating`/`restoring`. A worker that polls
   tasks to completion and sweeps stuck rows at startup would make state authoritative.
-- **Node-drain migratability guard.** The balancer's planner reads Proxmox's `allowed_nodes`
-  preflight and pins un-migratable guests; apply the same guard to the **node-drain** planner so it
-  can't propose an impossible evacuation.
 - **First-class Postgres support.** The Prisma schema is portable but the shipped migration history
   is SQLite-locked (`migration_lock.toml`), and the built-in app-DB backup uses SQLite's
   `VACUUM INTO`. Postgres today means `db push` + `pg_dump`; proper support wants a migration
   history and a backup path of its own. SQLite stays the default.
-- **Forward the documented tuning vars in Docker Compose.** `BALANCER_CRON`,
-  `TEMPLATE_REFRESH_CRON`, `ALERT_COOLDOWN_MIN` and `PUBLIC_TOKEN_RATE_LIMIT_*` are read by the
-  backend but not passed through by the shipped `docker-compose.yml`, so setting them in `.env`
-  silently does nothing under Compose.
+- **Forward the remaining tuning vars in Docker Compose.** `ALERT_COOLDOWN_MIN` and
+  `PUBLIC_TOKEN_RATE_LIMIT_*` are read by the backend but not passed through by the shipped
+  `docker-compose.yml`, so setting them in `.env` silently does nothing under Compose.
 
 ### Production hardening & ops
 
