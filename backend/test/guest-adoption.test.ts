@@ -157,6 +157,26 @@ describe('adoptGuest (admin)', () => {
     pveWith(null);
     await expect(adoptGuest(row())).rejects.toThrow(/no Proxmox guest/);
   });
+
+  it('keeps a hold while the guest still references another guest\'s volume (audit round 3)', async () => {
+    pveWith({ name: 'web', tags: guestMarker('rowa'), scsi1: 'local-lvm:vm-200-disk-0,size=10G' });
+    const held = row({ status: 'error', holdReason: 'The restored machine referenced disks that belong to another guest.' });
+    await expect(adoptGuest(held)).rejects.toThrow(/aren't its own/);
+    expect(prisma.virtualMachine.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ holdReason: null }) }));
+  });
+
+  it('lifts a hold once the guest references only its own volumes', async () => {
+    pveWith({ name: 'web', tags: guestMarker('rowa'), scsi0: 'local-lvm:vm-100-disk-0,size=10G' });
+    const held = row({ status: 'error', holdReason: "This machine's provisioning didn't finish." });
+    await adoptGuest(held);
+    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: { status: 'stopped', holdReason: null } });
+  });
+
+  it('refuses to adopt an untagged guest that references another guest\'s volume', async () => {
+    const c = pveWith({ name: 'web', scsi1: 'local-lvm:vm-200-disk-0,size=10G' });
+    await expect(adoptGuest(row())).rejects.toThrow(/aren't its own/);
+    expect(c.put).not.toHaveBeenCalled();
+  });
 });
 
 describe('listUnmatchedVms (admin)', () => {

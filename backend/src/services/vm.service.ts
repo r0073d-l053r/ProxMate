@@ -429,6 +429,16 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
       return current;
     }
     if (isHeld(current)) {
+      // Never lift a hold while the guest still references a volume that isn't its
+      // own: that is what a foreign-volume hold is about, and a guest whose
+      // provisioning didn't finish was never checked.
+      const cfg = await pve.getVmConfig(current.proxmoxNode, current.proxmoxVmId, client, kindOf(current));
+      const foreign = foreignVolumeKeys(cfg, current.proxmoxVmId);
+      if (foreign.length > 0) {
+        throw new AdoptError(
+          `The guest still references disks that aren't its own (${foreign.join(', ')}). Detach them in Proxmox first.`,
+        );
+      }
       return prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'stopped', holdReason: null } });
     }
     return current;
@@ -441,6 +451,10 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
   if (identity === 'foreign') throw new AdoptError("The guest at this VMID carries another machine's ProxMate tag.");
   const cfg = await pve.getVmConfig(current.proxmoxNode, current.proxmoxVmId, client, kindOf(current));
   if (cfg['template'] === '1') throw new AdoptError('The guest at this VMID is a Proxmox template, not a machine.');
+  const foreign = foreignVolumeKeys(cfg, current.proxmoxVmId);
+  if (foreign.length > 0) {
+    throw new AdoptError(`The guest references disks that aren't its own (${foreign.join(', ')}). Detach them in Proxmox first.`);
+  }
   await markClonedGuest(current, client);
   return current;
 }
