@@ -180,7 +180,7 @@ Keep it on the resource routers as **defense-in-depth** (it now almost never fir
 | **Happy path, passkey** | register → enrollment token → `/setup-2fa` → register passkey → "sign in" → passwordless passkey login → first session. |
 | **Mobile tab eviction mid-setup** | in-memory token lost → frontend has no token → redirect to `/login` w/ note → password login → `isMfaSetupRequired` still true → **new enrollment token** → resume. No session ever existed. |
 | **Non-`require2fa` invite** | unchanged: register issues a session directly. |
-| **SSO user** | exempt (IdP handles MFA), unchanged. |
+| **SSO user** | signing in through SSO is exempt (IdP handles MFA). Since 1.1.0 a **password** login on an SSO-linked account is not: it gets an enrollment token like any other `require2fa` account (`isMfaSetupRequired(id, { ssoExempt: false })`). |
 | **Admin flips `require2fa` on an existing, logged-in user** | **their sessions are invalidated on flip** (decided, §7) → next request 401s → clean re-login, which (no factor yet) returns an enrollment token, not a session. Fallback if ever relaxed: keep the session, corralled to `/security` by `enforceMfaSetup` + `AuthGuard`. |
 | **Leaked enrollment token (<15 min, before any factor)** | attacker could only enrol *their own* authenticator as the victim's first factor — which the victim's next login would expose (their code won't work) and which an account-recovery path resolves. Bounded, short, and strictly weaker than leaking a session. Mitigated further by the short TTL + inert-after-first-factor rule. |
 
