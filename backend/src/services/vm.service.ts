@@ -10,6 +10,7 @@ import { vmMaintenanceEmail } from '../lib/email-templates.js';
 import * as pve from './proxmox.service.js';
 import { getOfferedFeatureIds, getBaseFeatureIds } from './template.service.js';
 import { isValidPublicKey } from './ssh-key.service.js';
+import { diskSizeGb } from './disk.service.js';
 import { ALL_CAPS, CAPS_BY_ROLE, normalizeShareRole, type ShareRole, type VmCap } from './vm-share.service.js';
 
 /** The Proxmox guest kind for a VM row (defaults to QEMU for legacy/unset rows). */
@@ -1179,15 +1180,18 @@ export async function resizeVm(
   // Resolve the disk up-front so a missing/unresizable disk fails before we
   // change anything else. LXC's root volume is always `rootfs`; a QEMU VM's
   // primary disk is a bus slot (scsi0, …) we read from its config.
+  //
+  // `storage` is the VM's TOTAL (root + data disks — see disk.service), so the
+  // request is a change of the total. The root disk grows by that delta from its
+  // own current size; sizing it to the total would hand out the data disks' GB a
+  // second time, uncounted.
   let diskKey: string | undefined;
+  let rootTargetGb = 0;
   if (growDisk) {
-    if (kind === 'lxc') {
-      diskKey = 'rootfs';
-    } else {
-      const cfg = await pve.getVmConfig(current.proxmoxNode, current.proxmoxVmId, client);
-      diskKey = pve.findPrimaryDisk(cfg);
-      if (!diskKey) throw new ResizeError('Could not find a resizable disk on this VM.');
-    }
+    const cfg = await pve.getVmConfig(current.proxmoxNode, current.proxmoxVmId, client, kind);
+    diskKey = kind === 'lxc' ? 'rootfs' : pve.findPrimaryDisk(cfg);
+    if (!diskKey || !cfg[diskKey]) throw new ResizeError('Could not find a resizable disk on this VM.');
+    rootTargetGb = diskSizeGb(cfg[diskKey]) + (targetStorage - vm.storage);
   }
 
   if (resourcesChanged) {
@@ -1199,7 +1203,7 @@ export async function resizeVm(
   }
 
   if (growDisk && diskKey) {
-    await pve.resizeDisk(current.proxmoxNode, current.proxmoxVmId, diskKey, targetStorage, client, kind);
+    await pve.resizeDisk(current.proxmoxNode, current.proxmoxVmId, diskKey, rootTargetGb, client, kind);
     current = await prisma.virtualMachine.update({
       where: { id: current.id },
       data: { storage: targetStorage },

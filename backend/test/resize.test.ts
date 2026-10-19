@@ -132,4 +132,41 @@ describe('resizeVm', () => {
     expect(client.put).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
   });
+
+  it('grows the root disk by the requested delta when data disks are attached (storage is the total)', async () => {
+    const client = fakePve({
+      get: vi.fn((url: string) => {
+        const ok = (data: unknown) => Promise.resolve({ data: { data } });
+        if (url === '/cluster/resources') return ok([{ type: 'qemu', vmid: 120, node: 'pve1' }]);
+        if (/\/qemu\/120\/config$/.test(url))
+          return ok({ scsi0: 'local-lvm:vm-120-disk-0,size=20G', scsi1: 'local-lvm:vm-120-disk-1,size=100G' });
+        return ok(null);
+      }),
+    });
+    getClient.mockResolvedValue(client as never);
+
+    // Total 120 (20 root + 100 data) → 130 is "+10 GB": the root goes 20 → 30, not 130.
+    await resizeVm(user(), vm({ storage: 120 }), { storage: 130 });
+
+    const resizePut = client.put.mock.calls.find((c) => /\/resize$/.test(c[0] as string));
+    expect(bodyOf(resizePut!)).toEqual({ disk: 'scsi0', size: '30G' });
+    expect(update).toHaveBeenCalledWith({ where: { id: 'db-1' }, data: { storage: 130 } });
+  });
+
+  it('grows an LXC rootfs by the delta too', async () => {
+    const client = fakePve({
+      get: vi.fn((url: string) => {
+        const ok = (data: unknown) => Promise.resolve({ data: { data } });
+        if (url === '/cluster/resources') return ok([{ type: 'lxc', vmid: 120, node: 'pve1' }]);
+        if (/\/lxc\/120\/config$/.test(url)) return ok({ rootfs: 'local-lvm:subvol-120-disk-0,size=8G' });
+        return ok(null);
+      }),
+    });
+    getClient.mockResolvedValue(client as never);
+
+    await resizeVm(user(), vm({ type: 'lxc', storage: 8 }), { storage: 12 });
+
+    const resizePut = client.put.mock.calls.find((c) => /\/lxc\/120\/resize$/.test(c[0] as string));
+    expect(bodyOf(resizePut!)).toEqual({ disk: 'rootfs', size: '12G' });
+  });
 });

@@ -33,7 +33,7 @@ Every guest ProxMate creates carries a Proxmox tag `proxmate-<row id>` (`guestMa
 | `listVms` / `annotateAccess` | `(user)` / `(vms, user)` | Owned + shared (all for admins); adds `access` and `caps`. |
 | `migrateVmToNode` | `(vm, target, { notifyOwner?, actorId?, offline?, targetstorage?, timeoutMs? })` | Refuses LXC, passthrough VMs, unknown nodes and arch mismatch; live if running; optional owner email; waits (default 30 min); updates `proxmoxNode`. |
 | `updateVm` / `normalizeTags` | | Notes/name/tags; tags lowercased, deduped CSV. |
-| `quotaAccountFor` / `assertResizeWithinQuota` / `resizeVm` | | Resize billed to the VM OWNER; disk grow-only (`ResizeError`); Proxmox first, then DB per step. |
+| `quotaAccountFor` / `assertResizeWithinQuota` / `resizeVm` | | Resize billed to the VM OWNER; disk grow-only (`ResizeError`). `storage` is the total (root + data disks), so the root disk grows by the requested change of the total from its current size. Proxmox first, then DB per step. |
 | `setPowerSchedule` | `(vm, { startCron, stopCron })` | Stored for [power-schedule](/services/power-schedule.md). |
 | `syncVmNode` | `(vm)` | Corrects `proxmoxNode` from `/cluster/resources`. |
 | `getVmWithLiveStatus` / `refreshVmIps` / `getLiveUsage` | | Live status merge (syncs DB status unless `creating`), agent/LXC IP refresh, per-user live usage. |
