@@ -247,6 +247,16 @@ router.put('/settings/smtp', async (req: Request, res: Response) => {
     return;
   }
   await saveMailConfig(parsed.data);
+  // Names the server and account, never the password: the audit log is readable
+  // by every admin and outlives the credential.
+  await recordAudit({
+    action: 'admin.smtp_config',
+    actor: (req as AuthRequest).user,
+    detail: `${parsed.data.host}:${parsed.data.port}${parsed.data.user ? ` as ${parsed.data.user}` : ''}${
+      parsed.data.pass ? ' (password replaced)' : ''
+    }`,
+    req,
+  });
   res.json({ success: true });
 });
 
@@ -480,10 +490,19 @@ router.put('/settings/proxmox', async (req: Request, res: Response) => {
   await setConfig('proxmox_host', host);
   await setConfig('proxmox_token_id', tokenId);
   await setConfig('proxmox_verify_ssl', String(verifySsl));
-  if (tokenSecret && tokenSecret.trim().length > 0) {
+  const secretReplaced = !!tokenSecret && tokenSecret.trim().length > 0;
+  if (secretReplaced) {
     await setConfig('proxmox_token_secret', tokenSecret, true);
   }
 
+  // Repointing ProxMate at another cluster or token is one of the most consequential
+  // changes an admin can make, so it is recorded — without the secret itself.
+  await recordAudit({
+    action: 'admin.proxmox_config',
+    actor: (req as AuthRequest).user,
+    detail: `${host} as ${tokenId}, verifySsl=${verifySsl}${secretReplaced ? ', secret replaced' : ''}`,
+    req,
+  });
   res.json({ success: true });
 });
 
@@ -519,8 +538,7 @@ router.put('/settings/defaults', async (req: Request, res: Response) => {
   }
   // Capture the old values first: these decide where every future VM is placed and
   // whether it can ever be migrated, so "what changed, from what, and who did it"
-  // has to be answerable afterwards. This route previously wrote no audit entry at
-  // all — the only admin route that didn't.
+  // has to be answerable afterwards.
   const before = {
     storage: await getConfig('default_storage'),
     bridge: await getConfig('default_bridge'),
@@ -560,6 +578,12 @@ router.put('/settings/rescue', async (req: Request, res: Response) => {
     return;
   }
   await setConfig('rescue_iso', parsed.data.iso.trim());
+  await recordAudit({
+    action: 'admin.rescue_config',
+    actor: (req as AuthRequest).user,
+    detail: parsed.data.iso.trim() || 'rescue ISO cleared',
+    req,
+  });
   res.json({ success: true });
 });
 
@@ -576,6 +600,12 @@ router.put('/settings/template-refresh', async (req: Request, res: Response) => 
     return;
   }
   await setConfig('template_refresh_enabled', String(parsed.data.enabled));
+  await recordAudit({
+    action: 'admin.template_refresh_config',
+    actor: (req as AuthRequest).user,
+    detail: parsed.data.enabled ? 'monthly refresh enabled' : 'monthly refresh disabled',
+    req,
+  });
   res.json({ success: true });
 });
 
@@ -706,6 +736,14 @@ router.put('/isolation', async (req: Request, res: Response) => {
   if (parsed.data.vlanTag !== undefined) {
     await setConfig('isolation_vlan_tag', parsed.data.vlanTag === '' ? '' : String(parsed.data.vlanTag));
   }
+  await recordAudit({
+    action: 'admin.isolation_config',
+    actor: (req as AuthRequest).user,
+    detail: `isolation ${parsed.data.enabled ? 'on' : 'off'}${
+      parsed.data.dnsServers !== undefined ? `, dns: ${parsed.data.dnsServers.trim() || 'any'}` : ''
+    }${parsed.data.vlanTag !== undefined ? `, vlan: ${parsed.data.vlanTag === '' ? 'none' : parsed.data.vlanTag}` : ''}`,
+    req,
+  });
   res.json({ success: true });
 });
 
@@ -723,6 +761,12 @@ router.post('/isolation/enforce', async (req: Request, res: Response) => {
   }
   try {
     await setClusterFirewall(true, [parsed.data.managementCidr]);
+    await recordAudit({
+      action: 'admin.isolation_enforce',
+      actor: (req as AuthRequest).user,
+      detail: `cluster firewall on, management ${parsed.data.managementCidr}`,
+      req,
+    });
     res.json({ success: true, enforced: true });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
@@ -732,9 +776,10 @@ router.post('/isolation/enforce', async (req: Request, res: Response) => {
 // ─── DELETE /api/admin/isolation/enforce ──────────────────────
 // Disable the cluster firewall (stops enforcing; management allow-rules are left in place).
 
-router.delete('/isolation/enforce', async (_req: Request, res: Response) => {
+router.delete('/isolation/enforce', async (req: Request, res: Response) => {
   try {
     await setClusterFirewall(false);
+    await recordAudit({ action: 'admin.isolation_unenforce', actor: (req as AuthRequest).user, detail: 'cluster firewall off', req });
     res.json({ success: true, enforced: false });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });

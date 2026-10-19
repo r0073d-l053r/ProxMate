@@ -34,7 +34,7 @@ CRUD for a user's saved SSH public keys. Mounted at `/api/ssh-keys`.[^app] (Inje
 
 - zod `CreateSchema = { name: 1..60, publicKey: 1..16384 chars }`, then `isValidPublicKey()`; failure is 400 `That doesn't look like an OpenSSH public key.`[^routes]
 - `DuplicateKeyError` and `TooManyKeysError` both map to 409; other errors are rethrown to the global error handler (500).[^routes]
-- No audit entries are recorded by this router.
+- Adding and deleting a key are audited (`ssh_key.add`, `ssh_key.delete`).
 
 # Relationships
 

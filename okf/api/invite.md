@@ -41,7 +41,7 @@ Admins mint invite links that carry a tenant's starting quota, 2FA requirement a
 - Invite URL is `${FRONTEND_URL}/register/<token>` (default `http://localhost:3000`).[^routes]
 - Email failure never fails creation; SMTP not configured yields an `emailError` string. `/send` returns 200 even on failure so a proxy does not replace the error page.[^routes]
 - GET omits `token` and `inviteUrl` for used or expired invites so stale tokens do not linger in admin logs.[^routes]
-- No audit records are written by this router.
+- Create, send and revoke are audited (`invite.create`, `invite.send`, `invite.revoke`) by invite id; the token itself is never written to the audit log.
 
 # Relationships
 
