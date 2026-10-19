@@ -26,6 +26,7 @@ beforeEach(() => vi.clearAllMocks());
 
 describe('2FA (TOTP)', () => {
   it('beginSetup stores a provisional secret and returns a QR', async () => {
+    findUser.mockResolvedValue({ id: 'u1', twoFactorEnabled: false, twoFactorSecret: null } as never);
     vi.mocked(prisma.user.update).mockResolvedValue({} as never);
     const { secret, otpauthUrl, qrDataUrl } = await beginSetup('u1', 'a@b.c');
     expect(secret).toBeTruthy();
@@ -67,5 +68,55 @@ describe('2FA (TOTP)', () => {
 
     vi.mocked(prisma.twoFactorRecoveryCode.findFirst).mockResolvedValue(null);
     expect(await verifyRecoveryCode('u1', 'nope')).toBe(false);
+  });
+});
+
+describe('re-running 2FA setup while 2FA is on', () => {
+  const active = authenticator.generateSecret();
+  const enabledUser = () =>
+    ({ id: 'u1', twoFactorEnabled: true, twoFactorSecret: active, twoFactorPendingSecret: null }) as never;
+
+  it('refuses without a current code and leaves the active factor untouched', async () => {
+    findUser.mockResolvedValue(enabledUser());
+    vi.mocked(prisma.twoFactorRecoveryCode.findFirst).mockResolvedValue(null);
+    await expect(beginSetup('u1', 'a@b.c')).rejects.toThrow(/current code/i);
+    await expect(beginSetup('u1', 'a@b.c', '000000')).rejects.toThrow(/current code/i);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('with a current code, stages the new secret without disabling the active one', async () => {
+    findUser.mockResolvedValue(enabledUser());
+    vi.mocked(prisma.user.update).mockResolvedValue({} as never);
+    const { secret } = await beginSetup('u1', 'a@b.c', authenticator.generate(active));
+    const data = vi.mocked(prisma.user.update).mock.calls[0]![0].data as Record<string, unknown>;
+    expect(data).toEqual({ twoFactorPendingSecret: secret });
+    expect(data).not.toHaveProperty('twoFactorEnabled');
+    expect(data).not.toHaveProperty('twoFactorSecret');
+  });
+
+  it('enable confirms the staged secret and only then replaces the active one', async () => {
+    const next = authenticator.generateSecret();
+    findUser.mockResolvedValue({
+      id: 'u1',
+      twoFactorEnabled: true,
+      twoFactorSecret: active,
+      twoFactorPendingSecret: next,
+    } as never);
+    // A code from the OLD authenticator does not confirm the new one.
+    await expect(enable('u1', authenticator.generate(active))).rejects.toThrow(/incorrect/i);
+    await enable('u1', authenticator.generate(next));
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'u1' },
+      data: { twoFactorEnabled: true, twoFactorSecret: next, twoFactorPendingSecret: null },
+    });
+  });
+
+  it('a first-time setup needs no code and still enables on confirmation', async () => {
+    findUser.mockResolvedValue({ id: 'u1', twoFactorEnabled: false, twoFactorSecret: null, twoFactorPendingSecret: null } as never);
+    vi.mocked(prisma.user.update).mockResolvedValue({} as never);
+    const { secret } = await beginSetup('u1', 'a@b.c');
+    findUser.mockResolvedValue({ id: 'u1', twoFactorEnabled: false, twoFactorSecret: null, twoFactorPendingSecret: secret } as never);
+    const { recoveryCodes } = await enable('u1', authenticator.generate(secret));
+    expect(recoveryCodes).toHaveLength(10);
   });
 });

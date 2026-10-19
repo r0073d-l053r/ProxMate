@@ -56,7 +56,7 @@ No router-level middleware; each route picks its own:[^routes]
 | POST | `/api/auth/kiosk-exit/passkey-verify` | kioskExitLimiter + requireAuth + requireSession + admin | Verify that the passkey belongs to the current admin; mints no session. |
 | GET | `/api/auth/me` | allowExpiredAccess + requireAuth | Current user, 2FA/passkey/MFA flags, `broadcastOptOut`, `accessExpiresAt`, server-computed `accessExpired`, quota usage. In OpenAPI doc. |
 | PUT | `/api/auth/email-preferences` | requireAuth | `{ broadcastOptOut: boolean }`. Audited. |
-| POST | `/api/auth/2fa/setup` | requireAuthOrEnrollment + requireSession | Begin TOTP setup. |
+| POST | `/api/auth/2fa/setup` | requireAuthOrEnrollment + requireSession | Begin TOTP setup. While 2FA is on, needs `{ currentCode }` (current TOTP or recovery code); the active factor stays on until `/2fa/enable` confirms the new one. |
 | POST | `/api/auth/2fa/enable` | requireAuthOrEnrollment + requireSession | `{ code }`; returns `{ recoveryCodes }`. Audited `auth.2fa_enabled`. |
 | POST | `/api/auth/2fa/disable` | requireAuth + requireSession | `{ code }`. Audited `auth.2fa_disabled`. |
 | GET | `/api/auth/2fa/status` | requireAuth + requireSession | TOTP status. |

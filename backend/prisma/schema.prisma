@@ -25,6 +25,10 @@ model User {
   // Two-factor auth (TOTP). `twoFactorSecret` is the AES-encrypted base32 secret.
   twoFactorEnabled Boolean  @default(false)
   twoFactorSecret  String?
+  // A secret from a setup that has not been confirmed yet (same encryption). It
+  // replaces twoFactorSecret only when enable() verifies a code from it, so an
+  // unfinished setup never turns the active factor off.
+  twoFactorPendingSecret String?
   // Admin-enforced (via the invite): user must set up a 2FA method before using ProxMate.
   require2fa       Boolean  @default(false)
 

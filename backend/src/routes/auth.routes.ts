@@ -467,9 +467,19 @@ router.put('/email-preferences', requireAuth, async (req: Request, res: Response
 
 // ─── 2FA (TOTP) management — authenticated ────────────────────
 
+// While 2FA is on, starting a new setup (to move to another authenticator)
+// needs `{ currentCode }`: a current TOTP or recovery code, as for disabling.
+const TwoFaSetupSchema = z.object({ currentCode: z.string().min(1).optional() }).optional();
+
 router.post('/2fa/setup', requireAuthOrEnrollment, requireSession, async (req: Request, res: Response) => {
+  const parsed = TwoFaSetupSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Validation failed' }); return; }
   const u = (req as AuthRequest).user;
-  res.json(await twofa.beginSetup(u.id, u.email));
+  try {
+    res.json(await twofa.beginSetup(u.id, u.email, parsed.data?.currentCode));
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : '2FA setup failed' });
+  }
 });
 
 const TwoFaCodeSchema = z.object({ code: z.string().min(1) });
