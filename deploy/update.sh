@@ -143,10 +143,20 @@ fi
 [[ "$TAG" =~ ^v?[0-9A-Za-z][0-9A-Za-z._-]*$ ]] || fail "invalid tag: $TAG"
 git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null 2>&1 || fail "unknown tag: $TAG"
 
+# Never discard local edits to tracked files: a forced checkout would silently
+# revert e.g. extra volume mounts added to docker-compose.yml, and the restart
+# below would then bring the stack up without them. Local compose changes belong
+# in docker-compose.override.yml (untracked, merged automatically by compose).
+STEP="Checking for local changes"
+dirty="$(git status --porcelain --untracked-files=no | sed -E 's/^.{3}//' | tr '\n' ' ')"
+if [[ -n "$dirty" ]]; then
+  fail "local changes to tracked files: ${dirty}— move compose customisations into docker-compose.override.yml (see DEPLOYMENT.md), then revert or commit the rest and retry"
+fi
+
 echo "==> Updating ProxMate to $TAG"
 STEP="Checking out $TAG"
 status "running" "$STEP" "$TAG"
-git checkout -q --force "refs/tags/$TAG"
+git checkout -q "refs/tags/$TAG"
 
 STEP="Building images"
 status "running" "$STEP" "$TAG"

@@ -200,4 +200,31 @@ t_status_message_is_valid_json() {
     fail_msg "status file is not valid JSON: $(cat "$CONTROL/update-status.json")"
 }
 
+# ── BUG-033: an update never throws away the operator's local configuration ──
+t_override_file_survives_update() {
+  new_case
+  printf 'services:\n  backend:\n    volumes:\n      - ./deploy/update-control:/control\n' \
+    > "$CHECKOUT/docker-compose.override.yml"
+  cp "$CHECKOUT/docker-compose.override.yml" "$T/override.expected"
+  request v1.1.0
+  run_update --from-request
+  assert_eq "$(status_field state)" success "state" &&
+    assert_eq "$(version)" 1.1.0 "checked-out version" &&
+    assert_eq "$(cat "$CHECKOUT/docker-compose.override.yml")" "$(cat "$T/override.expected")" "override contents"
+}
+
+t_edited_tracked_file_blocks_update() {
+  new_case
+  printf '      - ./deploy/pve-ca.pem:/certs/pve-ca.pem:ro\n' >> "$CHECKOUT/docker-compose.yml"
+  cp "$CHECKOUT/docker-compose.yml" "$T/compose.expected"
+  request v1.1.0
+  run_update --from-request
+  assert_ne "$RC" 0 "exit code" &&
+    assert_eq "$(status_field state)" error "state" &&
+    assert_match "$(status_field message)" "docker-compose.override.yml" "message says where local edits belong" &&
+    assert_eq "$(cat "$CHECKOUT/docker-compose.yml")" "$(cat "$T/compose.expected")" "local edit preserved" &&
+    assert_eq "$(version)" 1.0.0 "checkout must not move" &&
+    assert_no_grep "compose build" "$T/docker.log"
+}
+
 run_cases "$@"

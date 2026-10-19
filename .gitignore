@@ -51,3 +51,9 @@ completed-tasks.md
 
 # Next.js boilerplate README (root README is the project README)
 frontend/README.md
+
+# Operator-local deployment state. Compose customisations live in the untracked
+# override (see docker-compose.override.example.yml) so updates never revert
+# them; the one-click-update control dir holds runtime request/status files.
+docker-compose.override.yml
+deploy/update-control/

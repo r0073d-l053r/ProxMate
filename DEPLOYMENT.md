@@ -135,9 +135,9 @@ Fill in the **PRODUCTION** block (replace the domain). The key values:
 
 > **`SNIPPET_DIR` and `BACKUP_DOWNLOAD_DIR` are CONTAINER paths.** Setting the variable is only
 > half the job — the host directory must also be **mounted into the backend container**, or the
-> path simply won't exist inside it. `docker-compose.yml` ships both mounts commented out next to
-> the `proxmate-data` volume; uncomment the one you need and keep its container-side path identical
-> to the variable. (This is the same container-boundary trap described for `PROXMATE_BACKUP_DIR`
+> path simply won't exist inside it. Add the mount to a `docker-compose.override.yml` next to
+> `docker-compose.yml` (copy `docker-compose.override.example.yml`, which has both lines ready to
+> uncomment) and keep its container-side path identical to the variable. (This is the same container-boundary trap described for `PROXMATE_BACKUP_DIR`
 > in §12.)
 
 > **Restore from old build (upload a MateState backup).** When `BACKUP_DOWNLOAD_DIR` is
@@ -504,10 +504,18 @@ The script checks out the tag, runs `docker compose build` + `up -d`, and the ba
 applies DB migrations on boot (`docker-entrypoint.sh`). **Back up the DB first** (the
 `proxmate-data` volume) so you can roll back. Rollback = `./deploy/update.sh <previous-tag>`.
 
+> **Keep local changes out of tracked files.** Extra mounts and any other compose
+> customisation go in `docker-compose.override.yml` (untracked, merged automatically by
+> `docker compose`; start from `docker-compose.override.example.yml`). Settings go in `.env`.
+> The script refuses to update — and reports which files — when a tracked file such as
+> `docker-compose.yml` has local edits, rather than discarding them. Move those edits into
+> the override, `git checkout -- docker-compose.yml`, and run it again.
+
 ### 14.3 Enabling the one-click "Install update" button
 
-1. **Mount the control dir + enable the flag** — in `docker-compose.yml`, uncomment
-   `- ./deploy/update-control:/control` under the backend `volumes`, and in `.env` set:
+1. **Mount the control dir + enable the flag** — in `docker-compose.override.yml` (copy
+   `docker-compose.override.example.yml`), uncomment `- ./deploy/update-control:/control`
+   under the backend `volumes`, and in `.env` set:
    ```
    SELF_UPDATE_ENABLED=true
    ```

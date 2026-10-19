@@ -33,7 +33,7 @@ sources:
 
 | Service | Image / build | Ports | Volumes | Notes |
 |---|---|---|---|---|
-| `backend` | `proxmate-backend`, built from `./backend` | `${BIND_ADDR:-0.0.0.0}:${BACKEND_PORT:-4000}:4000` | `proxmate-data:/data` (SQLite DB); `${PROXMATE_BACKUP_DIR:-./backups}:/var/backups/proxmate`; commented optional mounts: `/snippets` (shared snippets dir), `/backups:ro` (vzdump dump for downloads), `/control` (self-update), `/certs/pve-ca.pem:ro` (private Proxmox CA) | `cap_drop: ALL` plus `CHOWN`, `DAC_OVERRIDE`, `SETUID`, `SETGID`; `no-new-privileges`. Healthcheck: `fetch http://127.0.0.1:4000/api/health` every 30 s (start period 40 s). `restart: unless-stopped`.[^compose] |
+| `backend` | `proxmate-backend`, built from `./backend` | `${BIND_ADDR:-0.0.0.0}:${BACKEND_PORT:-4000}:4000` | `proxmate-data:/data` (SQLite DB); `${PROXMATE_BACKUP_DIR:-./backups}:/var/backups/proxmate`; optional mounts go in an untracked `docker-compose.override.yml` (template `docker-compose.override.example.yml`): `/snippets` (shared snippets dir), `/backups:ro` (vzdump dump for downloads), `/control` (self-update), `/certs/pve-ca.pem:ro` (private Proxmox CA) | `cap_drop: ALL` plus `CHOWN`, `DAC_OVERRIDE`, `SETUID`, `SETGID`; `no-new-privileges`. Healthcheck: `fetch http://127.0.0.1:4000/api/health` every 30 s (start period 40 s). `restart: unless-stopped`.[^compose] |
 | `frontend` | `proxmate-frontend`, built from `./frontend` | `${BIND_ADDR:-0.0.0.0}:${FRONTEND_PORT:-3000}:3000` | none | `cap_drop: ALL`, `no-new-privileges`. `depends_on: backend` with `condition: service_healthy`. |
 
 ## Backend container environment
@@ -53,7 +53,7 @@ sources:
 | `WEBAUTHN_RP_ID` / `WEBAUTHN_ORIGIN` | `${…:-}` (empty) | prod: recommended | Passkey RP id and origin. |
 | `AUTH_RATE_LIMIT_MAX` / `AUTH_RATE_LIMIT_WINDOW_MS` | `20` / `900000` | no | Auth limiter. |
 | `AUTH_LOCKOUT_MAX` / `AUTH_LOCKOUT_MINUTES` | `10` / `15` | no | Account lockout. |
-| `PROXMOX_CA_CERT_FILE` | `${…:-}` | no | e.g. `/certs/pve-ca.pem` with the matching volume uncommented. |
+| `PROXMOX_CA_CERT_FILE` | `${…:-}` | no | e.g. `/certs/pve-ca.pem` with the matching volume in `docker-compose.override.yml`. |
 | `UPDATE_REPO` | `r0073d-l053r/ProxMate` | no | Release source. |
 | `SELF_UPDATE_ENABLED` | `false` | no | Also needs the `/control` mount and the host updater. |
 | `METRICS_TOKEN` | `${…:-}` | no | Without it `/metrics` returns 404 in production. |
