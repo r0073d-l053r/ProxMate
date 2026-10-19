@@ -2,6 +2,12 @@
 
 > A lightweight, invite-only cloud dashboard built on Proxmox VE.
 
+> **Historical document.** This is the original Phase-1 design spec, kept for context. Parts of it
+> no longer match the code (for example, sessions are httpOnly cookies, not localStorage, and LXC
+> containers are supported). For how ProxMate works today, see the [README](./README.md),
+> [DEPLOYMENT.md](./DEPLOYMENT.md), [SECURITY.md](./SECURITY.md) and the [`okf/`](./okf/index.md)
+> knowledge bundle.
+
 ---
 
 ## 1. High-Level Architecture

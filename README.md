@@ -296,7 +296,7 @@ and security guides for admins.
 | [Cloudflare Tunnels](./docs/cloudflare-tunnels.md) | Tenants | Publish a public website from your VM without opening ports |
 | [REST API & scaling](./docs/api.md) | Developers | Personal `pm_…` tokens, OpenAPI spec, `/metrics`, PostgreSQL |
 | [Roadmap](./ROADMAP.md) | Everyone | Shipped, planned, and proposed features |
-| [Architecture spec](./project-architecture.md) | Contributors | Full system design — request flows, schema, security model |
+| [Architecture spec](./project-architecture.md) | Contributors | The original Phase-1 design spec (historical); `okf/` describes the current system |
 
 ---
 
