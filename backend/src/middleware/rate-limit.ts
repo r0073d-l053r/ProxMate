@@ -97,8 +97,8 @@ export const kioskExitLimiter = createRateLimiter({
  * requireAuth), not by IP. Generous for real use: a handful of colleagues.
  */
 export const shareLimiter = rateLimit({
-  windowMs: Number(process.env.SHARE_RATE_LIMIT_WINDOW_MS ?? 60 * 60 * 1000),
-  limit: Number(process.env.SHARE_RATE_LIMIT_MAX ?? 30),
+  windowMs: envNumber('SHARE_RATE_LIMIT_WINDOW_MS', 60 * 60 * 1000, 1),
+  limit: envNumber('SHARE_RATE_LIMIT_MAX', 30, 1),
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   keyGenerator: (req) => `user:${(req as unknown as { user?: { id?: string } }).user?.id ?? 'anon'}`,

@@ -50,6 +50,15 @@ describe('non-numeric rate-limit settings fall back to the defaults', () => {
     expect(codes[10]).toBe(429);
   });
 
+  it('share limiter: SHARE_RATE_LIMIT_MAX=abc still allows 30 then refuses', async () => {
+    vi.stubEnv('SHARE_RATE_LIMIT_MAX', 'abc');
+    vi.stubEnv('SHARE_RATE_LIMIT_WINDOW_MS', 'soon');
+    const { shareLimiter } = await import('../src/middleware/rate-limit.js');
+    const codes = await statuses(shareLimiter, 31);
+    expect(codes.slice(0, 30).every((c) => c === 200)).toBe(true);
+    expect(codes[30]).toBe(429);
+  });
+
   it('gateway limiter: IDE_GATEWAY_RATE_LIMIT_MAX=abc still limits', async () => {
     vi.stubEnv('IDE_GATEWAY_RATE_LIMIT_MAX', 'abc');
     const { gatewayAuthLimiter } = await import('../src/middleware/rate-limit.js');

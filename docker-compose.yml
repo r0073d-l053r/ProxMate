@@ -62,6 +62,9 @@ services:
       # Optional auth rate-limit tuning (defaults: 20 req / 15 min / IP).
       AUTH_RATE_LIMIT_MAX: ${AUTH_RATE_LIMIT_MAX:-20}
       AUTH_RATE_LIMIT_WINDOW_MS: ${AUTH_RATE_LIMIT_WINDOW_MS:-900000}
+      # Optional VM-share throttle (defaults: 30 share requests / hour / signed-in user).
+      SHARE_RATE_LIMIT_MAX: ${SHARE_RATE_LIMIT_MAX:-30}
+      SHARE_RATE_LIMIT_WINDOW_MS: ${SHARE_RATE_LIMIT_WINDOW_MS:-3600000}
       # Per-account brute-force lockout (defaults: 10 failed logins → 15 min
       # auto-unlock). Admins are emailed on lockout when SMTP is configured.
       AUTH_LOCKOUT_MAX: ${AUTH_LOCKOUT_MAX:-10}
