@@ -16,6 +16,7 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   setVmName: vi.fn(),
   applyDefaultBridge: vi.fn(),
   getVmConfig: vi.fn(),
+  listGuestVolumes: vi.fn(async () => new Set(['local-lvm:vm-200-disk-0'])),
   snippetWriteConfig: vi.fn(() => ({ dir: '/snip', storage: 'shared-snip' })),
   configureVmIsolation: vi.fn(),
   readIsolationOptions: vi.fn(async () => ({ dnsServers: [] })),
@@ -296,7 +297,7 @@ describe('restoreFromUpload', () => {
     const { assertOwnVolumes } = await import('../src/services/vm.service.js');
     await task.beforeTag();
     expect(client.put).toHaveBeenCalledWith('/nodes/pve-0/qemu/200/config', expect.any(URLSearchParams));
-    expect(assertOwnVolumes).toHaveBeenCalled();
+    expect(assertOwnVolumes).toHaveBeenCalledWith({ id: 'vm1' }, expect.anything(), new Set(['local-lvm:vm-200-disk-0']));
     expect(pve.configureVmIsolation).toHaveBeenCalled();
     expect(syncRestoredGuest).toHaveBeenCalledWith({ id: 'vm1' }, { approvedPci: [], client: expect.anything() });
     // The follower's cleanup is the archive removal.

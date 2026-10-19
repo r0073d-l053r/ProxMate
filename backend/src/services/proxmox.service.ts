@@ -2579,6 +2579,29 @@ export function backupVolidFromLog(lines: string[], storage: string): string | n
   return null;
 }
 
+/**
+ * Every volume Proxmox lists for `vmid` on the storages active on `node` (shared
+ * ones included) — e.g. disks a deleted guest with the same VMID left behind.
+ * Throws when the node's storage list can't be read; a storage whose content
+ * can't be listed is skipped (nothing can be restored onto it either).
+ */
+export async function listGuestVolumes(node: string, vmid: number, client?: AxiosInstance): Promise<Set<string>> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Array<{ storage: string }> }>(`/nodes/${node}/storage`, { params: { enabled: 1 } });
+  const out = new Set<string>();
+  for (const { storage } of res.data.data ?? []) {
+    try {
+      const content = await c.get<{ data: Array<{ volid: string }> }>(`/nodes/${node}/storage/${storage}/content`, {
+        params: { vmid },
+      });
+      for (const v of content.data.data ?? []) if (v.volid) out.add(v.volid);
+    } catch {
+      /* not listable here */
+    }
+  }
+  return out;
+}
+
 export interface PveBackup {
   volid: string;
   storage: string;

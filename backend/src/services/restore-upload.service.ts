@@ -370,6 +370,9 @@ async function restoreFromUploadLocked(
     try {
       // Remap all volumes onto our default pool: cross-cluster archives name
       // storages this cluster may not have. unique=1 → fresh MACs.
+      // Volumes already listed for this VMID (left by an earlier guest that had it)
+      // must not end up attached to the restored guest; see assertOwnVolumes.
+      const leftovers = await pve.listGuestVolumes(node, vmid, client);
       const upid = await pve.restoreNewGuest({ node, vmid, volid, storage: defaultStorage }, client, kind);
       restoreTask = {
         node,
@@ -380,7 +383,7 @@ async function restoreFromUploadLocked(
         beforeTag: async () => {
           await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
           await rebuildRestoredGuestConfig(node, vmid, isolate, client, kind);
-          await assertOwnVolumes(vm, client);
+          await assertOwnVolumes(vm, client, leftovers);
           if (isolate) await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, kind);
           await syncRestoredGuest(vm, { approvedPci: [], client });
         },
@@ -391,7 +394,7 @@ async function restoreFromUploadLocked(
       // The archive's config carries the OLD guest's tags; tie the guest to this row.
       await markClonedGuest(vm, client);
       // Every volume the restored config references must be this guest's own.
-      await assertOwnVolumes(vm, client);
+      await assertOwnVolumes(vm, client, leftovers);
 
       // Before anything else may happen to the guest: its name, network placement
       // and isolation are ours, not the archive's.

@@ -1793,11 +1793,23 @@ export class ForeignVolumeError extends Error {
 export async function assertOwnVolumes(
   vm: VirtualMachine,
   client?: Awaited<ReturnType<typeof pve.getClient>>,
+  /**
+   * Volumes listed for this VMID before the restore ran. A volume named for the
+   * VMID but already there — left by an earlier guest that had the same VMID —
+   * is not this guest's either.
+   */
+  preexisting?: Set<string>,
 ): Promise<void> {
   const c = client ?? (await pve.getClient());
   const kind = kindOf(vm);
   const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, c, kind);
   const foreign = foreignVolumeKeys(cfg, vm.proxmoxVmId);
+  if (preexisting && preexisting.size > 0) {
+    for (const [key, value] of Object.entries(cfg)) {
+      const volume = (String(value).split(',')[0] ?? '').replace(/^file=/, '');
+      if (preexisting.has(volume) && !foreign.includes(key)) foreign.push(key);
+    }
+  }
   if (foreign.length === 0) return;
   const attached = foreign.filter((k) => !/^unused\d+$/.test(k));
   if (attached.includes('rootfs')) {

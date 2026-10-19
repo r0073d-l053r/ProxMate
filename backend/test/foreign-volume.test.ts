@@ -109,6 +109,22 @@ describe('assertOwnVolumes (audit round 2, blocker 2)', () => {
     expect(c.put).not.toHaveBeenCalled();
   });
 
+  it('treats a volume that was already listed for the VMID before the restore as foreign (audit round 3)', async () => {
+    const c = pveWith({ scsi0: 'local-lvm:vm-100-disk-0,size=32G', scsi1: 'local-lvm:vm-100-disk-7,size=10G' });
+    await expect(assertOwnVolumes(row(), undefined, new Set(['local-lvm:vm-100-disk-7']))).rejects.toBeInstanceOf(ForeignVolumeError);
+    expect(bodyOf(c.put.mock.calls[0]!)).toEqual({ delete: 'scsi1' });
+  });
+
+  it('lists every volume Proxmox holds for a VMID on the node\'s active storages', async () => {
+    const c = fakeClient();
+    c.get.mockImplementation((url: string) => {
+      if (url === '/nodes/pve1/storage') return ok([{ storage: 'local-lvm' }, { storage: 'broken' }]);
+      if (url === '/nodes/pve1/storage/local-lvm/content') return ok([{ volid: 'local-lvm:vm-100-disk-7' }]);
+      return Promise.reject(new Error('storage offline'));
+    });
+    expect(await pve.listGuestVolumes('pve1', 100, asClient(c))).toEqual(new Set(['local-lvm:vm-100-disk-7']));
+  });
+
   it('passes a guest that only has its own volumes', async () => {
     const c = pveWith({ scsi0: 'local-lvm:vm-100-disk-0,size=32G' });
     await expect(assertOwnVolumes(row())).resolves.toBeUndefined();

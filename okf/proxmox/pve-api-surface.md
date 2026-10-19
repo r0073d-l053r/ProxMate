@@ -182,6 +182,7 @@ literal path segment); rows marked qemu use the `qemu` segment only. Paths are r
 | GET | `/nodes/{node}/qemu/{vmid}/snapshot/{snapname}/config` | `getSnapshotConfig` | Config a rollback would bring back (quota pre-check) |
 | POST | `/nodes/{node}/qemu/{vmid}/snapshot/{snapname}/rollback` | `rollbackSnapshot` | Roll back |
 | POST | `/nodes/{node}/vzdump` | `startBackup` | vzdump with `compress=zstd`, `remove=0`; returns UPID |
+| GET | `/nodes/{node}/storage?enabled=1`, `/nodes/{node}/storage/{storage}/content?vmid={vmid}` | `listGuestVolumes` | Volumes already present for a VMID before an upload restore |
 | GET | `/nodes/{node}/vzdump/extractconfig?volume={volid}` | `extractBackupConfig` | Guest config embedded in an archive (quota pre-check) |
 | GET | `/nodes/{node}/tasks/{upid}/status` | `waitForTask` | Task completion polling |
 | GET | `/nodes/{node}/tasks/{upid}/log?limit=0` | `getMigrationProgress`, `getTaskLog` | Full task log: migration progress; the archive a vzdump task wrote |
