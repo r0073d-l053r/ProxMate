@@ -29,7 +29,7 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
 
 import { prisma } from '../src/lib/prisma.js';
 import * as pve from '../src/services/proxmox.service.js';
-import { guestMarker, QuotaError } from '../src/services/vm.service.js';
+import { guestMarker, QuotaError, syncRestoredGuest } from '../src/services/vm.service.js';
 import { restoreFromMateState } from '../src/services/matestate.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
 
@@ -46,7 +46,7 @@ function fakePve(live: Record<string, string>, archive: Record<string, string>) 
   const toText = (o: Record<string, string>) => Object.entries(o).map(([k, v]) => `${k}: ${v}`).join('\n');
   c.get.mockImplementation((url: string) => {
     if (url.startsWith('/cluster/resources')) return ok([{ type: 'qemu', vmid: 100, node: 'pve1', tags: state.cfg['tags'] }, { type: 'node', node: 'pve1', status: 'online' }]);
-    if (/\/qemu\/100\/config$/.test(url)) return ok(state.cfg);
+    if (/\/(qemu|lxc)\/100\/config$/.test(url)) return ok(state.cfg);
     if (/\/qemu\/100\/status\/current$/.test(url)) return ok({ status: state.status });
     if (/\/tasks\/.*\/status$/.test(url)) return ok({ status: 'stopped', exitstatus: 'OK' });
     if (url.startsWith('/nodes/pve1/vzdump/extractconfig')) return ok(toText(archive));
@@ -60,7 +60,7 @@ function fakePve(live: Record<string, string>, archive: Record<string, string>) 
     return ok('UPID:fake');
   });
   c.put.mockImplementation((url: string, body: URLSearchParams) => {
-    if (/\/qemu\/100\/config$/.test(url)) {
+    if (/\/(qemu|lxc)\/100\/config$/.test(url)) {
       for (const [k, v] of body) {
         if (k === 'delete') for (const d of v.split(',')) delete state.cfg[d];
         else state.cfg[k] = v;
@@ -160,6 +160,31 @@ describe('MateState restore: resources come back only within quota (BUG-024)', (
     expect(prisma.virtualMachine.update).toHaveBeenCalledWith({
       where: { id: 'rowa' },
       data: expect.objectContaining({ hasPassthrough: true }),
+    });
+  });
+});
+
+describe('syncRestoredGuest', () => {
+  it('pins a restored container with no cores line to the row\'s cores (BUG-028)', async () => {
+    const { state } = fakePve({ hostname: 'ct', tags: marker, memory: '1024', rootfs: 'local-lvm:vm-100-disk-0,size=8G' }, {});
+    vi.mocked(prisma.virtualMachine.findUnique).mockResolvedValue(row({ type: 'lxc', cpu: 2, storage: 8 }));
+    await syncRestoredGuest(row({ type: 'lxc', cpu: 2, storage: 8 }), { approvedPci: [] });
+    expect(state.cfg['cores']).toBe('2');
+    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({
+      where: { id: 'rowa' },
+      data: { cpu: 2, ram: 1024, storage: 8 },
+    });
+  });
+
+  it('sets CPU/RAM that no longer fit the quota back to the row\'s size', async () => {
+    const { state } = fakePve({ ...BIG_ARCHIVE, tags: marker }, {});
+    vi.mocked(prisma.virtualMachine.findMany).mockResolvedValue([{ id: 'other', cpu: 7, ram: 15360, storage: 20 }] as never);
+    await syncRestoredGuest(row(), { approvedPci: [] });
+    expect(state.cfg['cores']).toBe('1');
+    expect(state.cfg['memory']).toBe('1024');
+    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({
+      where: { id: 'rowa' },
+      data: expect.objectContaining({ cpu: 1, ram: 1024, storage: 132 }),
     });
   });
 });

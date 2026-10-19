@@ -12,7 +12,7 @@ import {
   settleFailedCreate,
   syncRestoredGuest,
 } from './vm.service.js';
-import { parseGuestConfigText } from '../lib/guest-config.js';
+import { parseGuestConfigText, guestConfigSizes } from '../lib/guest-config.js';
 import * as pve from './proxmox.service.js';
 
 /**
@@ -81,40 +81,41 @@ export interface ParsedBackupConfig {
   memoryMb: number;
   diskGb: number;
   guestName: string | null;
+  /** A disk line with no `size=`: the restore would allocate a size this parse can't see. */
+  unsizedDisk: boolean;
 }
 
 /**
  * Parse the vzdump-embedded guest config (from `vzdump/extractconfig`) into the
- * resource numbers the quota check needs. Pure — unit-tested directly.
+ * resource numbers the quota check needs. Pure — unit-tested directly. CPUs are
+ * counted as Proxmox runs them (QEMU: sockets x cores, or `vcpus`); memory may be
+ * a property string (`current=N`).
  */
-export function parseBackupConfig(text: string): ParsedBackupConfig {
-  let cores = 1;
-  let memoryMb = 512;
+export function parseBackupConfig(text: string, kind: pve.GuestKind = 'qemu'): ParsedBackupConfig {
+  const cfg = parseGuestConfigText(text);
+  const sizes = guestConfigSizes(cfg, kind);
   let diskBytes = 0;
-  let guestName: string | null = null;
+  let unsizedDisk = false;
 
-  const DISK_RE = /^(scsi|sata|virtio|ide|efidisk|tpmstate|rootfs|mp)\d*:/;
+  const DISK_RE = /^(scsi|sata|virtio|ide|efidisk|tpmstate|rootfs|mp)\d*$/;
   const SIZE_RE = /(?:^|,)size=(\d+(?:\.\d+)?)([KMGT]?)/;
   const UNIT: Record<string, number> = { '': 1, K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4 };
 
-  for (const raw of text.split('\n')) {
-    const line = raw.trim();
-    // A snapshot section ("[snap1]") ends the current config — only size the live one.
-    if (line.startsWith('[')) break;
-    const m = line.match(/^([a-z]+\d*):\s*(.*)$/i);
-    if (!m) continue;
-    const [, key, value] = m as unknown as [string, string, string];
-
-    if (key === 'cores') cores = Math.max(1, parseInt(value, 10) || 1);
-    else if (key === 'memory') memoryMb = Math.max(16, parseInt(value, 10) || 512);
-    else if (key === 'name' || key === 'hostname') guestName = value.trim() || null;
-    else if (DISK_RE.test(line) && !value.includes('media=cdrom')) {
-      const s = value.match(SIZE_RE);
-      if (s) diskBytes += parseFloat(s[1]!) * (UNIT[s[2] ?? ''] ?? 1);
-    }
+  for (const [key, value] of Object.entries(cfg)) {
+    if (!DISK_RE.test(key) || value.includes('media=cdrom')) continue;
+    const s = value.match(SIZE_RE);
+    if (s) diskBytes += parseFloat(s[1]!) * (UNIT[s[2] ?? ''] ?? 1);
+    else unsizedDisk = true;
   }
 
-  return { cores, memoryMb, diskGb: Math.ceil(diskBytes / 1024 ** 3), guestName };
+  return {
+    // A container with no `cores` line is charged one core; the restore pins it to that.
+    cores: sizes.cpu ?? 1,
+    memoryMb: Math.max(16, sizes.ram),
+    diskGb: Math.ceil(diskBytes / 1024 ** 3),
+    guestName: (cfg['name'] ?? cfg['hostname'])?.trim() || null,
+    unsizedDisk,
+  };
 }
 
 /**
@@ -210,7 +211,10 @@ async function restoreFromUploadLocked(
     // Quota-check from the archive's embedded config BEFORE restoring anything.
     const rawCfg = await pve.extractBackupConfig(nodes[0]!, volid, client);
     assertRestorableConfig(rawCfg, kind);
-    const cfg = parseBackupConfig(rawCfg);
+    const cfg = parseBackupConfig(rawCfg, kind);
+    if (cfg.unsizedDisk) {
+      throw new RestoreUploadError("This backup can't be restored here: a disk in its configuration has no size.");
+    }
     await assertWithinQuota(user, {
       name: input.name,
       cpu: cfg.cores,

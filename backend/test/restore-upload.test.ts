@@ -90,7 +90,21 @@ describe('parseBackupConfig', () => {
 
   it('falls back to safe defaults on an empty config', () => {
     const cfg = parseBackupConfig('');
-    expect(cfg).toEqual({ cores: 1, memoryMb: 512, diskGb: 0, guestName: null });
+    expect(cfg).toEqual({ cores: 1, memoryMb: 512, diskGb: 0, guestName: null, unsizedDisk: false });
+  });
+
+  it('counts QEMU vCPUs as sockets x cores, or vcpus when set (BUG-028)', () => {
+    expect(parseBackupConfig(`sockets: 4\n${QEMU_CFG}`).cores).toBe(16);
+    expect(parseBackupConfig(`sockets: 4\nvcpus: 6\n${QEMU_CFG}`).cores).toBe(6);
+  });
+
+  it('reads memory written as a property string (BUG-028)', () => {
+    expect(parseBackupConfig(QEMU_CFG.replace('memory: 8192', 'memory: current=65536')).memoryMb).toBe(65536);
+  });
+
+  it('flags a disk line with no size (BUG-028)', () => {
+    expect(parseBackupConfig(`scsi2: local-lvm:vm-104-disk-5\n${QEMU_CFG}`).unsizedDisk).toBe(true);
+    expect(parseBackupConfig(QEMU_CFG).unsizedDisk).toBe(false);
   });
 });
 
@@ -252,6 +266,17 @@ describe('restoreFromUpload', () => {
     await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(RestoreUploadError);
     expect(pve.restoreNewGuest).not.toHaveBeenCalled();
     expect(pve.deleteBackup).toHaveBeenCalledWith('pve-0', 'backups', VOLID);
+  });
+
+  it('refuses an archive with an unsized disk, and charges sockets x cores (BUG-028)', async () => {
+    vi.mocked(pve.extractBackupConfig).mockResolvedValue(`scsi2: local-lvm:vm-104-disk-5\n${QEMU_CFG}`);
+    await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(/no size/);
+    expect(pve.restoreNewGuest).not.toHaveBeenCalled();
+
+    vi.mocked(pve.extractBackupConfig).mockResolvedValue(`sockets: 2\n${QEMU_CFG}`);
+    await restoreFromUpload(user, { filename: FILENAME, name: 'x' });
+    expect(assertWithinQuota).toHaveBeenLastCalledWith(user, expect.objectContaining({ cpu: 8 }));
+    expect(prisma.virtualMachine.create).toHaveBeenCalledWith({ data: expect.objectContaining({ cpu: 8 }) });
   });
 
   it('re-reads the restored guest (no PCI device approved) before it is started (BUG-027)', async () => {

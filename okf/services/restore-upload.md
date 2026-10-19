@@ -24,7 +24,7 @@ The migration path between clusters / ProxMate instances: a tenant uploads an ar
 | `uploadDir` | `() => string \| null` | `<BACKUP_DOWNLOAD_DIR>/dump` if it exists, else the dir. |
 | `restoreUploadsEnabled` | `() => Promise<boolean>` | Dir configured and `W_OK`. |
 | `resolveUnderUploadDir` | `(candidate, expect: RegExp) => string \| null` | Basename + regex + containment check; the only way a client-influenced string reaches the filesystem. |
-| `parseBackupConfig` | `(text) => { cores, memoryMb, diskGb, guestName }` | Parses `vzdump/extractconfig` output up to the first `[snapshot]` section; sums disk `size=` (excludes cdrom). |
+| `parseBackupConfig` | `(text, kind?) => { cores, memoryMb, diskGb, guestName, unsizedDisk }` | Parses `vzdump/extractconfig` output up to the first `[snapshot]` section; QEMU vCPUs are sockets × cores (or `vcpus`), memory may be `current=N`; sums disk `size=` (excludes cdrom) and flags a disk with no size (the restore refuses it). A container with no `cores` is charged one core and pinned to it after the restore. |
 | `restoreFromUpload` | `(user, { filename, name }) => VirtualMachine` | See steps below. |
 | `RestoreUploadError` | class | User-facing failures. |
 
