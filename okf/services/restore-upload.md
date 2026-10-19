@@ -35,7 +35,7 @@ The migration path between clusters / ProxMate instances: a tenant uploads an ar
 3. Extract embedded config; `assertRestorableConfig` refuses (and drops) an archive that sets `hostpciN`, `usbN`, a `/dev/` serial/parallel port, `args`, `hookscript`, any `lxc.*` key, a container `devN` or host-path `rootfs`/`mpN`, or a container without `unprivileged: 1`; then `assertWithinQuota` for cores/memory/disk.
 4. Require `default_storage`; `pickBestNode` among nodes that see the file, arch `amd64`; `getNextVmId`.
 5. Create the `VirtualMachine` row (`status: 'creating'`), `restoreNewGuest` onto `default_storage` (unique=1, fresh MACs, containers always `unprivileged=1`), wait up to 30 min, tag the guest, then `syncRestoredGuest` with no approved PCI devices (re-reads the row's sizes from the restored guest).
-6. Rename to chosen name, `applyDefaultBridge`, configure isolation before first boot if `isolation_enabled !== 'false'`.
+6. Rename to chosen name, `applyDefaultBridge`, configure isolation if `isolation_enabled !== 'false'` — all before `syncRestoredGuest` and the first boot. Any failure once the restore landed leaves the row `error`; a restore task still running when the wait gave up keeps the archive, which its follower removes when the task ends.
 7. Start, mark `running`, delete the archive.
 
 # Data

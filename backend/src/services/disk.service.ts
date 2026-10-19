@@ -133,7 +133,7 @@ export function removeDataDisk(vm: VirtualMachine, slot: string): Promise<void> 
 }
 
 async function removeDataDiskLocked(row: VirtualMachine, slot: string): Promise<void> {
-  const vm = await requireOurGuest(row);
+  const vm = await requireOurGuest(row, { allowError: true });
   const config = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId);
   if (!(slot in config)) throw new Error('Disk not found.');
   if (slot === pve.findPrimaryDisk(config)) throw new Error('The root disk cannot be removed.');

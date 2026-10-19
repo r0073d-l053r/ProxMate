@@ -27,7 +27,7 @@ vi.mock('../src/services/vm.service.js', () => ({
   assertWithinQuota: vi.fn(),
   acquireQuotaLock: vi.fn(async () => () => undefined),
   markClonedGuest: vi.fn(async () => undefined),
-  settleFailedCreate: vi.fn(async () => undefined),
+  settleFailedCreate: vi.fn(async () => ({ following: false })),
   syncRestoredGuest: vi.fn(async () => ({})),
 }));
 
@@ -250,7 +250,18 @@ describe('restoreFromUpload', () => {
     await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(
       'restore failed on node',
     );
-    expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, err, false, { task: { node: 'pve-0', upid: 'UPID:1' } });
+    expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, err, false, { task: expect.objectContaining({ node: 'pve-0', upid: 'UPID:1' }) });
+  });
+
+  it('leaves the archive to the follower while a timed-out restore task may still be reading it (audit MAJOR 1)', async () => {
+    vi.mocked(pve.waitForTask).mockRejectedValue(new Error('Proxmox task timed out'));
+    vi.mocked(settleFailedCreate).mockResolvedValueOnce({ following: true });
+    await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(/timed out/);
+    expect(pve.deleteBackup).not.toHaveBeenCalled();
+    // The follower's cleanup is the archive removal.
+    const task = vi.mocked(settleFailedCreate).mock.calls[0]![3]!.task as { afterTask: () => Promise<void> };
+    await task.afterTask();
+    expect(pve.deleteBackup).toHaveBeenCalledWith('pve-0', 'backups', VOLID);
   });
 
   it('settles a failure after the restore landed as "guest created", and tags the guest first', async () => {
@@ -258,7 +269,7 @@ describe('restoreFromUpload', () => {
     vi.mocked(pve.startVm).mockRejectedValue(err);
     await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow('start failed');
     expect(markClonedGuest).toHaveBeenCalledWith({ id: 'vm1' }, expect.anything());
-    expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, err, true, { task: { node: 'pve-0', upid: 'UPID:1' } });
+    expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, err, true, { task: expect.objectContaining({ node: 'pve-0', upid: 'UPID:1' }) });
   });
 
   it('never restores an archive carrying a host device, and drops it (BUG-027)', async () => {

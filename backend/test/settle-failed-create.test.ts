@@ -7,7 +7,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
-    virtualMachine: { update: vi.fn(async () => ({})), delete: vi.fn(async () => ({})) },
+    virtualMachine: {
+      update: vi.fn(async () => ({})),
+      delete: vi.fn(async () => ({})),
+      findUnique: vi.fn(async () => ({ id: 'rowa', userId: 'u1', name: 'web', type: 'qemu', proxmoxVmId: 100, proxmoxNode: 'pve1' })),
+    },
     ideGuestSecret: { deleteMany: vi.fn(async () => ({})) },
     ideGatewayToken: { deleteMany: vi.fn(async () => ({})) },
     $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops)),

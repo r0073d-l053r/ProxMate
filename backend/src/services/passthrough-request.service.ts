@@ -670,7 +670,7 @@ export async function denyPassthroughRequest(
 export async function detachPassthrough(vm: VirtualMachine, index: number): Promise<void> {
   if (vm.type !== 'qemu') throw new PassthroughRequestError('PCI passthrough is only available for VMs.', 400);
   const client = await pve.getClient();
-  const current = await requireOurGuest(vm, { client });
+  const current = await requireOurGuest(vm, { allowError: true, client });
 
   try {
     const st = await pve.getVmStatus(current.proxmoxNode, current.proxmoxVmId, client, 'qemu');

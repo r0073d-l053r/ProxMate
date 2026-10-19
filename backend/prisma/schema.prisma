@@ -266,6 +266,9 @@ model VirtualMachine {
   os            String
 
   status        String    @default("creating") // creating | running | stopped | error
+  // Why ProxMate put a row in `error` on purpose (e.g. a restore left it over
+  // quota) and what the owner can do about it. Null otherwise.
+  statusMessage String?
   ipAddress     String?
 
   // The guest's Tailscale address (100.64.0.0/10), when Tailscale runs inside it —

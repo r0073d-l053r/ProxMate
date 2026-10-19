@@ -85,7 +85,7 @@ export async function createMateState(
 ): Promise<MateState> {
   const client = await pve.getClient();
   // Never back up a guest that isn't this row's into this row's backup list.
-  vm = await requireOurGuest(vm, { client });
+  vm = await requireOurGuest(vm, { allowError: true, client });
   const storage = await getBackupStorage();
 
   // Snapshot the set of existing backups for this VM so we can identify the new one.
@@ -213,7 +213,7 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
   const client = await pve.getClient();
   const kind: pve.GuestKind = vm.type === 'lxc' ? 'lxc' : 'qemu';
   // A restore overwrites the guest at this VMID — only ever this row's (or an empty slot).
-  vm = await requireOurGuest(vm, { allowAbsent: true, client });
+  vm = await requireOurGuest(vm, { allowAbsent: true, allowError: true, client });
 
   // The guest may have moved since the backup (Proxmox HA, the PVE UI). On
   // node-local backup storage the archive is only on the node it was taken on, so
@@ -306,7 +306,7 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
  */
 export async function rollbackToSnapshot(vm: VirtualMachine, snapname: string): Promise<VirtualMachine> {
   const client = await pve.getClient();
-  vm = await requireOurGuest(vm, { client });
+  vm = await requireOurGuest(vm, { allowError: true, client });
   const snapCfg = await pve.getSnapshotConfig(vm.proxmoxNode, vm.proxmoxVmId, snapname, client);
   // A snapshot with RAM state comes back running, so it is a power-on like any
   // other and needs the owner's compute-access window open.

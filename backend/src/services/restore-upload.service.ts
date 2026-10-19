@@ -207,6 +207,8 @@ async function restoreFromUploadLocked(
     );
   }
 
+  // Set when a restore task outlived our wait and its follower owns the archive.
+  let archiveHandedOff = false;
   try {
     // Quota-check from the archive's embedded config BEFORE restoring anything.
     const rawCfg = await pve.extractBackupConfig(nodes[0]!, volid, client);
@@ -258,20 +260,19 @@ async function restoreFromUploadLocked(
     release(); // usage now includes this row
 
     let created = false;
-    let restoreTask: { node: string; upid: string } | undefined;
+    let restoreTask: { node: string; upid: string; afterTask: () => Promise<void> } | undefined;
     try {
       // Remap all volumes onto our default pool: cross-cluster archives name
       // storages this cluster may not have. unique=1 → fresh MACs.
       const upid = await pve.restoreNewGuest({ node, vmid, volid, storage: defaultStorage }, client, kind);
-      restoreTask = { node, upid };
+      restoreTask = { node, upid, afterTask: () => cleanupArchive(filename, node, storage, volid) };
       await pve.waitForTask(node, upid, client, 30 * 60 * 1000);
       created = true;
       // The archive's config carries the OLD guest's tags; tie the guest to this row.
       await markClonedGuest(vm, client);
-      // Read back what was actually restored: no PCI device is approved for a new
-      // guest, and the row's sizes come from the guest itself.
-      await syncRestoredGuest(vm, { approvedPci: [], client });
 
+      // Before anything else may happen to the guest: its name, network placement
+      // and isolation are ours, not the archive's.
       // The restored config carries the OLD guest's name — apply the chosen one.
       await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
 
@@ -284,6 +285,10 @@ async function restoreFromUploadLocked(
         await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, kind);
       }
 
+      // Read back what was actually restored: no PCI device is approved for a new
+      // guest, and the row's sizes come from the guest itself.
+      await syncRestoredGuest(vm, { approvedPci: [], client });
+
       await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
       const startUpid = await pve.startVm(node, vmid, client, kind);
       await pve.waitForTask(node, startUpid, client);
@@ -291,13 +296,17 @@ async function restoreFromUploadLocked(
       await cleanupArchive(filename, node, storage, volid);
       return done;
     } catch (err) {
-      await settleFailedCreate(vm, err, created, { task: restoreTask });
+      // Any failure once the restore has landed leaves the row in `error`, which
+      // nothing may start. A restore task still running when the wait gave up keeps
+      // reading the archive; its follower removes the archive once it ends.
+      const { following } = await settleFailedCreate(vm, err, created, { task: restoreTask });
+      if (following) archiveHandedOff = true;
       throw err;
     }
   } catch (err) {
     // Any pre-restore failure (quota, placement, extract) — drop the archive so
     // a rejected upload never lingers on the backup storage.
-    await cleanupArchive(filename, nodes[0] ?? null, storage, volid);
+    if (!archiveHandedOff) await cleanupArchive(filename, nodes[0] ?? null, storage, volid);
     throw err;
   }
 }

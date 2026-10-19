@@ -168,11 +168,40 @@ export async function assertGuestIsOurs(
  */
 export async function requireOurGuest(
   vm: VirtualMachine,
-  opts: { allowAbsent?: boolean; client?: Awaited<ReturnType<typeof pve.getClient>> } = {},
+  opts: {
+    allowAbsent?: boolean;
+    /** A repair or teardown path (stop, restore, rebuild, disk removal, device detach) — allowed on an `error` row. */
+    allowError?: boolean;
+    client?: Awaited<ReturnType<typeof pve.getClient>>;
+  } = {},
 ): Promise<VirtualMachine> {
+  if (!opts.allowError) assertNotErrored(vm);
   const current = await syncVmNode(vm);
   await assertGuestIsOurs(current, opts);
   return current;
+}
+
+/** Thrown for anything but repair or delete on a row in `error`. */
+export class GuestErroredError extends Error {
+  constructor(detail?: string | null) {
+    super(
+      detail ||
+        "This machine is in an error state. It can only be deleted, restored from a backup, or rebuilt — or ask an admin to check it.",
+    );
+    this.name = 'GuestErroredError';
+  }
+}
+
+/**
+ * A row ProxMate left in `error` — a create, clone or restore that didn't finish,
+ * or a restore that left it over quota — holds a guest that never got (or lost)
+ * the isolation, sizing and device checks a guest needs before it may run. So
+ * nothing may start it, open its console or install into it until a repair path
+ * (restore, rebuild, admin adoption) has put it right. Callers pass the row as
+ * loaded for this request.
+ */
+function assertNotErrored(vm: VirtualMachine): void {
+  if (vm.status === 'error') throw new GuestErroredError(vm.statusMessage);
 }
 
 /**
@@ -416,16 +445,21 @@ export async function settleFailedCreate(
   vm: VirtualMachine,
   err: unknown,
   guestCreated: boolean,
-  opts: { task?: { node: string; upid: string }; cloneSourceId?: string } = {},
-): Promise<void> {
+  opts: { task?: CreateTask; cloneSourceId?: string } = {},
+): Promise<{ following: boolean }> {
   let keep = guestCreated;
-  if (!keep && opts.task) keep = await settleCreateTask(vm, opts.task);
+  let following = false;
+  if (!keep && opts.task) {
+    const verdict = await settleCreateTask(vm, opts.task);
+    keep = verdict !== null;
+    following = verdict === 'following';
+  }
   if (!keep) {
     keep = await guestLeftByCreate(vm, opts.cloneSourceId).catch(() => true);
   }
   if (keep) {
     await markVmError(vm.id, vm.name, err).catch(() => undefined);
-    return;
+    return { following };
   }
   await deleteVmRow(vm.id).catch(() => undefined);
   await notify({
@@ -433,33 +467,48 @@ export async function settleFailedCreate(
     title: vm.name,
     message: `Provisioning of "${vm.name}" failed: ${pve.pveMessage(err)}`,
   }).catch(() => undefined);
+  return { following };
 }
 
 /** How long a create/clone task that outlived its wait is still followed. */
 const LATE_TASK_FOLLOW_MS = 6 * 60 * 60 * 1000;
 
+type CreateTask = { node: string; upid: string; afterTask?: () => Promise<void> };
+
 /**
  * Whether the create task behind a failed create produced (or is still producing)
- * this row's guest. A task that finished OK did; it is tagged now. A task still
- * running is followed in the background and its guest tagged once it completes.
+ * this row's guest: 'done' (finished OK — tagged now), 'following' (still running —
+ * followed in the background, tagged when it completes), or null (failed, or no
+ * verdict). The tag only lets the owner delete the guest with its row: the row
+ * stays in `error`, so nothing can start the guest. `afterTask` runs once the task
+ * has ended either way (e.g. to remove an uploaded archive the task was reading).
  */
-async function settleCreateTask(vm: VirtualMachine, task: { node: string; upid: string }): Promise<boolean> {
+async function settleCreateTask(vm: VirtualMachine, task: CreateTask): Promise<'done' | 'following' | null> {
+  let client: Awaited<ReturnType<typeof pve.getClient>>;
+  let st: { status: string; exitstatus?: string };
   try {
-    const client = await pve.getClient();
-    const st = await pve.getTaskStatus(task.node, task.upid, client);
-    if (st.status === 'stopped') {
-      if (st.exitstatus && st.exitstatus !== 'OK' && !st.exitstatus.startsWith('WARNINGS')) return false;
-      await markClonedGuest(vm, client);
-      return true;
-    }
-    void pve
-      .waitForTask(task.node, task.upid, client, LATE_TASK_FOLLOW_MS)
-      .then(() => markClonedGuest(vm, client))
-      .catch((e) => console.warn(`[vm] late create task for "${vm.name}" did not complete: ${pve.pveMessage(e)}`));
-    return true;
+    client = await pve.getClient();
+    st = await pve.getTaskStatus(task.node, task.upid, client);
   } catch {
-    return false; // no verdict from the task — fall back to what is at the VMID
+    return null; // no verdict from the task — fall back to what is at the VMID
   }
+  if (st.status === 'stopped') {
+    if (st.exitstatus && st.exitstatus !== 'OK' && !st.exitstatus.startsWith('WARNINGS')) return null;
+    await markClonedGuest(vm, client).catch(() => undefined);
+    return 'done';
+  }
+  void pve
+    .waitForTask(task.node, task.upid, client, LATE_TASK_FOLLOW_MS)
+    .then(async () => {
+      // Only while the row still exists and still points at this VMID: once it has
+      // been deleted, the VMID is nobody's and the guest must not be claimed.
+      const row = await prisma.virtualMachine.findUnique({ where: { id: vm.id } });
+      if (!row || row.proxmoxVmId !== vm.proxmoxVmId || row.proxmoxNode !== task.node) return;
+      await markClonedGuest(row, client);
+    })
+    .catch((e) => console.warn(`[vm] late create task for "${vm.name}" did not complete: ${pve.pveMessage(e)}`))
+    .finally(() => task.afterTask?.().catch(() => undefined));
+  return 'following';
 }
 
 /**
@@ -2110,7 +2159,7 @@ async function rebuildVmLocked(
 ): Promise<VirtualMachine> {
   const client = await pve.getClient();
   // Never re-image a guest that isn't this row's. An empty VMID is fine to build into.
-  const current = await requireOurGuest(vm, { allowAbsent: true, client });
+  const current = await requireOurGuest(vm, { allowAbsent: true, allowError: true, client });
   const vmid = current.proxmoxVmId;
   const isolate = (await getConfig('isolation_enabled')) !== 'false';
 
@@ -2310,7 +2359,7 @@ export async function startVm(vm: VirtualMachine): Promise<void> {
 }
 
 export async function stopVm(vm: VirtualMachine, force: boolean): Promise<void> {
-  const currentVm = await requireOurGuest(vm);
+  const currentVm = await requireOurGuest(vm, { allowError: true });
   const kind = kindOf(currentVm);
   if (force) await pve.stopVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind);
   else await pve.shutdownVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind);
