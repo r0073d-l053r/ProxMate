@@ -439,7 +439,11 @@ router.get('/password-requests', async (_req: Request, res: Response) => {
   res.json(await listResetRequests());
 });
 
-const AdminResetSchema = z.object({ password: z.string().min(8, 'Password must be at least 8 characters') });
+const AdminResetSchema = z.object({
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  // Also delete the user's passkeys (for an account believed compromised). Off by default.
+  removePasskeys: z.boolean().optional(),
+});
 
 router.post('/users/:id/reset-password', requireSession, async (req: Request, res: Response) => {
   const parsed = AdminResetSchema.safeParse(req.body);
@@ -451,10 +455,11 @@ router.post('/users/:id/reset-password', requireSession, async (req: Request, re
   const target = await prisma.user.findUnique({ where: { id: userId } });
   if (!target) { res.status(404).json({ error: 'User not found' }); return; }
 
-  await adminResetPassword(userId, parsed.data.password);
+  const removePasskeys = parsed.data.removePasskeys ?? false;
+  await adminResetPassword(userId, parsed.data.password, { removePasskeys });
   await recordAudit({
     action: 'admin.reset_password', actor: (req as AuthRequest).user,
-    targetType: 'user', targetId: userId, detail: target.email, req,
+    targetType: 'user', targetId: userId, detail: removePasskeys ? `${target.email} (passkeys removed)` : target.email, req,
   });
   res.json({ success: true });
 });

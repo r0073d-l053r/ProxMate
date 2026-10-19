@@ -71,7 +71,7 @@ No router-level middleware; each route picks its own:[^routes]
 | GET | `/api/auth/sso/callback` | public (SSO cookie) | Completes OIDC, sets session cookies, redirects to `FRONTEND_URL/`; errors redirect to `/login?sso_error=…`. |
 | GET | `/api/auth/invite/:token` | public + publicTokenLimiter | Validate an invite; returns quotas, expiry, label, `require2fa`, `email` (the invited address or null); 404 if used/expired. |
 | POST | `/api/auth/forgot-password` | public + authLimiter | `{ email }`. Email a reset link if SMTP is configured, else file an admin request; returns `{ method: 'email' or 'admin', message }`, where `method` reflects SMTP config only and the message does not reveal whether the account exists. |
-| POST | `/api/auth/reset-password` | public + authLimiter | `{ token, password (min 8) }`. Audited `auth.password_reset`. |
+| POST | `/api/auth/reset-password` | public + authLimiter | `{ token, password (min 8) }`. Returns `{ success, remainingPasskeys }` (names of passkeys that still sign in; the reset page lists them and points to Security to remove any). Audited `auth.password_reset`. |
 
 # Gotchas
 

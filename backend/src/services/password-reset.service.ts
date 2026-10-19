@@ -52,10 +52,12 @@ export async function requestReset(email: string, appUrl: string): Promise<{ met
  * after a compromise, so it must not leave behind any credential that was
  * derived from the old access.
  *
- * Passkeys are deliberately kept. They are a separate factor that the user
+ * Passkeys are kept by default. They are a separate factor that the user
  * enrolled and manages on their own Security page (where they can see and
  * remove each one), and deleting them would silently strip the second factor
- * from a require2fa account at exactly the moment it is being recovered.
+ * from a require2fa account at exactly the moment it is being recovered. So the
+ * user is told which passkeys remain (resetWithToken returns them), and an
+ * admin resetting a password can opt to remove them as well.
  */
 function revokeAccessOnReset(userId: string) {
   return [
@@ -65,11 +67,15 @@ function revokeAccessOnReset(userId: string) {
   ];
 }
 
-/** Complete a reset using the emailed token. Returns the user (for auditing). */
+/**
+ * Complete a reset using the emailed token. Returns the user (for auditing) and
+ * the names of the passkeys that can still sign in, so the person can check
+ * them and remove any they do not recognise.
+ */
 export async function resetWithToken(
   token: string,
   newPassword: string,
-): Promise<{ id: string; email: string }> {
+): Promise<{ id: string; email: string; remainingPasskeys: string[] }> {
   const row = await prisma.passwordResetToken.findUnique({ where: { tokenHash: sha256(token) } });
   if (!row || row.usedAt || row.expiresAt < new Date()) {
     throw new Error('This reset link is invalid or has expired.');
@@ -88,15 +94,29 @@ export async function resetWithToken(
     ...revokeAccessOnReset(row.userId),
   ]);
   const user = await prisma.user.findUnique({ where: { id: row.userId } });
-  return { id: row.userId, email: user?.email ?? '' };
+  const passkeys = await prisma.passkey.findMany({
+    where: { userId: row.userId },
+    select: { name: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  return { id: row.userId, email: user?.email ?? '', remainingPasskeys: passkeys.map((p) => p.name) };
 }
 
-/** Admin sets a user's password directly (the no-email fallback). */
-export async function adminResetPassword(userId: string, newPassword: string): Promise<void> {
+/**
+ * Admin sets a user's password directly (the no-email fallback). With
+ * `removePasskeys` the user's passkeys are deleted too, for an account the
+ * admin believes was taken over (off by default; see revokeAccessOnReset).
+ */
+export async function adminResetPassword(
+  userId: string,
+  newPassword: string,
+  { removePasskeys = false }: { removePasskeys?: boolean } = {},
+): Promise<void> {
   const passwordHash = await hashPassword(newPassword);
   await prisma.$transaction([
     prisma.user.update({ where: { id: userId }, data: { passwordHash } }),
     ...revokeAccessOnReset(userId),
+    ...(removePasskeys ? [prisma.passkey.deleteMany({ where: { userId } })] : []),
     prisma.passwordResetRequest.updateMany({
       where: { userId, status: 'pending' },
       data: { status: 'handled', handledAt: new Date() },

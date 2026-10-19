@@ -20,8 +20,8 @@ Self-service and admin-assisted password resets.[^reset]
 | Function | Signature summary | What it does |
 |---|---|---|
 | `requestReset` | `(email, appUrl) => { method: 'email' \| 'admin' }` | Normalises email. With SMTP → creates a token (SHA-256 hash, TTL 1 h) and emails `<appUrl>/reset-password?token=<raw>`; without SMTP → creates a pending `PasswordResetRequest` (deduped). |
-| `resetWithToken` | `(token, newPassword) => { id, email }` | Validates unused/unexpired token and claims it with a write conditional on it still being unused (so a link sets at most one password); then in one transaction sets the bcrypt hash, deletes all the user's sessions and API tokens, and voids their other outstanding reset links. |
-| `adminResetPassword` | `(userId, newPassword)` | Transaction: set hash, delete sessions and API tokens, void outstanding reset links, mark pending requests `handled`. |
+| `resetWithToken` | `(token, newPassword) => { id, email, remainingPasskeys }` | Validates unused/unexpired token and claims it with a write conditional on it still being unused (so a link sets at most one password); then in one transaction sets the bcrypt hash, deletes all the user's sessions and API tokens, and voids their other outstanding reset links. Returns the names of the passkeys left on the account. |
+| `adminResetPassword` | `(userId, newPassword, { removePasskeys = false })` | Transaction: set hash, delete sessions and API tokens, void outstanding reset links, optionally delete passkeys, mark pending requests `handled`. |
 | `listResetRequests` | `()` | Pending requests, newest first. |
 
 # Data
@@ -32,7 +32,7 @@ Self-service and admin-assisted password resets.[^reset]
 
 - Anti-enumeration: the returned `method` depends only on SMTP configuration, never on whether the account exists. Mail failures are logged, not surfaced.[^reset]
 - A reset logs the user out everywhere: all Session and ApiToken rows are deleted and other reset links stop working.[^reset]
-- Passkeys are kept on purpose: they are a separate factor the user manages on the Security page, and removing them would strip the second factor from a `require2fa` account during recovery.[^reset]
+- Passkeys are kept by default: they are a separate factor the user manages on the Security page, and removing them would strip the second factor from a `require2fa` account during recovery. A self-service reset tells the user which passkeys remain; an admin reset can opt to remove them.[^reset]
 
 # Relationships
 

@@ -42,7 +42,7 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 | PUT | `/api/admin/settings/sso` | admin + requireSession | OIDC config `{ enabled, issuer (URL), clientId, clientSecret?, scopes?, groupsClaim?, adminGroup?, allowSignup?, buttonLabel? }`. Audited `admin.sso_config`. |
 | POST | `/api/admin/settings/sso/test` | admin | OIDC discovery check. |
 | GET | `/api/admin/password-requests` | admin | Pending password reset requests (no-SMTP flow). |
-| POST | `/api/admin/users/:id/reset-password` | admin + requireSession | Set `{ password (min 8) }` for a user. Audited `admin.reset_password`. |
+| POST | `/api/admin/users/:id/reset-password` | admin + requireSession | Set `{ password (min 8), removePasskeys? }` for a user; `removePasskeys: true` (default false) also deletes their passkeys. Audited `admin.reset_password`. |
 | PUT | `/api/admin/settings/proxmox` | admin | `{ host, tokenId, tokenSecret?, verifySsl }`; secret only replaced if non-blank and stored encrypted. |
 | POST | `/api/admin/settings/proxmox/test` | admin | Test Proxmox connection. |
 | PUT | `/api/admin/settings/defaults` | admin | `{ storage, bridge, isoStorage, backupStorage? }`; `bridge` must match `NETWORK_NAME_RE`, `backupStorage: ''` clears the override. Audited `admin.settings_defaults` with a before/after diff. |

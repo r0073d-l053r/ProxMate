@@ -732,7 +732,8 @@ router.post('/reset-password', authLimiter, async (req: Request, res: Response) 
   try {
     const user = await resetWithToken(parsed.data.token, parsed.data.password);
     await recordAudit({ action: 'auth.password_reset', actor: user, targetType: 'user', targetId: user.id, req });
-    res.json({ success: true });
+    // Passkeys survive a reset; name them so the person can remove any they don't recognise.
+    res.json({ success: true, remainingPasskeys: user.remainingPasskeys });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : 'Reset failed' });
   }

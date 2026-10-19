@@ -7,7 +7,7 @@ vi.mock('../src/lib/prisma.js', () => ({
     passwordResetRequest: { findFirst: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
     session: { deleteMany: vi.fn() },
     apiToken: { deleteMany: vi.fn() },
-    passkey: { deleteMany: vi.fn() },
+    passkey: { deleteMany: vi.fn(), findMany: vi.fn(async () => []) },
     $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops)),
   },
 }));
@@ -143,5 +143,22 @@ describe('a password reset signs the account out everywhere', () => {
       data: { usedAt: expect.any(Date) },
     });
     expect(prisma.passkey.deleteMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('passkeys after a reset', () => {
+  it('self-service reset reports the passkeys that can still sign in', async () => {
+    tokenFind.mockResolvedValue({ id: 't1', userId: 'u1', usedAt: null, expiresAt: new Date(Date.now() + 60_000) } as never);
+    findUser.mockResolvedValue({ id: 'u1', email: 'a@b.c' } as never);
+    vi.mocked(prisma.passkey.findMany).mockResolvedValue([{ name: 'MacBook' }, { name: 'YubiKey' }] as never);
+    const res = await resetWithToken('good', 'newpassword1');
+    expect(res.remainingPasskeys).toEqual(['MacBook', 'YubiKey']);
+  });
+
+  it('admin reset can also remove passkeys when asked, and keeps them by default', async () => {
+    await adminResetPassword('u1', 'newpassword1');
+    expect(prisma.passkey.deleteMany).not.toHaveBeenCalled();
+    await adminResetPassword('u1', 'newpassword1', { removePasskeys: true });
+    expect(prisma.passkey.deleteMany).toHaveBeenCalledWith({ where: { userId: 'u1' } });
   });
 });
