@@ -39,6 +39,7 @@ vi.mock('../src/services/kiosk.service.js', () => ({}));
 vi.mock('../src/services/audit.service.js', () => ({ recordAudit: vi.fn(async () => undefined) }));
 vi.mock('../src/services/account-lockout.service.js', () => ({}));
 vi.mock('../src/services/password-reset.service.js', () => ({}));
+vi.mock('../src/services/vm-share.service.js', () => ({ claimPendingShares: vi.fn(async () => 0) }));
 vi.mock('../src/middleware/rate-limit.js', () => {
   const pass = (_req: unknown, _res: unknown, next: () => void) => next();
   return { authLimiter: pass, publicTokenLimiter: pass, kioskExitLimiter: pass };
@@ -46,6 +47,7 @@ vi.mock('../src/middleware/rate-limit.js', () => {
 
 import authRoutes from '../src/routes/auth.routes.js';
 import { prisma } from '../src/lib/prisma.js';
+import { claimPendingShares } from '../src/services/vm-share.service.js';
 
 const findInvite = vi.mocked(prisma.inviteToken.findUnique);
 const createUser = vi.mocked(prisma.user.create);
@@ -115,6 +117,22 @@ describe('POST /auth/register with an addressed invite', () => {
     expect(res.status).toBe(201);
     const data = createUser.mock.calls[0]![0].data as { emailBound: boolean };
     expect(data.emailBound).toBe(false);
+  });
+
+  it('hands the new account to the pending-share claim once the invite is redeemed', async () => {
+    findInvite.mockResolvedValue(invite('alice@corp.example') as never);
+    await register('alice@corp.example');
+    expect(claimPendingShares).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'new1', email: 'alice@corp.example', emailBound: true }),
+    );
+  });
+
+  it('does not claim pending shares when the invite was already used by someone else', async () => {
+    findInvite.mockResolvedValue(invite('alice@corp.example') as never);
+    vi.mocked(prisma.inviteToken.updateMany).mockResolvedValueOnce({ count: 0 } as never);
+    const res = await register('alice@corp.example');
+    expect(res.status).toBe(400);
+    expect(claimPendingShares).not.toHaveBeenCalled();
   });
 
   it('shows the invited address on the invite lookup so the form can lock it', async () => {

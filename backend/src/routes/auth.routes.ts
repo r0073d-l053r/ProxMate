@@ -33,6 +33,7 @@ import {
 } from '../lib/cookies.js';
 import { issueWebauthnChallenge, takeWebauthnChallenge } from '../lib/webauthn-challenges.js';
 import { requireAuth, requireSession, allowExpiredAccess } from '../middleware/auth.js';
+import { claimPendingShares } from '../services/vm-share.service.js';
 import { requireAuthOrEnrollment } from '../middleware/enrollment.js';
 import { authLimiter, publicTokenLimiter, kioskExitLimiter } from '../middleware/rate-limit.js';
 import { verifyKioskPin } from '../services/kiosk.service.js';
@@ -119,6 +120,10 @@ router.post('/register', authLimiter, async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Invite token already used' });
     return;
   }
+
+  // VMs shared with this address before the account existed — only when the invite
+  // was sent to the address, so it is confirmed (see claimPendingShares).
+  await claimPendingShares(user).catch((err) => console.warn('[auth] claiming pending shares failed:', err));
 
   await recordAudit({ action: 'auth.register', actor: user, targetType: 'user', targetId: user.id, req });
 

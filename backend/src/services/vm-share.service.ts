@@ -70,20 +70,30 @@ const toView = (s: { id: string; role: string; createdAt: Date; user: { email: s
   createdAt: s.createdAt.toISOString(),
 });
 
-/** Everyone a VM is shared with, oldest first. */
+/** Most shares one VM can hold, live and pending together. */
+export const MAX_SHARES_PER_VM = 100;
+
+/**
+ * Everyone a VM is shared with, oldest first. Shares to addresses that have no
+ * account yet are listed exactly like live ones: telling them apart would reveal
+ * which addresses have accounts.
+ */
 export async function listShares(vmId: string): Promise<ShareView[]> {
-  const shares = await prisma.vmShare.findMany({
-    where: { vmId },
-    orderBy: { createdAt: 'asc' },
-    include: { user: userSelect },
-  });
-  return shares.map(toView);
+  const [live, pending] = await Promise.all([
+    prisma.vmShare.findMany({ where: { vmId }, include: { user: userSelect } }),
+    prisma.pendingVmShare.findMany({ where: { vmId } }),
+  ]);
+  return [
+    ...live.map(toView),
+    ...pending.map((p) => toView({ id: p.id, role: p.role, createdAt: p.createdAt, user: { email: p.email } })),
+  ].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
 /**
- * Share a VM with an existing user (by email). Re-sharing the same user just
- * updates their preset. Returns null when no account has that address — the
- * caller must answer that case exactly like a success, so sharing can't be used
+ * Share a VM by email. Re-sharing the same address just updates its preset. An
+ * address with no account gets a pending share, which becomes live when an account
+ * is created with that address and the address is confirmed (see
+ * {@link claimPendingShares}). Both cases answer the same, so sharing can't be used
  * to discover which addresses have accounts. Throws {@link ShareError} for the
  * remaining failure cases.
  */
@@ -91,9 +101,34 @@ export async function addShare(
   vm: { id: string; userId: string },
   email: string,
   role: ShareRole,
-): Promise<ShareView | null> {
-  const target = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } });
-  if (!target) return null;
+): Promise<ShareView> {
+  const address = email.toLowerCase().trim();
+
+  // The cap is checked before the account lookup, and the same way for both kinds of
+  // share, so hitting it says nothing about whether the address has an account.
+  const [liveForAddress, pendingForAddress] = await Promise.all([
+    prisma.vmShare.findFirst({ where: { vmId: vm.id, user: { email: address } } }),
+    prisma.pendingVmShare.findUnique({ where: { vmId_email: { vmId: vm.id, email: address } } }),
+  ]);
+  if (!liveForAddress && !pendingForAddress) {
+    const [liveCount, pendingCount] = await Promise.all([
+      prisma.vmShare.count({ where: { vmId: vm.id } }),
+      prisma.pendingVmShare.count({ where: { vmId: vm.id } }),
+    ]);
+    if (liveCount + pendingCount >= MAX_SHARES_PER_VM) {
+      throw new ShareError(`A VM can be shared with at most ${MAX_SHARES_PER_VM} addresses. Remove one first.`, 409);
+    }
+  }
+
+  const target = await prisma.user.findUnique({ where: { email: address } });
+  if (!target) {
+    const pending = await prisma.pendingVmShare.upsert({
+      where: { vmId_email: { vmId: vm.id, email: address } },
+      create: { vmId: vm.id, email: address, role },
+      update: { role },
+    });
+    return toView({ id: pending.id, role: pending.role, createdAt: pending.createdAt, user: { email: pending.email } });
+  }
   if (target.id === vm.userId) throw new ShareError('That user already owns this VM.', 400);
 
   const share = await prisma.vmShare.upsert({
@@ -102,13 +137,48 @@ export async function addShare(
     update: { role },
     include: { user: userSelect },
   });
+  // An earlier share to the same address, made before the account existed, is now this one.
+  if (pendingForAddress) await prisma.pendingVmShare.delete({ where: { id: pendingForAddress.id } }).catch(() => undefined);
   return toView(share);
 }
 
-/** Revoke a share. Returns false if it doesn't belong to this VM. */
+/** Revoke a share, live or pending. Returns false if it doesn't belong to this VM. */
 export async function removeShare(vmId: string, shareId: string): Promise<boolean> {
   const share = await prisma.vmShare.findFirst({ where: { id: shareId, vmId } });
-  if (!share) return false;
-  await prisma.vmShare.delete({ where: { id: share.id } });
+  if (share) {
+    await prisma.vmShare.delete({ where: { id: share.id } });
+    return true;
+  }
+  const pending = await prisma.pendingVmShare.findFirst({ where: { id: shareId, vmId } });
+  if (!pending) return false;
+  await prisma.pendingVmShare.delete({ where: { id: pending.id } });
   return true;
+}
+
+/**
+ * Turn the shares waiting for a new account's address into live shares. Only for an
+ * account whose address is confirmed — registered through an invite sent to it, or
+ * created by SSO with a verified email. A self-typed address proves nothing about
+ * who owns it, so its pending shares stay pending. Returns how many were claimed.
+ */
+export async function claimPendingShares(user: { id: string; email: string; emailBound: boolean }): Promise<number> {
+  if (!user.emailBound) return 0;
+  const address = user.email.toLowerCase().trim();
+  const pending = await prisma.pendingVmShare.findMany({
+    where: { email: address },
+    include: { vm: { select: { userId: true } } },
+  });
+  let claimed = 0;
+  for (const p of pending) {
+    if (p.vm.userId !== user.id) {
+      await prisma.vmShare.upsert({
+        where: { vmId_userId: { vmId: p.vmId, userId: user.id } },
+        create: { vmId: p.vmId, userId: user.id, role: normalizeShareRole(p.role) },
+        update: {},
+      });
+      claimed++;
+    }
+    await prisma.pendingVmShare.delete({ where: { id: p.id } }).catch(() => undefined);
+  }
+  return claimed;
 }

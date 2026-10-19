@@ -949,7 +949,8 @@ router.post('/:id/migrate', async (req: Request, res: Response) => {
 });
 
 // ─── VM sharing (owner/admin only) ────────────────────────────
-// Grant another tenant co-owner (operate) or read-only (view) access to a VM.
+// Share a VM by email at a preset level. An address with no account yet gets a
+// pending share that starts when a confirmed account is created for it.
 
 router.get('/:id/shares', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
@@ -981,7 +982,9 @@ router.post('/:id/shares', shareLimiter, async (req: Request, res: Response) => 
       action: 'vm.share', actor: user, targetType: 'vm', targetId: vm.id,
       detail: `${parsed.data.email} as ${parsed.data.role}`, req,
     });
-    res.status(202).json({ message: 'If that person has a ProxMate account, the VM is now shared with them.' });
+    res.status(202).json({
+      message: 'Shared. Someone without a ProxMate account yet gets access once they register with that address through an invite sent to it.',
+    });
   } catch (err) {
     if (err instanceof ShareError) { res.status(err.status).json({ error: err.message }); return; }
     res.status(500).json({ error: 'Failed to share the VM' });

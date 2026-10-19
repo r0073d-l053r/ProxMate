@@ -12,7 +12,15 @@ const who = vi.hoisted(() => {
 });
 
 vi.mock('../src/lib/prisma.js', () => ({
-  prisma: { user: { findUnique: vi.fn(async () => null) } },
+  prisma: {
+    user: { findUnique: vi.fn(async () => null) },
+    vmShare: { findFirst: vi.fn(async () => null), count: vi.fn(async () => 0) },
+    pendingVmShare: {
+      findUnique: vi.fn(async () => null),
+      count: vi.fn(async () => 0),
+      upsert: vi.fn(async () => ({ id: 'p1', vmId: 'vm1', email: 'x@example.com', role: 'viewer', createdAt: new Date() })),
+    },
+  },
 }));
 vi.mock('../src/middleware/auth.js', () => ({
   requireAuth: (req: { user?: unknown }, _res: unknown, next: () => void) => {

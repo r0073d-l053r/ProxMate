@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import { getConfig, setConfig } from './config.service.js';
 import { hashPassword } from './auth.service.js';
 import type { User } from '@prisma/client';
+import { claimPendingShares } from './vm-share.service.js';
 
 /** Admin-facing SSO settings (never includes the client secret). */
 export interface SsoConfig {
@@ -241,6 +242,9 @@ export async function upsertSsoUser(claims: SsoClaims, cfg: SsoConfig): Promise<
         emailBound: claims.emailVerified === true,
       },
     });
+    // VMs shared with this address before the account existed — only when the IdP
+    // verified it (see claimPendingShares).
+    await claimPendingShares(user).catch((err) => console.warn('[sso] claiming pending shares failed:', err));
     return user;
   }
 

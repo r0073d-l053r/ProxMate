@@ -7,8 +7,10 @@ vi.mock('../src/lib/prisma.js', () => ({
 }));
 // hashPassword is async bcrypt — stub it so JIT-create tests don't spend real CPU.
 vi.mock('../src/services/auth.service.js', () => ({ hashPassword: async (s: string) => `hashed:${s}` }));
+vi.mock('../src/services/vm-share.service.js', () => ({ claimPendingShares: vi.fn(async () => 0) }));
 
 import { prisma } from '../src/lib/prisma.js';
+import { claimPendingShares } from '../src/services/vm-share.service.js';
 import { upsertSsoUser, type SsoConfig, type SsoClaims } from '../src/services/sso.service.js';
 
 const findUnique = vi.mocked(prisma.user.findUnique);
@@ -115,6 +117,8 @@ describe('upsertSsoUser', () => {
     await upsertSsoUser({ sub: 'v', email: 'v@b.c', emailVerified: true }, { ...baseCfg, allowSignup: true });
 
     expect((create.mock.calls[0][0].data as { emailBound: boolean }).emailBound).toBe(true);
+    // The new account is handed to the pending-share claim, which acts only on a bound address.
+    expect(claimPendingShares).toHaveBeenCalledWith(expect.objectContaining({ id: 'u9' }));
   });
 
   it('JIT-creates an admin when the user is in the configured admin group', async () => {

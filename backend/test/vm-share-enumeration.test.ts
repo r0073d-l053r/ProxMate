@@ -24,6 +24,17 @@ vi.mock('../src/lib/prisma.js', () => ({
         createdAt: new Date(),
         user: { id: 'u2', email: 'exists@example.com', displayName: 'Exists' },
       })),
+      findFirst: vi.fn(async () => null),
+      count: vi.fn(async () => 1),
+    },
+    pendingVmShare: {
+      findMany: vi.fn(async () => [
+        { id: 'p1', vmId: 'vm1', email: 'later@example.com', role: 'viewer', createdAt: new Date('2026-10-02T00:00:00Z') },
+      ]),
+      findUnique: vi.fn(async () => null),
+      count: vi.fn(async () => 1),
+      upsert: vi.fn(async () => ({ id: 'p2', vmId: 'vm1', email: 'nobody@example.com', role: 'viewer', createdAt: new Date() })),
+      delete: vi.fn(async () => ({})),
     },
   },
 }));
@@ -81,6 +92,8 @@ describe('POST /api/vms/:id/shares', () => {
     expect(hit.status).toBe(miss.status);
     expect(await hit.json()).toEqual(await miss.json());
     expect(prisma.vmShare.upsert).toHaveBeenCalledTimes(1);
+    // The unknown address is kept as a pending share rather than dropped.
+    expect(prisma.pendingVmShare.upsert).toHaveBeenCalledTimes(1);
   });
 
   it('records the same audit detail either way (the VM activity feed is tenant-visible)', async () => {
@@ -91,11 +104,12 @@ describe('POST /api/vms/:id/shares', () => {
 });
 
 describe('GET /api/vms/:id/shares', () => {
-  it('lists each share by the address and access level only — no account id or display name', async () => {
+  it('lists each share by the address and access level only — no account id, display name or pending flag', async () => {
     const res = await fetch(`${base}/vms/vm1/shares`);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([
       { id: 's1', email: 'exists@example.com', role: 'operator', createdAt: '2026-10-01T00:00:00.000Z' },
+      { id: 'p1', email: 'later@example.com', role: 'viewer', createdAt: '2026-10-02T00:00:00.000Z' },
     ]);
   });
 });
