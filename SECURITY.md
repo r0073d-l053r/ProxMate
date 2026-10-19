@@ -38,14 +38,21 @@ This is enforced in code and is always on:
   **Viewer** (see the VM and its status), **Operator** (+ power actions and console), and
   **Manager** (+ config, resize, backups). The ProxMate IDE opens only for a VM's owner, never through a share (or for an admin on another user's VM). No share level of any kind can delete,
   rebuild, migrate, re-share, or change passthrough — those stay with the owner and admins.
+- **Guest ownership tags.** Every guest ProxMate manages carries a Proxmox tag naming its
+  machine (`proxmate-<id>`; Store templates `proxmate-template-<id>`). Start, stop, console,
+  IDE, backups, restores, resize and delete act only on a guest carrying its own machine's
+  tag, so a stale or reused VMID never points an action at another guest. Machines without a
+  tagged guest, and machines held after a create, rebuild or restore that didn't finish, are
+  refused until an admin settles them (**Settings → Maintenance → Unconfirmed machines**).
 - VM listings return the VMs a caller owns **or has been shared** (admins see all), each row
   annotated with the caller's access level and capability set so the UI can gate controls.
 - **Compute access windows** bound how long an invited person may use the cluster at all.
   The term is anchored at sign-up (or `never`); when it lapses the account is **suspended,
   not deleted** — VMs are stopped and every auth path refuses the session, including the
   console WebSocket, the IDE proxy, and both API-token families. Admins never expire.
-- Resource **quotas** from the invite are enforced on every create; a tenant cannot
-  exceed the CPU/RAM/disk you granted.
+- Resource **quotas** from the invite are enforced on every create, resize and restore —
+  including several running at once for the same owner; a tenant cannot exceed the
+  CPU/RAM/disk you granted.
 - The Proxmox **API token never leaves the backend** — tenants talk only to ProxMate.
 - VM `name`, `os` (ISO filename), and target `node` are strictly validated so a tenant
   cannot inject extra Proxmox parameters or alter API paths.
@@ -146,9 +153,9 @@ the cluster balancer pins containers and node-drain lists them as blockers.
 | Proxmox API token | Stored AES-256-GCM encrypted in the DB; never sent to the browser. **Scope it down** — see below. |
 | Secrets at rest | `proxmox_token_secret`, `jwt_secret`, and the SMTP/SSO secrets are encrypted with `ENCRYPTION_KEY` (AES-256-GCM, random 12-byte IV + auth tag). The key must be a **64-hex (32-byte)** string, and secret operations **fail closed** if it is missing (no static fallback). |
 | Passwords | bcrypt (cost 12). Login runs bcrypt even for unknown emails to prevent timing-based account enumeration. |
-| Sessions / JWT | 24h JWTs with a random `jti`, **verified with a pinned `HS256` algorithm**; every token is backed by a `Session` row, so logout / revocation is server-side. |
-| Personal API tokens | The second auth path, for the public REST API (see [`docs/api.md`](docs/api.md)). Tokens are `pm_` + CSPRNG random; **only an HMAC-SHA256 hash is stored**, so the plaintext is shown once and is unrecoverable. Each token carries its owner's identity and is subject to the same capability checks, quotas, and compute-access-window enforcement as a browser session; owners can revoke individual tokens. |
-| Brute-force lockout | After `AUTH_LOCKOUT_MAX` (default 10) consecutive failed passwords an account is locked for `AUTH_LOCKOUT_MINUTES` (default 15), auto-unlocking. The locked response is identical to a normal failure (no enumeration), and admins are emailed when SMTP is configured. Complements the IP rate limiter (targeted vs. noisy-source protection). |
+| Sessions / JWT | 24h JWTs with a random `jti`, **verified with a pinned `HS256` algorithm**; every token is backed by a `Session` row, so logout / revocation is server-side. A password reset (self-service or by an admin) ends every session and revokes every API token of the account. |
+| Personal API tokens | The second auth path, for the public REST API (see [`docs/api.md`](docs/api.md)). Tokens are `pm_` + CSPRNG random; **only an HMAC-SHA256 hash is stored**, so the plaintext is shown once and is unrecoverable. Each token carries its owner's identity and is subject to the same capability checks, quotas, and compute-access-window enforcement as a browser session; owners can revoke individual tokens. Routes that change how an account signs in or is secured (2FA, passkeys, token management, invites, session refresh, kiosk exit, and the admin SSO / kiosk / reset-password settings) refuse API tokens and need a browser session; the full list is in [`docs/api.md`](docs/api.md#session-only-routes). |
+| Brute-force lockout | After `AUTH_LOCKOUT_MAX` (default 10) consecutive failed passwords an account is locked for `AUTH_LOCKOUT_MINUTES` (default 15), auto-unlocking. The locked response is identical to a normal failure (no enumeration), and admins are emailed when SMTP is configured. Complements the IP rate limiter (targeted vs. noisy-source protection). Attempts are reserved before they're checked, so concurrent guesses can't exceed the limit. Wrong 2FA codes are counted per account on their own counter (a correct password doesn't reset it) and capped per challenge; passkey challenges are held server-side and single-use, as are password-reset links, backup download links and recovery codes. Re-running 2FA setup on an account that already has it needs a current code. |
 | Invites | 32-byte URL-safe random tokens, single-use (claimed atomically), with an expiry. An invite sent to an email address can only be registered with that address; sending it to a different address issues a new link and the old one stops working. |
 | SSO account linking | A first SSO login links to an existing local account by email only when the ID token carries `email_verified: true` **and** the account's address was bound by ProxMate (registered through an invite emailed to it, or the setup-wizard admin). Otherwise the login is refused and the user keeps signing in with their password. Accounts that predate this rule and were registered with a self-typed address, and any IdP that omits `email_verified`, never auto-link. |
 | Input validation | All request bodies validated with Zod; Prisma parameterizes all queries. Request bodies are capped (1 MB). |
@@ -161,7 +168,7 @@ the cluster balancer pins containers and node-drain lists them as blockers.
 | Metrics endpoint | `GET /metrics` is token-gated; in **production** it returns 404 unless `METRICS_TOKEN` is set — including for localhost, so there is no unauthenticated local scrape. Scrapers send `Authorization: Bearer <token>`. |
 | MFA-setup enforcement | Where an invite required two-step auth, six protected routers (`/api/vms`, `/api/templates`, `/api/admin`, `/api/proxmox`, `/api/users`, `/api/passthrough-requests`) block access until the user has actually enrolled a TOTP or passkey method. |
 | Containers | Both images run with **all Linux capabilities dropped** and `no-new-privileges`; the frontend runs as a non-root user and the backend drops to the unprivileged `node` user after fixing data-volume ownership. |
-| Audit log | VM lifecycle (create/delete/start/stop/restart/restore), auth events, and **account lockouts** are recorded with actor + client IP; admin-viewable at `/admin/audit`. |
+| Audit log | VM lifecycle (create/delete/start/stop/restart/restore), auth events, settings changes (without secret values), and **account lockouts** are recorded with actor + client IP; admin-viewable at `/admin/audit`. The client IP comes from `REAL_IP_HEADER` only when `TRUST_PROXY` ≥ 1 (`x-forwarded-for` is resolved through the trusted hop count); otherwise it is the socket address. The notification webhook URL is only ever shown masked. |
 
 ### ProxMate IDE (in-guest editor + AI agent)
 
@@ -184,8 +191,12 @@ than out-of-band through the Proxmox API, so it has its own guarantees (full mod
 ProxMate works with a `root@pam` token, but for least privilege create a dedicated user
 (e.g. `proxmate@pve`) with only the roles it needs (VM lifecycle, console, storage/audit,
 firewall) on the relevant nodes/pool, and use that token instead. ProxMate needs:
-`VM.Allocate`, `VM.Config.*`, `VM.PowerMgmt`, `VM.Console`, `VM.Audit`, `Datastore.Audit`,
-`Datastore.AllocateSpace`, and `Sys.Audit` (+ firewall management for isolation).
+`VM.Allocate`, `VM.Config.*` (including `VM.Config.Options`, to set the guest ownership tags),
+`VM.Clone`, `VM.Snapshot`, `VM.PowerMgmt`, `VM.Console`, `VM.Audit`, `Datastore.Audit`,
+`Datastore.AllocateSpace`, and `Sys.Audit` (+ firewall management for isolation). On Proxmox
+VE 8+ add `SDN.Use` (checked whenever a guest NIC is attached, plain bridges included;
+`PVESDNUser` carries it) and `SDN.Audit` to list SDN VNets. The connection test warns about
+most missing privileges, these two included.
 
 > Note: Proxmox API tokens default to **Privilege Separation ON**, which gives the token an
 > empty permission set. Either disable privilege separation on the token or grant it a role
