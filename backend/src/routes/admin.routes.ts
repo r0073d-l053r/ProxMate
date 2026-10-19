@@ -57,7 +57,13 @@ import {
 import { getMailConfig, saveMailConfig, verifyMailConfig, isMailConfigured, sendMail } from '../services/mail.service.js';
 import { announcementEmail } from '../lib/email-templates.js';
 import { unsubscribeToken } from '../services/broadcast-optout.service.js';
-import { getNotifyConfig, saveNotifyConfig, sendTestNotification, NOTIFY_EVENTS } from '../services/notify.service.js';
+import {
+  getNotifyConfig,
+  saveNotifyConfig,
+  sendTestNotification,
+  maskWebhookUrl,
+  NOTIFY_EVENTS,
+} from '../services/notify.service.js';
 import * as sso from '../services/sso.service.js';
 import { getIdeConfig, saveIdeConfig, isValidIngressCidr } from '../services/ide.service.js';
 import { probeIdeReachability } from '../services/ide-provision.service.js';
@@ -111,6 +117,9 @@ router.get('/settings', async (_req: Request, res: Response) => {
 
   const mail = await getMailConfig();
   const ssoCfg = await sso.getSsoConfig();
+  // The webhook URL carries the receiver's token, so like the other secrets it is
+  // reported only as "is one set" plus a masked form that shows where it points.
+  const { webhookUrl, ...notifyCfg } = await getNotifyConfig();
   res.json({
     proxmox: { host, tokenId, verifySsl: verifySsl === 'true', hasSecret: !!(await getConfig('proxmox_token_secret')) },
     defaults: { storage, bridge, isoStorage, backupStorage },
@@ -119,7 +128,7 @@ router.get('/settings', async (_req: Request, res: Response) => {
     smtp: mail
       ? { configured: true, host: mail.host, port: mail.port, secure: mail.secure, user: mail.user ?? '', from: mail.from, hasPass: !!mail.pass }
       : { configured: false },
-    notify: await getNotifyConfig(),
+    notify: { ...notifyCfg, hasWebhookUrl: !!webhookUrl, webhookUrlMasked: maskWebhookUrl(webhookUrl) },
     sso: ssoCfg
       ? {
           configured: true,
@@ -247,6 +256,16 @@ router.put('/settings/smtp', async (req: Request, res: Response) => {
     return;
   }
   await saveMailConfig(parsed.data);
+  // Names the server and account, never the password: the audit log is readable
+  // by every admin and outlives the credential.
+  await recordAudit({
+    action: 'admin.smtp_config',
+    actor: (req as AuthRequest).user,
+    detail: `${parsed.data.host}:${parsed.data.port}${parsed.data.user ? ` as ${parsed.data.user}` : ''}${
+      parsed.data.pass ? ' (password replaced)' : ''
+    }`,
+    req,
+  });
   res.json({ success: true });
 });
 
@@ -261,7 +280,8 @@ router.post('/settings/smtp/test', async (_req: Request, res: Response) => {
 // ─── Event notifications (webhook + email) ────────────────────
 
 const NotifySchema = z.object({
-  webhookUrl: z.string().max(2000).optional(), // blank = webhook disabled
+  webhookUrl: z.string().max(2000).optional(), // blank = keep the stored one
+  clearWebhookUrl: z.boolean().default(false), // remove the webhook (disables it)
   emailEnabled: z.boolean().default(false),
   emailTo: z.string().max(200).optional(), // blank = all admins
   events: z.array(z.enum(NOTIFY_EVENTS)).default([]),
@@ -285,11 +305,20 @@ router.put('/settings/notifications', async (req: Request, res: Response) => {
   }
   await saveNotifyConfig({
     webhookUrl: url,
+    clearWebhookUrl: parsed.data.clearWebhookUrl,
     emailEnabled: parsed.data.emailEnabled,
     emailTo: parsed.data.emailTo,
     events: parsed.data.events,
   });
-  await recordAudit({ action: 'admin.notify_config', actor: (req as AuthRequest).user, req });
+  // What changed, never the URL itself (it carries the receiver's token).
+  const webhook = parsed.data.clearWebhookUrl ? 'removed' : url ? 'replaced' : 'kept';
+  const n = parsed.data.events.length;
+  await recordAudit({
+    action: 'admin.notify_config',
+    actor: (req as AuthRequest).user,
+    detail: `webhook ${webhook}, email ${parsed.data.emailEnabled ? 'on' : 'off'}, ${n} event${n === 1 ? '' : 's'}`,
+    req,
+  });
   res.json({ success: true });
 });
 
@@ -485,10 +514,19 @@ router.put('/settings/proxmox', async (req: Request, res: Response) => {
   await setConfig('proxmox_host', host);
   await setConfig('proxmox_token_id', tokenId);
   await setConfig('proxmox_verify_ssl', String(verifySsl));
-  if (tokenSecret && tokenSecret.trim().length > 0) {
+  const secretReplaced = !!tokenSecret && tokenSecret.trim().length > 0;
+  if (secretReplaced) {
     await setConfig('proxmox_token_secret', tokenSecret, true);
   }
 
+  // Repointing ProxMate at another cluster or token is one of the most consequential
+  // changes an admin can make, so it is recorded — without the secret itself.
+  await recordAudit({
+    action: 'admin.proxmox_config',
+    actor: (req as AuthRequest).user,
+    detail: `${host} as ${tokenId}, verifySsl=${verifySsl}${secretReplaced ? ', secret replaced' : ''}`,
+    req,
+  });
   res.json({ success: true });
 });
 
@@ -524,8 +562,7 @@ router.put('/settings/defaults', async (req: Request, res: Response) => {
   }
   // Capture the old values first: these decide where every future VM is placed and
   // whether it can ever be migrated, so "what changed, from what, and who did it"
-  // has to be answerable afterwards. This route previously wrote no audit entry at
-  // all — the only admin route that didn't.
+  // has to be answerable afterwards.
   const before = {
     storage: await getConfig('default_storage'),
     bridge: await getConfig('default_bridge'),
@@ -565,6 +602,12 @@ router.put('/settings/rescue', async (req: Request, res: Response) => {
     return;
   }
   await setConfig('rescue_iso', parsed.data.iso.trim());
+  await recordAudit({
+    action: 'admin.rescue_config',
+    actor: (req as AuthRequest).user,
+    detail: parsed.data.iso.trim() || 'rescue ISO cleared',
+    req,
+  });
   res.json({ success: true });
 });
 
@@ -581,6 +624,12 @@ router.put('/settings/template-refresh', async (req: Request, res: Response) => 
     return;
   }
   await setConfig('template_refresh_enabled', String(parsed.data.enabled));
+  await recordAudit({
+    action: 'admin.template_refresh_config',
+    actor: (req as AuthRequest).user,
+    detail: parsed.data.enabled ? 'monthly refresh enabled' : 'monthly refresh disabled',
+    req,
+  });
   res.json({ success: true });
 });
 
@@ -711,6 +760,14 @@ router.put('/isolation', async (req: Request, res: Response) => {
   if (parsed.data.vlanTag !== undefined) {
     await setConfig('isolation_vlan_tag', parsed.data.vlanTag === '' ? '' : String(parsed.data.vlanTag));
   }
+  await recordAudit({
+    action: 'admin.isolation_config',
+    actor: (req as AuthRequest).user,
+    detail: `isolation ${parsed.data.enabled ? 'on' : 'off'}${
+      parsed.data.dnsServers !== undefined ? `, dns: ${parsed.data.dnsServers.trim() || 'any'}` : ''
+    }${parsed.data.vlanTag !== undefined ? `, vlan: ${parsed.data.vlanTag === '' ? 'none' : parsed.data.vlanTag}` : ''}`,
+    req,
+  });
   res.json({ success: true });
 });
 
@@ -728,6 +785,12 @@ router.post('/isolation/enforce', async (req: Request, res: Response) => {
   }
   try {
     await setClusterFirewall(true, [parsed.data.managementCidr]);
+    await recordAudit({
+      action: 'admin.isolation_enforce',
+      actor: (req as AuthRequest).user,
+      detail: `cluster firewall on, management ${parsed.data.managementCidr}`,
+      req,
+    });
     res.json({ success: true, enforced: true });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
@@ -737,9 +800,10 @@ router.post('/isolation/enforce', async (req: Request, res: Response) => {
 // ─── DELETE /api/admin/isolation/enforce ──────────────────────
 // Disable the cluster firewall (stops enforcing; management allow-rules are left in place).
 
-router.delete('/isolation/enforce', async (_req: Request, res: Response) => {
+router.delete('/isolation/enforce', async (req: Request, res: Response) => {
   try {
     await setClusterFirewall(false);
+    await recordAudit({ action: 'admin.isolation_unenforce', actor: (req as AuthRequest).user, detail: 'cluster firewall off', req });
     res.json({ success: true, enforced: false });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });

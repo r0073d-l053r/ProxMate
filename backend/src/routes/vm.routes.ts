@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { promises as fsp, existsSync } from 'node:fs';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
+import { shareLimiter } from '../middleware/rate-limit.js';
 import { enforceMfaSetup } from '../middleware/mfa.js';
 import { recordAudit, listAuditForTarget } from '../services/audit.service.js';
 import {
@@ -83,7 +84,7 @@ import { isIdeInstalling } from '../services/ide-provision.service.js';
 import { isDeploying, refreshDeployState } from '../services/deploy-lock.service.js';
 import { getLiveStats } from '../services/live-stats.service.js';
 import { getConfig } from '../services/config.service.js';
-import { ALERT_METRICS } from '../services/alert.service.js';
+import { ALERT_METRICS, MAX_ALERT_RULES_PER_VM } from '../services/alert.service.js';
 import { downloadsEnabled, requestBackupDownload, DownloadError } from '../services/download.service.js';
 import {
   restoreUploadsEnabled,
@@ -110,15 +111,19 @@ router.use(enforceMfaSetup);
  * the response) when locked, so callers just `if (rejectIfLocked(vm, res)) return;`.
  */
 function rejectIfLocked(vm: { ideState: string | null; deployState: string | null }, res: Response): boolean {
-  if (isIdeInstalling(vm)) {
-    res.status(409).json({ error: 'The ProxMate IDE is installing on this VM — wait until it finishes.' });
-    return true;
-  }
-  if (isDeploying(vm)) {
-    res.status(409).json({ error: "This VM is still finishing its cloud-init setup — wait until it's ready." });
+  const reason = lockReason(vm);
+  if (reason) {
+    res.status(409).json({ error: reason });
     return true;
   }
   return false;
+}
+
+/** Why the VM is locked against destructive actions, or null when it isn't. */
+function lockReason(vm: { ideState: string | null; deployState: string | null }): string | null {
+  if (isIdeInstalling(vm)) return 'The ProxMate IDE is installing on this VM — wait until it finishes.';
+  if (isDeploying(vm)) return "This VM is still finishing its cloud-init setup — wait until it's ready.";
+  return null;
 }
 
 /**
@@ -458,6 +463,10 @@ router.post('/bulk', async (req: Request, res: Response) => {
   for (const id of ids) {
     const vm = await getOwnedVm(id, user);
     if (!vm) { results.push({ id, ok: false, error: 'not found' }); continue; }
+    // Same lock as the single-VM stop/restart/delete routes (start is never locked);
+    // a locked VM is reported as a per-item failure so the rest still proceed.
+    const locked = action === 'start' ? null : lockReason(vm);
+    if (locked) { results.push({ id, ok: false, error: locked }); continue; }
     try {
       if (action === 'start') await startVm(vm);
       else if (action === 'stop') await stopVm(vm, false);
@@ -915,6 +924,7 @@ router.post('/:id/migrate', async (req: Request, res: Response) => {
   }
   const vm = await getOwnedVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (rejectIfLocked(vm, res)) return;
   const parsed = MigrateSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Choose a target node.' }); return; }
   try {
@@ -949,7 +959,7 @@ const AddShareSchema = z.object({
   role: z.enum([...SHARE_ROLES, 'co-owner', 'read-only']).transform(normalizeShareRole),
 });
 
-router.post('/:id/shares', async (req: Request, res: Response) => {
+router.post('/:id/shares', shareLimiter, async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   const vm = await getOwnedVm(req.params['id'] as string, user);
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
@@ -957,12 +967,15 @@ router.post('/:id/shares', async (req: Request, res: Response) => {
   const parsed = AddShareSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Enter a valid email and role.' }); return; }
   try {
-    const share = await addShare(vm, parsed.data.email, parsed.data.role);
+    // Same response and same audit detail whether or not the address has an
+    // account (the VM activity feed is visible to the tenant), so the POST response
+    // itself does not confirm whether an account exists.
+    await addShare(vm, parsed.data.email, parsed.data.role);
     await recordAudit({
       action: 'vm.share', actor: user, targetType: 'vm', targetId: vm.id,
       detail: `${parsed.data.email} as ${parsed.data.role}`, req,
     });
-    res.status(201).json(share);
+    res.status(202).json({ message: 'If that person has a ProxMate account, the VM is now shared with them.' });
   } catch (err) {
     if (err instanceof ShareError) { res.status(err.status).json({ error: err.message }); return; }
     res.status(500).json({ error: 'Failed to share the VM' });
@@ -1286,6 +1299,19 @@ router.post('/:id/alerts', async (req: Request, res: Response) => {
   const threshold = metric === 'down' ? 0 : parsed.data.threshold;
   if (metric !== 'down' && threshold === undefined) {
     res.status(400).json({ error: 'A threshold percentage is required for this metric.' });
+    return;
+  }
+  // Bounded and de-duplicated: each rule is evaluated and can deliver every tick.
+  if ((await prisma.alertRule.count({ where: { vmId: vm.id } })) >= MAX_ALERT_RULES_PER_VM) {
+    res.status(409).json({ error: `A machine can have at most ${MAX_ALERT_RULES_PER_VM} alerts — remove one first.` });
+    return;
+  }
+  const duplicate = await prisma.alertRule.findFirst({
+    where: { vmId: vm.id, metric, threshold: threshold ?? 0 },
+    select: { id: true },
+  });
+  if (duplicate) {
+    res.status(409).json({ error: 'This machine already has that alert.' });
     return;
   }
   const rule = await prisma.alertRule.create({

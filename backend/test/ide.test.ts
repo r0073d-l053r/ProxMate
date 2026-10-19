@@ -143,3 +143,21 @@ describe('ide.service policy + gating', () => {
     expect((await getIdeCapability({ role: 'admin' })).available).toBe(false);
   });
 });
+
+describe('local models stored without an id', () => {
+  it('get the same id on every read, distinct per entry', async () => {
+    store.set(
+      'ide_local_models',
+      JSON.stringify([
+        { model: 'llama3', sourceKeyId: 'k1', visibility: 'shared' },
+        { model: 'llama3', sourceKeyId: 'k1', visibility: 'shared' },
+        { model: 'qwen', sourceKeyId: 'k1', visibility: 'admin' },
+      ]),
+    );
+    const first = (await getIdeConfig()).localModels.map((m) => m.id);
+    const second = (await getIdeConfig()).localModels.map((m) => m.id);
+    expect(first).toEqual(second);
+    expect(new Set(first).size).toBe(3);
+    expect(first.every((id) => id.length > 0)).toBe(true);
+  });
+});

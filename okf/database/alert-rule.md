@@ -51,7 +51,8 @@ Per-VM alerts managed under `/api/vms/:id/alerts`. Listing needs view access. Cr
 - Conditions: `cpu`/`memory`/`disk` need the guest running and value >= threshold. Disk is the fullest filesystem via the QEMU guest agent, so it's never available for LXC. `down` fires when ProxMate's recorded `status` is `running` but Proxmox reports it not running.[^svc]
 - A rule fires once the breach has lasted `sustainedMin` minutes **and** the cooldown has elapsed. The cooldown is `ALERT_COOLDOWN_MIN`, default 60, minimum 5.[^svc]
 - Evaluation runs on the 5-minute resource-history scheduler tick.[^sched]
-- Delivery: email to the VM's current owner (if SMTP is configured) plus `notifyWebhook` with event `vm.error`.[^svc]
+- Delivery: email to the VM's current owner (if SMTP is configured) plus `notifyWebhook` with event `vm.error`, one of each per VM per tick (rules that fire together are combined).[^svc]
+- At most 20 rules per VM, and no two with the same `metric` and `threshold`; the create route refuses others with 409.[^vm-routes]
 
 # Gotchas
 

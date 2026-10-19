@@ -21,6 +21,12 @@ sources:
   - id: init-mig
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/migrations/20260623035652_init/migration.sql
     title: backend/prisma/migrations/20260623035652_init/migration.sql
+  - id: creator-mig
+    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/migrations/20261019132000_invite_creator_set_null/migration.sql
+    title: backend/prisma/migrations/20261019132000_invite_creator_set_null/migration.sql
+  - id: user-routes
+    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/user.routes.ts
+    title: backend/src/routes/user.routes.ts
 ---
 
 # Purpose
@@ -33,7 +39,7 @@ ProxMate registration is invite-only. An admin creates an invite (admin-only rou
 |---|---|---|---|
 | id | String | `@id @default(cuid())` | Primary key. |
 | token | String | `@unique`, `@@index` | 32 random bytes base64url, stored in clear (it is what the link carries).[^svc] |
-| createdById | String | FK | Admin who minted it. |
+| createdById | String? | FK | Admin who minted it; NULL once that admin has been deleted. |
 | label | String? | | Admin label. |
 | email | String? | | Address the link was emailed to, if any. When set, registration must use this address. |
 | maxCpu | Int | | vCPU quota granted. |
@@ -49,7 +55,7 @@ ProxMate registration is invite-only. An admin creates an invite (admin-only rou
 
 # Relationships
 
-- `createdBy` -> [User](/database/user.md) (relation `CreatedInvites`, `ON DELETE RESTRICT`).
+- `createdBy` -> [User](/database/user.md) (relation `CreatedInvites`, `ON DELETE SET NULL`).
 - `usedBy` -> [User](/database/user.md) (relation `UsedInvite`, one-to-one via unique `usedById`, `ON DELETE SET NULL`).[^schema] [^init-mig]
 
 # Invariants
@@ -63,10 +69,12 @@ ProxMate registration is invite-only. An admin creates an invite (admin-only rou
 
 - `expiresAt` (link lifetime) and `accessDuration` (tenant compute window) are different things and are easy to confuse.[^schema]
 - Because `usedById` is `SET NULL` on user delete, deleting the redeeming user makes an unexpired invite redeemable again.[^init-mig]
-- `createdById` is `RESTRICT`, so an admin with invites on record cannot be deleted until those rows are gone.[^init-mig]
+- `createdById` is `SET NULL`: deleting an admin keeps the invites they issued that were redeemed (creator NULL). `DELETE /api/users/:id` revokes that admin's unredeemed invites in the same transaction.[^creator-mig] [^user-routes]
 
 [^schema]: backend/prisma/schema.prisma
 [^routes]: backend/src/routes/invite.routes.ts
 [^svc]: backend/src/services/invite.service.ts
 [^auth-routes]: backend/src/routes/auth.routes.ts
 [^init-mig]: backend/prisma/migrations/20260623035652_init/migration.sql
+[^creator-mig]: backend/prisma/migrations/20261019132000_invite_creator_set_null/migration.sql
+[^user-routes]: backend/src/routes/user.routes.ts

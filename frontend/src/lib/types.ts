@@ -105,9 +105,10 @@ export interface VmDisk {
 
 export interface VmShare {
   id: string;
+  /** The address the owner shared with (the sharee's other account details are not exposed). */
+  email: string;
   role: "viewer" | "operator" | "manager";
   createdAt: string;
-  user: { id: string; email: string; displayName: string };
 }
 
 export interface VmLiveStatus {
@@ -540,7 +541,10 @@ export type NotifyEvent =
   | "deploy.agent_missing";
 
 export interface NotifyConfig {
-  webhookUrl: string;
+  /** The URL itself is never returned (it carries the receiver's token). */
+  hasWebhookUrl: boolean;
+  /** Scheme and host only, e.g. "https://discord.com/…"; '' when unset. */
+  webhookUrlMasked: string;
   emailEnabled: boolean;
   emailTo: string;
   events: NotifyEvent[];

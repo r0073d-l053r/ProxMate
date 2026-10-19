@@ -29,7 +29,7 @@ Reads each node's memory load and live-migrates running ProxMate-managed guests 
 | `runMigrations` | `(moves: { vmId, toNode }[], actor?)` | Sequential; each via `vm.service.migrateVmToNode` (re-validates); audits `balancer.migrate` / `balancer.migrate_failed` with Proxmox's real error. |
 | `runAutoBalance` | `() => { applied, reason }` | Scheduler entry; no-op unless mode `auto`; audits `balancer.auto_run`. |
 | `planDrain` | `(input: DrainInput) => DrainPlan` | Pure: bin-packs the drained node's guests largest-first onto best-fit nodes (fits first, then most free memory); explicit `targetNode` forces all there. |
-| `planNodeDrain` | `(node, targetNode?, client?)` | Live snapshot → `planDrain`, adding blockers for unmanaged VMs (including guests without their row's ProxMate tag), LXC containers, and passthrough VMs. |
+| `planNodeDrain` | `(node, targetNode?, client?)` | Live snapshot → `planDrain`, adding blockers for unmanaged VMs (including guests without their row's ProxMate tag), LXC containers, passthrough VMs, and VMs locked by an IDE install or cloud-init deploy. |
 
 # Data
 
@@ -46,7 +46,7 @@ Cron `*/15 * * * *`, overridable with env `BALANCER_CRON`; under `balancerRunnin
 - Only ProxMate-managed guests move; foreign guests count as fixed load.[^bal]
 - Never x86 ↔ ARM (arch guardrail; `unknown` arch is permissive).[^bal]
 - Anti-affinity: VMs sharing an `aa:<group>` tag are never co-located by the balancer.[^bal]
-- Pinned: tags `pin` / `no-balance`, the exclude list, LXC (no live migration), VMs with PCI/GPU passthrough, and VMs whose Proxmox `allowed_nodes` is empty (node-local storage).[^bal]
+- Pinned: tags `pin` / `no-balance`, the exclude list, LXC (no live migration), VMs with PCI/GPU passthrough, VMs whose Proxmox `allowed_nodes` is empty (node-local storage), and VMs locked by an IDE install or cloud-init deploy (`ideState=installing` / `deployState=deploying`). `runMigrations` re-checks that lock per move at apply time (manual apply, auto mode, drain) and reports a locked VM as a failed move.[^bal]
 - Each move strictly lowers the peak load, preventing oscillation; `maxMoves` caps churn per pass.[^bal]
 
 # Gotchas
@@ -55,7 +55,7 @@ Cron `*/15 * * * *`, overridable with env `BALANCER_CRON`; under `balancerRunnin
 - `migratableTargets` preflight fails open: an unreadable result (null) leaves the VM unrestricted; the apply re-validates.[^bal]
 - Drain with an explicit target is an admin override: only arch and storage-locality are enforced, not capacity or anti-affinity. Auto drain falls back to ignoring anti-affinity when no safe node exists.[^bal]
 - In drains only running guests get the preflight; stopped ones (offline migration) are left unrestricted.[^bal]
-- Unmanaged-VM blockers are appended to the reason but do not set `ok = false`; container and passthrough blockers do.[^bal]
+- Unmanaged-VM blockers are appended to the reason but do not set `ok = false`; container, passthrough and locked-VM blockers do.[^bal]
 - Owners are notified only for admin-initiated moves (an `actor` is present), never for routine auto-balancing.[^bal]
 
 # Relationships

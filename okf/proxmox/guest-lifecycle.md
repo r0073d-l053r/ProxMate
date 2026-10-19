@@ -261,7 +261,7 @@ Network discovery is in [networking](/proxmox/networking.md); config keys are in
   `ipfilter=0` and allows DNS to configured servers or anywhere; SECURITY.md §3a matches the code on
   both points (it does not list the DHCP-reply and router-advertisement DROP rules).[^deploy][^security][^pve]
 - Changing the `ProxMate isolation` comment string would orphan deployed rules (not reconciled).[^pve]
-- `ensureHostCpu` reads the config with the default `qemu` kind regardless of `kind`.[^pve]
+- `ensureHostCpu` reads and writes the config of the same guest `kind`.[^pve]
 - Template deploys pile onto the template's node; ROADMAP tracks this.[^vm]
 
 [^pve]: backend/src/services/proxmox.service.ts

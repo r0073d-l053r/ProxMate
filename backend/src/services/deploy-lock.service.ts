@@ -10,7 +10,7 @@ import {
 } from './proxmox.service.js';
 import { decrypt } from '../lib/crypto.js';
 import { notify } from './notify.service.js';
-import { requireOurGuest } from './vm.service.js';
+import { requireOurGuest, guestIdentity } from './vm.service.js';
 
 /**
  * Cloud-init deploy lock. A VM cloned from a cloud-init template is reported
@@ -136,7 +136,13 @@ async function abandonPendingCiPassword(id: string): Promise<void> {
     select: { pendingCiPassword: true, name: true, description: true, os: true, proxmoxVmId: true },
   });
   if (!vm?.pendingCiPassword) return;
-  await clearPendingCiPassword(id);
+  // Conditional clear: the detail fetch and the scheduler tick can both close the
+  // window at once, and only the one that actually drops the secret reports it.
+  const { count } = await prisma.virtualMachine.updateMany({
+    where: { id, pendingCiPassword: { not: null } },
+    data: { pendingCiPassword: null },
+  });
+  if (count !== 1) return;
   logger.error(
     { vmId: id, name: vm.name },
     'could not set the login password in-guest before the deploy window closed — the guest agent never responded. ' +
@@ -200,8 +206,9 @@ async function cloudInitSettled(vm: VirtualMachine): Promise<boolean | null> {
 /**
  * Resolve the current deploy state, advancing 'deploying' → 'ready' once cloud-init
  * settles (or the timeout elapses). Called from the VM-detail fetch so the lock
- * clears on its own as the tenant watches the VM come up. No-op for guests that
- * aren't mid-deploy.
+ * clears as the tenant watches the VM come up, and from the scheduler's
+ * {@link advanceDeployingVms} tick for machines nobody is looking at. No-op for
+ * guests that aren't mid-deploy.
  */
 export async function refreshDeployState(vm: VirtualMachine): Promise<DeployState> {
   const state = deployStateOf(vm);
@@ -216,6 +223,11 @@ export async function refreshDeployState(vm: VirtualMachine): Promise<DeployStat
     return markReady(vm);
   }
 
+  // Probe only the guest ProxMate created for this row. Anything else at the VMID
+  // says nothing about this deploy (and must not be exec'd into); the timeout above
+  // still unlocks the row.
+  if ((await guestIdentity(vm).catch(() => null)) !== 'ours') return 'deploying';
+
   const settled = await cloudInitSettled(vm);
   if (settled === true) {
     logger.info({ vmId: vm.id }, 'cloud-init deploy finished — unlocking');
@@ -224,4 +236,23 @@ export async function refreshDeployState(vm: VirtualMachine): Promise<DeployStat
     return markReady(vm);
   }
   return 'deploying';
+}
+
+/**
+ * Advance every machine still flagged 'deploying'. Run from a scheduler tick: a
+ * guest deployed through the API, or simply never opened in the UI, must still
+ * unlock, receive its login password and hit the timeout — none of which may
+ * depend on someone fetching the VM. One machine's failure never stops the rest.
+ */
+export async function advanceDeployingVms(): Promise<{ checked: number; ready: number }> {
+  const vms = await prisma.virtualMachine.findMany({ where: { deployState: 'deploying' } });
+  let ready = 0;
+  for (const vm of vms) {
+    try {
+      if ((await refreshDeployState(vm)) === 'ready') ready += 1;
+    } catch (err) {
+      logger.warn({ vmId: vm.id, err }, 'deploy-lock tick could not advance this machine — will retry');
+    }
+  }
+  return { checked: vms.length, ready };
 }

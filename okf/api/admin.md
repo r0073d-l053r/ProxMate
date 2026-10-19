@@ -33,7 +33,7 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 | POST | `/api/admin/settings/appdb-backup/run` | admin | Run an app-DB backup now; `{ ok, file, pruned }`. Audited `admin.appdb_backup_run`. |
 | PUT | `/api/admin/settings/smtp` | admin | `{ host, port, secure, user?, pass?, from? }`; blank `pass` keeps existing. |
 | POST | `/api/admin/settings/smtp/test` | admin | Verify SMTP. |
-| PUT | `/api/admin/settings/notifications` | admin | `{ webhookUrl?, emailEnabled, emailTo?, events }`. Audited `admin.notify_config`. |
+| PUT | `/api/admin/settings/notifications` | admin | `{ webhookUrl?, clearWebhookUrl?, emailEnabled, emailTo?, events }`; a blank `webhookUrl` keeps the stored one, `clearWebhookUrl: true` removes it. Audited `admin.notify_config` with detail `webhook replaced\|removed\|kept, email on\|off, N events` (never the URL). |
 | POST | `/api/admin/settings/notifications/test` | admin | Send a test notification. |
 | PUT | `/api/admin/settings/ide` | admin | IDE policy `{ enabled: off/admin/tenants, allowByoKeys, localModels?, sharedModels?, gatewayUrl?, gatewayKey?, ingressCidr? }`. Audited `admin.ide_config`. |
 | GET | `/api/admin/ide/sources` | admin | Admin's own saved LLM keys (model sources). |
@@ -52,7 +52,7 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 | GET | `/api/admin/nodes` | admin | Node health. |
 | GET | `/api/admin/storage-pinning` | admin | Storage pinning report. |
 | GET | `/api/admin/placement-diagnostics` | admin | Placement diagnostics using `iso_storage` and `default_storage`. |
-| GET | `/api/admin/isolation` | admin | Tenant isolation state: `isolationEnabled`, `clusterFirewallEnabled`, `enforced`, `reachable`, `suggestedMgmtCidr`, `dnsServers`, `vlanTag`. |
+| GET | `/api/admin/isolation` | admin | Tenant isolation state: `isolationEnabled`, `clusterFirewallEnabled`, `enforced`, `reachable`, `suggestedMgmtCidr`, `dnsServers`, `vlanTag`. `reachable: false` means Proxmox could not be asked, so the firewall state is unknown; the settings page then shows that and hides the enforcement controls. |
 | PUT | `/api/admin/isolation` | admin | `{ enabled, dnsServers?, vlanTag? ('' or 1..4094) }`. |
 | POST | `/api/admin/isolation/enforce` | admin | `{ managementCidr }`; enable the Proxmox cluster firewall with that management CIDR allowed. |
 | DELETE | `/api/admin/isolation/enforce` | admin | Disable the cluster firewall. |
@@ -83,8 +83,8 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 
 - All bodies are zod-validated; failures are 400 with `details` (some return a short fixed message instead).[^routes]
 - SSRF guard: `webhookUrl` must pass `assertPublicHttpUrlShape`.[^routes]
-- Secrets are never returned by `GET /settings` (only `hasSecret` / `hasPass` / `hasGatewayKey`), and blank secret fields on PUT keep the stored value.[^routes]
-- Not audited: `PUT /settings/smtp`, `PUT /settings/proxmox`, `PUT /settings/rescue`, `PUT /settings/template-refresh`, `PUT /isolation`, isolation enforce/unenforce.[^routes]
+- Secrets are never returned by `GET /settings` (only `hasSecret` / `hasPass` / `hasGatewayKey`, and for the notification webhook `hasWebhookUrl` plus `webhookUrlMasked`, scheme and host only), and blank secret fields on PUT keep the stored value.[^routes]
+- Audited: `PUT /settings/proxmox` (`admin.proxmox_config`), `PUT /settings/smtp` (`admin.smtp_config`), `PUT /settings/rescue`, `PUT /settings/template-refresh`, `PUT /isolation` and isolation enforce/unenforce. Entries name what changed and whether a secret was replaced, never the secret value.[^routes]
 - Passthrough approve and balancer apply return 202 and run asynchronously (`void ... .catch(console.error)`); errors after 202 only reach the log.[^routes]
 - `GET /isolation` treats `isolation_enabled` as on unless it is exactly `'false'`.[^routes]
 - Broadcast unsubscribe base URL: `frontend_url` config, else `BACKEND_PUBLIC_URL`, else `FRONTEND_URL`; no link if all are empty. Requires SMTP (400 otherwise).[^routes]

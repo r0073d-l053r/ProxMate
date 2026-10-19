@@ -26,11 +26,13 @@ Single place where periodic work is registered. `startScheduler()` is called fro
 | Weekly backup catch-up | once, 10 s after start | — | `running` | `catchUpMissedBackups` |
 | Per-VM power schedules | `* * * * *` | — | `powerRunning` | [power-schedule](/services/power-schedule.md) `runDuePowerActions` |
 | Per-VM backups | `* * * * *` | — | `backupRunning` | [matestate](/services/matestate.md) `runDueBackups` |
+| Cloud-init deploy lock | `* * * * *` | — | `deployLockRunning` | [deploy-lock](/services/deploy-lock.md) `advanceDeployingVms` (`deployLockTick`) |
 | Resource history + alerts | `*/5 * * * *` | — | `historyRunning` | [resource-history](/services/resource-history.md) `sampleResourceUsage`, `pruneResourceSamples`; [alert](/services/alert.md) `evaluateAlerts` |
 | Cluster balancer | `*/15 * * * *` | `BALANCER_CRON` | `balancerRunning` | [cluster-balancer](/services/cluster-balancer.md) `runAutoBalance` (no-op unless mode `auto`) |
 | Template refresh | `0 4 1 * *` (1st, 04:00) | `TEMPLATE_REFRESH_CRON` | `templateRunning` | [template](/services/template.md) `refreshAllTemplates`, only if `template_refresh_enabled === 'true'` |
 | App-DB backup | `30 2 * * *` | `APPDB_BACKUP_CRON` | `appDbRunning` | [appdb-backup](/services/appdb-backup.md) `runAppDbBackup` (no-op without a dir) |
 | Guest ownership-tag backfill | `*/15 * * * *` | — | `markerRunning` | [vm](/services/vm.md) `runGuestMarkerBackfill`; a no-op once a pass completed without Proxmox errors (also run at boot from index.ts) |
+| Malformed stored schedules report | once, 20 s after start | — | — | [power-schedule](/services/power-schedule.md) `reportInvalidStoredCrons` |
 | Access-expiry sweep | `20 * * * *` | `ACCESS_EXPIRY_CRON` | `accessRunning` | [access-sweep](/services/access-sweep.md) `runAccessExpiryTick`; also once 15 s after start |
 
 # Key functions

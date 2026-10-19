@@ -216,7 +216,9 @@ model Session {
 model InviteToken {
   id          String    @id @default(cuid())
   token       String    @unique
-  createdById String
+  // NULL once the admin who issued it has been deleted: a redeemed invite is kept
+  // as the record of how its tenant joined, and must not block that deletion.
+  createdById String?
   label       String?
   email       String?   // address the invite link was emailed to, if any
 
@@ -236,7 +238,7 @@ model InviteToken {
   expiresAt   DateTime
   createdAt   DateTime  @default(now())
 
-  createdBy   User      @relation("CreatedInvites", fields: [createdById], references: [id])
+  createdBy   User?     @relation("CreatedInvites", fields: [createdById], references: [id], onDelete: SetNull)
   usedBy      User?     @relation("UsedInvite", fields: [usedById], references: [id])
 
   @@index([token])

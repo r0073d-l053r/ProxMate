@@ -42,6 +42,9 @@ sources:
   - id: init-mig
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/migrations/20260623035652_init/migration.sql
     title: backend/prisma/migrations/20260623035652_init/migration.sql
+  - id: creator-mig
+    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/migrations/20261019132000_invite_creator_set_null/migration.sql
+    title: backend/prisma/migrations/20261019132000_invite_creator_set_null/migration.sql
 ---
 
 # Purpose
@@ -82,7 +85,7 @@ The central identity row. Every tenant and admin is a `User`; `role` decides adm
 # Relationships
 
 - Has many [VirtualMachine](/database/virtual-machine.md) (`vms`), [Session](/database/session.md), [SshKey](/database/ssh-key.md), [ApiToken](/database/api-token.md), [VmShare](/database/vm-share.md) (VMs shared *with* this user), [QuotaRequest](/database/quota-request.md), [PassthroughRequest](/database/passthrough-request.md), [IdeGatewayToken](/database/ide-gateway-token.md), [TenantLlmKey](/database/tenant-llm-key.md) (`llmKeys`). All these FKs are `ON DELETE CASCADE`.[^schema]
-- [InviteToken](/database/invite-token.md) twice: `invitesCreated` (relation `CreatedInvites`, FK `ON DELETE RESTRICT`) and `usedInvite` (relation `UsedInvite`, FK `ON DELETE SET NULL`).[^init-mig]
+- [InviteToken](/database/invite-token.md) twice: `invitesCreated` (relation `CreatedInvites`, FK `ON DELETE SET NULL`) and `usedInvite` (relation `UsedInvite`, FK `ON DELETE SET NULL`).[^init-mig]
 - Referenced by plain scalar `userId` (no FK) from [PasswordResetToken](/database/password-reset-token.md), [PasswordResetRequest](/database/password-reset-request.md), [TwoFactorRecoveryCode](/database/two-factor-recovery-code.md), [Passkey](/database/passkey.md), [DownloadToken](/database/download-token.md), [AuditLog](/database/audit-log.md), [ResourceSample](/database/resource-sample.md), [AlertRule](/database/alert-rule.md).[^schema]
 
 # Invariants
@@ -97,7 +100,7 @@ The central identity row. Every tenant and admin is a `User`; `role` decides adm
 # Gotchas
 
 - Deleting a user cascades VMs, sessions, keys, tokens and shares, but leaves the non-FK rows listed above (passkeys, recovery codes, reset tokens, audit, samples) as orphans. The admin delete route destroys the user's VMs on Proxmox best-effort first.[^user-routes]
-- `InviteToken.createdById` is `ON DELETE RESTRICT`, so deleting an admin who created invites fails at the database unless those invites are removed first.[^init-mig]
+- `InviteToken.createdById` is `ON DELETE SET NULL`: deleting an admin who created invites keeps the redeemed ones with no creator; the delete route revokes the unredeemed ones in the same transaction.[^creator-mig] [^user-routes]
 - `InviteToken.usedById` is `SET NULL` on delete: deleting a tenant makes the invite they redeemed look unused again, and it is redeemable if its `expiresAt` has not passed.[^init-mig] [^auth-routes]
 - Registration creates the user first, then atomically claims the invite with `updateMany where usedById: null`; on a lost race the new user row is deleted.[^auth-routes]
 
@@ -113,3 +116,4 @@ The central identity row. Every tenant and admin is a `User`; `role` decides adm
 [^mfa]: backend/src/services/mfa.service.ts
 [^vm-svc]: backend/src/services/vm.service.ts
 [^init-mig]: backend/prisma/migrations/20260623035652_init/migration.sql
+[^creator-mig]: backend/prisma/migrations/20261019132000_invite_creator_set_null/migration.sql

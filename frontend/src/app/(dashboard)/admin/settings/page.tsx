@@ -21,8 +21,8 @@ import {
 import { api, apiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 import type { AdminSettings, ProxmoxResources, IsolationStatus, NotifyEvent } from "@/lib/types";
+import { IsolationStatusNote, isolationView } from "@/components/admin/isolation-status";
 import { NOTIFY_EVENT_LABELS } from "@/lib/types";
-import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { UpdatesCard } from "@/components/admin/updates-card";
 import { RescueIsoCard } from "@/components/admin/rescue-iso-card";
@@ -117,7 +117,10 @@ export default function SettingsPage() {
   const [testingSmtp, setTestingSmtp] = useState(false);
 
   // Notifications (webhook + email) — optional
-  const [notifyWebhook, setNotifyWebhook] = useState("");
+  const [notifyWebhook, setNotifyWebhook] = useState(""); // a NEW url; blank keeps the stored one
+  const [notifyHasWebhook, setNotifyHasWebhook] = useState(false);
+  const [notifyWebhookMasked, setNotifyWebhookMasked] = useState("");
+  const [notifyClearWebhook, setNotifyClearWebhook] = useState(false);
   const [notifyEmailEnabled, setNotifyEmailEnabled] = useState(false);
   const [notifyEmailTo, setNotifyEmailTo] = useState("");
   const [notifyEvents, setNotifyEvents] = useState<NotifyEvent[]>([]);
@@ -247,7 +250,8 @@ export default function SettingsPage() {
         }
         if (res.data.notify) {
           const n = res.data.notify;
-          setNotifyWebhook(n.webhookUrl);
+          setNotifyHasWebhook(n.hasWebhookUrl);
+          setNotifyWebhookMasked(n.webhookUrlMasked);
           setNotifyEmailEnabled(n.emailEnabled);
           setNotifyEmailTo(n.emailTo);
           setNotifyEvents(n.events);
@@ -390,12 +394,22 @@ export default function SettingsPage() {
     e.preventDefault();
     setSavingNotify(true);
     try {
+      const newWebhook = notifyClearWebhook ? "" : notifyWebhook.trim();
       await api.put("/admin/settings/notifications", {
-        webhookUrl: notifyWebhook.trim() || undefined,
+        webhookUrl: newWebhook || undefined,
+        clearWebhookUrl: notifyClearWebhook,
         emailEnabled: notifyEmailEnabled,
         emailTo: notifyEmailTo.trim() || undefined,
         events: notifyEvents,
       });
+      // Reload so the masked value reflects what the server now stores.
+      if (notifyClearWebhook || newWebhook) {
+        const fresh = await api.get<AdminSettings>("/admin/settings");
+        setNotifyHasWebhook(fresh.data.notify.hasWebhookUrl);
+        setNotifyWebhookMasked(fresh.data.notify.webhookUrlMasked);
+        setNotifyWebhook("");
+        setNotifyClearWebhook(false);
+      }
       toast.success("Notification settings saved.");
     } catch (err) {
       toast.error(apiError(err));
@@ -677,34 +691,7 @@ export default function SettingsPage() {
                   Apply isolation firewall to new VMs
                 </label>
 
-                <div
-                  className={cn(
-                    "rounded-lg border p-3 text-sm",
-                    isolation.enforced
-                      ? "border-emerald-500/30 bg-emerald-500/10"
-                      : "border-amber-500/30 bg-amber-500/10",
-                  )}
-                >
-                  {isolation.enforced ? (
-                    <p>
-                      <span className="font-medium">Isolation is enforced.</span> New VMs are firewalled
-                      off from the rest of your infrastructure.
-                    </p>
-                  ) : !isolation.clusterFirewallEnabled ? (
-                    <p>
-                      <span className="font-medium">Not enforced yet.</span> ProxMate is configuring each
-                      VM&apos;s firewall, but rules only take effect once the{" "}
-                      <span className="font-medium">Proxmox cluster firewall</span> is enabled. Until
-                      then, VMs share your LAN. See <code>SECURITY.md</code> for the safe steps to enable
-                      it (and the recommended dedicated-VLAN setup).
-                    </p>
-                  ) : (
-                    <p>
-                      <span className="font-medium">Isolation is disabled.</span> New VMs will be placed
-                      on your network without isolation rules.
-                    </p>
-                  )}
-                </div>
+                <IsolationStatusNote isolation={isolation} />
 
                 {/* Optional DNS allow-list for tenant isolation */}
                 {isolation.isolationEnabled && (
@@ -729,7 +716,7 @@ export default function SettingsPage() {
                 )}
 
                 {/* Guided enforcement: enable/disable the Proxmox cluster firewall */}
-                {isolation.isolationEnabled && !isolation.enforced && (
+                {isolationView(isolation).showEnable && (
                   <div className="grid gap-2">
                     <FormField
                       label="Management subnet (kept reachable)"
@@ -771,7 +758,7 @@ export default function SettingsPage() {
                   </div>
                 )}
 
-                {isolation.enforced && (
+                {isolationView(isolation).showDisable && (
                   <Button
                     variant="outline"
                     className="w-fit"
@@ -888,15 +875,31 @@ export default function SettingsPage() {
                 <FormField
                   label="Webhook URL"
                   htmlFor="notifyWebhook"
-                  hint="Paste a Discord/Slack incoming-webhook URL. Leave blank to disable the webhook."
+                  hint={
+                    notifyHasWebhook
+                      ? `A webhook is set (${notifyWebhookMasked}). Leave blank to keep it, or paste a new URL to replace it.`
+                      : "Paste a Discord/Slack incoming-webhook URL. Leave blank for no webhook."
+                  }
                 >
                   <Input
                     id="notifyWebhook"
                     value={notifyWebhook}
                     onChange={(e) => setNotifyWebhook(e.target.value)}
-                    placeholder="https://discord.com/api/webhooks/…"
+                    disabled={notifyClearWebhook}
+                    placeholder={notifyHasWebhook ? notifyWebhookMasked : "https://discord.com/api/webhooks/…"}
                   />
                 </FormField>
+                {notifyHasWebhook && (
+                  <label className="flex items-center gap-2 text-sm select-none">
+                    <input
+                      type="checkbox"
+                      checked={notifyClearWebhook}
+                      onChange={(e) => setNotifyClearWebhook(e.target.checked)}
+                      className="size-4 rounded border-input accent-primary"
+                    />
+                    Remove the webhook
+                  </label>
+                )}
 
                 <label className="flex items-center gap-2 text-sm select-none">
                   <input

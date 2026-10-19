@@ -24,7 +24,8 @@ Per-VM power schedules ("at HH:MM on these weekdays") and the shared cron matche
 |---|---|---|
 | `cronMatches` | `(expr, date) => boolean` | 5 fields; supports `*`, numbers, lists, ranges, steps; DOW 0 or 7 = Sunday. Uses local server time (`getHours`, `getDay`). |
 | `previousCronOccurrence` | `(expr, now?, maxLookbackMinutes = 8 days) => Date \| null` | Scans backwards minute by minute. |
-| `isValidCron` | `(expr) => boolean` | Same grammar; every field must match at least one in-range value. |
+| `isValidCron` | `(expr) => boolean` | Same grammar; every list item of every field must be well-formed (digits only, no empty items, `lo <= hi`, step > 0) and within the field's range. A malformed field never matches in `cronMatches` (the whole field is parsed before matching). |
+| `reportInvalidStoredCrons` | `() => Promise<number>` | Startup check: logs every stored `startCron`/`stopCron`/`backupCron` that fails `isValidCron` and sends one `vm.error` notification listing them. Never throws. |
 | `runDuePowerActions` | `(now?) => { started, stopped }` | VMs with `startCron` or `stopCron`; one `/cluster/resources` read (15 s timeout); start if `startCron` fires and not running, else graceful stop if `stopCron` fires and running; audits each. |
 
 # Data
