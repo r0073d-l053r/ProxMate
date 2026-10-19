@@ -31,6 +31,7 @@ import {
   IDE_AUTOSTART_PACKAGE_JSON,
   IDE_AUTOSTART_EXTENSION_JS,
 } from './ide-assets.generated.js';
+import { envNumber } from '../lib/env-number.js';
 
 /**
  * ProxMate IDE — lazy in-guest provisioning. On first "Open IDE", ProxMate installs
@@ -52,7 +53,7 @@ const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
  * Port code-server listens on inside the guest: its --bind-addr, the isolation
  * pinhole, the readiness probe and (via the same env var) the reverse proxy.
  */
-const IDE_GUEST_PORT = Number(process.env['IDE_GUEST_PORT'] || 8080);
+const IDE_GUEST_PORT = envNumber('IDE_GUEST_PORT', 8080, 1);
 
 /**
  * Pinned in-guest tool versions — the bootstrap installs EXACTLY these, so a new

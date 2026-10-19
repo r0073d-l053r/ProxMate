@@ -27,13 +27,14 @@ import { registry } from './lib/metrics.js';
 import { getVersion } from './services/proxmox.service.js';
 import { mountIdeProxy } from './services/ide-proxy.service.js';
 import { MODULE_MOUNT_ROOT, moduleRouter } from './modules/registry.js';
+import { envNumber } from './lib/env-number.js';
 
 const app = express();
 
 // Behind a reverse proxy / tunnel (Cloudflare, Tailscale, nginx), set
 // TRUST_PROXY to the number of trusted hops so rate limiting & req.ip use the
 // real client IP. Default 0 = trust none (direct connections / dev).
-app.set('trust proxy', Number(process.env.TRUST_PROXY ?? 0));
+app.set('trust proxy', envNumber('TRUST_PROXY', 0, 0));
 
 // ProxMate IDE reverse proxy (in-guest code-server). Mounted FIRST so it streams
 // the raw request body to code-server and passes code-server's own response

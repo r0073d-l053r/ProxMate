@@ -1,9 +1,12 @@
 import rateLimit, { type RateLimitRequestHandler } from 'express-rate-limit';
+import { envNumber } from '../lib/env-number.js';
 
 // Defaults are intentionally generous (this is brute-force protection, not a
 // per-user API budget) and overridable via env for stricter public deployments.
-const WINDOW_MS = Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS ?? 15 * 60 * 1000);
-const MAX = Number(process.env.AUTH_RATE_LIMIT_MAX ?? 20);
+// Read with envNumber so a non-numeric value keeps the default: a NaN limit or
+// window would disable the limiter outright.
+const WINDOW_MS = envNumber('AUTH_RATE_LIMIT_WINDOW_MS', 15 * 60 * 1000, 1);
+const MAX = envNumber('AUTH_RATE_LIMIT_MAX', 20, 1);
 
 /** Build a fixed-window IP rate limiter that responds 429 with a JSON error. */
 export function createRateLimiter(opts?: {
@@ -27,8 +30,8 @@ export function createRateLimiter(opts?: {
  */
 export const authLimiter = createRateLimiter();
 
-const API_WRITE_WINDOW_MS = Number(process.env.API_WRITE_RATE_LIMIT_WINDOW_MS ?? 60 * 1000);
-const API_WRITE_MAX = Number(process.env.API_WRITE_RATE_LIMIT_MAX ?? 60);
+const API_WRITE_WINDOW_MS = envNumber('API_WRITE_RATE_LIMIT_WINDOW_MS', 60 * 1000, 1);
+const API_WRITE_MAX = envNumber('API_WRITE_RATE_LIMIT_MAX', 60, 1);
 
 /**
  * Throttle for *mutating* API requests (anything that isn't a safe GET/HEAD/OPTIONS).
@@ -57,8 +60,8 @@ export const apiWriteLimiter = rateLimit({
  * abuse protection, not a per-tenant API budget.
  */
 export const moduleLimiter = createRateLimiter({
-  windowMs: Number(process.env.MODULE_RATE_LIMIT_WINDOW_MS ?? 60 * 1000),
-  max: Number(process.env.MODULE_RATE_LIMIT_MAX ?? 300),
+  windowMs: envNumber('MODULE_RATE_LIMIT_WINDOW_MS', 60 * 1000, 1),
+  max: envNumber('MODULE_RATE_LIMIT_MAX', 300, 1),
   message: 'Too many requests to this module — please slow down and try again later.',
 });
 
@@ -68,8 +71,8 @@ export const moduleLimiter = createRateLimiter({
  * credential POSTs) so a scanner can't hammer these as a free oracle.
  */
 export const publicTokenLimiter = createRateLimiter({
-  windowMs: Number(process.env.PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS ?? 15 * 60 * 1000),
-  max: Number(process.env.PUBLIC_TOKEN_RATE_LIMIT_MAX ?? 60),
+  windowMs: envNumber('PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS', 15 * 60 * 1000, 1),
+  max: envNumber('PUBLIC_TOKEN_RATE_LIMIT_MAX', 60, 1),
   message: 'Too many requests — please slow down and try again later.',
 });
 
@@ -82,8 +85,8 @@ export const publicTokenLimiter = createRateLimiter({
  * even a 4-digit space. Keyed by IP; passkey unlock (WebAuthn) needs no limit.
  */
 export const kioskExitLimiter = createRateLimiter({
-  windowMs: Number(process.env.KIOSK_EXIT_RATE_LIMIT_WINDOW_MS ?? 5 * 60 * 1000),
-  max: Number(process.env.KIOSK_EXIT_RATE_LIMIT_MAX ?? 10),
+  windowMs: envNumber('KIOSK_EXIT_RATE_LIMIT_WINDOW_MS', 5 * 60 * 1000, 1),
+  max: envNumber('KIOSK_EXIT_RATE_LIMIT_MAX', 10, 1),
   message: 'Too many unlock attempts — wait a few minutes and try again.',
 });
 
@@ -97,8 +100,8 @@ export const kioskExitLimiter = createRateLimiter({
  * routes handles per-tenant fairness after the token verifies.
  */
 export const gatewayAuthLimiter = rateLimit({
-  windowMs: Number(process.env.IDE_GATEWAY_RATE_LIMIT_WINDOW_MS ?? 60 * 1000),
-  limit: Number(process.env.IDE_GATEWAY_RATE_LIMIT_MAX ?? 600),
+  windowMs: envNumber('IDE_GATEWAY_RATE_LIMIT_WINDOW_MS', 60 * 1000, 1),
+  limit: envNumber('IDE_GATEWAY_RATE_LIMIT_MAX', 600, 1),
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: {
