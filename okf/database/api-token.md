@@ -19,7 +19,7 @@ sources:
 
 # Purpose
 
-Bearer tokens for programmatic access. The raw token is shown exactly once at creation; only a hash is stored, and a request bearing it is authenticated as the owning user.[^schema] [^svc] See [api-token router](/api/api-token.md).
+Bearer tokens for programmatic access. The raw token is shown exactly once at creation; only a hash is stored, and a request bearing it is authenticated as the owning user.[^schema] [^svc] See [api-token router](/api/api-token.md).[^routes]
 
 # Schema
 
@@ -46,6 +46,7 @@ Bearer tokens for programmatic access. The raw token is shown exactly once at cr
 - Verification rejects unknown hashes, `expiresAt` in the past, and owners whose compute access window has lapsed (`isAccessExpired`).[^svc]
 - Revocation is `deleteMany where { id, userId }`, so a user can only revoke their own tokens.[^svc]
 - Listing never selects `tokenHash`.[^svc]
+- The token-management router (list/create/delete) returns 403 when the caller authenticated with an API token. Managing tokens requires a browser session.[^routes]
 
 # Gotchas
 
