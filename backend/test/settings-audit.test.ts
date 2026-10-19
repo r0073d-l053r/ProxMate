@@ -14,8 +14,10 @@ vi.mock('../src/lib/prisma.js', () => ({
       updateMany: vi.fn(async () => ({ count: 1 })),
       findUnique: vi.fn(),
       delete: vi.fn(async () => ({})),
+      deleteMany: vi.fn(async () => ({ count: 0 })),
     },
     user: { findUnique: vi.fn(), delete: vi.fn(async () => ({})) },
+    $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops)),
   },
 }));
 vi.mock('../src/middleware/auth.js', () => ({

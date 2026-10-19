@@ -8,7 +8,11 @@ import type { AddressInfo } from 'node:net';
 // be deleted with it, and the account goes only once every guest is gone.
 
 vi.mock('../src/lib/prisma.js', () => ({
-  prisma: { user: { findUnique: vi.fn(), delete: vi.fn(async () => ({})) } },
+  prisma: {
+    user: { findUnique: vi.fn(), delete: vi.fn(async () => ({ op: 'user.delete' })) },
+    inviteToken: { deleteMany: vi.fn(async () => ({ op: 'invite.deleteMany' })) },
+    $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops)),
+  },
 }));
 vi.mock('../src/middleware/auth.js', () => ({
   requireAuth: (req: { user?: unknown }, _res: unknown, next: () => void) => {
@@ -64,6 +68,14 @@ describe('DELETE /api/users/:id', () => {
     expect(res.status).toBe(200);
     expect(destroyVm).toHaveBeenCalledTimes(2);
     expect(prisma.user.delete).toHaveBeenCalledWith({ where: { id: 'u1' } });
+  });
+
+  it("revokes the account's unredeemed invites in the same transaction as the delete", async () => {
+    const res = await del();
+    expect(res.status).toBe(200);
+    expect(prisma.inviteToken.deleteMany).toHaveBeenCalledWith({ where: { createdById: 'u1', usedById: null } });
+    const ops = vi.mocked(prisma.$transaction).mock.calls[0]?.[0] as unknown as Array<Promise<{ op: string }>>;
+    expect((await Promise.all(ops)).map((o) => o.op)).toEqual(['invite.deleteMany', 'user.delete']);
   });
 
   it('refuses up front, destroying nothing, when a machine\'s guest predates ownership tags', async () => {

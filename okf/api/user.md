@@ -37,7 +37,7 @@ Admin user directory. Mounted at `/api/users`.[^app]
 - Setting a non-`never` duration on an admin returns 400 (admins never expire).[^routes]
 - Quotas are enforced at create/resize time only; lowering below usage leaves existing VMs untouched.[^routes]
 - "used" in GET sums all the user's VMs (this list does not exclude `quotaExempt` VMs, unlike `GET /api/auth/me`).[^routes]
-- DELETE: refuses self-deletion (400). Every VM is first checked (`destroyBlocker`): a guest without a ProxMate tag, or one whose location can't be confirmed, refuses the deletion up front with 409 and nothing is destroyed — adopt or remove those rows first. A guest that then fails to destroy also returns 409 and keeps the account. A successful deletion is audited as `admin.delete_user`.[^routes]
+- DELETE: refuses self-deletion (400). Every VM is first checked (`destroyBlocker`): a guest without a ProxMate tag, or one whose location can't be confirmed, refuses the deletion up front with 409 and nothing is destroyed — adopt or remove those rows first. A guest that then fails to destroy also returns 409 and keeps the account. The account's unredeemed invites are revoked in the same transaction as the account itself; redeemed ones are kept with no creator. A successful deletion is audited as `admin.delete_user`.[^routes]
 
 # Relationships
 
