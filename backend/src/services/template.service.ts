@@ -2,7 +2,8 @@ import type { Template, VirtualMachine } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { getConfig, setConfig } from './config.service.js';
 import * as pve from './proxmox.service.js';
-import { requireOurGuest, markTemplateGuest } from './vm.service.js';
+import { requireOurGuest, markTemplateGuest, templateGuestIdentity } from './vm.service.js';
+import { notify } from './notify.service.js';
 
 /** Published templates shown in the user-facing Template Store. */
 export function listPublished(): Promise<Template[]> {
@@ -150,15 +151,45 @@ export async function unregister(id: string): Promise<void> {
   const template = await prisma.template.findUnique({ where: { id } });
   if (!template) return;
 
-  try {
-    const client = await pve.getClient();
-    await pve.deleteVm(template.proxmoxNode, template.proxmoxVmId, client);
-  } catch (err) {
-    const msg = pve.pveMessage(err);
-    if (!/does not exist|not found|no such/i.test(msg)) throw err;
+  const client = await pve.getClient();
+  // Only a guest that still carries this template's tag is deleted. When the
+  // guest can't be checked the row is kept, so the delete can be retried.
+  const identity = await templateGuestIdentity(template, client);
+  if (identity === 'ours') {
+    try {
+      await pve.deleteVm(template.proxmoxNode, template.proxmoxVmId, client);
+    } catch (err) {
+      const msg = pve.pveMessage(err);
+      if (!/does not exist|not found|no such/i.test(msg)) throw err;
+    }
+  } else if (identity === 'other') {
+    await reportTemplateGuestLeft(template, 'removed from the store');
   }
 
   await prisma.template.delete({ where: { id } });
+}
+
+/**
+ * The guest at a template's old VMID doesn't carry that template's tag (an
+ * untagged template from before ownership tags, or a VMID Proxmox has since given
+ * to another guest), so it was left alone. Tell the admins, who can check it and
+ * delete it in Proxmox if it is the old template.
+ */
+async function reportTemplateGuestLeft(
+  template: { id: string; name?: string; proxmoxNode: string; proxmoxVmId: number },
+  what: string,
+): Promise<void> {
+  const label = template.name ? `"${template.name}"` : template.id;
+  console.warn(
+    `[template] ${label} ${what}: guest ${template.proxmoxVmId} on ${template.proxmoxNode} is not tagged as this template — left in place`,
+  );
+  await notify({
+    event: 'vm.error',
+    title: `Template ${label}: Proxmox guest left in place`,
+    message:
+      `Template ${label} was ${what}, but the Proxmox guest at VMID ${template.proxmoxVmId} on ${template.proxmoxNode} ` +
+      `isn't tagged as this template, so ProxMate didn't delete it. Check it in Proxmox and delete it there if it is the old template.`,
+  }).catch(() => undefined);
 }
 
 /**
@@ -659,8 +690,18 @@ export async function refreshTemplate(id: string): Promise<Template> {
     console.warn(`[template] could not tag template ${updated.proxmoxVmId}: ${pve.pveMessage(err)}`),
   );
 
-  // The old template VM is now unreferenced (cloud images are full-cloned) — remove it.
-  await pve.deleteVm(oldNode, oldVmid, client).catch((e) => console.warn('[template] old template cleanup failed:', e));
+  // The old template VM is now unreferenced (cloud images are full-cloned) — remove
+  // it, but only while the guest at that VMID is still this template.
+  const old = { id: tpl.id, name: tpl.name, proxmoxNode: oldNode, proxmoxVmId: oldVmid };
+  const oldIdentity = await templateGuestIdentity(old, client).catch((e) => {
+    console.warn('[template] could not check the old template guest:', pve.pveMessage(e));
+    return null;
+  });
+  if (oldIdentity === 'ours') {
+    await pve.deleteVm(oldNode, oldVmid, client).catch((e) => console.warn('[template] old template cleanup failed:', e));
+  } else if (oldIdentity === 'other') {
+    await reportTemplateGuestLeft(old, 'refreshed');
+  }
 
   return updated;
 }

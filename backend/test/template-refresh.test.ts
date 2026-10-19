@@ -6,6 +6,7 @@ vi.mock('../src/lib/prisma.js', () => ({
   prisma: { template: { findUnique: vi.fn(), update: vi.fn(), upsert: vi.fn() } },
 }));
 vi.mock('../src/services/config.service.js', () => ({ getConfig: vi.fn() }));
+vi.mock('../src/services/notify.service.js', () => ({ notify: vi.fn(async () => undefined) }));
 vi.mock('../src/services/proxmox.service.js', () => ({
   getClient: vi.fn(async () => ({})),
   pickBestNode: vi.fn(async () => 'pve-0'),
@@ -13,7 +14,10 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   getNextVmId: vi.fn(async () => 9100),
   downloadUrlToStorage: vi.fn(async () => 'UPID:dl'),
   createCloudInitVm: vi.fn(async () => 'UPID:create'),
-  getVmConfig: vi.fn(async () => ({ scsi0: 'local:vm-9100-disk-0,size=8G' })),
+  // The old template (9000) carries its template tag; the new build (9100) has none yet.
+  getVmConfig: vi.fn(async (_node: string, vmid: number) =>
+    vmid === 9000 ? { template: '1', tags: 'proxmate-template-t1' } : { scsi0: 'local:vm-9100-disk-0,size=8G' },
+  ),
   primaryDiskSizeGb: vi.fn(() => 8),
   convertToTemplate: vi.fn(async () => undefined),
   deleteStorageVolume: vi.fn(async () => undefined),
@@ -38,6 +42,7 @@ import { prisma } from '../src/lib/prisma.js';
 import { getConfig } from '../src/services/config.service.js';
 import * as pve from '../src/services/proxmox.service.js';
 import { refreshTemplate, addCloudImage } from '../src/services/template.service.js';
+import { notify } from '../src/services/notify.service.js';
 
 const findUnique = vi.mocked(prisma.template.findUnique);
 const update = vi.mocked(prisma.template.update);
@@ -86,6 +91,29 @@ describe('refreshTemplate', () => {
   it('throws a clear error for an unknown template', async () => {
     findUnique.mockResolvedValue(null as never);
     await expect(refreshTemplate('nope')).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('refreshTemplate and the old template guest', () => {
+  it('does not delete the old VMID when the guest there no longer carries this template\'s tag', async () => {
+    findUnique.mockResolvedValue(cloudTpl());
+    vi.mocked(pve.getVmConfig).mockImplementation(async (_node: string, vmid: number) =>
+      vmid === 9000 ? { name: 'tenant-vm', tags: 'proxmate-rowb' } : { scsi0: 'local:vm-9100-disk-0,size=8G' },
+    );
+    await refreshTemplate('t1');
+    expect(deleteVm).not.toHaveBeenCalledWith('pve-2', 9000, expect.anything());
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/9000/) }));
+  });
+
+  it('skips the delete quietly when the old guest is already gone', async () => {
+    findUnique.mockResolvedValue(cloudTpl());
+    vi.mocked(pve.getVmConfig).mockImplementation(async (_node: string, vmid: number) => {
+      if (vmid === 9000) throw new Error('Configuration file does not exist');
+      return { scsi0: 'local:vm-9100-disk-0,size=8G' };
+    });
+    await refreshTemplate('t1');
+    expect(deleteVm).not.toHaveBeenCalledWith('pve-2', 9000, expect.anything());
+    expect(notify).not.toHaveBeenCalled();
   });
 });
 

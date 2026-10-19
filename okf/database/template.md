@@ -55,9 +55,9 @@ The store of deployable images. A row points at a Proxmox template VM (`proxmoxV
 # Invariants
 
 - `register` upserts on `proxmoxVmId` and forces `published: true`. On update it touches `notes` and `guestAgent` only when the caller supplied them, so re-registering keeps admin notes and builder measurements.[^svc]
-- `unregister` deletes the Proxmox template VM ("does not exist" is tolerated), then the row.[^svc]
+- `unregister` deletes the Proxmox template VM ("does not exist" is tolerated), then the row. Only a guest that still carries the template's tag (`proxmate-template-<id>`) is deleted; any other guest at that VMID is left in place and admins are notified. When the guest can't be checked the row is kept.[^svc]
 - `convertVmToTemplate` deletes the source VM's [VirtualMachine](/database/virtual-machine.md) row (with its IDE credential rows) and registers the template.[^svc]
-- `refreshTemplate` only works for `cloudInit` rows with a `sourceUrl`. It rebuilds from the URL, repoints the **same row** to the new VMID/node, re-measures `guestAgent`, sets `refreshedAt`, then deletes the old template VM. `refreshAllTemplates` runs on `TEMPLATE_REFRESH_CRON` (default `0 4 1 * *`, when enabled).[^svc] [^sched]
+- `refreshTemplate` only works for `cloudInit` rows with a `sourceUrl`. It rebuilds from the URL, repoints the **same row** to the new VMID/node, re-measures `guestAgent`, sets `refreshedAt`, then deletes the old template VM. Only a guest that still carries the template's tag (`proxmate-template-<id>`) is deleted; any other guest at that VMID is left in place and admins are notified. `refreshAllTemplates` runs on `TEMPLATE_REFRESH_CRON` (default `0 4 1 * *`, when enabled).[^svc] [^sched]
 
 # Gotchas
 

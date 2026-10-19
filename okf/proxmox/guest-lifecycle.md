@@ -110,13 +110,15 @@ before `startVm`.[^vm][^pve]
   `ide2: <storage>:cloudinit`, `serial0=socket`, `vga=std`, `boot=order=scsi0`, `agent=1`,
   `net0` on the default bridge with `firewall=1`) → `bakeGuestAgent` → convert → delete import
   volume. `refreshTemplate` builds a new template VM, repoints the same Template row, and deletes the
-  old Proxmox template (safe because cloud-init templates are always full-cloned).[^template]
+  old Proxmox template (safe because cloud-init templates are always full-cloned) — only while that
+  guest still carries the template's tag; otherwise it is left in place and admins are notified.[^template]
 - `bakeGuestAgent` boots the VM once with `cicustom=user=<guest-agent snippet>`, `ipconfig0=ip=dhcp`,
   `agent=enabled=1`, waits for `agent/ping`, then runs `cloud-init clean --logs --seed`, wipes
   journals/logs and truncates `/etc/machine-id` through `agent/exec`; finally shuts down and deletes
   `cicustom,ipconfig0`. It never fails the build; the outcome is stored as `Template.guestAgent`
   (`true`/`false`/`null`). It requires on-demand snippet writing (`SNIPPET_DIR`/`SNIPPET_STORAGE`).[^template]
-- `unregister` deletes the Proxmox template VM (ignoring "does not exist").[^template]
+- `unregister` deletes the Proxmox template VM (ignoring "does not exist") only when it carries the
+  template's tag; another guest at that VMID is left in place and admins are notified.[^template]
 
 # Steps: deploy from template (clone)
 

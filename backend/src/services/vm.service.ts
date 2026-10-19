@@ -75,6 +75,27 @@ export async function markTemplateGuest(
   );
 }
 
+/**
+ * Whether the guest at a template's VMID is still that template: `ours` when it
+ * carries the template's marker, `absent` when there is no guest there, `other`
+ * otherwise (untagged, or another template's or machine's). A VMID is reused once
+ * its guest is gone, so only `ours` may ever be deleted as the template.
+ */
+export async function templateGuestIdentity(
+  template: { id: string; proxmoxNode: string; proxmoxVmId: number },
+  client?: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<'ours' | 'absent' | 'other'> {
+  const c = client ?? (await pve.getClient());
+  let cfg: Record<string, string>;
+  try {
+    cfg = await pve.getVmConfig(template.proxmoxNode, template.proxmoxVmId, c);
+  } catch (err) {
+    if (/does not exist|not found|no such/i.test(pve.pveMessage(err))) return 'absent';
+    throw err;
+  }
+  return parsePveTags(cfg['tags']).includes(templateMarker(template.id)) ? 'ours' : 'other';
+}
+
 /** Whether a Proxmox tag list (config `tags` or a /cluster/resources entry's) carries this row's marker. */
 export function tagsMarkRow(raw: string | undefined, vmId: string): boolean {
   return parsePveTags(raw).includes(guestMarker(vmId));
