@@ -22,8 +22,8 @@ sources:
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/migrations/20260623035652_init/migration.sql
     title: backend/prisma/migrations/20260623035652_init/migration.sql
   - id: creator-mig
-    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/migrations/20261019130000_invite_creator_set_null/migration.sql
-    title: backend/prisma/migrations/20261019130000_invite_creator_set_null/migration.sql
+    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/migrations/20261019132000_invite_creator_set_null/migration.sql
+    title: backend/prisma/migrations/20261019132000_invite_creator_set_null/migration.sql
   - id: user-routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/user.routes.ts
     title: backend/src/routes/user.routes.ts
@@ -76,5 +76,5 @@ ProxMate registration is invite-only. An admin creates an invite (admin-only rou
 [^svc]: backend/src/services/invite.service.ts
 [^auth-routes]: backend/src/routes/auth.routes.ts
 [^init-mig]: backend/prisma/migrations/20260623035652_init/migration.sql
-[^creator-mig]: backend/prisma/migrations/20261019130000_invite_creator_set_null/migration.sql
+[^creator-mig]: backend/prisma/migrations/20261019132000_invite_creator_set_null/migration.sql
 [^user-routes]: backend/src/routes/user.routes.ts
