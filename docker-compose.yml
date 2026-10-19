@@ -65,6 +65,12 @@ services:
       # Optional VM-share throttle (defaults: 30 share requests / hour / signed-in user).
       SHARE_RATE_LIMIT_MAX: ${SHARE_RATE_LIMIT_MAX:-30}
       SHARE_RATE_LIMIT_WINDOW_MS: ${SHARE_RATE_LIMIT_WINDOW_MS:-3600000}
+      # Optional public-token throttle for invite lookups and downloads (defaults:
+      # 60 requests / 15 min / IP).
+      PUBLIC_TOKEN_RATE_LIMIT_MAX: ${PUBLIC_TOKEN_RATE_LIMIT_MAX:-60}
+      PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS: ${PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS:-900000}
+      # Minutes before a firing alert rule can fire again (default 60, minimum 5).
+      ALERT_COOLDOWN_MIN: ${ALERT_COOLDOWN_MIN:-60}
       # Per-account brute-force lockout (defaults: 10 failed logins → 15 min
       # auto-unlock). Admins are emailed on lockout when SMTP is configured.
       AUTH_LOCKOUT_MAX: ${AUTH_LOCKOUT_MAX:-10}

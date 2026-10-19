@@ -53,6 +53,8 @@ sources:
 | `WEBAUTHN_RP_ID` / `WEBAUTHN_ORIGIN` | `${…:-}` (empty) | prod: recommended | Passkey RP id and origin. |
 | `AUTH_RATE_LIMIT_MAX` / `AUTH_RATE_LIMIT_WINDOW_MS` | `20` / `900000` | no | Auth limiter. |
 | `SHARE_RATE_LIMIT_MAX` / `SHARE_RATE_LIMIT_WINDOW_MS` | `30` / `3600000` | no | VM-share throttle, per signed-in user. |
+| `PUBLIC_TOKEN_RATE_LIMIT_MAX` / `PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS` | `60` / `900000` | no | Public token lookups (invite links, downloads), per IP. |
+| `ALERT_COOLDOWN_MIN` | `60` | no | Minutes before a firing alert rule can fire again (minimum 5). |
 | `AUTH_LOCKOUT_MAX` / `AUTH_LOCKOUT_MINUTES` | `10` / `15` | no | Account lockout. |
 | `PROXMOX_CA_CERT_FILE` | `${…:-}` | no | e.g. `/certs/pve-ca.pem` with the matching volume in `docker-compose.override.yml`. |
 | `UPDATE_REPO` | `r0073d-l053r/ProxMate` | no | Release source. |
@@ -84,7 +86,7 @@ sources:
 
 - `NEXT_PUBLIC_*` values are inlined at **build** time (`frontend/Dockerfile` `ARG`/`ENV`). Changing them in the runtime environment without a rebuild has no effect.[^fe-dockerfile][^compose]
 - The entrypoint starts as root, runs `chown -R node:node /data`, and does non-recursive `chown`s of `$APPDB_BACKUP_DIR` and, when it exists, the self-update control dir `${UPDATE_CONTROL_DIR:-/control}` (failures there are non-fatal). It then re-execs as `node` through `su-exec`, runs `npx prisma migrate deploy`, applies migrations for any modules in `PROXMATE_MODULES`, and starts the server.[^entrypoint]
-- Only the variables listed in the `backend.environment` block reach the container; there is no `env_file`. The numeric tuning knobs (`PROXMOX_TIMEOUT_MS`, `PROXMOX_RETRIES`, `API_WRITE_RATE_LIMIT_*`, `PUBLIC_TOKEN_RATE_LIMIT_*`, `MODULE_RATE_LIMIT_*`, `RESOURCE_HISTORY_DAYS`, `ALERT_COOLDOWN_MIN`, `LIVE_FEED_INTERVAL_MS`) and `IDE_*_VERSION` are not forwarded. To use one, add it with an explicit default (`${VAR:-<default>}`), e.g. in `docker-compose.override.yml`.[^compose]
+- Only the variables listed in the `backend.environment` block reach the container; there is no `env_file`. The numeric tuning knobs (`PROXMOX_TIMEOUT_MS`, `PROXMOX_RETRIES`, `API_WRITE_RATE_LIMIT_*`, `MODULE_RATE_LIMIT_*`, `RESOURCE_HISTORY_DAYS`, `LIVE_FEED_INTERVAL_MS`) and `IDE_*_VERSION` are not forwarded. To use one, add it with an explicit default (`${VAR:-<default>}`), e.g. in `docker-compose.override.yml`.[^compose]
 - Because `ENCRYPTION_KEY` is required by compose (`:?`), the backend's auto-generate-and-write-to-`.env` path never runs in Docker. Back the key up together with the `proxmate-data` volume.
 
 # Relationships

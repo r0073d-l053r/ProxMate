@@ -144,6 +144,8 @@ Fill in the **PRODUCTION** block (replace the domain). The key values:
 | `AUTH_RATE_LIMIT_MAX` / `_WINDOW_MS` | *(optional)* default `20` / `900000` | Login / register / invite throttle per IP. |
 | `AUTH_LOCKOUT_MAX` / `AUTH_LOCKOUT_MINUTES` | *(optional)* default `10` / `15` | Per-account lockout after consecutive failed passwords (auto-unlocks). |
 | `SHARE_RATE_LIMIT_MAX` / `_WINDOW_MS` | *(optional)* default `30` / `3600000` | Sharing a VM by email, per signed-in user. |
+| `PUBLIC_TOKEN_RATE_LIMIT_MAX` / `_WINDOW_MS` | *(optional)* default `60` / `900000` | Public token lookups (invite links, downloads), per IP. |
+| `ALERT_COOLDOWN_MIN` | *(optional)* default `60`, minimum `5` | Minutes before a firing alert rule can fire again. |
 | `PROXMOX_CA_CERT_FILE` | *(optional)* e.g. `/certs/pve-ca.pem` | Keep Proxmox TLS verification on against a private CA. A container path: mount the PEM in `docker-compose.override.yml`. |
 | `IDE_GUEST_PORT` | *(optional)* default `8080` | Port `code-server` listens on inside tenant VMs for the ProxMate IDE (§16). The proxy, the guest install and the firewall pinhole all use it. |
 | `SELF_UPDATE_ENABLED` / `UPDATE_REPO` | *(optional)* | The one-click update button (§14.3) and the GitHub repo the release check reads. `GITHUB_TOKEN` raises the GitHub API rate limit for that check. |

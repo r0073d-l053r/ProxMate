@@ -73,7 +73,7 @@ The backend loads `.env` with `import 'dotenv/config'` (the first line of `src/i
 | `AUTH_RATE_LIMIT_MAX` / `AUTH_RATE_LIMIT_WINDOW_MS` | `20` / `900000` (15 min) | `middleware/rate-limit.ts` | Auth limiter, also applied to mutating `/api/setup` calls. |
 | `API_WRITE_RATE_LIMIT_MAX` / `API_WRITE_RATE_LIMIT_WINDOW_MS` | `60` / `60000` | same | Mutating `/api` requests per IP. |
 | `SHARE_RATE_LIMIT_MAX` / `SHARE_RATE_LIMIT_WINDOW_MS` | `30` / `3600000` | same | `POST /api/vms/:id/shares` requests per signed-in user. Forwarded by `docker-compose.yml`. |
-| `PUBLIC_TOKEN_RATE_LIMIT_MAX` / `PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS` | `60` / `900000` | same | Public token GETs (invite lookup, downloads). |
+| `PUBLIC_TOKEN_RATE_LIMIT_MAX` / `PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS` | `60` / `900000` | same | Public token GETs (invite lookup, downloads). Forwarded by `docker-compose.yml`. |
 | `MODULE_RATE_LIMIT_MAX` / `MODULE_RATE_LIMIT_WINDOW_MS` | `300` / `60000` | same | Optional-module routes. |
 | `KIOSK_EXIT_RATE_LIMIT_MAX` / `KIOSK_EXIT_RATE_LIMIT_WINDOW_MS` | `10` / `300000` | same | `/api/auth/kiosk-exit*`. |
 | `IDE_GATEWAY_RATE_LIMIT_MAX` / `IDE_GATEWAY_RATE_LIMIT_WINDOW_MS` | `600` / `60000` | same | IDE LLM gateway. |
@@ -109,7 +109,7 @@ All schedules are read in `scheduler.service.ts`.[^scheduler]
 | `APPDB_BACKUP_DIR` | `''` | `appdb-backup.service` | Default app-DB backup directory, used when the `appdb_backup_dir` row is missing. Docker sets `/var/backups/proxmate`. |
 | `BACKUP_DOWNLOAD_DIR` | unset (feature off) | `download.service.backupDir` | Mounted vzdump dump directory for tenant backup downloads. SMTP must also be configured. |
 | `RESTORE_UPLOAD_MAX_GB` | `50` | `vm.routes` | Cap on restore-from-upload size. |
-| `ALERT_COOLDOWN_MIN` | `60` (min 5) | `alert.service` | Minimum minutes between repeat alerts. |
+| `ALERT_COOLDOWN_MIN` | `60` (min 5) | `alert.service` | Minimum minutes between repeat alerts. Forwarded by `docker-compose.yml`. |
 | `RESOURCE_HISTORY_DAYS` | `14` (min 1) | `resource-history.service` | Retention of resource-usage samples. |
 | `LIVE_FEED_INTERVAL_MS` | `1000` (min 250) | `live-stats.service` | Admin live-feed push interval. |
 | `PROXMATE_MODULES` | unset (no modules) | `modules/registry.ts`, `scripts/migrate-modules.ts` | CSV of compiled-in modules to mount at `/api/ext/<name>`. A named module that fails to load stops the boot. |
