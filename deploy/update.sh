@@ -130,6 +130,18 @@ reclaim_for_owner() {
   command git -c safe.directory="$PROXMATE_DIR" -C "$PROXMATE_DIR" ls-files -z |
     reclaim_paths "$uid" "$gid"
 }
+# has_linked_ancestor <relative path>: true when any directory above it (inside
+# the checkout) is a symlink. Such a path resolves to somewhere else — possibly
+# outside the checkout — so it is never touched.
+has_linked_ancestor() {
+  local rest="$1" prefix=""
+  while [[ "$rest" == */* ]]; do
+    prefix="${prefix:+$prefix/}${rest%%/*}"
+    rest="${rest#*/}"
+    [[ -L "$PROXMATE_DIR/$prefix" ]] && return 0
+  done
+  return 1
+}
 # reclaim_paths <uid> <gid>: NUL-separated tracked paths on stdin; each path and
 # its parent directories, when owned by someone else, go to <uid>:<gid>.
 reclaim_paths() {
@@ -139,7 +151,8 @@ reclaim_paths() {
     p="$f"
     while [[ -n "$p" && -z "${seen[$p]:-}" ]]; do
       seen[$p]=1
-      if [[ -e "$PROXMATE_DIR/$p" || -L "$PROXMATE_DIR/$p" ]] &&
+      if ! has_linked_ancestor "$p" &&
+         [[ -e "$PROXMATE_DIR/$p" || -L "$PROXMATE_DIR/$p" ]] &&
          [[ "$(stat -c %u "$PROXMATE_DIR/$p")" != "$uid" ]]; then
         chown -h "$uid:$gid" "$PROXMATE_DIR/$p" || return 1
       fi
@@ -150,21 +163,6 @@ reclaim_paths() {
 }
 
 GIT_OWNER=""
-if [[ $(id -u) -eq 0 ]] && command -v runuser >/dev/null 2>&1; then
-  _owner_uid="$(stat -c %u "$PROXMATE_DIR" 2>/dev/null || echo 0)"
-  _owner_gid="$(stat -c %g "$PROXMATE_DIR" 2>/dev/null || echo 0)"
-  _owner="$(stat -c %U "$PROXMATE_DIR" 2>/dev/null || true)"
-  # ...and only when the owner can actually reach and write the repository
-  # (a checkout under a directory they cannot enter stays root's job), and
-  # everything git will touch could be handed back to them first. Otherwise
-  # this run uses git as root, as before.
-  if [[ "$_owner_uid" != 0 && -n "$_owner" && "$_owner" != "UNKNOWN" ]] &&
-     reclaim_for_owner "$_owner_uid" "$_owner_gid" 2>/dev/null &&
-     runuser -u "$_owner" -- test -w "$PROXMATE_DIR/.git" 2>/dev/null; then
-    GIT_OWNER="$_owner"
-    GIT_OWNER_HOME="$(getent passwd "$_owner" 2>/dev/null | cut -d: -f6)"
-  fi
-fi
 git() {
   if [[ -n "$GIT_OWNER" ]]; then
     HOME="${GIT_OWNER_HOME:-/}" runuser -u "$GIT_OWNER" -- \
@@ -214,6 +212,23 @@ elif [[ -n "${1:-}" ]]; then
   TAG="$1"
 fi
 
+# Decide who runs git (see above) — only now that there is an update to do.
+if [[ $(id -u) -eq 0 ]] && command -v runuser >/dev/null 2>&1; then
+  _owner_uid="$(stat -c %u "$PROXMATE_DIR" 2>/dev/null || echo 0)"
+  _owner_gid="$(stat -c %g "$PROXMATE_DIR" 2>/dev/null || echo 0)"
+  _owner="$(stat -c %U "$PROXMATE_DIR" 2>/dev/null || true)"
+  # ...and only when the owner can actually reach and write the repository
+  # (a checkout under a directory they cannot enter stays root's job), and
+  # everything git will touch could be handed back to them first. Otherwise
+  # this run uses git as root, as before.
+  if [[ "$_owner_uid" != 0 && -n "$_owner" && "$_owner" != "UNKNOWN" ]] &&
+     reclaim_for_owner "$_owner_uid" "$_owner_gid" 2>/dev/null &&
+     runuser -u "$_owner" -- test -w "$PROXMATE_DIR/.git" 2>/dev/null; then
+    GIT_OWNER="$_owner"
+    GIT_OWNER_HOME="$(getent passwd "$_owner" 2>/dev/null | cut -d: -f6)"
+  fi
+fi
+
 STEP="Fetching release tags"
 git fetch --tags --prune origin
 
@@ -257,7 +272,7 @@ if [[ "$head_commit" != "$tag_commit" ]]; then
 fi
 stale="$(git status --porcelain --untracked-files=no | sed -E 's/^.{3}//' | head -n 5 | tr '\n' ' ' | sed 's/ $//')"
 if [[ -n "$stale" ]]; then
-  fail "checkout of $TAG left files that do not match the release: ${stale} — check their ownership and permissions (they must be writable by the checkout owner), then retry; nothing was built"
+  fail "checkout of $TAG left files that do not match the release: ${stale} — nothing was built. Make them (and their directories) writable by the checkout owner ($(stat -c %U "$PROXMATE_DIR" 2>/dev/null || echo unknown)), then as the checkout owner run: git checkout -- ${stale} ; and retry the update"
 fi
 
 STEP="Building images"

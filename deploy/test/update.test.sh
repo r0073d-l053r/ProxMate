@@ -15,7 +15,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=deploy/test/lib.sh
 . "$HERE/lib.sh"
 
-UPDATE_SH="$REPO_ROOT/deploy/update.sh"
+UPDATE_SH="${UPDATE_SH:-$REPO_ROOT/deploy/update.sh}"
 
 # ── fixture ──────────────────────────────────────────────────────────────────
 # new_case: sets T (case dir), CHECKOUT, CONTROL; checkout starts on v1.0.0.
@@ -185,15 +185,26 @@ t_untracked_files_ownership_untouched() {
 t_reclaim_never_follows_links_out_of_checkout() {
   owner_case
   make_victim
-  rm -f "$CHECKOUT/app/data.txt"
-  ln -s "$VICTIM" "$CHECKOUT/app/data.txt"
-  chown -h 0:0 "$CHECKOUT/app/data.txt"
+  rm -f "$CHECKOUT/VERSION"
+  ln -s "$VICTIM" "$CHECKOUT/VERSION"
+  chown -h 0:0 "$CHECKOUT/VERSION"
   ln -s "$T" "$CHECKOUT/.git/outside-link"
   chown -h 0:0 "$CHECKOUT/.git/outside-link"
+  # A tracked DIRECTORY replaced by a link to a root-owned directory outside the
+  # checkout: the files reached through it must not be handed over either.
+  mkdir -p "$T/outside"
+  printf 'secret\n' > "$T/outside/data.txt"
+  chmod 0600 "$T/outside/data.txt"
+  chmod 0700 "$T/outside"
+  rm -rf "$CHECKOUT/app"
+  ln -s "$T/outside" "$CHECKOUT/app"
+  chown -h 0:0 "$CHECKOUT/app"
   request v1.1.0
   run_update --from-request
   assert_victim_untouched &&
-    assert_eq "$(stat -c %u "$T")" 0 "directory outside the checkout keeps its owner"
+    assert_eq "$(stat -c %u "$T")" 0 "directory outside the checkout keeps its owner" &&
+    assert_eq "$(stat -c '%u:%g %a' "$T/outside")" "0:0 700" "linked-to directory owner/mode" &&
+    assert_eq "$(stat -c '%u:%g %a' "$T/outside/data.txt")" "0:0 600" "file behind the linked directory"
 }
 
 t_stale_checkout_reported_not_built() {
@@ -209,7 +220,22 @@ t_stale_checkout_reported_not_built() {
   assert_ne "$RC" 0 "exit code" &&
     assert_eq "$(status_field state)" error "state" &&
     assert_match "$(status_field message)" "app/data.txt" "message names the stale file" &&
+    assert_match "$(status_field message)" "git checkout -- app/data.txt" "message names the recovery command" &&
+    assert_match "$(status_field message)" "checkout owner" "message says who runs it" &&
     assert_no_grep "compose build" "$T/docker.log"
+}
+
+t_no_reclaim_without_an_update_to_do() {
+  # --mark-failed (run after every service stop) and a trigger with no pending
+  # request must not walk or chown the checkout.
+  owner_case
+  printf '' > "$CHECKOUT/.git/FETCH_HEAD"
+  chown 0:0 "$CHECKOUT/.git/FETCH_HEAD"
+  SERVICE_RESULT=success run_update --mark-failed
+  assert_eq "$(stat -c %u "$CHECKOUT/.git/FETCH_HEAD")" 0 "owner after --mark-failed" || return 1
+  run_update --from-request
+  assert_match "$(cat "$T/out")" "no pending update request" "no-request exit" &&
+    assert_eq "$(stat -c %u "$CHECKOUT/.git/FETCH_HEAD")" 0 "owner after a no-request run"
 }
 
 t_git_falls_back_without_runuser() {
