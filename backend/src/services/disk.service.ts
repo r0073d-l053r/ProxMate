@@ -140,5 +140,10 @@ async function removeDataDiskLocked(row: VirtualMachine, slot: string): Promise<
   const freed = diskSizeGb(String(config[slot]));
 
   await pve.removeDisk(vm.proxmoxNode, vm.proxmoxVmId, slot);
-  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { storage: { decrement: freed } } });
+  // Re-read under the lock (the caller's copy may be stale) and never go below 0.
+  const fresh = await prisma.virtualMachine.findUnique({ where: { id: vm.id }, select: { storage: true } });
+  await prisma.virtualMachine.update({
+    where: { id: vm.id },
+    data: { storage: Math.max(0, (fresh?.storage ?? vm.storage) - freed) },
+  });
 }

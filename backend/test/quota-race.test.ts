@@ -125,4 +125,15 @@ describe('resize and disk changes overlapping on one VM', () => {
     await Promise.all([addDataDisk(stale, 15), removeDataDisk(stale, 'scsi1')]);
     expect(rows[0]!['storage']).toBe(5); // 10 + 15 - 20 (the stale copy would have written 10 - 20 → 0)
   });
+
+  it('removing a data disk never drives recorded storage below zero', async () => {
+    rows.push({ id: 'vm-a', userId: 'u1', storage: 10, cpu: 1, ram: 512, quotaExempt: false });
+    vi.mocked(pve.getVmConfig).mockImplementation(async () => ({
+      tags: 'proxmate-vm-a',
+      scsi0: 'local-lvm:vm-1-disk-0,size=10G',
+      scsi1: 'local-lvm:vm-1-disk-1,size=20G',
+    }));
+    await removeDataDisk({ ...rows[0] } as never, 'scsi1');
+    expect(rows[0]!['storage']).toBe(0);
+  });
 });
