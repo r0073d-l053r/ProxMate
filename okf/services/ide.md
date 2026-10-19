@@ -4,7 +4,7 @@ title: IDE service (ProxMate IDE admin policy)
 description: Config-only admin policy for the in-guest ProxMate IDE - availability tier, BYO-key switch, admin-sourced local models with visibility, legacy shared models and the ingress CIDR - and per-user capability resolution.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/ide.service.ts
 tags: [proxmate, ide, llm, policy]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: ide
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/ide.service.ts
@@ -23,6 +23,7 @@ The ProxMate IDE is an in-guest code-server (with OpenCode) that ProxMate revers
 | `getIdeConfig` | `() => IdeConfig` | `{ enabled, allowByoKeys, localModels, sharedModels, gatewayUrl, hasGatewayKey, ingressCidr }`; gateway key masked to a boolean. Malformed JSON parses to `[]`. |
 | `saveIdeConfig` | `(data)` | Writes tier and BYO flag always; models/URL/CIDR only when provided; `gatewayKey` only when non-blank (encrypted). Assigns UUIDs to local models without one. |
 | `getIdeCapability` | `(user: { role }) => { available, allowByoKeys, models, sharedModels }` | Applies tier and per-model visibility; returns picker ids `shared:<id>` and `local:<id>`. |
+| `isIdeOwner` / `IDE_OWNER_ONLY_MESSAGE` | `(vm, user) => boolean` | Only the VM's owner may install, relocate, mint a gateway token for or open the IDE; admins and sharees with the `ide` capability get 403 with this message. |
 
 Tiers: `off` (nobody), `admin` (admins only), `tenants` (admins + tenants). Local-model visibility: `admin`, `shared` (all users), `none` (hidden from everyone).[^ide]
 

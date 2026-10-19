@@ -4,7 +4,7 @@ title: Template auto-refresh setting
 description: SystemConfig key toggling the monthly job that rebuilds every refreshable cloud-image template so new deploys start from a patched base.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/scheduler.service.ts
 tags: [proxmate, config, templates, scheduler]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: scheduler
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/scheduler.service.ts
@@ -23,7 +23,7 @@ sources:
 # Gotchas
 
 - Schedule: `TEMPLATE_REFRESH_CRON`, default `0 4 1 * *` (the 1st of the month at 04:00). The cron task is always registered and checks the flag on every tick, so toggling takes effect without a restart.[^scheduler]
-- The route writes no audit entry.[^admin-routes]
+- The route records an `admin.template_refresh_config` audit entry (`monthly refresh enabled` / `disabled`).[^admin-routes]
 
 # Relationships
 

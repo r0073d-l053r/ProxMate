@@ -4,7 +4,7 @@ title: SSO service (OpenID Connect)
 description: OIDC authorization-code + PKCE login via openid-client, cached discovery, and mapping of ID-token claims to a local user with optional JIT provisioning and admin-group promotion.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/sso.service.ts
 tags: [proxmate, auth, sso, oidc]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: sso
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/sso.service.ts
@@ -46,6 +46,6 @@ Single sign-on against any OIDC provider (e.g. Keycloak).[^sso]
 # Relationships
 
 - Called by the [auth router](/api/auth.md) and [admin router](/api/admin.md).
-- Uses [config](/services/config.md) and [auth service](/services/auth.md). [mfa](/services/mfa.md) exempts SSO users from mandated 2FA.
+- Uses [config](/services/config.md) and [auth service](/services/auth.md). [mfa](/services/mfa.md) exempts SSO sessions from mandated 2FA (not the account's password login).
 
 [^sso]: backend/src/services/sso.service.ts

@@ -266,7 +266,7 @@ Network discovery is in [networking](/proxmox/networking.md); config keys are in
      (rogue DHCP server), OUT DROP icmpv6 `router-advertisement`, OUT DROP to `192.168.0.0/16`,
      `172.16.0.0/12`, `10.0.0.0/8`, then OUT ACCEPT udp+tcp dport 53 to each configured DNS server,
      or to any destination when none are set.
-- `ensureNicFirewall`: adds/flips `firewall=1` on every `netN` (clones and in-place restores).[^pve]
+- `ensureNicFirewall`: adds/flips `firewall=1` on every `netN` and drops any `trunks=` (clones and in-place restores).[^pve]
 - Cluster firewall: guest rules only take effect once it is on. `setClusterFirewall(true, cidrs)`
   first adds IN ACCEPT tcp 8006 and 22 from each CIDR with comment `ProxMate: management access`
   (skipped entirely if any rule with that comment already exists), then `enable=1`; disabling leaves

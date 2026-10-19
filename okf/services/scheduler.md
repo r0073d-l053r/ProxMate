@@ -4,7 +4,7 @@ title: Scheduler service (node-cron jobs)
 description: Starts every in-process node-cron job after the HTTP server listens, each guarded by its own in-memory running flag, with env-overridable schedules and boot-time catch-up for weekly backups and access expiry.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/scheduler.service.ts
 tags: [proxmate, scheduler, cron, jobs]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: sch
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/scheduler.service.ts
@@ -24,7 +24,7 @@ Single place where periodic work is registered. `startScheduler()` is called fro
 |---|---|---|---|---|
 | Weekly MateState backups | `0 3 * * 0` (Sun 03:00) | `MATESTATE_CRON` | `running` | [matestate](/services/matestate.md) `runScheduledBackups`, then sets `matestate_last_run` |
 | Weekly backup catch-up | once, 10 s after start | — | `running` | `catchUpMissedBackups` |
-| Per-VM power schedules | `* * * * *` | — | `powerRunning` | [power-schedule](/services/power-schedule.md) `runDuePowerActions` |
+| Per-VM power schedules | `* * * * *` | — | `powerRunning` | [power-schedule](/services/power-schedule.md) `runDuePowerActions` (due VMs handled side by side) |
 | Per-VM backups | `* * * * *` | — | `backupRunning` | [matestate](/services/matestate.md) `runDueBackups` |
 | Cloud-init deploy lock | `* * * * *` | — | `deployLockRunning` | [deploy-lock](/services/deploy-lock.md) `advanceDeployingVms` (`deployLockTick`) |
 | Resource history + alerts | `*/5 * * * *` | — | `historyRunning` | [resource-history](/services/resource-history.md) `sampleResourceUsage`, `pruneResourceSamples`; [alert](/services/alert.md) `evaluateAlerts` |
@@ -44,7 +44,7 @@ Single place where periodic work is registered. `startScheduler()` is called fro
 
 # Data
 
-SystemConfig `matestate_last_run` (ISO timestamp) and `template_refresh_enabled` ([template refresh config](/config/template-refresh.md)).[^sch]
+SystemConfig `matestate_last_run` (ISO timestamp), `matestate_vm_tick_last` (last minute the per-VM backup tick covered) and `template_refresh_enabled` ([template refresh config](/config/template-refresh.md)).[^sch]
 
 # Gotchas
 

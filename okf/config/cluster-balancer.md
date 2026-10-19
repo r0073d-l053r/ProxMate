@@ -4,7 +4,7 @@ title: Cluster balancer settings
 description: SystemConfig keys configuring the DRS-style memory-load balancer, covering its mode, imbalance threshold, per-pass migration cap and excluded VMIDs.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/cluster-balancer.service.ts
 tags: [proxmate, config, balancer, migration, scheduler]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: balancer
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/cluster-balancer.service.ts
@@ -36,7 +36,7 @@ The balancer reads node memory load and recommends or applies live migrations to
 
 # Gotchas
 
-- On a fresh install (no `PUT /balancer` yet) `GET /balancer` reports threshold 5 and max moves 1, not the `DEFAULTS` values. The first save writes all four keys explicitly.[^balancer]
+- On a fresh install (no `PUT /balancer` yet) the missing or blank rows read as the `DEFAULTS` (threshold 15, max moves 5); a non-numeric stored value does too. The first save writes all four keys explicitly.[^balancer]
 - The scheduled tick runs on `BALANCER_CRON`, default `*/15 * * * *`, but it only acts in `auto` mode. An overlapping tick is skipped while a previous pass is still running.[^scheduler] See [backend environment](/env/backend-environment.md).
 
 [^balancer]: backend/src/services/cluster-balancer.service.ts (`DEFAULTS`, `clampInt`, `parseVmidCsv`, `getBalancerSettings`, `saveBalancerSettings`)

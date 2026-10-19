@@ -4,7 +4,7 @@ title: Proxmox connection settings
 description: SystemConfig keys holding the Proxmox VE API endpoint, API token and TLS-verification flag that every Proxmox client ProxMate builds is created from.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts
 tags: [proxmate, config, proxmox, api-token, secrets]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: pve
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts
@@ -45,7 +45,7 @@ The four keys ProxMate needs to talk to the Proxmox VE API. `getConnectionConfig
 # Gotchas
 
 - `testProxmoxConnection()` checks `/version`, then `/access/permissions`. It fails if the token holds no privileges at all (the usual cause is privsep), if `VM.Audit` is missing or `/cluster/resources` cannot be read, or if `Datastore.Audit` is missing or returns no storages. Zero visible guests is only a warning. Missing operational privileges (`VM.Allocate`, `VM.Clone`, `Sys.Audit`, and others), `SDN.Use` on PVE 8+, and `SDN.Audit` only produce warnings.[^setup-svc] See [Proxmox privileges](/proxmox/privileges.md).
-- `PUT /api/admin/settings/proxmox` writes no audit entry and does not re-test the connection.[^admin-routes]
+- `PUT /api/admin/settings/proxmox` records an `admin.proxmox_config` audit entry (host, token id, `verifySsl` and whether the secret was replaced, never the secret) and does not re-test the connection.[^admin-routes]
 - The token secret can only be decrypted with the same `ENCRYPTION_KEY` that encrypted it. If that key changes, `getConfig('proxmox_token_secret')` throws while decrypting and every Proxmox call fails. See [backend environment](/env/backend-environment.md).
 
 # Relationships
