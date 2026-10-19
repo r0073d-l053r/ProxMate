@@ -2939,12 +2939,10 @@ export async function getBridgeGateway(
 /** Whether the cluster-wide firewall is enabled (required for guest firewalls to take effect). */
 export async function isClusterFirewallEnabled(client?: AxiosInstance): Promise<boolean> {
   const c = client ?? (await getClient());
-  try {
-    const res = await c.get<{ data: { enable?: number } }>('/cluster/firewall/options');
-    return res.data.data.enable === 1;
-  } catch {
-    return false;
-  }
+  // Errors propagate: a caller must be able to tell "the firewall is off" apart
+  // from "Proxmox could not be asked" (the isolation page shows them differently).
+  const res = await c.get<{ data: { enable?: number } }>('/cluster/firewall/options');
+  return res.data.data.enable === 1;
 }
 
 /** Get a bridge's gateway and CIDR (e.g. for deriving the management subnet). */

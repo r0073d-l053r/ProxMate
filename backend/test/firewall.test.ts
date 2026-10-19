@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 // (proxmox.service → config.service → prisma) at import time.
 vi.mock('../src/lib/prisma.js', () => ({ prisma: {} }));
 
-import { configureVmIsolation, ipv4NetworkCidr } from '../src/services/proxmox.service.js';
+import { configureVmIsolation, ipv4NetworkCidr, isClusterFirewallEnabled } from '../src/services/proxmox.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
 
 describe('ipv4NetworkCidr', () => {
@@ -165,5 +165,23 @@ describe('configureVmIsolation (per-VM firewall rule builder)', () => {
 
     expect(c.delete).not.toHaveBeenCalled();
     expect(c.post).toHaveBeenCalledTimes(7);
+  });
+});
+
+describe('isClusterFirewallEnabled', () => {
+  it('reports the cluster firewall state', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue({ data: { data: { enable: 1 } } });
+    expect(await isClusterFirewallEnabled(asClient(c))).toBe(true);
+    c.get.mockResolvedValue({ data: { data: {} } });
+    expect(await isClusterFirewallEnabled(asClient(c))).toBe(false);
+  });
+
+  // The isolation page tells "firewall off" apart from "Proxmox unreachable" by
+  // whether this throws, so a failed read must not be reported as "off".
+  it('throws when Proxmox cannot be read', async () => {
+    const c = fakeClient();
+    c.get.mockRejectedValue(new Error('connect ECONNREFUSED'));
+    await expect(isClusterFirewallEnabled(asClient(c))).rejects.toThrow('ECONNREFUSED');
   });
 });
