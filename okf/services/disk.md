@@ -35,7 +35,7 @@ sources:
 
 - Admins skip the quota check; shrinking deltas skip it too. Over-quota throws `QuotaError` from [vm service](/services/vm.md).[^disk]
 - The root disk is resized via the VM resize controls, not this service.[^disk]
-- The DB column is updated after the Proxmox call with `vm.storage + delta` from the passed-in row, so concurrent disk ops on the same VM could race (no lock in this file).
+- The DB column is updated after the Proxmox call with `vm.storage + delta` from the passed-in row.
 
 # Relationships
 

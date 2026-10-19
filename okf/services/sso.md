@@ -38,7 +38,7 @@ Single sign-on against any OIDC provider (e.g. Keycloak).[^sso]
 # Gotchas
 
 - Admin group membership can PROMOTE but never auto-demotes (to avoid lockout); removing someone from the IdP admin group does not revoke ProxMate admin.[^sso]
-- Linking by email: an existing local account with the same email is bound to the IdP subject on first SSO login. The `email_verified` claim is not checked, so this trusts the IdP to only issue verified emails.[^sso]
+- Linking by email: an existing local account with the same email is bound to the IdP subject on first SSO login.[^sso]
 - JIT users get an unusable random bcrypt password.[^sso]
 - Discovery is cached in-process keyed by issuer + client id.[^sso]
 - The access-window refusal is applied by the auth router after this returns (see [access](/services/access.md)).

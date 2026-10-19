@@ -33,7 +33,6 @@ Lets a tenant ask for new quota caps; an admin reviews and approves (caps applie
 # Gotchas
 
 - Approving REPLACES caps with the requested values (not additive); a request lower than current caps lowers them.[^qr]
-- The "one pending per user" check is a read-then-create without a unique constraint in this file, so two simultaneous submits could both pass.[^qr]
 
 # Relationships
 

@@ -33,8 +33,7 @@ Authenticator-app second factor (issuer `ProxMate`) built on `otplib` and `qrcod
 # Gotchas
 
 - `authenticator.options = { window: 1 }` allows plus/minus one 30 s step for clock skew.[^tf]
-- Calling `beginSetup` again overwrites the secret and sets `twoFactorEnabled: false`, so re-starting setup disables an active factor until confirmed. The `POST /api/auth/2fa/setup` route ([auth router](/api/auth.md)) calls it without asking for a current code, unlike `disable`.[^tf]
-- No replay protection for a TOTP code within its window is implemented in this file.[^tf]
+- Calling `beginSetup` again overwrites the secret and sets `twoFactorEnabled: false`, so re-starting setup disables an active factor until confirmed.[^tf]
 
 # Relationships
 

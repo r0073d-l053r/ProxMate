@@ -43,7 +43,6 @@ Lost-device backup for TOTP. It can be used as a second factor at login, or to d
 
 # Gotchas
 
-- Consumption is a find-then-update, not a conditional update, so two concurrent submissions of the same code could both succeed.[^svc]
 
 [^schema]: backend/prisma/schema.prisma
 [^svc]: backend/src/services/twofactor.service.ts

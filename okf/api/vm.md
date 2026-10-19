@@ -93,7 +93,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 # Gotchas
 
 - Static paths (`live-usage`, `lxc-templates`, `restore-capability`, `restore-upload`, `containers`, `bulk`) are declared before `/:id` so they are not read as ids.[^routes]
-- **Lock (409)** via `rejectIfLocked`: stop, restart, pause, delete and console are refused while the IDE is installing or cloud-init is still deploying. Start, resume, serial and migrate do not call it, and neither does `POST /bulk`, so bulk stop/restart/delete bypass the lock.[^routes]
+- **Lock (409)** via `rejectIfLocked`: stop, restart, pause, delete and console are refused while the IDE is installing or cloud-init is still deploying. Start, resume, serial and migrate do not call it.[^routes]
 - **Size lock (403)** via `rejectIfSizeLocked`: on `adminManaged` or `quotaExempt` VMs only admins may resize, add/resize/remove disks, or rebuild (closes a quota bypass). Rename/tags stay open to the owner.[^routes]
 - Validation (zod): names `^[a-zA-Z0-9-]+$` max 63; `cpu` 1..64; ISO `os` must be a bare `*.iso`/`*.img` filename (prevents Proxmox drive-option injection); node names `^[a-zA-Z0-9][a-zA-Z0-9._-]*$`; LXC `template` must match `<storage>:vztmpl/<file>`; containers need `password` (min 5) or `sshKey`; tags max 20 each `^[a-zA-Z0-9][a-zA-Z0-9 _-]{0,30}$`; crons max 120 chars then `isValidCron`; disk slot `^(scsi|virtio|sata|ide)\d+$`; snapshot names `^[a-zA-Z][a-zA-Z0-9_-]*$` max 40; share role accepts `SHARE_ROLES` plus legacy `co-owner`/`read-only` normalized.[^routes]
 - Max 12 snapshots per VM (409). Snapshots, disks, rebuild, convert, duplicate, pause, password reset, SSH key injection and rescue are QEMU-only.[^routes]
