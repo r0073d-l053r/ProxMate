@@ -129,6 +129,9 @@ export function parseBackupConfig(text: string, kind: pve.GuestKind = 'qemu'): P
 // beyond nesting, a template flag or a privileged container — refuses the
 // archive. Keys a restore must not keep (autostart, start order, protection) are
 // accepted but stripped afterwards, and every NIC is rebuilt from scratch.
+// `cicustom` is accepted because ProxMate writes it itself (the vendor snippet of
+// a cloud-init deploy), but it survives the restore only while every snippet it
+// names is one ProxMate produces (see ownCicustom); otherwise it is stripped.
 
 const COMMON_KEYS = new Set([
   'name', 'hostname', 'description', 'tags', 'ostype', 'arch', 'cores', 'memory', 'cpulimit', 'cpuunits',
@@ -137,7 +140,7 @@ const COMMON_KEYS = new Set([
 const QEMU_KEYS = new Set([
   'agent', 'acpi', 'balloon', 'shares', 'bios', 'boot', 'bootdisk', 'cpu', 'hotplug', 'kvm', 'localtime',
   'machine', 'numa', 'scsihw', 'smbios1', 'sockets', 'vcpus', 'tablet', 'vga', 'vmgenid', 'keyboard', 'meta',
-  'citype', 'ciuser', 'cipassword', 'ciupgrade', 'sshkeys',
+  'citype', 'ciuser', 'cipassword', 'ciupgrade', 'sshkeys', 'cicustom',
 ]);
 const QEMU_KEY_PATTERNS = [/^(ide|sata|scsi|virtio)\d+$/, /^efidisk0$/, /^tpmstate0$/, /^net\d+$/, /^ipconfig\d+$/, /^serial\d+$/, /^unused\d+$/];
 const LXC_KEYS = new Set(['swap', 'unprivileged', 'features', 'timezone', 'console', 'tty', 'cmode', 'rootfs']);
@@ -185,6 +188,20 @@ export function assertRestorableConfig(text: string, kind: pve.GuestKind): void 
   }
 }
 
+/**
+ * Whether a `cicustom` value names only snippets ProxMate itself writes: each part
+ * is `<SNIPPET_STORAGE>:snippets/proxmate-<features>.yaml` (pve.cloudInitSnippetFile).
+ * Their content comes from ProxMate's fixed feature catalog, never from a tenant.
+ */
+export function ownCicustom(value: string): boolean {
+  const storage = pve.snippetWriteConfig()?.storage;
+  if (!storage) return false;
+  const esc = storage.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const part = new RegExp(`^(vendor|user)=${esc}:snippets/proxmate-[a-z0-9-]+\\.yaml$`);
+  const parts = value.split(',').map((p) => p.trim()).filter(Boolean);
+  return parts.length > 0 && parts.every((p) => part.test(p));
+}
+
 const NIC_MODELS = new Set(['virtio', 'e1000', 'e1000e', 'rtl8139', 'vmxnet3']);
 
 /**
@@ -220,6 +237,7 @@ async function rebuildRestoredGuestConfig(
     }
   }
   const strip = STRIPPED_AFTER_RESTORE.filter((k) => k in cfg);
+  if (cfg['cicustom'] !== undefined && !ownCicustom(cfg['cicustom'])) strip.push('cicustom');
   if (strip.length > 0) params.set('delete', strip.join(','));
   if ([...params.keys()].length > 0) await client.put(`/nodes/${node}/${kind}/${vmid}/config`, params);
 }

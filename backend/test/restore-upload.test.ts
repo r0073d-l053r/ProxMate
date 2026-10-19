@@ -16,6 +16,7 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   setVmName: vi.fn(),
   applyDefaultBridge: vi.fn(),
   getVmConfig: vi.fn(),
+  snippetWriteConfig: vi.fn(() => ({ dir: '/snip', storage: 'shared-snip' })),
   configureVmIsolation: vi.fn(),
   readIsolationOptions: vi.fn(async () => ({ dnsServers: [] })),
   startVm: vi.fn(),
@@ -42,6 +43,7 @@ import { fakeClient, asClient, bodyOf } from './helpers.js';
 import { assertWithinQuota, markClonedGuest, settleFailedCreate, syncRestoredGuest } from '../src/services/vm.service.js';
 import {
   assertRestorableConfig,
+  ownCicustom,
   parseBackupConfig,
   restoreFromUpload,
   resolveUnderUploadDir,
@@ -171,6 +173,7 @@ describe('restoreFromUpload', () => {
     vi.mocked(pve.getVmConfig).mockResolvedValue({
       name: 'web-01',
       onboot: '1',
+      cicustom: 'vendor=local:snippets/not-ours.yaml',
       net0: 'e1000=AA:BB:CC:DD:EE:FF,bridge=vmbr9,firewall=0,trunks=1-4094,rate=5',
       net1: 'bogus=11:22:33:44:55:66,bridge=vmbr9',
     });
@@ -225,7 +228,7 @@ describe('restoreFromUpload', () => {
     expect(bodyOf(nicPut!)).toEqual({
       net0: 'e1000,bridge=vmbr0,firewall=1,tag=42',
       net1: 'virtio,bridge=vmbr0,firewall=1,tag=42',
-      delete: 'onboot',
+      delete: 'onboot,cicustom',
     });
     // The tenant-isolation invariant: firewall configured before first boot.
     const isolationOrder = vi.mocked(pve.configureVmIsolation).mock.invocationCallOrder[0]!;
@@ -343,6 +346,43 @@ describe('archive config keys an upload may not carry (BUG-027)', () => {
     }
   });
 
+  it('accepts every config shape ProxMate itself produces (audit round 2)', () => {
+    const shapes: Array<[string, 'qemu' | 'lxc', string]> = [
+      ['QEMU ISO create', 'qemu', [
+        'agent: 1', 'boot: order=scsi0;ide2', 'cores: 2', 'ide2: local:iso/debian-12.iso,media=cdrom',
+        'memory: 2048', 'meta: creation-qemu=8.1.2,ctime=1700000000', 'name: web', 'net0: virtio=BC:24:11:00:00:01,bridge=vmbr0,firewall=1',
+        'ostype: l26', 'scsi0: local-lvm:vm-104-disk-0,size=32G', 'scsihw: virtio-scsi-pci',
+        'smbios1: uuid=0b6b1f6c-0000-4000-8000-000000000000', 'sockets: 1', 'tags: proxmate-abc', 'vmgenid: 0b6b1f6c-0000-4000-8000-000000000001',
+      ].join('\n')],
+      ['cloud-init deploy', 'qemu', [
+        'agent: enabled=1', 'bios: ovmf', 'boot: order=scsi0', 'cicustom: vendor=shared-snip:snippets/proxmate-docker-tailscale.yaml',
+        'ciuser: admin', 'cores: 4', 'cpu: host', 'description: Debian 12 cloud image', 'efidisk0: local-lvm:vm-104-disk-1,efitype=4m,size=4M',
+        'ide2: local-lvm:vm-104-cloudinit,media=cdrom', 'ipconfig0: ip=dhcp', 'machine: q35', 'memory: 4096', 'name: app',
+        'net0: virtio=BC:24:11:00:00:02,bridge=vmbr0,firewall=1,tag=42', 'scsi0: local-lvm:vm-104-disk-0,discard=on,size=20G',
+        'scsihw: virtio-scsi-single', 'serial0: socket', 'sshkeys: ssh-ed25519%20AAAAC3Nz%20me', 'vga: serial0',
+      ].join('\n')],
+      ['rescue mode', 'qemu', [
+        'boot: order=ide3', 'cores: 1', 'ide3: local:iso/systemrescue.iso,media=cdrom', 'memory: 1024', 'name: web',
+        'net0: virtio=BC:24:11:00:00:03,bridge=vmbr0,firewall=1', 'scsi0: local-lvm:vm-104-disk-0,size=32G', 'vga: std',
+      ].join('\n')],
+      ['LXC create', 'lxc', [
+        'arch: amd64', 'cores: 2', 'hostname: ct', 'memory: 1024', 'swap: 512',
+        'net0: name=eth0,bridge=vmbr0,firewall=1,hwaddr=BC:24:11:00:00:04,ip=dhcp,type=veth',
+        'ostype: debian', 'rootfs: local-lvm:vm-105-disk-0,size=8G', 'unprivileged: 1', 'tags: proxmate-def',
+      ].join('\n')],
+    ];
+    for (const [label, kind, text] of shapes) {
+      expect(() => assertRestorableConfig(text, kind), label).not.toThrow();
+    }
+  });
+
+  it('keeps only ProxMate-produced snippets in cicustom (audit round 2)', () => {
+    expect(ownCicustom('vendor=shared-snip:snippets/proxmate-docker.yaml')).toBe(true);
+    expect(ownCicustom('vendor=local:snippets/proxmate-docker.yaml')).toBe(false); // not SNIPPET_STORAGE
+    expect(ownCicustom('user=shared-snip:snippets/evil.yaml')).toBe(false);
+    expect(ownCicustom('vendor=shared-snip:snippets/proxmate-docker.yaml,network=shared-snip:snippets/proxmate-x.yaml')).toBe(false);
+  });
+
   it('refuses a privileged container', () => {
     expect(() => assertRestorableConfig(LXC_CFG.replace('unprivileged: 1\n', ''), 'lxc')).toThrow(/privileged/);
   });
@@ -353,7 +393,6 @@ describe('archive config keys an upload may not carry (BUG-027)', () => {
       'virtiofs0: share1',
       'scsi5: /dev/sdb,size=10G',
       'scsi5: local-lvm:0,import-from=/root/disk.qcow2,size=10G',
-      'cicustom: user=local:snippets/u.yaml',
       'numa0: cpus=0-3,hostnodes=0,memory=1024',
       'numa: 2',
       'affinity: 0-3',
