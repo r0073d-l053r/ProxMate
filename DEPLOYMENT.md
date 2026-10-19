@@ -369,7 +369,7 @@ app: the mount has to exist before the container starts.
    (uid 1000), then recreate the backend so the mount is picked up:
 
    ```bash
-   sudo mkdir -p /mnt/backups/proxmate && sudo chown 1000:1000 /mnt/backups/proxmate
+   sudo install -d -m 0700 -o 1000 -g 1000 /mnt/backups/proxmate
    docker compose up -d backend
    ```
 
@@ -380,6 +380,11 @@ app: the mount has to exist before the container starts.
 
 Snapshots are named `proxmate-appdb-YYYYMMDD-HHMMSS.db`. Retention only ever
 deletes files matching that pattern, so anything else in the directory is safe.
+
+Each snapshot is written mode `0600` (owner only). Treat the files as secret:
+besides the encrypted secrets they contain the session table, so anyone who can
+read a recent snapshot can act as a signed-in user. Keep the directory (and any
+share it lives on) restricted to the backup owner.
 
 Schedule override: `APPDB_BACKUP_CRON` (default nightly 02:30).
 

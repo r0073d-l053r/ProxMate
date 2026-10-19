@@ -759,6 +759,9 @@ if [ ! -d "$backup_dir" ]; then
     # entrypoint now chowns it too, which covers hand-rolled installs; this hands
     # it to the invoking human as well so they can read their own snapshots.
     chown_to_invoker "$backup_dir"
+    # Snapshots hold live session tokens, so nobody but the owner should even be
+    # able to list them.
+    chmod 0700 "$backup_dir" 2>/dev/null || warn "could not chmod 0700 $backup_dir"
     ok "created $backup_dir for app-database backups"
   else
     warn "could not create $backup_dir — create it yourself before enabling backups"

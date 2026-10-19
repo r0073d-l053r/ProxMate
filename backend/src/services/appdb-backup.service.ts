@@ -155,9 +155,25 @@ export async function runAppDbBackup(now: Date = new Date()): Promise<AppDbBacku
   }
 
   const file = path.join(dir, appDbBackupFileName(now));
-  // VACUUM INTO snapshots a live SQLite DB consistently. The path rides inside a
-  // SQL string literal — escape quotes (the path itself is admin-configured).
-  await prisma.$executeRawUnsafe(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+  // The snapshot holds live session tokens in plaintext (only the stored secrets
+  // are encrypted), so it must be readable by its owner alone. SQLite would create
+  // it world-readable (0644 under the usual umask) and the backup dir is often a
+  // shared mount, so create the empty file owner-only FIRST — VACUUM INTO accepts
+  // an existing empty file and keeps its mode — instead of chmodding afterwards,
+  // which would leave it readable while the copy is being written.
+  await fsp.writeFile(file, '', { flag: 'wx', mode: 0o600 });
+  try {
+    // The mode passed above is still filtered by the umask; force it exactly.
+    await fsp.chmod(file, 0o600);
+    // VACUUM INTO snapshots a live SQLite DB consistently. The path rides inside a
+    // SQL string literal — escape quotes (the path itself is admin-configured).
+    await prisma.$executeRawUnsafe(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+  } catch (err) {
+    // An empty placeholder would sort as the newest "snapshot" and push a real
+    // one out of retention.
+    await fsp.unlink(file).catch(() => undefined);
+    throw err;
+  }
   const pruned = await pruneAppDbBackups(dir, keep);
   logger.info({ file, pruned, keep }, 'app-db backup complete');
   return { ran: true, file, pruned };
