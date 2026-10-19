@@ -1520,6 +1520,7 @@ router.post('/:id/matestates/:msid/restore', async (req: Request, res: Response)
     });
     res.json({ success: true });
   } catch (err) {
+    if (err instanceof QuotaError) { res.status(403).json({ error: 'Quota exceeded', details: err.details }); return; }
     res.status(502).json({ error: pveMessage(err) });
   }
 });

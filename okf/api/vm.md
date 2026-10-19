@@ -81,7 +81,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | GET | `/api/vms/:id/matestates` | viewable | `{ downloadable, items }` MateState backups. |
 | POST | `/api/vms/:id/matestates/:msid/download` | `backups` | Email a single-use download link to the caller; `{ emailed, to }`. Audited `matestate.download`. |
 | POST | `/api/vms/:id/matestates` | `backups` | Manual backup; 201. Audited `matestate.create`. |
-| POST | `/api/vms/:id/matestates/:msid/restore` | `backups` | Restore VM from a MateState of this VM. Audited `matestate.restore`. |
+| POST | `/api/vms/:id/matestates/:msid/restore` | `backups` | Restore VM from a MateState of this VM. Audited `matestate.restore`. 403 `Quota exceeded` (with `details`) when the backup would grow the guest past the owner's quota. |
 | DELETE | `/api/vms/:id/matestates/:msid` | `backups` | Delete a MateState. Audited `matestate.delete`. |
 | GET | `/api/vms/:id/snapshots` | viewable | Proxmox snapshots (empty for LXC). |
 | POST | `/api/vms/:id/snapshots` | `backups` | `{ name, description?, includeRam? }`; waits for the task; 201. Audited `snapshot.create`. |

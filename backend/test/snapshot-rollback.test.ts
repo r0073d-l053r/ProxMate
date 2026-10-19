@@ -11,6 +11,7 @@ vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
     virtualMachine: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     user: { findUnique: vi.fn() },
+    mateState: { findUnique: vi.fn(), update: vi.fn(async () => ({})) },
   },
 }));
 vi.mock('../src/middleware/auth.js', () => ({
@@ -138,6 +139,25 @@ describe('snapshot rollback and the owner\'s compute-access window (BUG-067)', (
     const res = await rollback();
     expect(res.status).toBe(200);
     expect(rolledBack(c)).toBe(true);
+  });
+});
+
+describe('MateState restore route (BUG-024)', () => {
+  it('answers 403 with the quota details when the backup would exceed the quota', async () => {
+    const c = fakePve(LIVE, SNAP).c;
+    const get = c.get.getMockImplementation()!;
+    const text = Object.entries(SNAP).map(([k, v]) => `${k}: ${v}`).join('\n');
+    c.get.mockImplementation((url: string) => {
+      if (url.startsWith('/cluster/resources')) return ok([{ type: 'qemu', vmid: 100, node: 'pve1' }, { type: 'node', node: 'pve1', status: 'online' }]);
+      if (url.startsWith('/nodes/pve1/storage/backups/content')) return ok([{ volid: 'backups:backup/x.vma.zst' }]);
+      if (url.startsWith('/nodes/pve1/vzdump/extractconfig')) return ok(text);
+      return get(url);
+    });
+    vi.mocked(prisma.mateState.findUnique).mockResolvedValue({ id: 'ms1', vmId: 'rowa', status: 'ready', volid: 'backups:backup/x.vma.zst', storage: 'backups', createdAt: new Date() } as never);
+    vi.mocked(prisma.virtualMachine.findMany).mockResolvedValue([{ id: 'other', cpu: 7, ram: 15360, storage: 20 }] as never);
+    const res = await fetch(`${base}/vms/rowa/matestates/ms1/restore`, { method: 'POST' });
+    expect(res.status).toBe(403);
+    expect((await res.json()).details.cpu).toBeDefined();
   });
 });
 
