@@ -334,6 +334,11 @@ router.post('/session/refresh', requireAuth, requireSession, async (req: Request
 // /passkeys/auth/verify flow; this covers the PIN and the account-password
 // fallback. Session-authed (the kiosk already holds a valid admin session) +
 // tightly rate-limited so a short PIN can't be swept by a passer-by.
+//
+// A rejected PIN, password or passkey answers 403 with `code: 'reauth_failed'`,
+// never 401: the session is still valid, and the frontend reads any 401 as "the
+// session is gone" and signs the browser out.
+const REAUTH_FAILED = 'reauth_failed';
 const KioskExitSchema = z.object({
   method: z.enum(['pin', 'password']),
   value: z.string().min(1).max(128),
@@ -357,7 +362,7 @@ router.post('/kiosk-exit', kioskExitLimiter, requireAuth, requireSession, async 
     ok = await verifyPasswordSafe(parsed.data.value, user?.passwordHash ?? null);
   }
   if (!ok) {
-    res.status(401).json({ error: 'Incorrect — try again.' });
+    res.status(403).json({ code: REAUTH_FAILED, error: 'Incorrect — try again.' });
     return;
   }
   res.json({ ok: true });
@@ -393,12 +398,12 @@ router.post('/kiosk-exit/passkey-verify', kioskExitLimiter, requireAuth, require
     const userId = await passkeys.verifyAuthentication(req.body, challenge);
     // Must be THIS admin's own passkey — no session is issued either way.
     if (userId !== ar.user.id) {
-      res.status(401).json({ error: "That passkey isn't for this account." });
+      res.status(403).json({ code: REAUTH_FAILED, error: "That passkey isn't for this account." });
       return;
     }
     res.json({ ok: true });
   } catch (err) {
-    res.status(401).json({ error: err instanceof Error ? err.message : 'Passkey check failed' });
+    res.status(403).json({ code: REAUTH_FAILED, error: err instanceof Error ? err.message : 'Passkey check failed' });
   }
 });
 

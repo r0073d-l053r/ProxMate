@@ -51,9 +51,9 @@ No router-level middleware; each route picks its own:[^routes]
 | POST | `/api/auth/2fa/verify` | public + authLimiter | Exchange `{ challenge, code }` (TOTP or recovery code) for a session. A challenge is single-use and stops working after 5 wrong codes; wrong codes also count against the account and lock it at the lockout threshold; a locked account cannot complete 2FA. |
 | POST | `/api/auth/logout` | allowExpiredAccess + requireAuth | Deletes the `Session` row, clears cookies. |
 | POST | `/api/auth/session/refresh` | requireAuth + requireSession | Mint a fresh 24 h session, set cookies, retire old session with a ~90 s grace, prune the user's expired sessions. |
-| POST | `/api/auth/kiosk-exit` | kioskExitLimiter + requireAuth + requireSession + admin | `{ method: 'pin' or 'password', value }` unlock check; `{ ok: true }` or 401. |
+| POST | `/api/auth/kiosk-exit` | kioskExitLimiter + requireAuth + requireSession + admin | `{ method: 'pin' or 'password', value }` unlock check; `{ ok: true }`, or 403 `{ code: 'reauth_failed' }` for a wrong PIN or password (401 is reserved for a missing or dead session, which the frontend treats as signed out). |
 | POST | `/api/auth/kiosk-exit/passkey-options` | kioskExitLimiter + requireAuth + requireSession + admin | WebAuthn assertion options; sets challenge cookie. |
-| POST | `/api/auth/kiosk-exit/passkey-verify` | kioskExitLimiter + requireAuth + requireSession + admin | Verify that the passkey belongs to the current admin; mints no session. |
+| POST | `/api/auth/kiosk-exit/passkey-verify` | kioskExitLimiter + requireAuth + requireSession + admin | Verify that the passkey belongs to the current admin; mints no session. A failed or foreign passkey is 403 `{ code: 'reauth_failed' }`. |
 | GET | `/api/auth/me` | allowExpiredAccess + requireAuth | Current user, 2FA/passkey/MFA flags, `broadcastOptOut`, `accessExpiresAt`, server-computed `accessExpired`, quota usage. In OpenAPI doc. |
 | PUT | `/api/auth/email-preferences` | requireAuth | `{ broadcastOptOut: boolean }`. Audited. |
 | POST | `/api/auth/2fa/setup` | requireAuthOrEnrollment + requireSession | Begin TOTP setup. While 2FA is on, needs `{ currentCode }` (current TOTP or recovery code); the active factor stays on until `/2fa/enable` confirms the new one. |
