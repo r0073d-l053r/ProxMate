@@ -122,7 +122,8 @@ router.post('/:id/provision', async (req: Request, res: Response) => {
     if (err instanceof IdeProvisionError) {
       // `code` lets the UI offer the right remedy (reboot vs relocate) instead
       // of parsing message text.
-      res.status(400).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+      const status = err.code === 'install_in_progress' ? 409 : 400;
+      res.status(status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
       return;
     }
     throw err;

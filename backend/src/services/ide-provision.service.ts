@@ -170,9 +170,10 @@ echo "[proxmate-ide] done"
  * Machine-readable reason for a provision refusal, so the UI can offer the right
  * next step: 'reboot_required' → a cpu-model change needs one reboot to land;
  * 'node_no_avx' → the NODE's physical CPU lacks AVX, so no reboot will ever help —
- * offer the one-click relocate to a capable node instead.
+ * offer the one-click relocate to a capable node instead; 'install_in_progress'
+ * → an install is already running (409).
  */
-export type IdeProvisionErrorCode = 'reboot_required' | 'node_no_avx';
+export type IdeProvisionErrorCode = 'reboot_required' | 'node_no_avx' | 'install_in_progress';
 
 export class IdeProvisionError extends Error {
   constructor(
@@ -197,6 +198,15 @@ export async function startIdeProvision(
   // The gateway token and model list below are minted for `user` and written into
   // the guest, so it must be the VM's owner (the route enforces this too).
   if (vm.userId !== user.id) throw new IdeProvisionError("Only this VM's owner can install its ProxMate IDE.");
+  // One install at a time: a second run would rotate the guest secret under the
+  // first one. A stuck install may be retried once it has timed out.
+  if (
+    vm.ideState === 'installing' &&
+    vm.ideStateAt &&
+    Date.now() - vm.ideStateAt.getTime() <= INSTALL_TIMEOUT_MS
+  ) {
+    throw new IdeProvisionError('The IDE is already being installed on this VM — wait for it to finish.', 'install_in_progress');
+  }
   if (vm.type === 'lxc') throw new IdeProvisionError('The IDE needs a QEMU VM — containers are not supported.');
   if (vm.status !== 'running') throw new IdeProvisionError('Start the VM before installing the IDE.');
 

@@ -123,6 +123,26 @@ describe('startIdeProvision — bootstrap files in /tmp', () => {
   });
 });
 
+describe('startIdeProvision — one install at a time', () => {
+  it('refuses while an install is still running, without touching the guest or the secret', async () => {
+    const err = await startIdeProvision(
+      vm({ ideState: 'installing', ideStateAt: new Date() }),
+      { id: 'u1', role: 'user' },
+      'https://x',
+    ).catch((e: unknown) => e);
+    expect((err as { code?: string }).code).toBe('install_in_progress');
+    expect(vi.mocked(guestFileWrite)).not.toHaveBeenCalled();
+    expect(vi.mocked(saveIdeGuestSecret)).not.toHaveBeenCalled();
+  });
+
+  it('allows a retry once a stuck install has timed out', async () => {
+    const old = new Date(Date.now() - 11 * 60 * 1000);
+    await expect(
+      startIdeProvision(vm({ ideState: 'installing', ideStateAt: old }), { id: 'u1', role: 'user' }, 'https://x'),
+    ).resolves.toBe('installing');
+  });
+});
+
 describe('startIdeProvision — owner only', () => {
   it('refuses to install (and mint a gateway token) for anyone but the VM owner', async () => {
     await expect(startIdeProvision(vm({ userId: 'owner1' }), { id: 'admin1', role: 'admin' }, 'https://x')).rejects.toThrow(
