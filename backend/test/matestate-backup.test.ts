@@ -84,6 +84,25 @@ describe('a backup that outlives the wait (BUG-025)', () => {
   });
 });
 
+describe('which volume a backup records (BUG-026)', () => {
+  const FOREIGN = 'backups:backup/vzdump-qemu-100-2000_01_01-00_00_00.vma.zst';
+
+  it('records the archive its own vzdump task wrote, not another file for the same VMID that appeared meanwhile', async () => {
+    // The foreign file sorts first in the listing.
+    fakePve([{ volid: FOREIGN, vmid: 100 }, { volid: OURS, vmid: 100 }]);
+    const ms = await createMateState(row);
+    expect(ms.volid).toBe(OURS);
+  });
+
+  it('refuses to guess when the log names nothing and more than one new volume appeared', async () => {
+    const c = fakePve([{ volid: FOREIGN, vmid: 100 }, { volid: OURS, vmid: 100 }]);
+    const get = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) => (/\/tasks\/.*\/log$/.test(url) ? ok([]) : get(url)));
+    await expect(createMateState(row)).rejects.toThrow(/could not be identified/);
+    expect(prisma.mateState.update).toHaveBeenCalledWith({ where: { id: 'ms1' }, data: { status: 'error' } });
+  });
+});
+
 describe('backupVolidFromLog', () => {
   it('maps a directory-storage archive path to its volid', () => {
     expect(

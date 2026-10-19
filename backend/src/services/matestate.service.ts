@@ -115,10 +115,18 @@ export async function createMateState(
     // vzdump can take a while on real workloads — give it up to 30 minutes.
     await pve.waitForTask(vm.proxmoxNode, upid, client, 30 * 60 * 1000);
 
-    // Find the volume that wasn't there before.
+    // Record the volume this task wrote, as its own log names it. Any backup file
+    // for this VMID that merely appeared meanwhile (an uploaded archive can carry
+    // any VMID in its name) is not evidence of what this run produced. Only when
+    // the log names nothing is a lone new volume accepted.
     const after = (await pve.listBackups(storage, client)).filter((b) => b.vmid === vm.proxmoxVmId);
-    const fresh = after.find((b) => !before.has(b.volid));
-    if (!fresh) throw new Error('Backup finished but no new volume was found on Proxmox.');
+    const logged = pve.backupVolidFromLog(
+      await pve.getTaskLog(vm.proxmoxNode, upid, client).catch(() => [] as string[]),
+      storage,
+    );
+    const added = after.filter((b) => !before.has(b.volid));
+    const fresh = logged ? after.find((b) => b.volid === logged) : added.length === 1 ? added[0] : undefined;
+    if (!fresh) throw new Error('Backup finished but its volume could not be identified on Proxmox.');
 
     const updated = await prisma.mateState.update({
       where: { id: placeholder.id },
