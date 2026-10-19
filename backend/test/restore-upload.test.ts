@@ -30,6 +30,7 @@ vi.mock('../src/services/vm.service.js', () => ({
   markClonedGuest: vi.fn(async () => undefined),
   settleFailedCreate: vi.fn(async () => ({ following: false })),
   syncRestoredGuest: vi.fn(async () => ({})),
+  assertOwnVolumes: vi.fn(async () => undefined),
 }));
 
 import { prisma } from '../src/lib/prisma.js';
@@ -305,6 +306,15 @@ describe('restoreFromUpload', () => {
     await restoreFromUpload(user, { filename: FILENAME, name: 'x' });
     expect(assertWithinQuota).toHaveBeenLastCalledWith(user, expect.objectContaining({ cpu: 8 }));
     expect(prisma.virtualMachine.create).toHaveBeenCalledWith({ data: expect.objectContaining({ cpu: 8 }) });
+  });
+
+  it('checks volume ownership right after the restore, and never starts a guest that fails it (audit round 2)', async () => {
+    const { ForeignVolumeError } = await vi.importActual<typeof import('../src/services/vm.service.js')>('../src/services/vm.service.js');
+    const { assertOwnVolumes } = await import('../src/services/vm.service.js');
+    vi.mocked(assertOwnVolumes).mockRejectedValueOnce(new ForeignVolumeError(['scsi1']));
+    await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toBeInstanceOf(ForeignVolumeError);
+    expect(pve.startVm).not.toHaveBeenCalled();
+    expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, expect.any(ForeignVolumeError), true, expect.anything());
   });
 
   it('re-reads the restored guest (no PCI device approved) before it is started (BUG-027)', async () => {

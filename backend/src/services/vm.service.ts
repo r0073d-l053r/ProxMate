@@ -11,7 +11,8 @@ import * as pve from './proxmox.service.js';
 import { getOfferedFeatureIds, getBaseFeatureIds } from './template.service.js';
 import { isValidPublicKey } from './ssh-key.service.js';
 import { diskSizeGb } from './disk.service.js';
-import { guestConfigSizes, pciLines } from '../lib/guest-config.js';
+import { guestConfigSizes, pciLines, foreignVolumeKeys } from '../lib/guest-config.js';
+import { recordAudit } from './audit.service.js';
 import { ALL_CAPS, CAPS_BY_ROLE, normalizeShareRole, type ShareRole, type VmCap } from './vm-share.service.js';
 
 /** The Proxmox guest kind for a VM row (defaults to QEMU for legacy/unset rows). */
@@ -487,7 +488,8 @@ export async function settleFailedCreate(
     keep = await guestLeftByCreate(vm, opts.cloneSourceId).catch(() => true);
   }
   if (keep) {
-    await markVmError(vm.id, vm.name, err).catch(() => undefined);
+    // A foreign-volume hold is already set and says more than the generic one.
+    if (!(err instanceof ForeignVolumeError)) await markVmError(vm.id, vm.name, err).catch(() => undefined);
     return { following };
   }
   await deleteVmRow(vm.id).catch(() => undefined);
@@ -1743,6 +1745,54 @@ export const QUOTA_HOLD_MESSAGE =
   "After the restore this machine's disks exceed the owner's storage quota, so it can't be started. " +
   'Remove a data disk (or ask an admin to raise the quota), then start it again — or delete it.';
 
+/** holdReason of a row whose restored guest referenced volumes that aren't its own. */
+export const FOREIGN_VOLUME_MESSAGE =
+  "The restored machine referenced disks that belong to another guest. They were detached and it can't be started — " +
+  'ask an admin to check it, or delete it.';
+
+/** Thrown when a restored guest references volumes that aren't its own. */
+export class ForeignVolumeError extends Error {
+  constructor(public readonly keys: string[]) {
+    super(FOREIGN_VOLUME_MESSAGE);
+    this.name = 'ForeignVolumeError';
+  }
+}
+
+/**
+ * After any restore or rollback: every volume the guest's config references must
+ * be its own VMID's. A tenant-built archive could otherwise point a disk line at
+ * another guest's volume, and whether Proxmox lets that through must not matter.
+ * Foreign lines that are attached are removed from the config with a plain delete
+ * (which only detaches them; nothing is ever freed here, so another guest's data
+ * is never touched); a container whose rootfs is foreign is destroyed without
+ * purging anything unreferenced. The row is then held, the event audited, and
+ * ForeignVolumeError thrown so the caller never starts the guest.
+ */
+export async function assertOwnVolumes(
+  vm: VirtualMachine,
+  client?: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<void> {
+  const c = client ?? (await pve.getClient());
+  const kind = kindOf(vm);
+  const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, c, kind);
+  const foreign = foreignVolumeKeys(cfg, vm.proxmoxVmId);
+  if (foreign.length === 0) return;
+  const attached = foreign.filter((k) => !/^unused\d+$/.test(k));
+  if (attached.includes('rootfs')) {
+    await c.delete(`/nodes/${vm.proxmoxNode}/${kind}/${vm.proxmoxVmId}`).catch(() => undefined);
+  } else if (attached.length > 0) {
+    await c.put(`/nodes/${vm.proxmoxNode}/${kind}/${vm.proxmoxVmId}/config`, new URLSearchParams({ delete: attached.join(',') }));
+  }
+  await holdErroredRow(vm, FOREIGN_VOLUME_MESSAGE);
+  await recordAudit({
+    action: 'vm.foreign_volume',
+    targetType: 'vm',
+    targetId: vm.id,
+    detail: `restored guest ${vm.proxmoxVmId} referenced volumes that aren't its own (${foreign.map((k) => `${k}=${cfg[k]}`).join('; ')}); detached and held`,
+  });
+  throw new ForeignVolumeError(foreign);
+}
+
 /** holdReason of a row whose restore or rollback did not finish. */
 export const RESTORE_FAILED_MESSAGE =
   "A restore or rollback of this machine didn't finish, so it can't be started. " +
@@ -1823,7 +1873,8 @@ export async function syncRestoredGuest(
     // never use or free; it is deleted, as removeDisk does with the volume a
     // detach leaves behind. Proxmox refuses for a volume an existing snapshot still
     // uses — that one stays until the snapshot is deleted.
-    for (const key of Object.keys(cfg).filter((k) => /^unused\d+$/.test(k))) {
+    const foreignUnused = new Set(foreignVolumeKeys(cfg, row.proxmoxVmId));
+    for (const key of Object.keys(cfg).filter((k) => /^unused\d+$/.test(k) && !foreignUnused.has(k))) {
       try {
         await client.put(path, new URLSearchParams({ delete: key }));
         delete cfg[key];

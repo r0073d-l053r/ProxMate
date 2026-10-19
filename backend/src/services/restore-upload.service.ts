@@ -11,6 +11,7 @@ import {
   markClonedGuest,
   settleFailedCreate,
   syncRestoredGuest,
+  assertOwnVolumes,
 } from './vm.service.js';
 import { parseGuestConfigText, guestConfigSizes } from '../lib/guest-config.js';
 import * as pve from './proxmox.service.js';
@@ -348,6 +349,8 @@ async function restoreFromUploadLocked(
       created = true;
       // The archive's config carries the OLD guest's tags; tie the guest to this row.
       await markClonedGuest(vm, client);
+      // Every volume the restored config references must be this guest's own.
+      await assertOwnVolumes(vm, client);
 
       // Before anything else may happen to the guest: its name, network placement
       // and isolation are ours, not the archive's.

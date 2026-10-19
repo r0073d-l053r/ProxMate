@@ -15,6 +15,7 @@ import {
   type RestoreReservation,
   syncRestoredGuest,
   assertOwnerAccessActive,
+  assertOwnVolumes,
 } from './vm.service.js';
 import { parseGuestConfigText, pciLines } from '../lib/guest-config.js';
 
@@ -340,6 +341,8 @@ async function settleRestoredGuest(
   } finally {
     await reapplyIsolation(vm, client);
   }
+  // Only this guest's own volumes, whatever the archive or snapshot referenced.
+  await assertOwnVolumes(vm, client);
   return syncRestoredGuest(vm, { approvedPci, client });
 }
 
@@ -367,7 +370,8 @@ async function afterFailedRestore(
   } catch {
     /* gone or unreachable — the error state below still keeps it from being started */
   }
-  if (err instanceof Error && err.name === 'QuotaError') return; // held by syncRestoredGuest
+  // Held already, with a more specific reason, by syncRestoredGuest / assertOwnVolumes.
+  if (err instanceof Error && (err.name === 'QuotaError' || err.name === 'ForeignVolumeError')) return;
   await holdErroredRow(vm, RESTORE_FAILED_MESSAGE).catch(() => undefined);
 }
 

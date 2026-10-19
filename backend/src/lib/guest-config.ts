@@ -78,3 +78,30 @@ export function pciLines(cfg: Record<string, string>): Array<{ key: string; valu
     .filter(([k]) => /^hostpci\d+$/.test(k))
     .map(([key, value]) => ({ key, value: String(value) }));
 }
+
+const VOLUME_KEY = /^((ide|sata|scsi|virtio)\d+|efidisk0|tpmstate0|rootfs|mp\d+|unused\d+)$/;
+
+/**
+ * The volume keys of a config whose volume is not this VMID's own. A volume is
+ * owned when the last path component of its name is `vm-`, `subvol-` or
+ * `base-<vmid>-…` (that covers every storage type's naming, and a linked clone's
+ * `base-<template>/vm-<vmid>-…`). An empty cdrom (`none`) and a cdrom ISO
+ * (`<storage>:iso/…`) are not volumes of any guest. Anything else — another
+ * guest's volume, a host path — is foreign.
+ */
+export function foreignVolumeKeys(cfg: Record<string, string>, vmid: number): string[] {
+  const owned = new RegExp(`^(vm|subvol|base)-${vmid}-`);
+  const out: string[] = [];
+  for (const [key, raw] of Object.entries(cfg)) {
+    if (!VOLUME_KEY.test(key)) continue;
+    const value = String(raw);
+    const volume = (value.split(',')[0] ?? '').replace(/^file=/, '');
+    if (volume === 'none') continue;
+    if (/media=cdrom/.test(value) && /^[^/:]+:iso\//.test(volume)) continue;
+    const colon = volume.indexOf(':');
+    const name = colon > 0 && !volume.startsWith('/') ? volume.slice(colon + 1) : '';
+    const last = name.split('/').pop() ?? '';
+    if (!owned.test(last)) out.push(key);
+  }
+  return out;
+}

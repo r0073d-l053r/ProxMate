@@ -60,6 +60,7 @@ import {
   GuestErroredError,
   QUOTA_HOLD_MESSAGE,
   RESTORE_FAILED_MESSAGE,
+  FOREIGN_VOLUME_MESSAGE,
 } from '../src/services/vm.service.js';
 import { restoreFromMateState } from '../src/services/matestate.service.js';
 import { removeDataDisk } from '../src/services/disk.service.js';
@@ -166,6 +167,18 @@ describe('a restore that leaves the guest over its storage quota (audit MAJOR 2)
     await expect(restoreFromMateState(db.rows.get('rowa') as never, ms)).rejects.toBeInstanceOf(QuotaError);
     await removeDataDisk(db.rows.get('rowa') as never, 'scsi1');
     expect(db.rows.get('rowa')).toMatchObject({ storage: 32, status: 'stopped', holdReason: null });
+  });
+});
+
+describe('a restored config pointing at another guest\'s volume (audit round 2, blocker 2)', () => {
+  it('detaches it, holds the row and never starts the guest', async () => {
+    const { c, state } = fakePve(LIVE, { ...LIVE, tags: '', scsi1: 'local-lvm:vm-200-disk-0,size=10G' });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined); // audit table not mocked here
+    await expect(restoreFromMateState(db.rows.get('rowa') as never, ms)).rejects.toThrow(/belong to another guest/);
+    errSpy.mockRestore();
+    expect(state.cfg['scsi1']).toBeUndefined();
+    expect(started(c)).toBe(false);
+    expect(db.rows.get('rowa')).toMatchObject({ status: 'error', holdReason: FOREIGN_VOLUME_MESSAGE });
   });
 });
 
