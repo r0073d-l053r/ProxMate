@@ -192,7 +192,10 @@ Start it (`auto_https off`), then in the Cloudflare Zero Trust dashboard point t
 hostname (`proxmate.example.com`) at `http://<host>:8184`. WebSockets (the noVNC console)
 pass through automatically on proxied hostnames. The `.env` values are identical to the
 reverse-proxy setup above (single HTTPS origin), and **no inbound ports** are exposed on
-the host.
+the host. In particular keep **`TRUST_PROXY=1`**: the audit log only uses Cloudflare's
+`CF-Connecting-IP` header (the `REAL_IP_HEADER` default) when a proxy is trusted, so with
+`TRUST_PROXY` unset or `0` every entry records the merge-proxy's address instead of the
+client's.
 
 ---
 
@@ -695,7 +698,7 @@ then read `/var/backups/proxmate`. See §12.
 | SSO: "redirect_uri mismatch" | The redirect URI in Keycloak must be **exactly** `${BACKEND_PUBLIC_URL}/api/auth/sso/callback`. |
 | SSO: discovery/Test fails | Issuer must serve `/.well-known/openid-configuration`; check the client secret and that the realm name is right. |
 | Proxmox storage empty / VM create 403 | Token has **Privilege Separation ON** — recreate with `--privsep 0` (§2.2). |
-| Rate-limit/audit shows the proxy IP, not the client | Set `TRUST_PROXY=1` (already in the production `.env`). |
+| Rate-limit/audit shows the proxy IP, not the client | Set `TRUST_PROXY=1` (already in the production `.env`); the audit log ignores `REAL_IP_HEADER` without it. |
 | Console (noVNC) won't connect | Ensure the reverse proxy forwards WebSocket upgrades on `/api/*` (Caddy does automatically). |
 | Changed `NEXT_PUBLIC_API_URL` but the browser still calls the old URL | Rebuild the frontend image: `docker compose up -d --build frontend`. |
 
