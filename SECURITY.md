@@ -164,7 +164,7 @@ the cluster balancer pins containers and node-drain lists them as blockers.
 
 ### ProxMate IDE (in-guest editor + AI agent)
 
-The IDE is the one feature that reaches a guest **over the network** (`guest-ip:8080`) rather
+The IDE is the one feature that reaches a guest **over the network** (`guest-ip:8080`, or `IDE_GUEST_PORT`) rather
 than out-of-band through the Proxmox API, so it has its own guarantees (full model in
 [`docs/proxmate-ide.md`](docs/proxmate-ide.md)):
 

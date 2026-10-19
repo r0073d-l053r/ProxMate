@@ -48,7 +48,10 @@ export type IdeState = 'none' | 'installing' | 'ready' | 'failed';
 // doesn't lock the VM forever.
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 
-/** Port code-server listens on inside the guest (and the isolation pinhole target). */
+/**
+ * Port code-server listens on inside the guest: its --bind-addr, the isolation
+ * pinhole, the readiness probe and (via the same env var) the reverse proxy.
+ */
 const IDE_GUEST_PORT = Number(process.env['IDE_GUEST_PORT'] || 8080);
 
 /**
@@ -145,7 +148,7 @@ Wants=network-online.target
 Type=simple
 User=root
 EnvironmentFile=/etc/proxmate-ide.env
-ExecStart=/usr/bin/code-server --app-name "ProxMate IDE" --auth password --disable-telemetry --bind-addr 0.0.0.0:8080 /
+ExecStart=/usr/bin/code-server --app-name "ProxMate IDE" --auth password --disable-telemetry --bind-addr 0.0.0.0:${IDE_GUEST_PORT} /
 Restart=on-failure
 RestartSec=3
 [Install]

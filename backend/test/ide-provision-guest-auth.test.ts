@@ -138,3 +138,22 @@ describe('refreshIdeState — ready only once the guest proves the secret', () =
     expect(vi.mocked(ensureIdeGuestProven)).toHaveBeenCalledWith('vm-1', 'http://10.0.0.5:8080', 's');
   });
 });
+
+describe('startIdeProvision — IDE_GUEST_PORT', () => {
+  it('binds code-server to the configured guest port (the one the pinhole, probe and proxy use)', async () => {
+    vi.stubEnv('IDE_GUEST_PORT', '9000');
+    vi.resetModules();
+    try {
+      const prov = await import('../src/services/ide-provision.service.js');
+      const pmx = await import('../src/services/proxmox.service.js');
+      await prov.startIdeProvision(vm(), { id: 'u1', role: 'user' }, 'https://x');
+      const b64 = vi.mocked(pmx.guestFileWrite).mock.calls.at(-1)![3] as string;
+      const script = Buffer.from(b64, 'base64').toString('utf8');
+      expect(script).toContain('--bind-addr 0.0.0.0:9000');
+      expect(script).not.toContain('0.0.0.0:8080');
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+});

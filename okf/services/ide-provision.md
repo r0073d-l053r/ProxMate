@@ -35,7 +35,7 @@ On first "Open IDE", ProxMate runs a self-contained bootstrap through the guest 
 - SystemConfig `ide_min_ram_mb` (default 8192), `ide_ingress_cidr` — see [ide config](/config/ide.md).
 - [IdeGuestSecret](/database/ide-guest-secret.md): the install's secret, encrypted, rotated on every (re)provision.
 - In guest: `/etc/proxmate-ide.env` (`PROXMATE_IDE_TOKEN`, `HASHED_PASSWORD` = SHA-256 of the guest secret, umask 077), `/etc/systemd/system/proxmate-ide.service`, `/root/.config/opencode/opencode.json`, log `/var/log/pmide-provision.log`.
-- Env `IDE_GUEST_PORT` (8080), `IDE_TARGET_OVERRIDE`.
+- Env `IDE_GUEST_PORT` (default 8080: code-server's bind port, the pinhole port and the probe port), `IDE_TARGET_OVERRIDE`.
 
 # Gotchas
 
@@ -43,7 +43,7 @@ On first "Open IDE", ProxMate runs a self-contained bootstrap through the guest 
 - RAM floor: 4 GB OOMs and wedges the VM during install; 8 GB is the proven-safe default.[^prov]
 - AVX: OpenCode's Bun runtime needs it. The service sets the VM CPU to `host` first; if the guest still lacks AVX it returns `reboot_required`, unless the node is known to lack AVX (`node_no_avx`) in which case only a relocate helps.[^prov]
 - Without `ide_ingress_cidr` no pinhole is added and an isolated guest stays unreachable; this only logs a warning.[^prov]
-- code-server runs as root with `--auth password` bound to `0.0.0.0:8080`. Only the backend holds the secret behind `HASHED_PASSWORD`, so only proxied requests authenticate; the isolation firewall pinhole additionally limits who can reach the port. code-server removes `HASHED_PASSWORD` from its environment at startup, so IDE terminals don't inherit it.[^prov]
+- code-server runs as root with `--auth password` bound to `0.0.0.0:<IDE_GUEST_PORT>` (8080 by default). Only the backend holds the secret behind `HASHED_PASSWORD`, so only proxied requests authenticate; the isolation firewall pinhole additionally limits who can reach the port. code-server removes `HASHED_PASSWORD` from its environment at startup, so IDE terminals don't inherit it.[^prov]
 - The bootstrap restarts `proxmate-ide.service` (not just enables it), so a reinstall replaces a running code-server and an install made before guest authentication gains its secret.[^prov]
 - Relocation is deliberately OFFLINE: live-migrating a `cpu: host` guest between heterogeneous CPUs is unsafe. Targets must be CONFIRMED AVX-capable (fail-closed). Tenants never choose nodes.[^prov]
 - Relocation status lives in process memory (single-process backend); a restart loses it.[^prov]

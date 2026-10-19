@@ -44,7 +44,7 @@ Reads [VirtualMachine](/database/virtual-machine.md) `ipAddress` via `vm.service
 - `IDE_TARGET_OVERRIDE` is TEST-ONLY: it sends every VM's IDE to the same box. The guest proof still applies to it.[^proxy]
 - WS Origin check is lenient (absent, `FRONTEND_URL`, or the backend's own host) because the IDE page is served from the backend origin; cookie + ownership are the real gate.[^proxy]
 - `verifyToken` returns null for access-expired users, so suspended tenants lose the IDE immediately.[^proxy]
-- Reaching code-server through tenant isolation requires the managed `:8080` pinhole added by [ide-provision](/services/ide-provision.md).[^proxy]
+- Reaching code-server through tenant isolation requires the managed pinhole on `IDE_GUEST_PORT` (8080 by default) added by [ide-provision](/services/ide-provision.md).[^proxy]
 - Upstream errors produce 502 `ProxMate IDE: upstream unreachable` or a destroyed socket.[^proxy]
 
 # Relationships
