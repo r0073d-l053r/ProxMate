@@ -2022,7 +2022,11 @@ export async function destroyVm(vm: VirtualMachine, opts: { rowOnly?: boolean } 
   if (opts.rowOnly) {
     // Removing only the record of a machine whose guest IS confirmed as its own would
     // orphan a live, tagged guest — that's what a normal delete is for.
-    if ((await guestIdentity(await syncVmNode(vm))) === 'ours') {
+    // And that is only known when the cluster-wide lookup worked: on a stale node an
+    // own guest that has moved reads as "absent".
+    const { vm: current, synced } = await syncVmNodeChecked(vm);
+    if (!synced) throw new Error("Couldn't confirm where this machine's guest is on the cluster — try again.");
+    if ((await guestIdentity(current)) === 'ours') {
       throw new GuestIdentityError('ours');
     }
     await deleteVmRow(vm.id);

@@ -236,6 +236,22 @@ describe('destroy when the guest\'s whereabouts are unknown', () => {
     await destroyVm(row());
     expect(del).toHaveBeenCalledWith({ where: { id: 'rowa' } });
   });
+
+  it('a row-only delete is refused while the cluster lookup fails (C2)', async () => {
+    const c = pveWith(null);
+    const base = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) =>
+      url === '/cluster/resources' ? Promise.reject(new Error('cluster unreachable')) : base(url),
+    );
+    await expect(destroyVm(row(), { rowOnly: true })).rejects.toThrow(/try again/i);
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it('a row-only delete still removes the row once the cluster confirms the VMID is empty (C2)', async () => {
+    pveWith(null);
+    await destroyVm(row(), { rowOnly: true });
+    expect(del).toHaveBeenCalledWith({ where: { id: 'rowa' } });
+  });
 });
 
 describe('backfillGuestMarkers (one-time startup tagging of pre-marker guests)', () => {
