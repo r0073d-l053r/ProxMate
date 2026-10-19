@@ -34,8 +34,10 @@ flowchart LR
 ```
 
 - **Editor transport:** the browser talks to ProxMate over your one HTTPS origin; ProxMate
-  reverse-proxies to the guest's own `code-server` on `:8080`. Auth is the ProxMate session
-  cookie + VM ownership: only the VM's owner can open it (admins and sharees can't).
+  reverse-proxies to the guest's own `code-server` on `:8080` (`IDE_GUEST_PORT` changes it).
+  Auth is the ProxMate session cookie + VM ownership: only the VM's owner can open it (admins
+  and sharees can't). Before relaying, ProxMate checks that the `code-server` it reaches proves
+  this VM's own per-install secret, and ProxMate's cookies are never passed to the guest.
 - **AI transport:** the in-guest OpenCode agent calls ProxMate's OpenAI-compatible **LLM
   gateway** with a **per-VM bearer token**. The gateway enforces the admin's model allow-list
   and forwards to the real upstream. The tenant never sees the upstream endpoint or key.
@@ -49,6 +51,10 @@ releases this ProxMate build was verified against (a new upstream release can't 
 provisioning). Operators can override per-deploy with the `IDE_CODE_SERVER_VERSION` and
 `IDE_OPENCODE_VERSION` backend env vars; existing guests keep whatever they already run until
 the IDE is reinstalled.
+
+An IDE installed by ProxMate 1.0.x has no per-install secret, so it is **reinstalled once**
+before it opens. This happens automatically the first time its owner opens it after the
+upgrade, and takes about a minute.
 
 ---
 
@@ -91,14 +97,15 @@ Admin **Settings ▸ ProxMate IDE**:
 
 ### Networking requirement (the one thing to get right)
 
-The IDE is the only feature that reaches a guest **over the network** (`guest-ip:8080`) rather
+The IDE is the only feature that reaches a guest **over the network** (`guest-ip:8080`, or
+`IDE_GUEST_PORT`) rather
 than out-of-band via the Proxmox API. So:
 
-- **The ProxMate host must be able to reach tenant VM IPs on TCP :8080.**
+- **The ProxMate host must be able to reach tenant VM IPs on TCP :8080** (or `IDE_GUEST_PORT`).
 - On a **flat network** (ProxMate on the same LAN as the guests) this just works.
 - On a **non-flat network** (ProxMate can't reach the guest VLAN directly), you provide the
   routing — a **Tailscale subnet route**, a VPN, a static route. ProxMate can't create that for you.
-- With tenant isolation on, ProxMate opens a **managed, infra-scoped** `:8080` firewall pinhole on
+- With tenant isolation on, ProxMate opens a **managed, infra-scoped** firewall pinhole for that port on
   each IDE VM (via the Proxmox firewall API, exactly like the isolation rules). It's scoped to
   **`ide_ingress_cidr`** — the address ProxMate's traffic *arrives from* (the backend host on a flat
   LAN; the **subnet-router node's LAN IP** when routed, because subnet routes SNAT to the router).
@@ -114,7 +121,14 @@ than out-of-band via the Proxmox API. So:
 - **Ownership-gated transport.** The reverse proxy resolves each request (HTTP *and* WebSocket)
   through the per-VM capability gate, serves the VM's **owner only**, and refuses
   loopback/link-local targets, so a spoofed guest-reported IP can't point the proxy at the host.
-- **Gateway-enforced model access.** A per-VM token maps to `(user, VM)` and is re-checked live on
+  ProxMate's cookies and `Authorization` header are stripped from every proxied request, and
+  the guest can't set ProxMate cookies in its responses.
+- **Guest proof.** Every install gets its own random secret; the guest holds only its hash, and
+  `code-server` runs with password auth keyed to it. Only running VMs are proxied. Before
+  relaying, the proxy reads the guest's current address from the guest agent and requires the
+  `code-server` there to prove the secret, so another VM's editor or another service at that
+  address isn't relayed to. The browser never sees the secret.
+- **Gateway-enforced model access.** A per-VM token, issued only to the VM's owner, maps to `(user, VM)` and is re-checked live on
   every request (ownership + policy). `resolveModelRoute` is the single allow-list choke point: a
   tenant can reach only admin-shared models or — when enabled — their own BYO keys, and nothing else,
   even if they edit their in-guest config. Admin upstream endpoints and keys never leave ProxMate.
@@ -129,6 +143,8 @@ than out-of-band via the Proxmox API. So:
 
 | Symptom | Cause / fix |
 |---|---|
+| **"Only this VM's owner can open its ProxMate IDE"** | The IDE is owner-only. Admins and people the VM is shared with use the console instead. |
+| **"couldn't verify this VM's IDE"** | The `code-server` at the guest's address didn't prove this VM's secret. Wait a moment if the IDE was just reinstalled; otherwise reinstall it. |
 | IDE opens on the **wrong VM** / every VM shows the same box | A stale `IDE_TARGET_OVERRIDE` (a rig-only escape hatch) is set — unset it; routing is per-VM by the guest's own IP. |
 | Editor loads but the connection **drops / "extension host unresponsive"** | The path to the guest is unstable (e.g. a relayed/flaky link). Use a *stable* route to the guest LAN (direct LAN, or a subnet route through a well-connected node), not a best-effort peer link. |
 | **"Unauthorized — missing session"** when the AI agent runs | The gateway base URL is `http://` and the edge 301-redirects to https, downgrading the POST to a GET. Ensure `TRUST_PROXY=1` and `BACKEND_PUBLIC_URL`/the origin are **https**. |
