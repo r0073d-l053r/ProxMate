@@ -100,7 +100,7 @@ All are `SameSite=Lax`, `path=/`; `Secure` defaults to on when `NODE_ENV=product
 
 Other gates:
 
-- `requireSession`: 403 when the caller authenticated with a `pm_` API token. Mounted after `requireAuth` on account-security routes (session refresh, 2FA, passkeys, kiosk exit, API-token management) and on the admin sign-in settings (user password reset, SSO config, kiosk PIN).[^mw-auth]
+- `requireSession`: 403 when the caller authenticated with a `pm_` API token. Mounted after `requireAuth` on account-security routes (session refresh, 2FA, passkeys, kiosk exit, API-token management) and on the admin sign-in settings (user password reset, SSO config, kiosk PIN) and invite create/send/list.[^mw-auth]
 - `requireAdmin`: `user.role === 'admin'`, else 403.[^mw-admin]
 - `enforceMfaSetup`: 403 `{ code: 'mfa_setup_required' }` while an admin-required second factor is not enrolled.[^mw-mfa]
 - `requireAuthOrEnrollment`: a real session (with CSRF) or a scoped enrollment Bearer token that is honoured only while MFA setup is still required and the access window is not lapsed. Used only by first-factor enrollment endpoints.[^mw-enroll]
@@ -136,7 +136,7 @@ Inline in `app.ts`:[^app]
 |---|---|---|
 | `/api/setup` | [setup](/api/setup.md) | none (authLimiter on writes; locked after completion) |
 | `/api/auth` | [auth](/api/auth.md) | per route |
-| `/api/invites` | [invite](/api/invite.md) | requireAuth + requireAdmin |
+| `/api/invites` | [invite](/api/invite.md) | requireAuth + requireAdmin (+ requireSession on create/send/list) |
 | `/api/vms` | [vm](/api/vm.md) | requireAuth + enforceMfaSetup |
 | `/api/proxmox` | [proxmox](/api/proxmox.md) | requireAuth + enforceMfaSetup |
 | `/api/users` | [user](/api/user.md) | requireAuth + requireAdmin + enforceMfaSetup |

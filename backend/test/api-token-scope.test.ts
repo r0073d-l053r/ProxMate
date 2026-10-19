@@ -12,8 +12,29 @@ import type { AddressInfo } from 'node:net';
  * PIN). Those accept only a browser session.
  */
 
-vi.mock('../src/lib/prisma.js', () => ({
-  prisma: new Proxy({}, { get: () => new Proxy({}, { get: () => vi.fn(async () => null) }) }),
+vi.mock('../src/lib/prisma.js', () => {
+  // Stable per-model, per-method mocks so a test can assert nothing was written.
+  const models = new Map<string, Record<string, unknown>>();
+  const model = (name: string) => {
+    if (!models.has(name)) {
+      const fns = new Map<string, unknown>();
+      models.set(
+        name,
+        new Proxy({}, {
+          get: (_t, m: string) => {
+            if (!fns.has(m)) fns.set(m, vi.fn(async () => null));
+            return fns.get(m);
+          },
+        }),
+      );
+    }
+    return models.get(name);
+  };
+  return { prisma: new Proxy({}, { get: (_t, name: string) => model(name) }) };
+});
+vi.mock('../src/services/mail.service.js', () => ({
+  isMailConfigured: vi.fn(async () => true),
+  sendMail: vi.fn(async () => undefined),
 }));
 vi.mock('../src/services/auth.service.js', () => ({
   hashPassword: vi.fn(),
@@ -75,6 +96,9 @@ vi.mock('../src/middleware/rate-limit.js', () => {
 import authRoutes from '../src/routes/auth.routes.js';
 import apiTokenRoutes from '../src/routes/api-token.routes.js';
 import adminRoutes from '../src/routes/admin.routes.js';
+import inviteRoutes from '../src/routes/invite.routes.js';
+import { prisma } from '../src/lib/prisma.js';
+import * as mailService from '../src/services/mail.service.js';
 import * as authService from '../src/services/auth.service.js';
 import * as apiTokenService from '../src/services/api-token.service.js';
 import * as passwordReset from '../src/services/password-reset.service.js';
@@ -100,6 +124,7 @@ beforeEach(async () => {
   app.use('/api/auth', authRoutes);
   app.use('/api/api-tokens', apiTokenRoutes);
   app.use('/api/admin', adminRoutes);
+  app.use('/api/invites', inviteRoutes);
   server = http.createServer(app);
   await new Promise<void>((r) => server!.listen(0, r));
   base = `http://127.0.0.1:${(server!.address() as AddressInfo).port}/api`;
@@ -136,6 +161,10 @@ const SESSION_ONLY: Array<[string, string, unknown?]> = [
   ['POST', '/admin/users/u2/reset-password', { password: 'newpassword' }],
   ['PUT', '/admin/settings/sso', { issuer: 'https://idp.example', clientId: 'x' }],
   ['PUT', '/admin/settings/kiosk', { pin: '' }],
+  // Invite links create accounts, so they are not obtainable with an API token.
+  ['GET', '/invites'],
+  ['POST', '/invites', { maxCpu: 1, maxRam: 512, maxStorage: 10, email: 'x@y.z' }],
+  ['POST', '/invites/inv1/send', { email: 'x@y.z' }],
 ];
 
 /** Behind requireAuthOrEnrollment (a session or a scoped enrollment token). */
@@ -156,6 +185,11 @@ describe('API tokens cannot reach account-security endpoints', () => {
     expect(passwordReset.adminResetPassword).not.toHaveBeenCalled();
     expect(ssoService.saveSsoConfig).not.toHaveBeenCalled();
     expect(kioskService.setKioskPin).not.toHaveBeenCalled();
+    expect(prisma.inviteToken.findMany).not.toHaveBeenCalled();
+    expect(prisma.inviteToken.findUnique).not.toHaveBeenCalled();
+    expect(prisma.inviteToken.create).not.toHaveBeenCalled();
+    expect(prisma.inviteToken.updateMany).not.toHaveBeenCalled();
+    expect(mailService.sendMail).not.toHaveBeenCalled();
   });
 
   it.each(ENROLLMENT)('%s %s refuses a pm_ Bearer token', async (method, path, body) => {

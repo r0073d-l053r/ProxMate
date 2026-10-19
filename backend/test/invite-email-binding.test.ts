@@ -182,6 +182,19 @@ describe('sending an invite to an address', () => {
     expect(JSON.stringify(sent.mails[0])).toContain('old-token');
   });
 
+  it('reports a neutral error when the invite changed while the mail was going out', async () => {
+    const inv = seedInvite(null);
+    const { sendMail } = await import('../src/services/mail.service.js');
+    vi.mocked(sendMail).mockImplementationOnce(async () => {
+      inv.usedById = 'someone';
+    });
+    const body = await (await post(`/invites/${inv.id}/send`, { email: 'alice@corp.example' })).json();
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe('The invite changed while sending — the emailed link will not work; reload and try again.');
+    expect(inv.email).toBeNull();
+    expect(inv.token).toBe('old-token');
+  });
+
   it('changes nothing when the send fails', async () => {
     const inv = seedInvite(null);
     sent.fail = true;

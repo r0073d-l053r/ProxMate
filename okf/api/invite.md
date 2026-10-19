@@ -29,9 +29,9 @@ Admins mint invite links that carry a tenant's starting quota, 2FA requirement a
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/invites` | admin | Create an invite; optionally email it. The invite's `email` is stored only when the send succeeds. 201 with `token`, `inviteUrl`, quotas, `require2fa`, `accessDuration`, `expiresAt`, `emailed`, `emailError?`. |
-| POST | `/api/invites/:id/send` | admin | (Re)send a still-valid invite to `{ email }`; 400 on a bad email, 404 if unknown, 409 if used or expired; otherwise 200 `{ ok, email, error? }` even when the send fails. On success the invite's `email` is updated; when the address differs from the stored one (or none was stored) the invite gets a new token in the same write and the mail carries the new link, so the previous link stops working. A failed send changes nothing. |
-| GET | `/api/invites` | admin | All invites (newest first) with `used`, `usedBy`, `expired`. |
+| POST | `/api/invites` | admin + requireSession | Create an invite; optionally email it. The invite's `email` is stored only when the send succeeds. 201 with `token`, `inviteUrl`, quotas, `require2fa`, `accessDuration`, `expiresAt`, `emailed`, `emailError?`. |
+| POST | `/api/invites/:id/send` | admin + requireSession | (Re)send a still-valid invite to `{ email }`; 400 on a bad email, 404 if unknown, 409 if used or expired; otherwise 200 `{ ok, email, error? }` even when the send fails. On success the invite's `email` is updated; when the address differs from the stored one (or none was stored) the invite gets a new token in the same write and the mail carries the new link, so the previous link stops working. A failed send changes nothing. |
+| GET | `/api/invites` | admin + requireSession | All invites (newest first) with `used`, `usedBy`, `expired`. |
 | DELETE | `/api/invites/:id` | admin | Revoke an unused invite; 409 if already used. |
 
 # Gotchas
