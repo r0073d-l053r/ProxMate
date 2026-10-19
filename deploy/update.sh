@@ -105,10 +105,32 @@ trap 'exit 143' TERM
 trap 'exit 130' INT
 
 # The updater runs as root, while the checkout normally belongs to the human
-# who installed it (install.sh hands it back to them). git refuses to work in a
-# repository owned by someone else unless that directory is declared safe, so
-# trust exactly this one checkout, for this script's git calls only.
-git() { command git -c safe.directory="$PROXMATE_DIR" "$@"; }
+# who installed it (install.sh hands it back to them). Run git AS that owner
+# when we can: git run by root leaves root-owned objects, refs and working
+# files behind, after which the owner's own git commands fail. Without runuser
+# (or for an owner with no account name) fall back to running as root. Either
+# way the checkout is declared safe — git otherwise refuses to work in a
+# repository owned by someone else — for this script's git calls only.
+GIT_OWNER=""
+if [[ $(id -u) -eq 0 ]] && command -v runuser >/dev/null 2>&1; then
+  _owner_uid="$(stat -c %u "$PROXMATE_DIR" 2>/dev/null || echo 0)"
+  _owner="$(stat -c %U "$PROXMATE_DIR" 2>/dev/null || true)"
+  # ...and only when the owner can actually reach and write the repository
+  # (a checkout under a directory they cannot enter stays root's job).
+  if [[ "$_owner_uid" != 0 && -n "$_owner" && "$_owner" != "UNKNOWN" ]] &&
+     runuser -u "$_owner" -- test -w "$PROXMATE_DIR/.git" 2>/dev/null; then
+    GIT_OWNER="$_owner"
+    GIT_OWNER_HOME="$(getent passwd "$_owner" 2>/dev/null | cut -d: -f6)"
+  fi
+fi
+git() {
+  if [[ -n "$GIT_OWNER" ]]; then
+    HOME="${GIT_OWNER_HOME:-/}" runuser -u "$GIT_OWNER" -- \
+      git -c safe.directory="$PROXMATE_DIR" "$@"
+  else
+    command git -c safe.directory="$PROXMATE_DIR" "$@"
+  fi
+}
 
 # --mark-failed: run by systemd after the service stops. When the run was killed
 # (OOM, timeout, reboot) no trap got to report it, so a status that still says

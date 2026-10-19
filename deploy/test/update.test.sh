@@ -42,7 +42,7 @@ new_case() {
 
 # run_update [args...]: runs the real update.sh; output in $T/out, exit code in RC.
 run_update() {
-  PATH="$T/bin:$PATH" STUB_LOG="$T/docker.log" \
+  PATH="$T/bin:${BASE_PATH:-$PATH}" STUB_LOG="$T/docker.log" \
     PROXMATE_DIR="$CHECKOUT" UPDATE_CONTROL_DIR="$CONTROL" \
     bash "$UPDATE_SH" "$@" >"$T/out" 2>&1
   RC=$?
@@ -104,6 +104,38 @@ t_checkout_owned_by_another_user() {
   request v1.1.0
   run_update --from-request
   assert_eq "$RC" 0 "exit code (output: $(tr '\n' ' ' < "$T/out"))" &&
+    assert_eq "$(status_field state)" success "state" &&
+    assert_eq "$(version)" 1.1.0 "checked-out version"
+}
+
+t_git_runs_as_checkout_owner() {
+  # Run as root, git would leave root-owned objects and refs in a checkout that
+  # belongs to the human who installed it, breaking their own git use later.
+  [ "$(id -u)" -eq 0 ] || skip "needs root"
+  getent passwd 1000 >/dev/null 2>&1 || skip "needs a named user with uid 1000"
+  command -v runuser >/dev/null 2>&1 || skip "needs runuser"
+  new_case
+  chmod 0755 "$WORK" "$T"
+  chown -R 1000:1000 "$T/origin.git"   # a real origin is remote; here the owner must read it
+  chown -R 1000:1000 "$CHECKOUT"
+  request v1.1.0
+  run_update --from-request
+  local root_owned
+  root_owned="$(find "$CHECKOUT" -path "$CONTROL" -prune -o -user 0 -print | head -5)"
+  assert_eq "$RC" 0 "exit code" &&
+    assert_eq "$(version)" 1.1.0 "checked-out version" &&
+    assert_eq "$root_owned" "" "root-owned paths left in the checkout"
+}
+
+t_git_falls_back_without_runuser() {
+  # runuser lives in sbin; without it the update still works (as root, with
+  # the checkout declared safe).
+  [ "$(id -u)" -eq 0 ] || skip "needs root"
+  new_case
+  chown -R 1000:1000 "$CHECKOUT"
+  request v1.1.0
+  BASE_PATH="/usr/bin:/bin" run_update --from-request
+  assert_eq "$RC" 0 "exit code" &&
     assert_eq "$(status_field state)" success "state" &&
     assert_eq "$(version)" 1.1.0 "checked-out version"
 }
