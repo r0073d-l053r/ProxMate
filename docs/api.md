@@ -13,7 +13,7 @@ curl -H "Authorization: Bearer pm_xxxxxxxx" https://proxmate.example.com/api/vms
 ```
 
 A token acts as the user who created it (same quotas and ownership). Tokens are stored
-as a SHA-256 hash — ProxMate can't recover the secret, only revoke it. A password
+as an HMAC-SHA256 hash — ProxMate can't recover the secret, only revoke it. A password
 reset revokes all of the account's tokens.
 
 ### Session-only routes
@@ -76,7 +76,46 @@ curl -H "$AUTH" -H 'content-type: application/json' -X POST \
 
 # Nodes this VM may migrate to (admin only) — Proxmox allowed_nodes ∩ online
 curl -H "$AUTH" "$BASE/vms/<id>/migrate-targets"
+
+# Share a VM by email (owner/admin) — role: viewer | operator | manager
+curl -H "$AUTH" -H 'content-type: application/json' -X POST \
+  -d '{"email":"friend@example.com","role":"operator"}' "$BASE/vms/<id>/shares"
 ```
+
+## Responses worth knowing
+
+- **Stop** (`POST /vms/:id/stop`) waits up to 45 seconds for Proxmox to confirm the guest
+  is down, then answers `{ success, status: "stopped", forced }`. A graceful stop the guest
+  ignores answers **502** with an error asking you to wait or stop it forcibly
+  (`?force=true`).
+- **Migration targets** (`GET /vms/:id/migrate-targets`) answers
+  `{ current, targets, blockers, localDisks }`: `targets` are the online nodes Proxmox
+  allows, `blockers` is a list of `{ node, reason }` for the nodes it can't move to (`node`
+  is `"*"` when the reason covers every node, e.g. a container or an attached PCI device).
+- **Shares.** `POST /vms/:id/shares` answers **202** with the same message whether or not
+  the address has an account, and is limited per signed-in user (30 per hour by default;
+  `SHARE_RATE_LIMIT_MAX`, `SHARE_RATE_LIMIT_WINDOW_MS`). `GET /vms/:id/shares` lists
+  `{ id, email, role, createdAt }` per share; `DELETE /vms/:id/shares/:shareId` revokes one.
+- **Sizes.** Creates, template deploys and resizes asking for less than 64 MB of RAM
+  answer **400**. A resize grows the root disk by the difference between the requested
+  total and the current total.
+- **Alerts.** A machine can have at most 20 alert rules; a 21st, or a duplicate of an
+  existing rule (same metric and threshold), answers **409**.
+- **Machines that can't run.** A machine held after a create, rebuild or restore that
+  didn't finish, or one whose guest doesn't carry its ProxMate ownership tag, refuses
+  start, console, IDE and backups with an error that says why; an admin settles it (below).
+- **Kiosk exit** (`POST /auth/kiosk-exit`, `/auth/kiosk-exit/passkey-verify`) answers
+  **403** with `code: "reauth_failed"` for a wrong PIN, password or passkey. A 401 there
+  always means the session is gone.
+
+### Admin: unconfirmed machines and users
+
+| Call | What it does |
+|---|---|
+| `GET /admin/vms/unmatched` | Machines whose VMID holds no guest carrying their ProxMate tag, with what Proxmox has at that VMID (`guest`), whether another machine shares the VMID (`sharedVmid`) and whether it's a Template Store VMID (`templateRow`). |
+| `POST /admin/vms/:id/adopt` | Tags the guest at the VMID as this machine's (and, for a held machine, re-applies isolation and re-reads its sizes before clearing the hold). **409** with the reason when the guest can't be adopted. |
+| `DELETE /vms/:id?rowOnly=true` | Removes only ProxMate's record and leaves the guest alone. Admin only (**403** otherwise); refused for a machine whose guest is confirmed as its own — delete it normally. |
+| `DELETE /users/:id` | Deletes the account and its machines with their guests. When any machine can't be deleted with its guest, answers **409**, keeps the account and lists those machines in `vms` (`id`, `name`, `proxmoxVmId`, `reason`). |
 
 ## Observability
 
