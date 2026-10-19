@@ -20,6 +20,7 @@ import {
   PROVISION_FAILED_MESSAGE,
 } from './vm.service.js';
 import { parseGuestConfigText, pciLines, foreignVolumeKeys } from '../lib/guest-config.js';
+import { IDE_GUEST_PORT } from './ide-provision.service.js';
 
 /** Rolling retention: only this many MateStates are kept per VM. */
 export const MATESTATE_RETENTION = 2;
@@ -235,9 +236,8 @@ async function reapplyIsolation(
   await pve.ensureNicFirewall(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
   const ingress = (await getConfig('ide_ingress_cidr'))?.trim();
   if (vm.ideState === 'ready' && ingress) {
-    // Same port the IDE installer opens (ide-provision.service).
-    const port = Number(process.env['IDE_GUEST_PORT'] || 8080);
-    await pve.ensureIdePinhole(vm.proxmoxNode, vm.proxmoxVmId, { port, source: ingress }, client, kind);
+    // Same port the IDE installer opens and code-server binds to.
+    await pve.ensureIdePinhole(vm.proxmoxNode, vm.proxmoxVmId, { port: IDE_GUEST_PORT, source: ingress }, client, kind);
   }
 }
 

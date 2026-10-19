@@ -51,9 +51,10 @@ const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
  * Port code-server listens on inside the guest: its --bind-addr, the isolation
- * pinhole, the readiness probe and (via the same env var) the reverse proxy.
+ * pinhole (also re-opened after a MateState restore), the readiness probe and
+ * (via the same env var) the reverse proxy.
  */
-const IDE_GUEST_PORT = envNumber('IDE_GUEST_PORT', 8080, 1);
+export const IDE_GUEST_PORT = envNumber('IDE_GUEST_PORT', 8080, 1);
 
 /**
  * Pinned in-guest tool versions — the bootstrap installs EXACTLY these, so a new
