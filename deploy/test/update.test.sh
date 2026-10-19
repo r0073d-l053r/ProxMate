@@ -98,7 +98,7 @@ t_up_failure_reports_error() {
 t_checkout_owned_by_another_user() {
   # The systemd unit runs as root; install.sh hands the checkout to the human
   # who ran it. git refuses such a repo unless told it is safe.
-  [ "$(id -u)" -eq 0 ] || { skip "needs root"; return 0; }
+  [ "$(id -u)" -eq 0 ] || skip "needs root"
   new_case
   chown -R 1000:1000 "$CHECKOUT"
   request v1.1.0

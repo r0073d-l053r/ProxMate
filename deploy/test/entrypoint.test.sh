@@ -16,6 +16,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib.sh"
 
 ENTRYPOINT="$REPO_ROOT/backend/docker-entrypoint.sh"
+REAL_ID="$(command -v id)"
 
 new_case() {
   T="$(mktemp -d "$WORK/case.XXXXXX")"
@@ -24,7 +25,9 @@ new_case() {
     printf '#!/bin/sh\necho "%s $*" >> "%s/calls.log"\nexit 0\n' "$cmd" "$T" > "$T/bin/$cmd"
     chmod +x "$T/bin/$cmd"
   done
-  printf '#!/bin/sh\n[ "$1" = "-u" ] && { echo 0; exit 0; }\nexec /usr/bin/id "$@"\n' > "$T/bin/id"
+  # A fake `id -u` that reports root; anything else goes to the real id.
+  # shellcheck disable=SC2016  # $1 / $@ belong to the generated stub
+  printf '#!/bin/sh\n[ "$1" = "-u" ] && { echo 0; exit 0; }\nexec %s "$@"\n' "$REAL_ID" > "$T/bin/id"
   chmod +x "$T/bin/id"
   touch "$T/calls.log"
 }

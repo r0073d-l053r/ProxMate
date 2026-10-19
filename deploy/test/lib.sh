@@ -20,7 +20,6 @@ git config --global advice.detachedHead false
 PASSED=0
 FAILED=0
 SKIPPED=0
-CURRENT=""
 
 fail_msg() { printf '    %s\n' "$*"; return 1; }
 # skip <reason>: ends the current case (cases run in a subshell) as skipped.
@@ -65,7 +64,6 @@ run_cases() {
     mapfile -t cases < <(declare -F | awk '{print $3}' | grep '^t_')
   fi
   for c in "${cases[@]}"; do
-    CURRENT="$c"
     (
       T=""
       if "$c"; then exit 0; fi
