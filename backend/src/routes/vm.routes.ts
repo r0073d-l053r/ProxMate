@@ -84,7 +84,7 @@ import { isIdeInstalling } from '../services/ide-provision.service.js';
 import { isDeploying, refreshDeployState } from '../services/deploy-lock.service.js';
 import { getLiveStats } from '../services/live-stats.service.js';
 import { getConfig } from '../services/config.service.js';
-import { ALERT_METRICS } from '../services/alert.service.js';
+import { ALERT_METRICS, MAX_ALERT_RULES_PER_VM } from '../services/alert.service.js';
 import { downloadsEnabled, requestBackupDownload, DownloadError } from '../services/download.service.js';
 import {
   restoreUploadsEnabled,
@@ -1296,6 +1296,19 @@ router.post('/:id/alerts', async (req: Request, res: Response) => {
   const threshold = metric === 'down' ? 0 : parsed.data.threshold;
   if (metric !== 'down' && threshold === undefined) {
     res.status(400).json({ error: 'A threshold percentage is required for this metric.' });
+    return;
+  }
+  // Bounded and de-duplicated: each rule is evaluated and can deliver every tick.
+  if ((await prisma.alertRule.count({ where: { vmId: vm.id } })) >= MAX_ALERT_RULES_PER_VM) {
+    res.status(409).json({ error: `A machine can have at most ${MAX_ALERT_RULES_PER_VM} alerts — remove one first.` });
+    return;
+  }
+  const duplicate = await prisma.alertRule.findFirst({
+    where: { vmId: vm.id, metric, threshold: threshold ?? 0 },
+    select: { id: true },
+  });
+  if (duplicate) {
+    res.status(409).json({ error: 'This machine already has that alert.' });
     return;
   }
   const rule = await prisma.alertRule.create({

@@ -73,7 +73,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | POST | `/api/vms/:id/rescue` | `configure` | Boot the admin-designated rescue ISO (QEMU only). Audited `vm.rescue_enter`. |
 | POST | `/api/vms/:id/rescue/exit` | `configure` | Leave rescue mode. Audited `vm.rescue_exit`. |
 | GET | `/api/vms/:id/alerts` | viewable | Alert rules. |
-| POST | `/api/vms/:id/alerts` | `configure` | `{ metric, threshold?, sustainedMin (default 5) }`; 201. Audited `vm.alert_add`. |
+| POST | `/api/vms/:id/alerts` | `configure` | `{ metric, threshold?, sustainedMin (default 5) }`; 201. 409 beyond 20 rules per VM (`MAX_ALERT_RULES_PER_VM`) or for a duplicate metric/threshold. Audited `vm.alert_add`. |
 | DELETE | `/api/vms/:id/alerts/:alertId` | `configure` | Delete rule. Audited `vm.alert_remove`. |
 | GET | `/api/vms/:id/live-stats` | viewable | Current cpu/mem/uptime from the live-stats cache. |
 | POST | `/api/vms/:id/rebuild` | owned + size lock (`rebuild`) | Re-image from exactly one of `os` (ISO) or `templateId` (QEMU only). Audited `vm.rebuild`. |
