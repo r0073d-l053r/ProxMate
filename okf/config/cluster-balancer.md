@@ -26,8 +26,8 @@ The balancer reads node memory load and recommends or applies live migrations to
 | Key | Value format | Default / when unset | Written by | Read by | Description |
 |---|---|---|---|---|---|
 | `balancer_mode` | `off` \| `recommend` \| `auto` | `off` (any other value reads as `off`) | `saveBalancerSettings` ← `PUT /api/admin/balancer` | `getBalancerSettings`; `runAutoBalance` (scheduler) | `auto` lets the scheduled tick apply migrations. `recommend` only computes plans. |
-| `balancer_threshold` | integer percent string | `DEFAULTS` says `15`, but a missing or empty row reads as `5`: `clampInt` turns `Number(null)` (0) into the 5 floor. Stored values are clamped to 5–50 | same | `getBalancerSettings` | Imbalance threshold (`thresholdPct`). |
-| `balancer_max_moves` | integer string | `DEFAULTS` says `5`, but a missing or empty row reads as `1` (same `clampInt` path). Stored values are clamped to 1–20 | same | `getBalancerSettings` | Maximum migrations per pass (`maxMoves`). |
+| `balancer_threshold` | integer percent string | `15` when the row is missing or blank. Stored values are clamped to 5–50 | same | `getBalancerSettings` | Imbalance threshold (`thresholdPct`). |
+| `balancer_max_moves` | integer string | `5` when the row is missing or blank. Stored values are clamped to 1–20 | same | `getBalancerSettings` | Maximum migrations per pass (`maxMoves`). |
 | `balancer_exclude` | CSV of positive integer VMIDs | `''`, meaning no exclusions; parsing de-duplicates and drops invalid entries | same (`exclude.join(',')`) | `getBalancerSettings` (`parseVmidCsv`) | Proxmox VMIDs the balancer never moves. |
 
 # Validation

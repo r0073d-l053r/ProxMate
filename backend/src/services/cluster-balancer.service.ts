@@ -260,6 +260,9 @@ export function planBalance(input: BalancerInput): BalancePlan {
 const DEFAULTS: BalancerSettings = { mode: 'off', thresholdPct: 15, maxMoves: 5, exclude: [] };
 
 function clampInt(raw: string | null, min: number, max: number, fallback: number): number {
+  // Unset/blank means "use the default": Number(null) and Number('') are 0, which
+  // would otherwise clamp to the minimum and make a fresh install far more eager.
+  if (raw === null || raw.trim() === '') return fallback;
   const n = Math.floor(Number(raw));
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, n));
