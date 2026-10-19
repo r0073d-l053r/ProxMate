@@ -24,7 +24,7 @@ The IDE proxy dials the address the guest's own agent reports, so reaching a cod
 | `saveIdeGuestSecret` / `loadIdeGuestSecret` | `(vmId, secret)` / `(vmId) => string \| null` | Encrypted upsert / decrypt of [IdeGuestSecret](/database/ide-guest-secret.md); null when missing or undecryptable. |
 | `proveIdeGuest` | `(target, secret, timeoutMs?) => boolean` | POSTs the secret to the guest's `/login` and requires the returned `code-server-session` cookie to equal the expected hash. |
 | `resolveIdeTargetUrl` | `(vm: { ipAddress }, env?) => string \| null` | `IDE_TARGET_OVERRIDE` if set; else `http://<ipAddress>:<IDE_GUEST_PORT or 8080>`; null if no IP or the IP is loopback/link-local. |
-| `proveIdeGuestTarget` | `(vm, secret, env?) => string \| null` | Running VMs only. Reuses a proof under 5 minutes old while the VM's recorded address still matches it; otherwise reads the address live from the guest agent (recording it if it moved), proves the guest there and returns the target. A stopped VM or a changed address drops the cached proof. |
+| `proveIdeGuestTarget` | `(vm, secret, env?) => string \| null` | Running VMs only. Reuses a proof under 5 minutes old while the VM's recorded address still matches it; otherwise reads the address live from the guest agent (recording it if it moved), proves the guest there and returns the target. A stopped VM or a changed address drops the cached proof. Concurrent misses for a VM share one agent read and one proof. |
 
 # Gotchas
 

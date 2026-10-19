@@ -182,6 +182,19 @@ async function freshIdeTarget(vm: IdeGuestVm, env: NodeJS.ProcessEnv): Promise<s
 const PROOF_TTL_MS = 5 * 60 * 1000;
 const proofs = new Map<string, { target: string; cred: string; until: number }>();
 
+// Single-flight: one agent read + one /login proof per VM and credential at a
+// time. Opening the IDE fires many parallel requests; without this, each cache
+// miss would dial the guest agent and the guest on its own.
+const inflight = new Map<string, Promise<string | null>>();
+
+function singleFlight(key: string, run: () => Promise<string | null>): Promise<string | null> {
+  const pending = inflight.get(key);
+  if (pending) return pending;
+  const p = run().finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+
 /**
  * The proven code-server target for a running VM, or null. Uses a recent proof
  * while the VM's recorded address still matches it; otherwise reads the address
@@ -202,14 +215,17 @@ export async function proveIdeGuestTarget(
     return hit.target;
   }
   proofs.delete(vm.id);
-  const target = await freshIdeTarget(vm, env);
-  if (!target || !(await proveIdeGuest(target, secret))) return null;
-  if (proofs.size > 1000) proofs.clear();
-  proofs.set(vm.id, { target, cred, until: Date.now() + PROOF_TTL_MS });
-  return target;
+  return singleFlight(`${vm.id}|${cred}`, async () => {
+    const target = await freshIdeTarget(vm, env);
+    if (!target || !(await proveIdeGuest(target, secret))) return null;
+    if (proofs.size > 1000) proofs.clear();
+    proofs.set(vm.id, { target, cred, until: Date.now() + PROOF_TTL_MS });
+    return target;
+  });
 }
 
 /** Test hook: forget cached proofs. */
 export function clearIdeGuestProofs(): void {
   proofs.clear();
+  inflight.clear();
 }

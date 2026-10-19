@@ -118,6 +118,14 @@ describe('proveIdeGuestTarget — fresh address, running VM', () => {
     expect(logins).toBe(2);
   });
 
+  it('shares one agent read and one proof between concurrent cache misses', async () => {
+    vi.mocked(getVmIps).mockResolvedValue({ ip: '127.0.0.1', tailscaleIp: null } as never);
+    const results = await Promise.all(Array.from({ length: 8 }, () => proveIdeGuestTarget(vm(), SECRET)));
+    expect(new Set(results)).toEqual(new Set([`http://127.0.0.1:${port}`]));
+    expect(vi.mocked(getVmIps)).toHaveBeenCalledTimes(1);
+    expect(logins).toBe(1);
+  });
+
   it('refuses when the guest at the current address cannot prove the secret', async () => {
     vi.mocked(getVmIps).mockResolvedValue({ ip: '127.0.0.1', tailscaleIp: null } as never);
     expect(await proveIdeGuestTarget(vm(), 'a-different-vms-secret')).toBeNull();
