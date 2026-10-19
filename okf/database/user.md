@@ -58,6 +58,7 @@ The central identity row. Every tenant and admin is a `User`; `role` decides adm
 | displayName | String | | Display name. |
 | role | String | `@default("user")` | `"admin"` or `"user"`. |
 | ssoSubject | String? | `@unique` | OIDC `sub` claim, set on first SSO login. |
+| emailBound | Boolean | default false | The address is known to belong to this person: registered through an invite addressed to it, entered at setup, or asserted verified by the IdP at SSO sign-up. Required before SSO links by email. |
 | twoFactorEnabled | Boolean | `@default(false)` | TOTP active. |
 | twoFactorSecret | String? | | AES-256-GCM encrypted base32 TOTP secret (`iv:tag:ciphertext` hex).[^twofactor] |
 | require2fa | Boolean | `@default(false)` | Copied from the invite; user must enroll a factor before use. |
@@ -89,7 +90,7 @@ The central identity row. Every tenant and admin is a `User`; `role` decides adm
 - Warning dedupe compares `accessWarned7For` / `accessWarned1For` against the *current* `accessExpiresAt`, so extending the window re-arms warnings automatically.[^sweep]
 - Quota enforcement sums `cpu`/`ram`/`storage` over the user's VMs with `quotaExempt: false`; admins are never quota-checked.[^vm-svc]
 - `isMfaSetupRequired` is true only when `require2fa` is set, there is no `ssoSubject`, TOTP is off and the user has zero passkeys.[^mfa]
-- SSO login looks up by `ssoSubject`, otherwise links an existing account with the same email by writing `ssoSubject` onto it, and otherwise JIT-provisions a new user when that is allowed.[^sso]
+- SSO login looks up by `ssoSubject`, otherwise links an existing account with the same email (only when `emailBound` and the IdP asserts `email_verified: true`) by writing `ssoSubject` onto it, and otherwise JIT-provisions a new user when that is allowed.[^sso]
 
 # Gotchas
 

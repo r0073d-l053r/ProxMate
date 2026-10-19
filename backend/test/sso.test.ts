@@ -49,15 +49,41 @@ describe('upsertSsoUser', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  it('refuses to link a local account whose email was never bound', async () => {
+    // Self-typed at registration (unaddressed invite): nothing ties the address
+    // to the person holding the account, so the IdP identity must not attach to it.
+    const local = { id: 'u7', email: 'jo@b.c', role: 'user', ssoSubject: null, emailBound: false };
+    whenLookedUp({ byEmail: local });
+
+    await expect(
+      upsertSsoUser({ sub: 'sub-7', email: 'jo@b.c', emailVerified: true, groups: ['admins'] }, { ...baseCfg, adminGroup: 'admins', allowSignup: true }),
+    ).rejects.toThrow(/sign in with your password/i);
+    expect(update).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('links an existing local account by email on first SSO login', async () => {
-    const local = { id: 'u2', email: 'jo@b.c', role: 'user', ssoSubject: null };
+    const local = { id: 'u2', email: 'jo@b.c', role: 'user', ssoSubject: null, emailBound: true };
     whenLookedUp({ byEmail: local });
     update.mockResolvedValue({ ...local, ssoSubject: 'sub-2' } as never);
 
-    const user = await upsertSsoUser({ sub: 'sub-2', email: 'Jo@B.c' }, baseCfg);
+    const user = await upsertSsoUser({ sub: 'sub-2', email: 'Jo@B.c', emailVerified: true }, baseCfg);
 
     expect(update).toHaveBeenCalledWith({ where: { id: 'u2' }, data: { ssoSubject: 'sub-2' } });
     expect(user.ssoSubject).toBe('sub-2');
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('refuses to link by email unless the IdP asserts the email is verified', async () => {
+    const local = { id: 'u8', email: 'jo@b.c', role: 'admin', ssoSubject: null, emailBound: true };
+    whenLookedUp({ byEmail: local });
+
+    for (const emailVerified of [undefined, false]) {
+      await expect(
+        upsertSsoUser({ sub: 'sub-8', email: 'jo@b.c', emailVerified }, { ...baseCfg, allowSignup: true }),
+      ).rejects.toThrow(/sign in with your password/i);
+    }
+    expect(update).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -78,6 +104,17 @@ describe('upsertSsoUser', () => {
     expect(data.email).toBe('new@b.c'); // lowercased
     expect(data.role).toBe('user');
     expect(data.ssoSubject).toBe('new');
+    // No email_verified claim: the new account's address is not treated as bound.
+    expect((data as { emailBound?: boolean }).emailBound).toBe(false);
+  });
+
+  it('marks a JIT-created account bound when the IdP verified the email', async () => {
+    whenLookedUp({});
+    create.mockResolvedValue({ id: 'u9', email: 'v@b.c', role: 'user' } as never);
+
+    await upsertSsoUser({ sub: 'v', email: 'v@b.c', emailVerified: true }, { ...baseCfg, allowSignup: true });
+
+    expect((create.mock.calls[0][0].data as { emailBound: boolean }).emailBound).toBe(true);
   });
 
   it('JIT-creates an admin when the user is in the configured admin group', async () => {

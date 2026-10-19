@@ -261,6 +261,8 @@ export interface InviteValidation {
   expiresAt: string;
   label: string | null;
   require2fa: boolean;
+  /** Set when the invite was sent to an address: registration must use it. */
+  email: string | null;
 }
 
 export interface ManagedUser {

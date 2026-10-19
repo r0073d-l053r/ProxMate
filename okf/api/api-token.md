@@ -24,7 +24,7 @@ Self-service management of personal API tokens used by scripts, CLIs and Terrafo
 # Authentication
 
 - `router.use(requireAuth)` on every route.[^routes]
-- A second router-level guard returns **403** `API tokens cannot manage API tokens — use the web app.` when the caller authenticated with an API token (`isApiToken(req.sessionToken)`), so a leaked token cannot mint or revoke tokens. A real browser (or session-JWT Bearer) session is required.[^routes]
+- A second router-level guard, `requireSession`, returns **403** `API tokens cannot manage account security — use the web app.` when the caller authenticated with an API token (`isApiToken(req.sessionToken)`), so a leaked token cannot mint or revoke tokens. A real browser (or session-JWT Bearer) session is required.[^routes]
 - No `enforceMfaSetup` on this router.
 - Mutating requests are subject to the global `apiWriteLimiter` and (for cookie auth) CSRF via `requireAuth`. See [HTTP API](/api/http-api.md).
 

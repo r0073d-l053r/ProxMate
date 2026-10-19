@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireSession } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/admin.js';
 import { enforceMfaSetup } from '../middleware/mfa.js';
 import { assertPublicHttpUrlShape } from '../lib/url-safety.js';
@@ -80,6 +80,9 @@ import { prisma } from '../lib/prisma.js';
 const router = Router();
 
 router.use(requireAuth, requireAdmin, enforceMfaSetup);
+// Routes that decide how accounts sign in (password reset, SSO, kiosk PIN) also
+// carry `requireSession`: an admin's API token automates the cluster, it must
+// not be able to take over other accounts or rewire authentication.
 
 // ─── GET /api/admin/audit ─────────────────────────────────────
 // Append-only activity trail (who did what, when). Newest first, paginated.
@@ -151,7 +154,7 @@ const KioskSchema = z.object({
   pin: z.string().max(64).refine((v) => v === '' || isValidKioskPin(v), '4–12 digits (or empty to clear)'),
 });
 
-router.put('/settings/kiosk', async (req: Request, res: Response) => {
+router.put('/settings/kiosk', requireSession, async (req: Request, res: Response) => {
   const parsed = KioskSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
@@ -411,7 +414,7 @@ const SsoSchema = z.object({
   buttonLabel: z.string().optional(),
 });
 
-router.put('/settings/sso', async (req: Request, res: Response) => {
+router.put('/settings/sso', requireSession, async (req: Request, res: Response) => {
   const parsed = SsoSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
@@ -438,7 +441,7 @@ router.get('/password-requests', async (_req: Request, res: Response) => {
 
 const AdminResetSchema = z.object({ password: z.string().min(8, 'Password must be at least 8 characters') });
 
-router.post('/users/:id/reset-password', async (req: Request, res: Response) => {
+router.post('/users/:id/reset-password', requireSession, async (req: Request, res: Response) => {
   const parsed = AdminResetSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });

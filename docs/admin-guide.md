@@ -262,7 +262,7 @@ You can delegate authentication to an external OpenID Connect (OIDC) provider (e
 - **Issuer URL**: The discovery endpoint of your provider (e.g., `https://keycloak.example.com/realms/myrealm`).
 - **Callback URL**: Register `${BACKEND_PUBLIC_URL}/api/auth/sso/callback` as the permitted redirect URI in your identity provider.
 - **Group mapping**: Specify a "Groups Claim" (e.g., `groups` or `roles`) and the "Admin Group" name. Users with this group membership will be automatically promoted to Admin in ProxMate on login.
-- **JIT Provisioning**: When "Allow self-sign up via SSO (JIT)" is checked, new users can sign up automatically via SSO. If unchecked, only pre-invited or existing users whose emails match the SSO provider's claims can sign in.
+- **JIT Provisioning**: When "Allow self-sign up via SSO (JIT)" is checked, new users can sign up automatically via SSO. If unchecked, only users already linked to SSO, or existing users whose email can be safely matched, can sign in. An existing local account is linked on its first SSO login only when the identity provider marks the email as verified (`email_verified: true`) and the account was registered through an invite emailed to that address (or is the setup admin); otherwise the user is told to sign in with their password.
 
 ---
 
