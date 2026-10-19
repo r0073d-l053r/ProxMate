@@ -21,7 +21,7 @@ A VM cloned from a cloud-init template is "running" the instant it boots, but cl
 |---|---|---|
 | `deployStateOf` | `(vm) => 'none' \| 'deploying' \| 'ready'` | Normalises the column. |
 | `isDeploying` | `(vm) => boolean` | Gate for destructive VM actions. |
-| `refreshDeployState` | `(vm: VirtualMachine) => Promise<DeployState>` | Called from the VM-detail fetch. If past `DEPLOY_TIMEOUT_MS` (8 min) → final password attempt, abandon, mark ready. Else probes cloud-init; when settled → apply password, mark ready. |
+| `refreshDeployState` | `(vm: VirtualMachine) => Promise<DeployState>` | Called from the VM-detail fetch and the scheduler tick. If past `DEPLOY_TIMEOUT_MS` (8 min) → final password attempt, abandon, mark ready. Else probes cloud-init; when settled → apply password, mark ready. |
 | `applyPendingCiPassword` (internal) | `(vm)` | Decrypts `pendingCiPassword` and sets it via the guest agent `set-user-password` for the `ciuser`; clears it on success. |
 | `abandonPendingCiPassword` (internal) | `(id)` | Drops the secret, logs at ERROR, and sends `notify({ event: 'deploy.agent_missing' })` naming the source template. |
 | `cloudInitSettled` (internal) | `(vm) => boolean \| null` | Guest-agent ping, then `cloud-init status` via guest exec (8 s). Terminal state or no cloud-init → true; `running`/`not` → false; agent unreachable → null. |
@@ -37,7 +37,7 @@ A VM cloned from a cloud-init template is "running" the instant it boots, but cl
 - Best-effort: a password failure never holds the lock. The encrypted value is kept for a retry on the next poll and dropped at timeout; recovery is the reset-password flow (same agent call).[^lock]
 - LXC guests are skipped (`vm.type !== 'qemu'`). If no `ciuser` is found, the pending secret is discarded.[^lock]
 - The `deploy.agent_missing` notification is about the template, not the VM: a template without `qemu-guest-agent` breaks every password-only deploy from it.[^lock]
-- The lock advances only when something fetches the VM detail; there is no background job.[^lock]
+- The lock also advances without anyone viewing the VM: the scheduler's 1-minute tick calls `advanceDeployingVms`, which runs `refreshDeployState` for every row still `deploying` (one failure does not stop the rest). See [scheduler](/services/scheduler.md).[^lock]
 
 # Relationships
 

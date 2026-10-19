@@ -200,8 +200,9 @@ async function cloudInitSettled(vm: VirtualMachine): Promise<boolean | null> {
 /**
  * Resolve the current deploy state, advancing 'deploying' → 'ready' once cloud-init
  * settles (or the timeout elapses). Called from the VM-detail fetch so the lock
- * clears on its own as the tenant watches the VM come up. No-op for guests that
- * aren't mid-deploy.
+ * clears as the tenant watches the VM come up, and from the scheduler's
+ * {@link advanceDeployingVms} tick for machines nobody is looking at. No-op for
+ * guests that aren't mid-deploy.
  */
 export async function refreshDeployState(vm: VirtualMachine): Promise<DeployState> {
   const state = deployStateOf(vm);
@@ -224,4 +225,23 @@ export async function refreshDeployState(vm: VirtualMachine): Promise<DeployStat
     return markReady(vm);
   }
   return 'deploying';
+}
+
+/**
+ * Advance every machine still flagged 'deploying'. Run from a scheduler tick: a
+ * guest deployed through the API, or simply never opened in the UI, must still
+ * unlock, receive its login password and hit the timeout — none of which may
+ * depend on someone fetching the VM. One machine's failure never stops the rest.
+ */
+export async function advanceDeployingVms(): Promise<{ checked: number; ready: number }> {
+  const vms = await prisma.virtualMachine.findMany({ where: { deployState: 'deploying' } });
+  let ready = 0;
+  for (const vm of vms) {
+    try {
+      if ((await refreshDeployState(vm)) === 'ready') ready += 1;
+    } catch (err) {
+      logger.warn({ vmId: vm.id, err }, 'deploy-lock tick could not advance this machine — will retry');
+    }
+  }
+  return { checked: vms.length, ready };
 }

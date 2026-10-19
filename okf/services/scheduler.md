@@ -26,6 +26,7 @@ Single place where periodic work is registered. `startScheduler()` is called fro
 | Weekly backup catch-up | once, 10 s after start | — | `running` | `catchUpMissedBackups` |
 | Per-VM power schedules | `* * * * *` | — | `powerRunning` | [power-schedule](/services/power-schedule.md) `runDuePowerActions` |
 | Per-VM backups | `* * * * *` | — | `backupRunning` | [matestate](/services/matestate.md) `runDueBackups` |
+| Cloud-init deploy lock | `* * * * *` | — | `deployLockRunning` | [deploy-lock](/services/deploy-lock.md) `advanceDeployingVms` (`deployLockTick`) |
 | Resource history + alerts | `*/5 * * * *` | — | `historyRunning` | [resource-history](/services/resource-history.md) `sampleResourceUsage`, `pruneResourceSamples`; [alert](/services/alert.md) `evaluateAlerts` |
 | Cluster balancer | `*/15 * * * *` | `BALANCER_CRON` | `balancerRunning` | [cluster-balancer](/services/cluster-balancer.md) `runAutoBalance` (no-op unless mode `auto`) |
 | Template refresh | `0 4 1 * *` (1st, 04:00) | `TEMPLATE_REFRESH_CRON` | `templateRunning` | [template](/services/template.md) `refreshAllTemplates`, only if `template_refresh_enabled === 'true'` |
