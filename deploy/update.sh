@@ -41,16 +41,31 @@ json_escape() {
 # status <state> <message> [tag]  — writes the JSON the in-app card polls.
 # Best-effort: a status that cannot be written must never abort the update or
 # hide the real error.
+#
+# The control dir is writable by the app container, so whatever sits at
+# update-status.json (or appears there mid-write) is not trusted: this script
+# runs as root and must never write, chown or chmod THROUGH a link planted
+# there. So the status is written to a fresh, randomly named file — opened with
+# O_CREAT|O_EXCL (bash noclobber on a name that does not exist yet), which never
+# follows a symlink — and then renamed over update-status.json. A rename
+# replaces whatever entry is there; it never follows it.
 status() {
-  printf '{"state":"%s","message":"%s","tag":"%s","updatedAt":"%s"}\n' \
-    "$1" "$(json_escape "$2")" "$(json_escape "${3-${TAG:-}}")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    > "$STATUS_FILE" 2>/dev/null || return 0
-  # This script runs as root, but the app (in its container, as an unprivileged
-  # user) rewrites this same file on the next request. Hand it back to the
-  # control dir's owner so the app can always overwrite it. Best-effort — the
-  # app also self-heals if this is ever skipped.
-  chown --reference="$CONTROL_DIR" "$STATUS_FILE" 2>/dev/null || true
-  chmod 0664 "$STATUS_FILE" 2>/dev/null || true
+  local tmp owner
+  tmp="$(mktemp -u "$CONTROL_DIR/.update-status.XXXXXXXXXX" 2>/dev/null)" || return 0
+  # umask 002 gives 0664 at creation, so no chmod by path is needed afterwards.
+  if ! (umask 0002; set -o noclobber
+        printf '{"state":"%s","message":"%s","tag":"%s","updatedAt":"%s"}\n' \
+          "$1" "$(json_escape "$2")" "$(json_escape "${3-${TAG:-}}")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          > "$tmp") 2>/dev/null; then
+    return 0
+  fi
+  # The app (in its container, as an unprivileged user) rewrites this same file
+  # on the next request, so hand it to the control dir's owner. -h: if the entry
+  # was swapped for a link, change the link itself, never its target. The app
+  # also self-heals if this is ever skipped.
+  owner="$(stat -c '%u:%g' "$CONTROL_DIR" 2>/dev/null)" && chown -h "$owner" "$tmp" 2>/dev/null || true
+  # -T: treat the destination as a file even if a directory was planted there.
+  mv -fT "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
 }
 
 LOG_HINT="see: journalctl -u proxmate-updater"
@@ -101,8 +116,15 @@ cd "$PROXMATE_DIR" || fail "PROXMATE_DIR $PROXMATE_DIR not found"
 
 TAG=""
 if [[ "${1:-}" == "--from-request" ]]; then
-  [[ -f "$REQUEST_FILE" ]] || { echo "no pending update request"; FINISHED=1; exit 0; }
-  TAG="$(sed -nE 's/.*"tag"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$REQUEST_FILE" | head -1)"
+  [[ -e "$REQUEST_FILE" || -L "$REQUEST_FILE" ]] || { echo "no pending update request"; FINISHED=1; exit 0; }
+  # The request comes from the app-writable control dir: only a plain file the
+  # app wrote is a request. A link would make root read some other host file.
+  # (rm -f on a link removes the link, not its target.)
+  if [[ -L "$REQUEST_FILE" || ! -f "$REQUEST_FILE" ]]; then
+    rm -f "$REQUEST_FILE"
+    fail "update request is not a regular file — ignored"
+  fi
+  TAG="$(head -c 4096 "$REQUEST_FILE" | sed -nE 's/.*"tag"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1)"
   rm -f "$REQUEST_FILE"
 elif [[ -n "${1:-}" ]]; then
   TAG="$1"

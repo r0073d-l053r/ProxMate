@@ -125,4 +125,79 @@ t_mark_failed_leaves_finished_status_alone() {
   assert_eq "$(status_field state)" success "state"
 }
 
+# ── BUG-032: files in the app-writable control dir are never followed ────────
+# victim: a root-owned 0600 file outside the control dir.
+make_victim() {
+  VICTIM="$T/victim"
+  printf 'precious\n' > "$VICTIM"
+  chmod 0600 "$VICTIM"
+  VICTIM_STAT="$(stat -c '%u:%g %a' "$VICTIM")"
+}
+assert_victim_untouched() {
+  assert_eq "$(cat "$VICTIM")" precious "victim contents" &&
+    assert_eq "$(stat -c '%u:%g %a' "$VICTIM")" "$VICTIM_STAT" "victim owner/mode"
+}
+
+t_symlinked_status_not_followed_on_error() {
+  new_case
+  make_victim
+  [ "$(id -u)" -eq 0 ] && chown 1000:1000 "$CONTROL"
+  ln -s "$VICTIM" "$CONTROL/update-status.json"
+  request vDOESNOTEXIST
+  run_update --from-request
+  assert_victim_untouched &&
+    assert_regular_file "$CONTROL/update-status.json" &&
+    assert_eq "$(status_field state)" error "state"
+}
+
+t_symlinked_status_not_followed_on_success() {
+  new_case
+  make_victim
+  [ "$(id -u)" -eq 0 ] && chown 1000:1000 "$CONTROL"
+  ln -s "$VICTIM" "$CONTROL/update-status.json"
+  request v1.1.0
+  run_update --from-request
+  assert_victim_untouched &&
+    assert_regular_file "$CONTROL/update-status.json" &&
+    assert_eq "$(status_field state)" success "state"
+}
+
+t_dangling_status_symlink_not_followed() {
+  new_case
+  ln -s "$T/created-by-updater" "$CONTROL/update-status.json"
+  request v1.1.0
+  run_update --from-request
+  assert_file_missing "$T/created-by-updater" &&
+    assert_regular_file "$CONTROL/update-status.json"
+}
+
+t_status_handed_to_control_dir_owner() {
+  [ "$(id -u)" -eq 0 ] || skip "needs root"
+  new_case
+  chown 1000:1000 "$CONTROL"
+  request v1.1.0
+  run_update --from-request
+  assert_eq "$(stat -c '%u:%g %a' "$CONTROL/update-status.json")" "1000:1000 664" "status owner/mode"
+}
+
+t_symlinked_request_not_read() {
+  new_case
+  make_victim
+  printf '{"tag":"v1.1.0"}\n' > "$VICTIM"
+  VICTIM_STAT="$(stat -c '%u:%g %a' "$VICTIM")"
+  ln -s "$VICTIM" "$CONTROL/update-request.json"
+  run_update --from-request
+  assert_eq "$(version)" 1.0.0 "checkout must not move" &&
+    assert_eq "$(cat "$VICTIM")" '{"tag":"v1.1.0"}' "victim contents" &&
+    assert_eq "$(status_field state)" error "state"
+}
+
+t_status_message_is_valid_json() {
+  command -v python3 >/dev/null 2>&1 || skip "needs python3 to parse JSON"
+  new_case
+  run_update 'v1"; echo'
+  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$CONTROL/update-status.json" ||
+    fail_msg "status file is not valid JSON: $(cat "$CONTROL/update-status.json")"
+}
+
 run_cases "$@"
