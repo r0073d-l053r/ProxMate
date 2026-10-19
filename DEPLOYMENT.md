@@ -520,7 +520,9 @@ applies DB migrations on boot (`docker-entrypoint.sh`). **Back up the DB first**
    systemctl enable --now proxmate-updater.path
    ```
 3. Now **Install update** in the UI drops a request flag the unit picks up; the card polls
-   the host's status file and shows progress, then a **Reload** when it's done.
+   the host's status file and shows progress, then a **Reload** when it's done. If any
+   step fails (fetch, checkout, build, restart — or the run is killed), the card shows an
+   error naming the step; the full output is in `journalctl -u proxmate-updater`.
 
 > **Security note:** the app itself never runs Docker or git — it only writes one JSON
 > flag in the bind-mounted control dir. All privileged work lives in `update.sh`, run by
