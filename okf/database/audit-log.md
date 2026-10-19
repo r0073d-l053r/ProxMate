@@ -4,7 +4,7 @@ title: AuditLog
 description: An append-only record of who did what, deliberately not foreign-keyed to User so the trail outlives deleted accounts.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/schema.prisma
 tags: [proxmate, database, prisma, audit, security]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: schema
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/schema.prisma
@@ -46,7 +46,7 @@ Accountability trail for a multi-tenant box. It feeds both the admin audit log a
 
 # Gotchas
 
-- `ip` prefers the header named by `REAL_IP_HEADER` (default `cf-connecting-ip`, first comma value) and falls back to `req.ip`. Set it to empty to disable. Behind a non-Cloudflare proxy without `TRUST_PROXY` every row can show the same IP.[^svc]
+- `ip` uses the header named by `REAL_IP_HEADER` (default `cf-connecting-ip`, first comma value) only when `TRUST_PROXY` is 1 or more; otherwise, and when the header is empty, unset or `x-forwarded-for`, it is `req.ip` (Express applies the trusted hop count). Behind a proxy without `TRUST_PROXY` every row shows the proxy's address.[^svc]
 - No pruning exists for this table. It grows without bound.[^svc]
 
 [^schema]: backend/prisma/schema.prisma

@@ -4,7 +4,7 @@ title: Proxmox token privileges
 description: Which Proxmox VE privileges ProxMate's connection test checks, how it reads the token's effective permissions, what breaks without each privilege, and the documented token/ACL setup.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/setup.service.ts
 tags: [proxmate, proxmox, permissions, acl, setup]
-generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T20:00:00Z }
 sources:
   - id: setup
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/setup.service.ts
@@ -88,7 +88,9 @@ PCI resource mappings.[^pve] SECURITY.md summarises the need as `VM.Allocate`, `
 `VM.PowerMgmt`, `VM.Console`, `VM.Audit`, `Datastore.Audit`, `Datastore.AllocateSpace`,
 `Sys.Audit` "(+ firewall management for isolation)".[^security] A token that passes the test can
 therefore still get 403 on migration, backups, isolation enforcement or the IDE/agent features;
-those surface as `pveMessage` errors at the call site.
+those surface as `pveMessage` errors at the call site. Writing ProxMate's ownership tag onto a
+guest needs `VM.Config.Options`, which the test does not check either; the privilege-separation-off
+token and the Administrator role include it.[^pve]
 
 # Recommended setup (from the docs)
 
