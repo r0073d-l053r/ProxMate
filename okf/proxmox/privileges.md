@@ -92,11 +92,29 @@ The warning rows come verbatim from `OPERATIONAL_PRIVILEGES` and `guestAgentPriv
 # Not checked by the connection test
 
 - `VM.Snapshot.Rollback` (rollback also accepts `VM.Snapshot`, which is checked).
-- `VM.GuestAgent.FileWrite` (PVE 9, the IDE's bootstrap file only).
+- `VM.GuestAgent.FileWrite` (PVE 9, the IDE's bootstrap file only — and on 9.2.3 `VM.GuestAgent.Unrestricted` already covers `file-write`; see the hardware section).
 - `Mapping.Audit` / `Mapping.Use` (GPU/PCI passthrough through resource mappings).
 
 A token that passes the test can still get 403 on those features; it surfaces as a `pveMessage`
 error at the call site. The script below grants all of them.[^pve]
+
+# Proven on hardware (QueenBee, 7 nodes, PVE 9.2.3 / 9.2.4 / 9.2.6)
+
+Checked with the role `deploy/proxmox-token.sh` creates, by removing one privilege at a time and
+retrying the call. Everything below is an observation from that cluster, not a reading of the docs.
+
+| Question | Answer |
+| --- | --- |
+| `VM.GuestAgent.Unrestricted` and `exec` / `exec-status` | Work. `exec` + `exec-status` ran shell commands in a deployed guest. |
+| `set-user-password` | Works with `VM.GuestAgent.Unrestricted`. |
+| Does `file-write` need `VM.GuestAgent.FileWrite`? | **No, on 9.2.3.** With `VM.GuestAgent.FileWrite` removed from the role, `agent/file-write` still wrote and read back a file. `Unrestricted` covers it, so `--with-ide` is redundant on this release — harmless, and kept for older 9.x where it may still be checked. |
+| `/nodes/{node}/hardware/pci` (passthrough host readiness) | Satisfied by **either `Sys.Audit` or `Sys.Modify`**. Removing `Mapping.Audit`/`Mapping.Use`, then `Sys.Audit`, then `Sys.Modify` (one at a time) never broke it. |
+| `/cluster/mapping/pci` without `Mapping.Audit` | Returns `200 []`, **not** 403 — the mappings page looks empty rather than reporting a missing privilege. |
+| `GET /storage/<id>` (the storage *configuration* endpoint) | Needs **`Datastore.Allocate`**: without it, `Permission check failed (/storage/<id>, Datastore.Allocate)`. `/cluster/resources?type=storage` carries the same per-node availability under `Datastore.Audit`, so prefer it. |
+| Does `cicustom` need `Datastore.Allocate` on the snippet storage? | **No.** With `Datastore.Allocate` removed from the role (keeping `AllocateSpace`/`AllocateTemplate`), a full cloud-init deploy still cloned, attached `cicustom: vendor=<snippet storage>:snippets/…`, started and finished provisioning. ProxMate writes the snippet through the mounted `SNIPPET_DIR` filesystem, not the storage API, and Proxmox only reads the volid at start time. |
+| `download-url` (cloud-image import) | Works with this role (`Sys.Modify` on `/`). A Debian 13 genericcloud image imported and became a template. |
+| Restore as a non-root token | A QEMU `vma.zst` archive is **neither refused nor silently changed**: cores, memory, disk size, `net0 … firewall=1` and the ownership tag all survived in place. No `SDN.Use` complaint for the archive's NIC (`vmbr0` is in the implicit `localnetwork` zone and the role holds `SDN.Use`). |
+| The token's own task calls | `GET /nodes/{n}/tasks`, `…/{upid}/status`, `…/{upid}/log` and `DELETE …/{upid}` all work with no extra privileges. |
 
 # Recommended setup (from the docs)
 

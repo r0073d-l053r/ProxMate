@@ -201,7 +201,8 @@ firewall, cluster status and cloud-image downloads are checked there). The role 
   `Datastore.Audit`
 - `SDN.Audit`, `SDN.Use`, `Sys.Audit`, `Sys.Modify` (cluster firewall isolation)
 - the guest agent: `VM.Monitor` on Proxmox VE 8; `VM.GuestAgent.Audit` and
-  `VM.GuestAgent.Unrestricted` on 9 (plus `VM.GuestAgent.FileWrite` for the IDE)
+  `VM.GuestAgent.Unrestricted` on 9 (plus `VM.GuestAgent.FileWrite` for the IDE — on
+  PVE 9.2.3 `Unrestricted` already covers `file-write`, so that one is belt-and-braces)
 - for GPU/PCI passthrough only: `Mapping.Audit`, `Mapping.Use`
 
 It needs no user, pool or permission management, and never the node shell. The connection

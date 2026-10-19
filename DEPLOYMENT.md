@@ -87,6 +87,19 @@ pveum user token add root@pam proxmate --privsep 0       # privsep OFF
 You'll enter `root@pam!proxmate` as the **Token ID** and that value as the **Secret**
 during OOBE (§7).
 
+**Least-privilege alternative (recommended).** `deploy/proxmox-token.sh`, run as root on one
+node, creates the user `proxmate@pve`, a role holding only the privileges ProxMate uses, and a
+privilege-separated token, granting the role on `/` to both:
+
+```bash
+bash proxmox-token.sh --dry-run                 # prints the pveum commands, changes nothing
+bash proxmox-token.sh --with-ide                # add --with-passthrough if you use PCI mappings
+```
+
+The connection test then reports every privilege that is still missing; a correctly created
+token passes it with no warnings. `Datastore.Audit` and `VM.Audit` are the two that block
+outright — without them ProxMate can see no guests and no storages.
+
 Whatever token you use must be able to set guest tags (`VM.Config.Options`): ProxMate
 tags every guest it manages with the machine it belongs to, and acts only on guests
 carrying their own machine's tag. On Proxmox VE 8+ it also needs `SDN.Use` (checked
