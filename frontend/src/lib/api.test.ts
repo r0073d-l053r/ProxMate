@@ -28,7 +28,7 @@ describe("api 401 interceptor", () => {
   it("keeps the cached user when a kiosk-exit PIN is wrong", async () => {
     await expect(
       api.post("/auth/kiosk-exit", { method: "pin", value: "0000" }, {
-        adapter: respondWith(401, { error: "Incorrect — try again." }),
+        adapter: respondWith(403, { code: "reauth_failed", error: "Incorrect — try again." }),
       }),
     ).rejects.toBeInstanceOf(AxiosError);
     expect(useAuthStore.getState().user).not.toBeNull();
@@ -37,9 +37,18 @@ describe("api 401 interceptor", () => {
   it("keeps the cached user when a kiosk-exit passkey check fails", async () => {
     await expect(
       api.post("/auth/kiosk-exit/passkey-verify", {}, {
-        adapter: respondWith(401, { error: "Passkey check failed" }),
+        adapter: respondWith(403, { code: "reauth_failed", error: "Passkey check failed" }),
       }),
     ).rejects.toBeInstanceOf(AxiosError);
     expect(useAuthStore.getState().user).not.toBeNull();
+  });
+
+  it("clears the cached user when a kiosk-exit call finds the session gone", async () => {
+    await expect(
+      api.post("/auth/kiosk-exit", { method: "pin", value: "1234" }, {
+        adapter: respondWith(401, { error: "Invalid or expired session" }),
+      }),
+    ).rejects.toBeInstanceOf(AxiosError);
+    expect(useAuthStore.getState().user).toBeNull();
   });
 });

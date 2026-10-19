@@ -1,6 +1,7 @@
 import type { Request } from 'express';
 import type { AuditLog } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { envNumber } from '../lib/env-number.js';
 
 export interface AuditActor {
   id: string;
@@ -36,7 +37,7 @@ export interface AuditInput {
 function clientIp(req?: Request): string | null {
   if (!req) return null;
   const socketIp = req.ip ?? req.socket?.remoteAddress ?? null;
-  const trustedHops = Number(process.env['TRUST_PROXY'] ?? 0);
+  const trustedHops = envNumber('TRUST_PROXY', 0, 0);
   if (!(trustedHops > 0)) return socketIp;
   const headerName = (process.env['REAL_IP_HEADER'] ?? 'cf-connecting-ip').toLowerCase();
   if (headerName === 'x-forwarded-for') return socketIp;

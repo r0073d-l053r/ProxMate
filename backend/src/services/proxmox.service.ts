@@ -5,13 +5,14 @@ import { access, mkdir, writeFile, rename } from 'node:fs/promises';
 import axios, { AxiosError, type AxiosInstance, type AxiosRequestConfig, type InternalAxiosRequestConfig } from 'axios';
 import { getConfig } from './config.service.js';
 import { proxmoxApiErrors } from '../lib/metrics.js';
+import { envNumber } from '../lib/env-number.js';
 
 // ─── Client builder ───────────────────────────────────────────
 
-const TIMEOUT_MS = Number(process.env['PROXMOX_TIMEOUT_MS'] ?? 15_000);
+const TIMEOUT_MS = envNumber('PROXMOX_TIMEOUT_MS', 15_000, 0);
 // How many times to retry a *transient* failure. Only idempotent reads are retried
 // (see below) so this can never double-submit a VM create/delete.
-const MAX_RETRIES = Math.max(0, Number(process.env['PROXMOX_RETRIES'] ?? 2));
+const MAX_RETRIES = envNumber('PROXMOX_RETRIES', 2, 0);
 const IDEMPOTENT = new Set(['get', 'head', 'options']);
 
 type RetryConfig = InternalAxiosRequestConfig & { _retryCount?: number; _noRetry?: boolean };

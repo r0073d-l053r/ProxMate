@@ -126,8 +126,14 @@ export async function consumeDownloadToken(raw: string): Promise<ResolvedDownloa
   const fullPath = resolveBackupFile(token.filename);
   if (!fullPath) throw new DownloadError('missing');
 
-  // Mark used up-front (single-use even if the stream is interrupted).
-  await prisma.downloadToken.update({ where: { id: token.id }, data: { usedAt: new Date() } });
+  // Mark used up-front (single-use even if the stream is interrupted). The claim
+  // is conditional on the token still being unused, so of two requests that both
+  // passed the check above, only the one whose write lands first gets the file.
+  const { count } = await prisma.downloadToken.updateMany({
+    where: { id: token.id, usedAt: null },
+    data: { usedAt: new Date() },
+  });
+  if (count === 0) throw new DownloadError('used');
   return { fullPath, filename: token.filename };
 }
 

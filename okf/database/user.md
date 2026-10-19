@@ -64,9 +64,11 @@ The central identity row. Every tenant and admin is a `User`; `role` decides adm
 | emailBound | Boolean | default false | The address is known to belong to this person: registered through an invite addressed to it, entered at setup, or asserted verified by the IdP at SSO sign-up. Required before SSO links by email. |
 | twoFactorEnabled | Boolean | `@default(false)` | TOTP active. |
 | twoFactorSecret | String? | | AES-256-GCM encrypted base32 TOTP secret (`iv:tag:ciphertext` hex).[^twofactor] |
+| twoFactorPendingSecret | String? | | Encrypted secret from a setup not yet confirmed; replaces `twoFactorSecret` when `enable` verifies a code from it. |
 | require2fa | Boolean | `@default(false)` | Copied from the invite; user must enroll a factor before use. |
 | failedLoginAttempts | Int | `@default(0)` | Consecutive failed passwords. |
 | lockedUntil | DateTime? | | End of the temporary lockout window. |
+| twoFactorFailedAttempts | Int | `@default(0)` | Wrong 2FA codes at login. Not reset by a correct password; cleared by a completed 2FA login. Shares the lockout threshold and `lockedUntil`. |
 | maxCpu | Int | `@default(0)` | Total vCPU quota. |
 | maxRam | Int | `@default(0)` | Total RAM quota (MB). |
 | maxStorage | Int | `@default(0)` | Total disk quota (GB). |

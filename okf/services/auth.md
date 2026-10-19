@@ -27,7 +27,8 @@ Core authentication primitives shared by the HTTP middleware, the console WebSoc
 | `retireSessionWithGrace` | `(token, graceMs = 90_000)` | Shrinks an old session's `expiresAt` to now+grace during rotation (`POST /auth/session/refresh`). |
 | `verifySession` | `(token) => { user, csrfToken, accessExpired, accessExpiresAt } \| null` | Verifies JWT (HS256 pinned), checks Session row exists and is unexpired, loads the user. |
 | `verifyToken` | `(token) => AuthUser \| null` | Like `verifySession` but returns null when access has expired; for socket/proxy transports. |
-| `signChallenge` / `verifyChallenge` | `(userId)` / `(token)` | 5-minute `{ twofa: true }` JWT bridging password and TOTP step. |
+| `signChallenge` / `verifyChallenge` | `(userId)` / `(token) => { userId, challengeId } \| null` | 5-minute `{ twofa: true, jti }` JWT bridging password and TOTP step. Each challenge is also recorded in an in-process store, so it can be retired. |
+| `beginChallengeAttempt` / `endChallengeAttempt` | `(challengeId)` / `(challengeId, ok)` | Synchronously count an attempt and mark the challenge busy before a code is checked (false if unknown, busy or past 5 attempts); then spend it on success (single-use) or free it on failure. |
 | `signEnrollment` / `verifyEnrollment` | `(userId)` / `(token)` | 15-minute `{ enroll: true }` JWT authorising only first-factor enrollment endpoints. |
 
 # Data

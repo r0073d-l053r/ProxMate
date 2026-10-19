@@ -86,7 +86,7 @@ As registered in `app.ts`:[^app]
 |---|---|---|
 | `proxmate_session` | yes | The session JWT. |
 | `proxmate_csrf` | no | CSRF token; the frontend echoes it in `X-CSRF-Token`. |
-| `proxmate_webauthn` | yes | WebAuthn challenge, 5 min. |
+| `proxmate_webauthn` | yes | Opaque handle to a server-held WebAuthn challenge, 5 min. Each challenge is single-use and bound to its ceremony (login, registration, kiosk exit). |
 | `proxmate_sso` | yes | OIDC state/nonce/PKCE verifier, 10 min. |
 
 All are `SameSite=Lax`, `path=/`; `Secure` defaults to on when `NODE_ENV=production`, overridable with `COOKIE_SECURE`.[^cookies]
