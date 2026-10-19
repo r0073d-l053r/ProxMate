@@ -33,6 +33,9 @@ In Proxmox: **Datacenter → Permissions → API Tokens → Add**.
 > pveum acl modify / --tokens 'root@pam!proxmate' --roles Administrator
 > ```
 
+Whichever you choose, the token must be able to set guest tags (`VM.Config.Options`):
+ProxMate tags every guest it manages with the machine it belongs to.
+
 Copy the secret that Proxmox shows you — **it's only shown once**.
 
 ### 1.2 Run the ProxMate setup wizard
@@ -42,7 +45,7 @@ Open the ProxMate web UI. The wizard walks you through:
 1. **Admin account** — your owner login
 2. **Proxmox connection** — host URL (`https://your-host:8006`), token ID, secret. Leave "Verify TLS" off for a self-signed cert on a private network. Click **Test connection** — you should see "Connected to Proxmox VE X.Y (N nodes)".
 3. **Defaults** — pick the storage pool for VM disks (must support `images` — e.g. `local-lvm`, `local-zfs`, Ceph), the network bridge for VMs (e.g. `vmbr0`), and the ISO storage (typically `local`).
-4. **Finish** — you're auto-logged in as the admin.
+4. **Finish** — you're signed in as the admin from step 1 (every step after it needs that session).
 
 ---
 
@@ -309,7 +312,8 @@ A few things worth knowing day-to-day:
   are then skipped (the send result shows how many). Transactional and security emails (password
   resets, sign-in alerts, VM notifications) are never affected by the opt-out. _(The EDU edition has
   no opt-out — instructors must be able to reach every student.)_
-- **Deleting a tenant** in **Admin → Users** also destroys their VMs (best-effort) on Proxmox.
+- **Unconfirmed machines** (**Settings → Maintenance → Unconfirmed machines**). ProxMate tags every guest it manages (`proxmate-<id>`) and only acts on a guest that carries its own machine's tag. The card lists machines whose VMID holds no guest with their tag — typically machines from before ownership tags that the automatic tagging couldn't match (left in `error` or `creating`, renamed so the Proxmox name differs, or sharing a VMID with another machine). Those machines can't be started, opened, backed up or deleted until you settle them: **Adopt** tags the guest at the VMID as that machine's and clears an `error` or held state, **Remove row** deletes only the ProxMate record and leaves the guest alone. Admins are notified once when the automatic tagging leaves machines unmatched.
+- **Deleting a tenant** in **Admin → Users** also destroys their VMs on Proxmox. If any of their machines can't be deleted with its guest (an unconfirmed machine, or a guest that fails to delete), the account is kept and the machines are listed — settle them under **Unconfirmed machines**, then delete again.
 - **Re-configuring Proxmox** later (new host, rotated token) is in **Admin → Settings**; the existing token secret is kept if you leave the field blank.
 
 ---
@@ -319,6 +323,7 @@ A few things worth knowing day-to-day:
 | Symptom | Cause / Fix |
 |---|---|
 | "Connection test" passes but storage lists are empty | Privilege Separation on the API token — see §1.1 |
+| A machine answers "This VM predates ProxMate's ownership tags — ask an admin", or can't be started | It isn't matched to a tagged guest (or is held after a failed create/restore) — check **Settings → Maintenance → Unconfirmed machines** (§7) |
 | Tenant VM creation fails with a 403 | Same as above |
 | Tenants can reach my LAN | The cluster firewall isn't enabled — see §2 |
 | `vzdump` fails for a tenant VM | The chosen storage doesn't support `content=backup` — enable it in Proxmox **Datacenter → Storage** |

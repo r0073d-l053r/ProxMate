@@ -35,6 +35,42 @@ Read DEPLOYMENT.md §14.4 before updating. In short:
 - **`TRUST_PROXY` ≥ 1 is required for the audit log's real-IP header** (`REAL_IP_HEADER`, default `cf-connecting-ip`); `x-forwarded-for` is resolved through the trusted hop count. Behind Caddy, nginx or a Cloudflare Tunnel keep `TRUST_PROXY=1`.
 - **The backend refuses to start in production without `ENCRYPTION_KEY`.** Docker installs already require it; bare `node`/`npm start` runs no longer generate a key in memory.
 
+### What changes for admins and users after upgrading from 1.0.x
+
+**Guest ownership tags and the Unconfirmed machines card**
+
+- Every guest ProxMate manages now carries a Proxmox tag naming its machine (`proxmate-<id>`; templates `proxmate-template-<id>`). Start, stop, console, IDE, backups, restores, resize and delete act only on a guest that carries its own machine's tag. The Proxmox API token must be allowed to set guest tags (`VM.Config.Options`); the recommended privilege-separation-off token, or one with the Administrator role, is.
+- At first start the upgrade tags existing guests. A machine is tagged only when exactly one machine references its VMID, its status is not `error` or `creating`, its guest has no ProxMate tag yet, and the guest's Proxmox name matches the machine's name. Everything else stays **unmatched**: machines left in `error` or `creating` by 1.0.x, machines renamed in Proxmox (or in ProxMate) so the names differ, and VMIDs referenced by more than one machine.
+- If Proxmox can't be reached at boot, or a guest can't be read, the tagging pass is retried every 15 minutes until a pass completes. When a completed pass leaves machines unmatched, admins get one `vm.error` notification with the count.
+- Unmatched machines are refused (start, console, IDE, backups, delete) until an admin settles them in **Settings → Maintenance → Unconfirmed machines**: **Adopt** tags the guest at the VMID as that machine's (and clears an `error` or held state, so the machine can be started again), **Remove row** deletes only the ProxMate record and leaves the guest alone. Adopt is refused for a guest that carries another machine's tag, is a Proxmox or Template Store template, has another machine on the same VMID, or references disks that aren't its own.
+- Removing or refreshing a template deletes the old Proxmox guest only while it still carries that template's tag. Otherwise it is left in place and admins are notified.
+
+**Machines that can't run**
+
+- A machine in `error`, or held after a create, rebuild or restore that didn't finish (or a restore that left it over quota), can't be started and its console and IDE don't open. Its page says why. It can be restored, rebuilt, adopted by an admin, or deleted.
+- Backups are refused for a machine whose config references a disk that isn't one of its own storage volumes. That includes disks that are not volumes at all, such as an iSCSI LUN or a host disk passed through by path; such a guest can't be adopted either. Detach the disk in Proxmox first.
+- **Restore from an uploaded backup** accepts only archives whose config describes the guest itself. Host devices and paths, raw QEMU or LXC keys, hook scripts, custom cloud-init snippets, CPU/NUMA host pinning, container features beyond nesting, a template flag and privileged containers are refused. Containers are always restored unprivileged.
+- Stored power and backup schedules that aren't valid cron expressions never fire. At startup, admins are notified with a list of the affected machines; re-save those schedules on each machine's page.
+
+**ProxMate IDE**
+
+- The IDE opens only for the machine's owner. Admins and people the machine is shared with no longer open it.
+- An IDE installed by 1.0.x must be reinstalled once before it opens. This happens automatically the first time its owner opens it, and takes about a minute.
+
+**Accounts, sign-in and API tokens**
+
+- `pm_` API tokens are refused (403) on routes that change how an account signs in or is secured: session refresh, 2FA, passkeys, API-token management, invites, the kiosk exit check, and the admin kiosk, SSO and reset-password settings. The full list is in `docs/api.md`. Scripts that used a token for these must use the web app.
+- A password reset (self-service or by an admin) revokes all of the account's API tokens and signs it out everywhere.
+- Re-running 2FA setup on an account that already has 2FA requires a current authenticator or recovery code.
+- Leaving kiosk mode with a wrong PIN, password or passkey now answers **403** with `code: "reauth_failed"`. A 401 there always means the session is gone.
+- After the setup wizard creates the admin account, every later setup step requires that admin's session.
+
+**Sharing, users and settings**
+
+- The share list (`GET /api/vms/:id/shares`) returns only `id`, `email`, `role` and `createdAt` for each share. `POST /api/vms/:id/shares` answers **202** whether or not the address has an account, and is limited per signed-in user (30 per hour by default; `SHARE_RATE_LIMIT_MAX` and `SHARE_RATE_LIMIT_WINDOW_MS`, both forwarded by `docker-compose.yml`).
+- `DELETE /api/users/:id` answers **409** and keeps the account when any of its machines can't be deleted together with its guest: an unmatched machine, a guest whose location can't be confirmed, or a guest that fails to delete. The response lists those machines (`vms`); adopt or remove them, then try again.
+- The notification webhook URL is no longer shown in admin settings, only a masked form of it. Leave the field blank to keep the stored URL.
+
 ### Also
 
 - SSO links to an existing local account only when the IdP sends `email_verified: true` and the account's email was bound by an emailed invite (or is the setup-wizard admin). After upgrading, local accounts registered with a self-typed address, and every account when the IdP omits `email_verified`, no longer auto-link on first SSO login; those users keep signing in with their password. Accounts already linked are unaffected.
