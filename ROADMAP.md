@@ -124,8 +124,8 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 
 Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
 
-- **v1.1.0 — security and reliability release.** A full code review, every finding closed:
-  **guest ownership tags** gate every guest action (existing guests adopted on upgrade, admin
+- **v1.1.0 (2026-10-19) — security and reliability release.** A full code review, every finding closed:
+  **guest ownership tags** gate every guest action (existing guests tagged on upgrade, admin
   **Unconfirmed machines** card for the rest); **owner-only IDE** with per-machine guest proof;
   hardened sign-in (concurrent-safe lockout, per-account 2FA limits, server-side passkey
   challenges, single-use links and codes); session-only account-security routes; verified-email SSO
