@@ -30,6 +30,8 @@ export interface RenderedEmail {
  * Wrap inner table rows in ProxMate's branded, email-client-safe shell: table
  * layout + inline styles (for Outlook/Gmail), a fixed light palette matching the
  * app's monochrome theme, a hidden preheader, and a wordmark header + footer.
+ * `preheader` is plain text and is escaped here: callers pass user-supplied names
+ * and addresses into it, and it is markup like the body.
  */
 function wrapEmail(preheader: string, bodyRows: string): string {
   return `<!DOCTYPE html>
@@ -42,7 +44,7 @@ function wrapEmail(preheader: string, bodyRows: string): string {
 <title>ProxMate</title>
 </head>
 <body style="margin:0; padding:0; background-color:#f4f4f5;">
-<div style="display:none; max-height:0; overflow:hidden; opacity:0; mso-hide:all;">${preheader}</div>
+<div style="display:none; max-height:0; overflow:hidden; opacity:0; mso-hide:all;">${escapeHtml(preheader)}</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f4f5;">
 <tr>
 <td align="center" style="padding:32px 16px;">
@@ -343,7 +345,7 @@ export function vmRebuildFailedEmail(opts: { vmName: string; kept: boolean; reas
     h1('A rebuild failed') +
     p(`Rebuilding your VM <strong style="color:${INK};">${escapeHtml(vmName)}</strong> failed: ${escapeHtml(reason)}`) +
     p(next, { color: MUTED, size: 13, mb: 0 });
-  return { subject, text, html: wrapEmail(`Rebuild of "${escapeHtml(vmName)}" failed.`, bodyRows) };
+  return { subject, text, html: wrapEmail(`Rebuild of "${vmName}" failed.`, bodyRows) };
 }
 
 export function vmMaintenanceEmail(opts: { vmName: string; live: boolean }): RenderedEmail {
@@ -374,7 +376,7 @@ export function vmMaintenanceEmail(opts: { vmName: string; live: boolean }): Ren
   return {
     subject,
     text,
-    html: wrapEmail(`Maintenance: your server "${escapeHtml(vmName)}" is being moved to another host.`, bodyRows),
+    html: wrapEmail(`Maintenance: your server "${vmName}" is being moved to another host.`, bodyRows),
   };
 }
 
@@ -409,7 +411,7 @@ export function alertEmail(opts: { vmName: string; alertLabel: string; detail: s
       mb: 0,
     });
 
-  return { subject, text, html: wrapEmail(`${alertLabel}: ${escapeHtml(vmName)}`, bodyRows) };
+  return { subject, text, html: wrapEmail(`${alertLabel}: ${vmName}`, bodyRows) };
 }
 
 /**

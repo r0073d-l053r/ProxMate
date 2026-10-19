@@ -51,4 +51,25 @@ describe('isValidCron', () => {
     expect(isValidCron('0 25 * * *')).toBe(false); // hour > 23
     expect(isValidCron('0 8 * * mon')).toBe(false); // names unsupported
   });
+
+  it('rejects empty list items, out-of-range list members and malformed ranges or steps', () => {
+    expect(isValidCron('0 1,,2 * * *')).toBe(false);
+    expect(isValidCron('0 1, * * *')).toBe(false);
+    expect(isValidCron('0 1,99 * * *')).toBe(false);
+    expect(isValidCron('0 5-2 * * *')).toBe(false);
+    expect(isValidCron('0 1- * * *')).toBe(false);
+    expect(isValidCron('*/0 * * * *')).toBe(false);
+    expect(isValidCron('*/ * * * *')).toBe(false);
+    expect(isValidCron('0 1/2/3 * * *')).toBe(false);
+    expect(isValidCron('*/15 0-6/2 1,15 1-12 1-5')).toBe(true);
+  });
+
+  it('a malformed field never matches, even at a value an earlier list item names', () => {
+    expect(cronMatches('0 1,,2 * * *', new Date(2026, 0, 5, 1, 0))).toBe(false);
+    expect(cronMatches('0 1,99 * * *', new Date(2026, 0, 5, 1, 0))).toBe(false);
+  });
+
+  it('an empty list item never matches as 0', () => {
+    expect(cronMatches('0 1,,2 * * *', new Date(2026, 0, 5, 0, 0))).toBe(false);
+  });
 });

@@ -16,7 +16,7 @@ sources:
 
 # Purpose
 
-Tenants set thresholds on their own machines. A rule fires when its condition holds continuously for `sustainedMin` minutes (tracked via `breachingSince`), then stays quiet for a cooldown so a flapping metric cannot spam. Delivery is a branded email to the VM owner plus the admin webhook.[^alert]
+Tenants set thresholds on their own machines. A rule fires when its condition holds continuously for `sustainedMin` minutes (tracked via `breachingSince`), then stays quiet for a cooldown so a flapping metric cannot spam. Delivery is a branded email to the VM owner plus the admin webhook, one of each per VM per tick: rules of one VM that fire together are combined. A VM carries at most `MAX_ALERT_RULES_PER_VM` (20) rules.[^alert]
 
 # Key functions
 

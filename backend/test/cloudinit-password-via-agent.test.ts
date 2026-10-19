@@ -6,6 +6,8 @@ vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
     virtualMachine: {
       update: (...a: unknown[]) => updateMock(...a),
+      // The end-of-window clear is a conditional updateMany; record it alongside update.
+      updateMany: async (...a: unknown[]) => (updateMock(...a), { count: 1 }),
       findUnique: (...a: unknown[]) => findUniqueMock(...a),
     },
   },
@@ -20,7 +22,10 @@ vi.mock('../src/services/proxmox.service.js', () => ({
 }));
 
 // The guest at the VMID is the row's own unless a test says otherwise.
-vi.mock('../src/services/vm.service.js', () => ({ requireOurGuest: vi.fn(async (v: unknown) => v) }));
+vi.mock('../src/services/vm.service.js', () => ({
+  requireOurGuest: vi.fn(async (v: unknown) => v),
+  guestIdentity: vi.fn(async () => 'ours'),
+}));
 
 // Real crypto — this test also proves the value we persist is not plaintext.
 import { encrypt } from '../src/lib/crypto.js';

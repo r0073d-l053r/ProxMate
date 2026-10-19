@@ -8,6 +8,8 @@ import { generateToken, parseExpiry } from '../services/invite.service.js';
 import { ACCESS_DURATIONS } from '../services/access.service.js';
 import { isMailConfigured, sendMail } from '../services/mail.service.js';
 import { inviteEmail } from '../lib/email-templates.js';
+import { recordAudit } from '../services/audit.service.js';
+import type { AuthRequest } from '../types/index.js';
 
 const router = Router();
 
@@ -114,6 +116,19 @@ router.post('/', requireSession, async (req: Request, res: Response) => {
     }
   }
 
+  // The token is a bearer credential for creating an account, so it is never
+  // written to the audit log; the invite id identifies it.
+  await recordAudit({
+    action: 'invite.create',
+    actor: (req as AuthRequest).user,
+    targetType: 'invite',
+    targetId: invite.id,
+    detail: `${invite.label ? `${invite.label}: ` : ''}${invite.maxCpu} vCPU / ${invite.maxRam} MB / ${invite.maxStorage} GB${
+      invite.email ? `, emailed to ${invite.email}` : ''
+    }`,
+    req,
+  });
+
   res.status(201).json({
     id: invite.id,
     token: invite.token,
@@ -177,6 +192,15 @@ router.post('/:id/send', requireSession, async (req: Request, res: Response) => 
     if (updated.count === 0) emailError = 'The invite changed while sending — the emailed link will not work; reload and try again.';
   }
 
+  await recordAudit({
+    action: 'invite.send',
+    actor: (req as AuthRequest).user,
+    targetType: 'invite',
+    targetId: invite.id,
+    detail: `${parsed.data.email}${emailError ? ' (send failed)' : ''}${readdressed && !emailError ? ', new link issued' : ''}`,
+    req,
+  });
+
   // Return 200 with a structured result rather than a 5xx an upstream proxy might
   // replace with its own opaque error page, so the admin sees the real reason.
   res.json({ ok: !emailError, email: parsed.data.email, error: emailError ?? undefined });
@@ -229,6 +253,14 @@ router.delete('/:id', async (req: Request, res: Response) => {
   }
 
   await prisma.inviteToken.delete({ where: { id: invite.id } });
+  await recordAudit({
+    action: 'invite.revoke',
+    actor: (req as AuthRequest).user,
+    targetType: 'invite',
+    targetId: invite.id,
+    detail: invite.label ?? invite.email ?? undefined,
+    req,
+  });
   res.json({ success: true });
 });
 

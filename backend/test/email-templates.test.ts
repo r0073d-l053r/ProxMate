@@ -7,6 +7,7 @@ import {
   inviteEmail,
   announcementEmail,
   vmMaintenanceEmail,
+  alertEmail,
   type RenderedEmail,
 } from '../src/lib/email-templates.js';
 
@@ -212,5 +213,32 @@ describe('vmRebuildFailedEmail', () => {
 
   it('says the machine was removed when nothing was kept', () => {
     expect(vmRebuildFailedEmail({ vmName: 'web', kept: false, reason: 'x' }).text).toMatch(/removed from your list/);
+  });
+});
+
+// User-supplied text (display names, emails, VM names) reaches the hidden preheader
+// too, so it is escaped there exactly as in the body, and escaped only once.
+describe('preheader escaping', () => {
+  const INJECT = 'x</div><a href="https://evil.example/login">Re-verify</a><div>';
+
+  it('escapes a notification title in the preheader', () => {
+    const m = notificationEmail('Tenant access expired', `${INJECT} (a@b.c)`, 'msg');
+    expect(m.html).not.toContain('<a href="https://evil.example');
+    expect(m.html).toContain('x&lt;/div&gt;&lt;a href=');
+  });
+
+  it('escapes the locked account address in the preheader', () => {
+    const m = accountLockedEmail({ email: INJECT, attempts: 5, ip: null, lockedUntil: new Date(), lockMinutes: 15 });
+    expect(m.html).not.toContain('<a href="https://evil.example');
+  });
+
+  it('escapes a VM name once, not twice', () => {
+    const rebuild = vmRebuildFailedEmail({ vmName: 'a&b', kept: true, reason: 'r' });
+    const alert = alertEmail({ vmName: 'a&b', alertLabel: 'High CPU', detail: 'd' });
+    const move = vmMaintenanceEmail({ vmName: 'a&b', live: true });
+    for (const m of [rebuild, alert, move]) {
+      expect(m.html).not.toContain('a&amp;amp;b');
+      expect(m.html).toContain('a&amp;b');
+    }
   });
 });

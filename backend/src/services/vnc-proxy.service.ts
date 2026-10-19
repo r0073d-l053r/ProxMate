@@ -55,7 +55,7 @@ export async function requestTermProxy(node: string, vmid: number, client?: Axio
  * token; the browser never sees the token.
  */
 function connectConsoleTarget(node: string, vmid: number, port: string, ticket: string, config: ProxmoxConnection, kind: GuestKind): WebSocket {
-  const { host, tokenId, tokenSecret, verifySsl } = config;
+  const { host, tokenId, tokenSecret, verifySsl, ca } = config;
   // Proxmox's API/console listens on HTTPS only; force wss so a host saved as http://
   // (which REST tolerates via a 301 redirect, but the ws client does NOT) still works.
   const wsBase = `wss://${host.replace(/^[a-z]+:\/\//i, '')}`;
@@ -66,6 +66,9 @@ function connectConsoleTarget(node: string, vmid: number, port: string, ticket: 
   return new WebSocket(url, ['binary'], {
     headers: { Authorization: `PVEAPIToken=${tokenId}=${tokenSecret}` },
     rejectUnauthorized: verifySsl,
+    // Same trust anchor as the REST client: with a private CA and verification on,
+    // the console handshake must accept the certificate the API calls accept.
+    ...(ca ? { ca } : {}),
   });
 }
 

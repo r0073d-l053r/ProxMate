@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { runScheduledBackups, runDueBackups } from './matestate.service.js';
-import { runDuePowerActions, previousCronOccurrence } from './power-schedule.service.js';
+import { runDuePowerActions, previousCronOccurrence, reportInvalidStoredCrons } from './power-schedule.service.js';
 import { sampleResourceUsage, pruneResourceSamples } from './resource-history.service.js';
 import { evaluateAlerts } from './alert.service.js';
 import { refreshAllTemplates } from './template.service.js';
@@ -9,6 +9,7 @@ import { runAppDbBackup } from './appdb-backup.service.js';
 import { runAccessExpiryTick } from './access-sweep.service.js';
 import { getConfig, setConfig } from './config.service.js';
 import { runGuestMarkerBackfill } from './vm.service.js';
+import { advanceDeployingVms } from './deploy-lock.service.js';
 
 /** SystemConfig key: ISO timestamp of the last successful weekly backup run. */
 const LAST_RUN_KEY = 'matestate_last_run';
@@ -33,6 +34,7 @@ let markerTask: ReturnType<typeof cron.schedule> | null = null;
 let markerRunning = false;
 let running = false;
 let powerRunning = false;
+let deployLockRunning = false;
 let backupRunning = false;
 let historyRunning = false;
 let balancerRunning = false;
@@ -120,6 +122,20 @@ export async function guestMarkerBackfillTick(): Promise<void> {
   }
 }
 
+/** One cloud-init deploy-lock tick (every minute). Exported for tests. */
+export async function deployLockTick(): Promise<void> {
+  if (deployLockRunning) return; // probes are slow; never stack ticks
+  deployLockRunning = true;
+  try {
+    const r = await advanceDeployingVms();
+    if (r.ready) console.log(`[scheduler] deploy lock: ${r.ready} of ${r.checked} machine(s) finished deploying`);
+  } catch (err) {
+    console.error('[scheduler] deploy-lock tick failed:', err);
+  } finally {
+    deployLockRunning = false;
+  }
+}
+
 export function startScheduler(): void {
   if (task) return; // already started
   markerTask = cron.schedule('*/15 * * * *', () => void guestMarkerBackfillTick());
@@ -134,6 +150,9 @@ export function startScheduler(): void {
   setTimeout(() => {
     void catchUpMissedBackups().catch((err) => console.error('[scheduler] catch-up check failed:', err));
   }, 10_000);
+
+  // Schedules stored before validation was strict may never fire; say so once at boot.
+  setTimeout(() => void reportInvalidStoredCrons(), 20_000);
 
   // Per-minute tick that applies due per-VM power schedules (auto start/stop).
   powerTask = cron.schedule('* * * * *', async () => {
@@ -152,6 +171,10 @@ export function startScheduler(): void {
   });
 
   console.log('[scheduler] per-VM power schedules active (1-min tick)');
+
+  // Per-minute tick that advances the cloud-init deploy lock (and applies the
+  // pending login password) for machines nobody has opened in the UI.
+  cron.schedule('* * * * *', () => void deployLockTick());
 
   // Per-minute tick that takes per-VM scheduled backups as their cron fires.
   // Separate lock from power actions: a slow vzdump must never block start/stop.

@@ -9,6 +9,7 @@ import {
   DuplicateKeyError,
   TooManyKeysError,
 } from '../services/ssh-key.service.js';
+import { recordAudit } from '../services/audit.service.js';
 import type { AuthRequest } from '../types/index.js';
 
 const router = Router();
@@ -42,6 +43,8 @@ router.post('/', async (req: Request, res: Response) => {
   }
   try {
     const key = await addSshKey(user.id, parsed.data.name, parsed.data.publicKey);
+    // A new key grants shell access to every machine it is later injected into.
+    await recordAudit({ action: 'ssh_key.add', actor: user, targetType: 'ssh_key', targetId: key.id, detail: key.name, req });
     res.status(201).json(key);
   } catch (err) {
     if (err instanceof DuplicateKeyError || err instanceof TooManyKeysError) {
@@ -61,6 +64,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
     res.status(404).json({ error: 'Key not found' });
     return;
   }
+  await recordAudit({ action: 'ssh_key.delete', actor: user, targetType: 'ssh_key', targetId: req.params['id'] as string, req });
   res.json({ success: true });
 });
 

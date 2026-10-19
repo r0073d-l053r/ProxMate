@@ -606,6 +606,18 @@ describe('reconcileInterruptedPassthroughApplies (startup recovery)', () => {
     });
   });
 
+  it('keeps the record of dropped cloud-init drives while Proxmox is unreachable, for the next start to restore', async () => {
+    prFindMany.mockResolvedValue([{ id: 'q1', vmId: 'vm1', ciDropped: JSON.stringify([{ slot: 'ide2', storage: 'tank' }]) }] as never);
+    vmFindUnique.mockResolvedValue(qemuVm());
+    getClient.mockRejectedValue(new Error('connect refused'));
+
+    const n = await reconcileInterruptedPassthroughApplies();
+
+    expect(n).toBe(0);
+    expect(addCiDrive).not.toHaveBeenCalled();
+    expect(prUpdate).not.toHaveBeenCalled();
+  });
+
   it('marks an interrupted apply failed even with no cloud-init to restore', async () => {
     prFindMany.mockResolvedValue([{ id: 'q1', vmId: 'vm1', ciDropped: null }] as never);
     vmFindUnique.mockResolvedValue(qemuVm());

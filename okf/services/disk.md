@@ -33,7 +33,7 @@ sources:
 
 # Gotchas
 
-- Admins skip the quota check; shrinking deltas skip it too. Over-quota throws `QuotaError` from [vm service](/services/vm.md).[^disk]
+- Admins skip the quota check; shrinking deltas skip it too. Usage counts only the owner's non-quota-exempt machines, as for create and resize. Over-quota throws `QuotaError` from [vm service](/services/vm.md).[^disk]
 - The root disk is resized via the VM resize controls, not this service.[^disk]
 - The DB column is incremented by the delta after the Proxmox call. Add, resize and remove run under the owner's quota lock (`withQuotaLock` from [vm](/services/vm.md)), so concurrent changes are checked and counted one at a time; removal re-reads the row under the lock and writes `max(0, storage - freed)`. All three go through `requireOurGuest`, and `listDisks` returns none for a guest that isn't the row's.
 

@@ -98,6 +98,14 @@ describe('ensureHostCpu — expose AVX for OpenCode', () => {
     expect(await ensureHostCpu('pve', 109, asClient(c))).toBe(false);
     expect(c.put).not.toHaveBeenCalled();
   });
+
+  it('reads the config from the same guest kind it writes to', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue({ data: { data: { cpu: 'kvm64' } } });
+    await ensureHostCpu('pve', 109, asClient(c), 'lxc');
+    expect(c.get.mock.calls[0][0]).toBe('/nodes/pve/lxc/109/config');
+    expect(c.put.mock.calls[0][0]).toBe('/nodes/pve/lxc/109/config');
+  });
 });
 
 // ─── Node AVX capability (the IDE relocate prerequisite) ──────────────────────
