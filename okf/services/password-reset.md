@@ -20,18 +20,19 @@ Self-service and admin-assisted password resets.[^reset]
 | Function | Signature summary | What it does |
 |---|---|---|
 | `requestReset` | `(email, appUrl) => { method: 'email' \| 'admin' }` | Normalises email. With SMTP → creates a token (SHA-256 hash, TTL 1 h) and emails `<appUrl>/reset-password?token=<raw>`; without SMTP → creates a pending `PasswordResetRequest` (deduped). |
-| `resetWithToken` | `(token, newPassword) => { id, email }` | Validates unused/unexpired token; in one transaction sets the bcrypt hash, marks token used, deletes all the user's sessions. |
-| `adminResetPassword` | `(userId, newPassword)` | Transaction: set hash, delete sessions, mark pending requests `handled`. |
+| `resetWithToken` | `(token, newPassword) => { id, email }` | Validates unused/unexpired token; in one transaction sets the bcrypt hash, marks token used, deletes all the user's sessions and API tokens, and voids their other outstanding reset links. |
+| `adminResetPassword` | `(userId, newPassword)` | Transaction: set hash, delete sessions and API tokens, void outstanding reset links, mark pending requests `handled`. |
 | `listResetRequests` | `()` | Pending requests, newest first. |
 
 # Data
 
-[PasswordResetToken](/database/password-reset-token.md) (`tokenHash`, `expiresAt`, `usedAt`), [PasswordResetRequest](/database/password-reset-request.md) (`status` pending/handled, `handledAt`), [User](/database/user.md) `passwordHash`, [Session](/database/session.md) (deleted). [smtp config](/config/smtp.md).[^reset]
+[PasswordResetToken](/database/password-reset-token.md) (`tokenHash`, `expiresAt`, `usedAt`), [PasswordResetRequest](/database/password-reset-request.md) (`status` pending/handled, `handledAt`), [User](/database/user.md) `passwordHash`, [Session](/database/session.md) and [ApiToken](/database/api-token.md) (deleted). [smtp config](/config/smtp.md).[^reset]
 
 # Gotchas
 
 - Anti-enumeration: the returned `method` depends only on SMTP configuration, never on whether the account exists. Mail failures are logged, not surfaced.[^reset]
-- A reset logs the user out everywhere (all Session rows deleted).[^reset]
+- A reset logs the user out everywhere: all Session and ApiToken rows are deleted and other reset links stop working.[^reset]
+- Passkeys are kept on purpose: they are a separate factor the user manages on the Security page, and removing them would strip the second factor from a `require2fa` account during recovery.[^reset]
 
 # Relationships
 

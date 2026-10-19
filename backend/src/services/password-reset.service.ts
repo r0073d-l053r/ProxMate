@@ -45,6 +45,26 @@ export async function requestReset(email: string, appUrl: string): Promise<{ met
   return { method: mailOn ? 'email' : 'admin' };
 }
 
+/**
+ * What a password reset (self-service or admin) revokes, in the same
+ * transaction as the new password: every session, every API token, and any
+ * other reset link still outstanding. A reset is how an account is recovered
+ * after a compromise, so it must not leave behind any credential that was
+ * derived from the old access.
+ *
+ * Passkeys are deliberately kept. They are a separate factor that the user
+ * enrolled and manages on their own Security page (where they can see and
+ * remove each one), and deleting them would silently strip the second factor
+ * from a require2fa account at exactly the moment it is being recovered.
+ */
+function revokeAccessOnReset(userId: string) {
+  return [
+    prisma.session.deleteMany({ where: { userId } }),
+    prisma.apiToken.deleteMany({ where: { userId } }),
+    prisma.passwordResetToken.updateMany({ where: { userId, usedAt: null }, data: { usedAt: new Date() } }),
+  ];
+}
+
 /** Complete a reset using the emailed token. Returns the user (for auditing). */
 export async function resetWithToken(
   token: string,
@@ -58,8 +78,7 @@ export async function resetWithToken(
   await prisma.$transaction([
     prisma.user.update({ where: { id: row.userId }, data: { passwordHash } }),
     prisma.passwordResetToken.update({ where: { id: row.id }, data: { usedAt: new Date() } }),
-    // Invalidate every existing session — a reset logs you out everywhere.
-    prisma.session.deleteMany({ where: { userId: row.userId } }),
+    ...revokeAccessOnReset(row.userId),
   ]);
   const user = await prisma.user.findUnique({ where: { id: row.userId } });
   return { id: row.userId, email: user?.email ?? '' };
@@ -70,7 +89,7 @@ export async function adminResetPassword(userId: string, newPassword: string): P
   const passwordHash = await hashPassword(newPassword);
   await prisma.$transaction([
     prisma.user.update({ where: { id: userId }, data: { passwordHash } }),
-    prisma.session.deleteMany({ where: { userId } }),
+    ...revokeAccessOnReset(userId),
     prisma.passwordResetRequest.updateMany({
       where: { userId, status: 'pending' },
       data: { status: 'handled', handledAt: new Date() },

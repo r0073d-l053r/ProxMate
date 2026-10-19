@@ -3,9 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
     user: { findUnique: vi.fn(), update: vi.fn() },
-    passwordResetToken: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
+    passwordResetToken: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     passwordResetRequest: { findFirst: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
     session: { deleteMany: vi.fn() },
+    apiToken: { deleteMany: vi.fn() },
+    passkey: { deleteMany: vi.fn() },
     $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops)),
   },
 }));
@@ -14,7 +16,7 @@ vi.mock('../src/services/auth.service.js', () => ({ hashPassword: vi.fn(async ()
 
 import { prisma } from '../src/lib/prisma.js';
 import * as mail from '../src/services/mail.service.js';
-import { requestReset, resetWithToken } from '../src/services/password-reset.service.js';
+import { requestReset, resetWithToken, adminResetPassword } from '../src/services/password-reset.service.js';
 
 const findUser = vi.mocked(prisma.user.findUnique);
 const tokenCreate = vi.mocked(prisma.passwordResetToken.create);
@@ -88,5 +90,31 @@ describe('resetWithToken', () => {
     expect(prisma.user.update).toHaveBeenCalledWith({ where: { id: 'u1' }, data: { passwordHash: 'HASH' } });
     expect(prisma.passwordResetToken.update).toHaveBeenCalledWith({ where: { id: 't1' }, data: { usedAt: expect.any(Date) } });
     expect(prisma.session.deleteMany).toHaveBeenCalledWith({ where: { userId: 'u1' } });
+  });
+});
+
+describe('a password reset signs the account out everywhere', () => {
+  it('self-service reset revokes API tokens and other outstanding reset links, but keeps passkeys', async () => {
+    tokenFind.mockResolvedValue({ id: 't1', userId: 'u1', usedAt: null, expiresAt: new Date(Date.now() + 60_000) } as never);
+    findUser.mockResolvedValue({ id: 'u1', email: 'a@b.c' } as never);
+    await resetWithToken('good', 'newpassword1');
+    expect(prisma.session.deleteMany).toHaveBeenCalledWith({ where: { userId: 'u1' } });
+    expect(prisma.apiToken.deleteMany).toHaveBeenCalledWith({ where: { userId: 'u1' } });
+    expect(prisma.passwordResetToken.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', usedAt: null },
+      data: { usedAt: expect.any(Date) },
+    });
+    expect(prisma.passkey.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('admin reset revokes sessions, API tokens and outstanding reset links, but keeps passkeys', async () => {
+    await adminResetPassword('u1', 'newpassword1');
+    expect(prisma.session.deleteMany).toHaveBeenCalledWith({ where: { userId: 'u1' } });
+    expect(prisma.apiToken.deleteMany).toHaveBeenCalledWith({ where: { userId: 'u1' } });
+    expect(prisma.passwordResetToken.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'u1', usedAt: null },
+      data: { usedAt: expect.any(Date) },
+    });
+    expect(prisma.passkey.deleteMany).not.toHaveBeenCalled();
   });
 });
