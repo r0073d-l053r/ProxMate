@@ -87,6 +87,13 @@ pveum user token add root@pam proxmate --privsep 0       # privsep OFF
 You'll enter `root@pam!proxmate` as the **Token ID** and that value as the **Secret**
 during OOBE (§7).
 
+Whatever token you use must be able to set guest tags (`VM.Config.Options`): ProxMate
+tags every guest it manages with the machine it belongs to, and acts only on guests
+carrying their own machine's tag. On Proxmox VE 8+ it also needs `SDN.Use` (checked
+whenever a guest NIC is attached, plain bridges included) and `SDN.Audit` to list SDN
+VNets; the connection test warns when either is missing. A privsep-off token has all
+of these.
+
 > Prefer least privilege? You can scope a token with a role on a pool instead — but
 > note the per-tenant Pool/ACL least-privilege model is still being validated
 > (tracked separately). For now a privsep-off token is the supported path.
@@ -124,6 +131,7 @@ Fill in the **PRODUCTION** block (replace the domain). The key values:
 | `WEBAUTHN_ORIGIN` | `https://proxmate.example.com` | Passkey origin (full https origin). |
 | `COOKIE_SECURE` | `true` | Send `Secure` cookies (HTTPS). |
 | `TRUST_PROXY` | `1` | One proxy hop (Caddy) → real client IP for rate-limit + audit. |
+| `REAL_IP_HEADER` | *(optional)* default `cf-connecting-ip` | Header the audit log reads the client IP from. Honoured **only when `TRUST_PROXY` ≥ 1**; `x-forwarded-for` is resolved through the trusted hop count rather than read verbatim. Behind plain Caddy/nginx set `x-forwarded-for`; set it empty to always record the socket address. |
 | `BIND_ADDR` | `127.0.0.1` | Only the local reverse proxy can reach the app ports. |
 | `PROXMATE_BACKUP_DIR` | *(recommended)* e.g. `/mnt/backups/proxmate-db` | **Where ProxMate's own database snapshots land on the HOST** (§12). The container-side path is fixed at `/var/backups/proxmate`; this chooses the host directory that gets mounted there. Creating a folder on the host does **nothing** unless it's set here — the backend runs in a container and can only write to paths mounted into it. Changing it requires `docker compose up -d backend` (a mount is only established at container-create time), not a restart. Default: `./backups` next to `docker-compose.yml`. |
 | `BACKUP_DOWNLOAD_DIR` | *(optional)* e.g. `/backups` | **Enables tenant backup downloads.** Mount your backup share (the same NFS/CIFS/PBS-dir Proxmox writes vzdumps to) into the API container and point this at it. Tenants then get a **Download** button on each MateState that emails them a single-use, 1-hour link; ProxMate streams the file off this mount (the Proxmox API can't stream vzdump bytes). Requires SMTP. Leave unset to keep the feature off. |
@@ -132,6 +140,17 @@ Fill in the **PRODUCTION** block (replace the domain). The key values:
 | `METRICS_TOKEN` | *(recommended)* a random string | Guards `GET /metrics`. **In production `/metrics` returns 404 unless this is set** — there is no localhost exemption, so a Prometheus scrape from `127.0.0.1` gets a 404 too. Scrapers send `Authorization: Bearer <token>`. |
 | `ALLOW_PRIVATE_OUTBOUND_URLS` | *(optional)* `true` | Admin-configured **webhooks** and **cloud-image URLs** are blocked from targeting private/loopback/metadata addresses (SSRF guard). Set `true` only if you legitimately point at a **LAN** service (self-hosted Mattermost/ntfy, a local image mirror). The scheme + no-credentials checks always stay enforced. |
 | `MATESTATE_CRON` / `ACCESS_EXPIRY_CRON` | *(optional)* 5-field cron | Override the guest-backup schedule (default Sundays 03:00) and the compute-access-window sweep (default hourly at :20). |
+| `APPDB_BACKUP_CRON` / `BALANCER_CRON` / `TEMPLATE_REFRESH_CRON` | *(optional)* 5-field cron | Override the app-database snapshot schedule (default nightly 02:30), the Cluster Balancer and the cloud-image template refresh. An unset or invalid expression uses the built-in schedule. |
+| `AUTH_RATE_LIMIT_MAX` / `_WINDOW_MS` | *(optional)* default `20` / `900000` | Login / register / invite throttle per IP. |
+| `AUTH_LOCKOUT_MAX` / `AUTH_LOCKOUT_MINUTES` | *(optional)* default `10` / `15` | Per-account lockout after consecutive failed passwords (auto-unlocks). |
+| `SHARE_RATE_LIMIT_MAX` / `_WINDOW_MS` | *(optional)* default `30` / `3600000` | Sharing a VM by email, per signed-in user. |
+| `PROXMOX_CA_CERT_FILE` | *(optional)* e.g. `/certs/pve-ca.pem` | Keep Proxmox TLS verification on against a private CA. A container path: mount the PEM in `docker-compose.override.yml`. |
+| `IDE_GUEST_PORT` | *(optional)* default `8080` | Port `code-server` listens on inside tenant VMs for the ProxMate IDE (§16). The proxy, the guest install and the firewall pinhole all use it. |
+| `SELF_UPDATE_ENABLED` / `UPDATE_REPO` | *(optional)* | The one-click update button (§14.3) and the GitHub repo the release check reads. `GITHUB_TOKEN` raises the GitHub API rate limit for that check. |
+| `PROXMATE_MODULES` / `LOG_LEVEL` | *(optional)* | Optional modules to enable ([`backend/src/modules/README.md`](backend/src/modules/README.md)) and the log level (default `info`). |
+
+`docker-compose.yml` forwards every setting listed in `.env.docker.example` to the
+backend; the file documents each one with its default.
 
 > **`SNIPPET_DIR` and `BACKUP_DOWNLOAD_DIR` are CONTAINER paths.** Setting the variable is only
 > half the job — the host directory must also be **mounted into the backend container**, or the
@@ -222,8 +241,10 @@ Browse to **https://proxmate.example.com** — you should land on the setup wiza
 2. Enter the **Proxmox host** (`https://<pve-host>:8006`), **Token ID**
    (`root@pam!proxmate`), and **Secret** from §2.2. Leave "verify SSL" off if your
    Proxmox uses a self-signed cert.
-3. Set **VM defaults** (storage, bridge — point this at your tenant VLAN/VNet if you
-   made one, ISO storage).
+3. Set **VM defaults** (storage, network — point this at your tenant VLAN/VNet if you
+   made one; Linux bridges, Open vSwitch bridges and SDN VNets are listed, and a name
+   can be typed in — ISO storage). Every step after the admin account needs that
+   admin's session.
 
 ### 7.2 Smoke-test the core
 - Dashboard shows live cluster capacity (admins see cluster stats).
@@ -313,7 +334,7 @@ Run these against the production HTTPS site (passkeys won't work otherwise).
 | 4 | **Passkey enroll** | `/security` → Passkeys → Add a passkey | Browser biometric/security-key prompt; passkey listed |
 | 5 | **Passwordless passkey login** | Log out → **Sign in with a passkey** | Authenticate with the device; lands on dashboard (skips password + TOTP) |
 | 6 | **Invite-enforced 2FA** | Create an invite with **Require two-step authentication** ticked → register through it | New user is corralled to `/security` and **can't use VMs** until they enroll TOTP or a passkey |
-| 7 | **SSO exemption** | An SSO-linked user with require-2FA | Not forced into local 2FA (their IdP handles it) |
+| 7 | **SSO exemption** | An SSO-linked user with require-2FA | Signing in **through SSO** isn't forced into local 2FA (their IdP handles it); a **password** login on the same account still needs the second factor |
 
 ---
 
@@ -334,7 +355,7 @@ Run these against the production HTTPS site (passkeys won't work otherwise).
       Schedule override: `APPDB_BACKUP_CRON` (default nightly 02:30). See §12.
 - [ ] **Backups (manual alternative):** snapshot the `proxmate-data` volume —
       `docker run --rm -v proxmate_proxmate-data:/data -v "$PWD":/backup alpine tar czf /backup/proxmate-db-$(date +%F).tgz -C /data .`
-- [ ] **Updates:** `git pull && docker compose up -d --build` (migrations apply on boot).
+- [ ] **Updates:** `./deploy/update.sh` onto a release tag (§14); migrations apply on boot.
 - [ ] Consider enforcing **2FA on the owner/admin** account immediately after setup.
 
 ---
@@ -590,6 +611,11 @@ over after this update. So, **before** you update:
 
 Also changed in this release:
 
+- **Guest ownership tags.** ProxMate now tags every guest it manages (`proxmate-<id>`) and
+  acts only on guests carrying their own machine's tag, so the Proxmox token must be allowed
+  to set tags (`VM.Config.Options`; a privsep-off or Administrator token is). The first start
+  tags existing guests; machines it can't match are listed under **Settings → Maintenance →
+  Unconfirmed machines** for an admin to adopt or remove (see the admin guide §7).
 - **Images move to Node 22.** The first build pulls `node:22-alpine`, so it needs network
   access and takes a little longer than a normal update.
 - **`TRUST_PROXY` ≥ 1 is now required for the real-IP header.** The audit log only
@@ -670,19 +696,22 @@ Notes:
 If you want the per-VM browser IDE, the full setup + security model is in
 [`docs/proxmate-ide.md`](docs/proxmate-ide.md). The production essentials:
 
-- **Reachability:** the ProxMate host must reach tenant VM IPs on **TCP :8080**. On a flat
+- **Reachability:** the ProxMate host must reach tenant VM IPs on **TCP :8080** (or
+  `IDE_GUEST_PORT`, §4). On a flat
   network this is automatic; on a non-flat one you provide the routing (Tailscale subnet route,
   VPN, static route). ProxMate can't create it.
 - **`BACKEND_PUBLIC_URL` must be your https origin** — the in-guest AI agent's gateway URL is built
   from it directly. Since v0.8.0 the configured value wins outright; deriving the scheme from
   `X-Forwarded-Proto` proved unreliable behind a proxy that rewrites it (an http URL gets 301'd,
   which breaks the agent's POST). Header derivation remains only a fallback for bare dev setups.
-- **Firewall:** with isolation on, ProxMate opens a managed, infra-scoped `:8080` pinhole on each
+- **Firewall:** with isolation on, ProxMate opens a managed, infra-scoped pinhole for that port on each
   IDE VM, scoped to **`ide_ingress_cidr`** — set it to the address ProxMate's traffic arrives from
   (the backend host on a flat LAN; the subnet-router node's LAN IP when routed).
 - **Guest specs:** IDE VMs need the **qemu-guest-agent** running, **>= 8 GB RAM** (`ide_min_ram_mb`),
   and AVX (ProxMate sets `cpu: host` automatically; reboot to apply).
 - Enable + configure models in **admin Settings ▸ IDE tab**.
+- **Owner-only:** the IDE opens only for a VM's owner — not for admins or people the VM is
+  shared with. IDEs installed by 1.0.x reinstall once, automatically, on their owner's next open.
 
 Prefer an agent to do it? [`DEPLOY_WITH_CLAUDE.md`](DEPLOY_WITH_CLAUDE.md) covers the IDE in §7.
 
