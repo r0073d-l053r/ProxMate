@@ -124,14 +124,14 @@ All schedules are read in `scheduler.service.ts`.[^scheduler]
 
 # Gotchas
 
-- **ENCRYPTION_KEY auto-generation:** when the variable is unset, `index.ts` generates `randomBytes(32).toString('hex')`, sets it on the process and writes it into `.env` in the current working directory, but **only if that `.env` file already exists**. Without a `.env`, a new key is generated on every start and previously encrypted secrets become undecryptable. Never change the key after setup.[^index][^env-example]
+- **ENCRYPTION_KEY auto-generation:** when the variable is unset or empty, `index.ts` (via `lib/encryption-key.ts`) generates `randomBytes(32).toString('hex')` only outside production and only when a `.env` exists in the current working directory: it writes the key there (filling an existing `ENCRYPTION_KEY=` line or appending one), sets the file to mode 0600 and logs the path. In production, or with no `.env`, the server exits at boot with instructions instead of running on a key that would be lost on restart. Never change the key after setup.[^index][^env-example]
 - `config/env.ts` is dead code. Changing its defaults has no effect.[^env-ts]
 - The logger header comment mentions `LOG_PRETTY=1`, but no code reads that variable.
 - Numeric variables are parsed with `Number(...)`, so a non-numeric value becomes `NaN`. Some readers clamp the result with `Math.max` (lockout, retries, cooldown), but `Math.max` returns `NaN` for a `NaN` input, so the clamp does not catch a non-numeric value. The rate-limit values are not clamped at all.[^rate-limit]
 
 [^env-example]: .env.example
 [^env-ts]: backend/src/config/env.ts
-[^index]: backend/src/index.ts (dotenv load, ENCRYPTION_KEY auto-generation, PORT/BIND_ADDR)
+[^index]: backend/src/index.ts and backend/src/lib/encryption-key.ts (dotenv load, ENCRYPTION_KEY auto-generation, PORT/BIND_ADDR)
 [^app]: backend/src/app.ts (trust proxy, CORS, /metrics)
 [^crypto]: backend/src/lib/crypto.ts (`getKey`)
 [^rate-limit]: backend/src/middleware/rate-limit.ts

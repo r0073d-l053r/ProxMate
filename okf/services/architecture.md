@@ -46,7 +46,7 @@ ProxMate is an invite-only, self-service cloud dashboard on top of Proxmox VE. T
 
 `backend/src/index.ts`:[^index]
 
-1. Loads `.env`; if `ENCRYPTION_KEY` is missing, generates 32 random bytes hex and writes it into `.env` when that file exists (compose instead REQUIRES it to be set).
+1. Loads `.env`; if `ENCRYPTION_KEY` is missing, generates 32 random bytes hex and writes it into `.env` (mode 0600) when that file exists and `NODE_ENV` is not `production`; otherwise exits with instructions (compose REQUIRES it to be set).
 2. Creates `http.Server(app)` with `requestTimeout = 0` (multi-GB backup uploads), `keepAliveTimeout = 65s`, `headersTimeout = 66s`.
 3. One `upgrade` dispatcher: console relay (`handleConsoleUpgrade`, `/console` + `/serial`), then the IDE proxy (`handleIdeUpgrade`, `/api/ide/:id/proxy`), else destroy the socket.
 4. `await loadModules()` BEFORE listen; a broken named module exits the process.
