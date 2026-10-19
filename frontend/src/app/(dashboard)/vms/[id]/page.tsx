@@ -219,6 +219,8 @@ export default function VmDetailPage() {
         popupOrOffer("ProxMate IDE is ready.");
       } else if (r.status === "done") {
         toast.error("The IDE install didn't finish. Check the VM and try again.");
+      } else if (r.status === "timeout") {
+        toast.error("The IDE install is taking unusually long — check the VM and try again.");
       }
     } catch (err) {
       // The backend tags CPU-guardrail refusals so we can offer the right remedy
