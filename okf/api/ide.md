@@ -47,7 +47,7 @@ Browser-facing ProxMate IDE management (code-server + OpenCode inside a guest). 
 - Tenants are held to public endpoints and preset providers (`addLlmKey(..., { allowPrivate: isAdmin, allowCustomBase: isAdmin })`); `/keys/:keyId/test` runs `assertSafeOutboundUrl` for non-admins (SSRF guard). Admins are exempt so they can use LAN sources such as a private Ollama.[^routes]
 - `TooManyLlmKeysError` / `InvalidLlmKeyError` give 400. Keys are encrypted at rest and never returned.[^routes]
 - `publicBaseUrl(req)`: `BACKEND_PUBLIC_URL` wins; otherwise derived from `x-forwarded-proto` / `req.protocol` + Host. It must be https in production, because an edge http-to-https 301 turns the agent's POST into a GET and drops the body and Bearer token.[^routes]
-- The IDE itself is served by the reverse proxy at `/api/ide/:id/proxy/*` (HTTP and WebSocket), authed by the session cookie and VM ownership, mounted ahead of helmet/CORS. It relays only to a guest that proves the VM's per-install secret (see [ide-guest-auth](/services/ide-guest-auth.md)).[^proxy]
+- The IDE itself is served by the reverse proxy at `/api/ide/:id/proxy/*` (HTTP and WebSocket), authed by the session cookie and VM ownership (owner only), mounted ahead of helmet/CORS; ProxMate cookies and `Authorization` are stripped from proxied requests, and ProxMate-named `Set-Cookie` and `Service-Worker-Allowed` from responses. It relays only to a guest that proves the VM's per-install secret (see [ide-guest-auth](/services/ide-guest-auth.md)).[^proxy]
 
 # Relationships
 

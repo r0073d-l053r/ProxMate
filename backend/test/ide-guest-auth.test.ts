@@ -8,7 +8,10 @@ import express from 'express';
 // caller may open this VM, and which guest secret (if any) ProxMate holds for it.
 vi.mock('../src/services/auth.service.js', () => ({ verifyToken: vi.fn() }));
 vi.mock('../src/services/vm.service.js', () => ({ getVmWithCap: vi.fn() }));
-vi.mock('../src/services/ide.service.js', () => ({ getIdeCapability: vi.fn() }));
+vi.mock('../src/services/ide.service.js', async (orig) => ({
+  ...(await orig<typeof import('../src/services/ide.service.js')>()),
+  getIdeCapability: vi.fn(),
+}));
 vi.mock('../src/lib/crypto.js', () => ({ encrypt: (s: string) => `enc:${s}`, decrypt: (s: string) => s.slice(4) }));
 vi.mock('../src/lib/logger.js', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('../src/lib/prisma.js', () => ({

@@ -1,11 +1,11 @@
 import httpProxy from 'http-proxy';
 import type { Express } from 'express';
-import { STATUS_CODES, type IncomingMessage, type ServerResponse } from 'node:http';
+import { STATUS_CODES, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { Socket } from 'node:net';
 import { verifyToken } from './auth.service.js';
 import { getVmWithCap } from './vm.service.js';
-import { getIdeCapability } from './ide.service.js';
+import { getIdeCapability, isIdeOwner, IDE_OWNER_ONLY_MESSAGE } from './ide.service.js';
 import { SESSION_COOKIE } from '../lib/cookies.js';
 import { logger } from '../lib/logger.js';
 import { isLoopbackOrLinkLocal } from '../lib/url-safety.js';
@@ -22,9 +22,16 @@ import { IDE_GUEST_COOKIE, ideGuestCookieValue, loadIdeGuestSecret, ensureIdeGue
  * rest — every asset/WS then resolves back under our prefix. The one rule that
  * makes relative resolution correct is that the entry URL must end in `/`.
  *
- * Auth mirrors the console relay: httpOnly session cookie + VM ownership + the
- * admin IDE policy (getIdeCapability). No ticket in the URL; the cookie is sent
- * on every same-origin sub-request automatically.
+ * Auth: httpOnly session cookie + the VM's OWNER (admins and sharees are refused,
+ * see ide.service IDE_OWNER_ONLY_MESSAGE) + the admin IDE policy
+ * (getIdeCapability). No ticket in the URL; the cookie is sent on every
+ * same-origin sub-request automatically.
+ *
+ * Header hygiene: everything the guest serves is controlled by its root user, and
+ * it is served on the ProxMate origin. So ProxMate's own credentials (every
+ * `proxmate_*` cookie and the Authorization header) are removed before a request
+ * reaches the guest, and a guest response can neither set or overwrite a
+ * ProxMate cookie nor widen a service worker's scope (`Service-Worker-Allowed`).
  *
  * Target resolution (per-VM — see {@link resolveIdeTargetUrl}):
  *   1. `IDE_TARGET_OVERRIDE` — a single fixed URL for the rig (no live guest).
@@ -57,6 +64,35 @@ const IDE_WS_PATH = /^\/api\/ide\/([^/]+)\/proxy(\/.*)?$/;
 // (verified against real code-server 4.127 on the lab cluster). http-proxy still dials
 // the real target regardless of the Host header.
 const proxy = httpProxy.createProxyServer({ ws: true, changeOrigin: false, xfwd: true });
+
+/** Every ProxMate cookie (lib/cookies.ts) uses this prefix. */
+const PROXMATE_COOKIE_PREFIX = 'proxmate_';
+
+/**
+ * Strip what a guest response must not deliver to the browser on the ProxMate
+ * origin: Set-Cookie for ProxMate's cookie names (and code-server's session
+ * cookie, which the proxy supplies itself) and Service-Worker-Allowed.
+ */
+export function sanitizeGuestResponseHeaders(headers: IncomingHttpHeaders): void {
+  delete headers['service-worker-allowed'];
+  const set = headers['set-cookie'];
+  if (!set) return;
+  const kept = set.filter((line) => {
+    const name = (line.split('=', 1)[0] ?? '').trim();
+    return !name.startsWith(PROXMATE_COOKIE_PREFIX) && !name.startsWith(IDE_GUEST_COOKIE);
+  });
+  if (kept.length) headers['set-cookie'] = kept;
+  else delete headers['set-cookie'];
+}
+
+// Runs before http-proxy copies the upstream headers onto the browser response.
+proxy.on('proxyRes', (proxyRes) => sanitizeGuestResponseHeaders(proxyRes.headers));
+// WebSocket upgrades have no proxyRes event; listeners added here run before
+// http-proxy's own, so the 101 (or a refusal) is cleaned before it is relayed.
+proxy.on('proxyReqWs', (proxyReq) => {
+  proxyReq.on('response', (r) => sanitizeGuestResponseHeaders(r.headers));
+  proxyReq.on('upgrade', (r) => sanitizeGuestResponseHeaders(r.headers));
+});
 
 proxy.on('error', (err, _req, target) => {
   logger.warn({ err: (err as Error)?.message }, 'ide proxy upstream error');
@@ -99,7 +135,7 @@ export function resolveIdeTargetUrl(
   const override = env['IDE_TARGET_OVERRIDE'];
   if (override) return override;
   // The guest agent reports the IP, and a tenant with root in their guest could
-  // report a bogus one. Refuse to proxy to the host's own loopback / link-local /
+  // report a bogus one (resolveTarget also makes the guest prove its secret). Refuse to proxy to the host's own loopback / link-local /
   // metadata address (private LAN is fine — that's where guests live).
   if (!vm.ipAddress || isLoopbackOrLinkLocal(vm.ipAddress)) return null;
   const port = env['IDE_GUEST_PORT'] || '8080';
@@ -119,6 +155,7 @@ const NOT_AVAILABLE: ResolvedTarget = { ok: false, status: 403, message: 'ProxMa
 async function resolveTarget(vmId: string, user: { id: string; role: string }): Promise<ResolvedTarget> {
   const vm = await getVmWithCap(vmId, user, 'ide');
   if (!vm) return NOT_AVAILABLE;
+  if (!isIdeOwner(vm, user)) return { ok: false, status: 403, message: IDE_OWNER_ONLY_MESSAGE };
   const cap = await getIdeCapability({ role: user.role });
   if (!cap.available) return NOT_AVAILABLE;
   const target = resolveIdeTargetUrl(vm);
@@ -144,8 +181,9 @@ async function resolveTarget(vmId: string, user: { id: string; role: string }): 
 }
 
 /**
- * The Cookie header sent to the guest: whatever the browser sent, minus any
- * code-server session cookie of its own, plus the server-held guest cookie.
+ * The Cookie header sent to the guest: whatever the browser sent, minus every
+ * ProxMate cookie and any code-server session cookie of its own, plus the
+ * server-held guest cookie.
  */
 export function guestCookieHeader(header: string | undefined, guestCookie: string): string {
   const kept = (header ?? '')
@@ -154,7 +192,7 @@ export function guestCookieHeader(header: string | undefined, guestCookie: strin
     .filter((p) => {
       if (!p) return false;
       const name = p.split('=', 1)[0]!.trim();
-      return !name.startsWith(IDE_GUEST_COOKIE);
+      return !name.startsWith(PROXMATE_COOKIE_PREFIX) && !name.startsWith(IDE_GUEST_COOKIE);
     });
   kept.push(`${IDE_GUEST_COOKIE}=${guestCookie}`);
   return kept.join('; ');
@@ -195,6 +233,7 @@ export function mountIdeProxy(appInstance: Express): void {
       }
       req.url = rest + query; // strip the /api/ide/:id/proxy prefix
       req.headers.cookie = guestCookieHeader(req.headers.cookie, resolved.guestCookie);
+      delete req.headers.authorization; // a ProxMate credential, never the guest's
       proxy.web(req, res, { target: resolved.target });
     })().catch(() => {
       if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' }).end('IDE proxy error');
@@ -242,6 +281,7 @@ export function handleIdeUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
     }
     req.url = (m[2] ?? '/') + (url.search ?? ''); // strip the prefix
     req.headers.cookie = guestCookieHeader(req.headers.cookie, resolved.guestCookie);
+    delete req.headers.authorization; // a ProxMate credential, never the guest's
     proxy.ws(req, socket as unknown as Socket, head, { target: resolved.target });
   })().catch(() => socket.destroy());
   return true;

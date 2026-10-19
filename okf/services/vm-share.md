@@ -23,7 +23,7 @@ Capability model (owner decision 2026-07-11): a share stores a preset name in `V
 | `operator` | `view`, `power`, `console` |
 | `manager` | `view`, `power`, `console`, `configure`, `backups`, `ide` |
 
-Owners and admins hold `ALL_CAPS` (= manager set).[^share]
+Owners and admins hold `ALL_CAPS` (= manager set).[^share] The `ide` capability alone does not open, provision or mint tokens for the ProxMate IDE; those are limited to the VM's owner (see [ide-proxy](/services/ide-proxy.md)).
 
 # Key functions
 
