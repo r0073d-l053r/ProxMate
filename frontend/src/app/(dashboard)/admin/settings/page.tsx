@@ -21,8 +21,8 @@ import {
 import { api, apiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 import type { AdminSettings, ProxmoxResources, IsolationStatus, NotifyEvent } from "@/lib/types";
+import { IsolationStatusNote, isolationView } from "@/components/admin/isolation-status";
 import { NOTIFY_EVENT_LABELS } from "@/lib/types";
-import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { UpdatesCard } from "@/components/admin/updates-card";
 import { RescueIsoCard } from "@/components/admin/rescue-iso-card";
@@ -691,34 +691,7 @@ export default function SettingsPage() {
                   Apply isolation firewall to new VMs
                 </label>
 
-                <div
-                  className={cn(
-                    "rounded-lg border p-3 text-sm",
-                    isolation.enforced
-                      ? "border-emerald-500/30 bg-emerald-500/10"
-                      : "border-amber-500/30 bg-amber-500/10",
-                  )}
-                >
-                  {isolation.enforced ? (
-                    <p>
-                      <span className="font-medium">Isolation is enforced.</span> New VMs are firewalled
-                      off from the rest of your infrastructure.
-                    </p>
-                  ) : !isolation.clusterFirewallEnabled ? (
-                    <p>
-                      <span className="font-medium">Not enforced yet.</span> ProxMate is configuring each
-                      VM&apos;s firewall, but rules only take effect once the{" "}
-                      <span className="font-medium">Proxmox cluster firewall</span> is enabled. Until
-                      then, VMs share your LAN. See <code>SECURITY.md</code> for the safe steps to enable
-                      it (and the recommended dedicated-VLAN setup).
-                    </p>
-                  ) : (
-                    <p>
-                      <span className="font-medium">Isolation is disabled.</span> New VMs will be placed
-                      on your network without isolation rules.
-                    </p>
-                  )}
-                </div>
+                <IsolationStatusNote isolation={isolation} />
 
                 {/* Optional DNS allow-list for tenant isolation */}
                 {isolation.isolationEnabled && (
@@ -743,7 +716,7 @@ export default function SettingsPage() {
                 )}
 
                 {/* Guided enforcement: enable/disable the Proxmox cluster firewall */}
-                {isolation.isolationEnabled && !isolation.enforced && (
+                {isolationView(isolation).showEnable && (
                   <div className="grid gap-2">
                     <FormField
                       label="Management subnet (kept reachable)"
@@ -785,7 +758,7 @@ export default function SettingsPage() {
                   </div>
                 )}
 
-                {isolation.enforced && (
+                {isolationView(isolation).showDisable && (
                   <Button
                     variant="outline"
                     className="w-fit"

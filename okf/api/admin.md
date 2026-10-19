@@ -52,7 +52,7 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 | GET | `/api/admin/nodes` | admin | Node health. |
 | GET | `/api/admin/storage-pinning` | admin | Storage pinning report. |
 | GET | `/api/admin/placement-diagnostics` | admin | Placement diagnostics using `iso_storage` and `default_storage`. |
-| GET | `/api/admin/isolation` | admin | Tenant isolation state: `isolationEnabled`, `clusterFirewallEnabled`, `enforced`, `reachable`, `suggestedMgmtCidr`, `dnsServers`, `vlanTag`. |
+| GET | `/api/admin/isolation` | admin | Tenant isolation state: `isolationEnabled`, `clusterFirewallEnabled`, `enforced`, `reachable`, `suggestedMgmtCidr`, `dnsServers`, `vlanTag`. `reachable: false` means Proxmox could not be asked, so the firewall state is unknown; the settings page then shows that and hides the enforcement controls. |
 | PUT | `/api/admin/isolation` | admin | `{ enabled, dnsServers?, vlanTag? ('' or 1..4094) }`. |
 | POST | `/api/admin/isolation/enforce` | admin | `{ managementCidr }`; enable the Proxmox cluster firewall with that management CIDR allowed. |
 | DELETE | `/api/admin/isolation/enforce` | admin | Disable the cluster firewall. |
