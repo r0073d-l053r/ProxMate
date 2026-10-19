@@ -1,0 +1,115 @@
+---
+type: API Router
+title: VM router
+description: Tenant VM and LXC lifecycle API (create, restore, power, resize, disks, shares, schedules, alerts, snapshots, MateState backups, rescue, console tickets), mounted at /api/vms.
+resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/vm.routes.ts
+tags: [proxmate, api, vm, lxc, lifecycle]
+generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+sources:
+  - id: routes
+    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/vm.routes.ts
+    title: backend/src/routes/vm.routes.ts
+  - id: app
+    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/app.ts
+    title: backend/src/app.ts
+  - id: console
+    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/console.routes.ts
+    title: backend/src/routes/console.routes.ts
+---
+
+# Purpose
+
+The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distinguishes them). Mounted at `/api/vms`.[^app]
+
+# Authentication
+
+- `router.use(requireAuth)` then `router.use(enforceMfaSetup)`.[^routes]
+- Per-VM authorization helpers (from the vm service), all returning 404 `VM not found` when the caller lacks access:[^routes]
+  - `getViewableVm`: any access including read-only shares (reads).
+  - `getVmWithCap(id, user, cap)`: capability `configure`, `power`, `backups` or `console`.
+  - `getOwnedVm`: owner/admin/co-owner (delete, bulk, rebuild, shares, migrate, convert).
+  - `resolveVmAccess`: detail view; returns `access` badge and `caps`.
+- Admin-only (role check in handler, 403): `migrate-targets`, `migrate`, `convert-template`; `node`, `forUserId`, `quotaExempt` on create (enforced in `resolveCreateTarget`); `backupKeep` (silently forced to `null` for non-admins).[^routes]
+
+# Endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/vms` | user | Caller's VMs with refreshed IPs, annotated with access. |
+| GET | `/api/vms/live-usage` | user | Aggregate live usage of caller's running VMs. |
+| POST | `/api/vms` | user | Create a QEMU VM from an ISO. 201 `{ vm, status }`. Audited `vm.create`. |
+| GET | `/api/vms/lxc-templates` | user | LXC vztmpl templates on the cluster. |
+| GET | `/api/vms/restore-capability` | user | `{ enabled }` for restore-from-upload. |
+| POST | `/api/vms/restore-upload` | user | multipart `file` (vzdump archive) + `name`; restore as a new guest. Audited `vm.restore_upload`. |
+| POST | `/api/vms/containers` | user | Create an LXC container from a vztmpl volid. Audited `vm.create`. |
+| POST | `/api/vms/bulk` | user (`getOwnedVm` per id) | `{ action: start/stop/restart/delete, ids (1..50) }`; per-VM results. Audited `vm.bulk_<action>`. |
+| GET | `/api/vms/:id` | any access | Detail + live status, `deployState`, `access`, `caps`, `rescueAvailable`. |
+| GET | `/api/vms/:id/metrics` | viewable | RRD history `?timeframe=hour/day/week/month/year` (default hour). |
+| GET | `/api/vms/:id/passthrough` | viewable | Attached `hostpciN` devices (empty for LXC). |
+| GET | `/api/vms/:id/activity` | viewable | Last 20 audit entries for the VM (no IPs/actor ids; non-admins do not see admin actions except by the owner). |
+| PATCH | `/api/vms/:id` | `configure` | Notes, rename (pushed to Proxmox), tags, resize cpu/ram/storage. Audited `vm.update` / `vm.resize`. |
+| GET | `/api/vms/:id/schedule` | viewable | `{ startCron, stopCron }`. |
+| PUT | `/api/vms/:id/schedule` | `configure` | Set power schedule (nullable crons). Audited `vm.schedule`. |
+| GET | `/api/vms/:id/backup-policy` | viewable | `{ backupCron, backupKeep }`. |
+| PUT | `/api/vms/:id/backup-policy` | `backups` | Set backup cron; `backupKeep` 1..14 admin-only. Audited `vm.backup_policy`. |
+| GET | `/api/vms/:id/disks` | viewable | Data disks (empty for LXC). |
+| POST | `/api/vms/:id/disks` | `configure` + size lock | Add data disk `{ sizeGb 1..4096 }`; 201. Audited `vm.disk_add`. |
+| PATCH | `/api/vms/:id/disks/:slot` | `configure` + size lock | Grow data disk. Audited `vm.disk_resize`. |
+| DELETE | `/api/vms/:id/disks/:slot` | `configure` + size lock | Remove data disk. Audited `vm.disk_remove`. |
+| GET | `/api/vms/:id/migrate-targets` | admin | `{ current, targets, blockers, localDisks }` from Proxmox preflight intersected with online nodes. |
+| POST | `/api/vms/:id/migrate` | admin | `{ targetNode }`; migrates and notifies owner. Audited `vm.migrate`. |
+| GET | `/api/vms/:id/shares` | owned | List shares. |
+| POST | `/api/vms/:id/shares` | owned | `{ email, role }` share with another user; 201. Audited `vm.share`. |
+| DELETE | `/api/vms/:id/shares/:shareId` | owned | Remove share. Audited `vm.unshare`. |
+| DELETE | `/api/vms/:id` | owned + not locked | Destroy the guest. Audited `vm.delete`. |
+| POST | `/api/vms/:id/start` | `power` | Start. Audited `vm.start`. |
+| POST | `/api/vms/:id/stop` | `power` + not locked | Graceful stop; `?force=true` kills. Audited `vm.stop` / `vm.stop_force`. |
+| POST | `/api/vms/:id/restart` | `power` + not locked | Restart. Audited `vm.restart`. |
+| POST | `/api/vms/:id/pause` | `power` + not locked | Pause (QEMU only; 409 for LXC). Audited `vm.pause`. |
+| POST | `/api/vms/:id/resume` | `power` | Resume (QEMU only). Audited `vm.resume`. |
+| POST | `/api/vms/:id/duplicate` | `configure` | Clone to `{ name }` (QEMU only); 201. Audited `vm.duplicate`. |
+| POST | `/api/vms/:id/reset-password` | `configure` | Reset guest user password via guest agent (QEMU only); returns `{ password }`. Audited `vm.reset_password`. |
+| POST | `/api/vms/:id/ssh-keys` | `configure` | Add `{ username, publicKey }` to the guest via guest agent (QEMU only). Audited `vm.ssh_key_add`. |
+| POST | `/api/vms/:id/rescue` | `configure` | Boot the admin-designated rescue ISO (QEMU only). Audited `vm.rescue_enter`. |
+| POST | `/api/vms/:id/rescue/exit` | `configure` | Leave rescue mode. Audited `vm.rescue_exit`. |
+| GET | `/api/vms/:id/alerts` | viewable | Alert rules. |
+| POST | `/api/vms/:id/alerts` | `configure` | `{ metric, threshold?, sustainedMin (default 5) }`; 201. Audited `vm.alert_add`. |
+| DELETE | `/api/vms/:id/alerts/:alertId` | `configure` | Delete rule. Audited `vm.alert_remove`. |
+| GET | `/api/vms/:id/live-stats` | viewable | Current cpu/mem/uptime from the live-stats cache. |
+| POST | `/api/vms/:id/rebuild` | owned + size lock (`rebuild`) | Re-image from exactly one of `os` (ISO) or `templateId` (QEMU only). Audited `vm.rebuild`. |
+| POST | `/api/vms/:id/convert-template` | admin | Convert VM to a Template Store template `{ name, description?, os? }`; 201. Audited `template.create`. |
+| GET | `/api/vms/:id/matestates` | viewable | `{ downloadable, items }` MateState backups. |
+| POST | `/api/vms/:id/matestates/:msid/download` | `backups` | Email a single-use download link to the caller; `{ emailed, to }`. Audited `matestate.download`. |
+| POST | `/api/vms/:id/matestates` | `backups` | Manual backup; 201. Audited `matestate.create`. |
+| POST | `/api/vms/:id/matestates/:msid/restore` | `backups` | Restore VM from a MateState of this VM. Audited `matestate.restore`. |
+| DELETE | `/api/vms/:id/matestates/:msid` | `backups` | Delete a MateState. Audited `matestate.delete`. |
+| GET | `/api/vms/:id/snapshots` | viewable | Proxmox snapshots (empty for LXC). |
+| POST | `/api/vms/:id/snapshots` | `backups` | `{ name, description?, includeRam? }`; waits for the task; 201. Audited `snapshot.create`. |
+| POST | `/api/vms/:id/snapshots/:name/rollback` | `backups` | Roll back (waits up to 300 s). Audited `snapshot.rollback`. |
+| DELETE | `/api/vms/:id/snapshots/:name` | `backups` | Delete snapshot. Audited `snapshot.delete`. |
+| POST | `/api/vms/:id/console` | `console` + not locked | Mint a vncproxy `{ ticket, port }` for the WebSocket relay. |
+| POST | `/api/vms/:id/serial` | `console` | Mint a termproxy ticket; 409 `no_serial` if a QEMU VM has no serial console. |
+
+# Gotchas
+
+- Static paths (`live-usage`, `lxc-templates`, `restore-capability`, `restore-upload`, `containers`, `bulk`) are declared before `/:id` so they are not read as ids.[^routes]
+- **Lock (409)** via `rejectIfLocked`: stop, restart, pause, delete and console are refused while the IDE is installing or cloud-init is still deploying. Start, resume, serial and migrate do not call it.[^routes]
+- **Size lock (403)** via `rejectIfSizeLocked`: on `adminManaged` or `quotaExempt` VMs only admins may resize, add/resize/remove disks, or rebuild (closes a quota bypass). Rename/tags stay open to the owner.[^routes]
+- Validation (zod): names `^[a-zA-Z0-9-]+$` max 63; `cpu` 1..64; ISO `os` must be a bare `*.iso`/`*.img` filename (prevents Proxmox drive-option injection); node names `^[a-zA-Z0-9][a-zA-Z0-9._-]*$`; LXC `template` must match `<storage>:vztmpl/<file>`; containers need `password` (min 5) or `sshKey`; tags max 20 each `^[a-zA-Z0-9][a-zA-Z0-9 _-]{0,30}$`; crons max 120 chars then `isValidCron`; disk slot `^(scsi|virtio|sata|ide)\d+$`; snapshot names `^[a-zA-Z][a-zA-Z0-9_-]*$` max 40; share role accepts `SHARE_ROLES` plus legacy `co-owner`/`read-only` normalized.[^routes]
+- Max 12 snapshots per VM (409). Snapshots, disks, rebuild, convert, duplicate, pause, password reset, SSH key injection and rescue are QEMU-only.[^routes]
+- Alerts: metric `down` forces `threshold = 0`; other metrics require `threshold` 1..100.[^routes]
+- PATCH rename hits Proxmox first so a PVE failure does not desync the DB; disk is grow-only (enforced in the service).[^routes]
+- Restore upload: multer streams to the backup share as `.proxmate-upload-<hex>.part`, file name must match `VZDUMP_UPLOAD_RE`, size cap `RESTORE_UPLOAD_MAX_GB` (default 50, 0 disables) giving 413; refuses to overwrite an existing file (409); disabled unless the share is mounted read-write (409). The upload path is not subject to the 1 MB JSON cap (multipart).[^routes]
+- Common error mapping: `QuotaError` 403 `Quota exceeded` with `details`; `CreateOptionError` its own status; Proxmox failures 502 `pveMessage(err)`.[^routes]
+- Most per-VM reads call `syncVmNode` first because the VM may have moved nodes.[^routes]
+
+# Relationships
+
+- Data: [VirtualMachine](/database/virtual-machine.md), [VmShare](/database/vm-share.md), [AlertRule](/database/alert-rule.md), [MateState](/database/mate-state.md), [DownloadToken](/database/download-token.md), [Template](/database/template.md), [User](/database/user.md), [AuditLog](/database/audit-log.md).
+- Services: [vm](/services/vm.md), [proxmox](/services/proxmox.md), [vnc-proxy](/services/vnc-proxy.md), [matestate](/services/matestate.md), [vm-share](/services/vm-share.md), [disk](/services/disk.md), [download](/services/download.md), [restore-upload](/services/restore-upload.md), [deploy-lock](/services/deploy-lock.md), [live-stats](/services/live-stats.md), [power-schedule](/services/power-schedule.md), [alert](/services/alert.md), [template](/services/template.md), [audit](/services/audit.md).
+- WebSocket side of the console: [console relay](/api/console.md).[^console] Public download side: [download router](/api/download.md).
+- Proxmox: [guest lifecycle](/proxmox/guest-lifecycle.md), [storage](/proxmox/storage.md).
+
+[^routes]: backend/src/routes/vm.routes.ts
+[^app]: backend/src/app.ts
+[^console]: backend/src/routes/console.routes.ts
