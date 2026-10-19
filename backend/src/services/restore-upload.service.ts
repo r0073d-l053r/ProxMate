@@ -5,7 +5,14 @@ import { prisma } from '../lib/prisma.js';
 import { getConfig } from './config.service.js';
 import { backupDir } from './download.service.js';
 import { getBackupStorage } from './matestate.service.js';
-import { assertWithinQuota, acquireQuotaLock, markClonedGuest, settleFailedCreate } from './vm.service.js';
+import {
+  assertWithinQuota,
+  acquireQuotaLock,
+  markClonedGuest,
+  settleFailedCreate,
+  syncRestoredGuest,
+} from './vm.service.js';
+import { parseGuestConfigText } from '../lib/guest-config.js';
 import * as pve from './proxmox.service.js';
 
 /**
@@ -110,6 +117,33 @@ export function parseBackupConfig(text: string): ParsedBackupConfig {
   return { cores, memoryMb, diskGb: Math.ceil(diskBytes / 1024 ** 3), guestName };
 }
 
+/**
+ * Refuse an archive whose config reaches past the guest itself. The archive is
+ * built by the tenant, and a restore applies every key in it — so host devices
+ * (PCI, USB, serial/parallel ports, container device nodes), host-path mounts,
+ * raw QEMU arguments, hook scripts, raw LXC settings and a privileged container
+ * are all things only an admin may grant, never something an upload carries in.
+ * Throws RestoreUploadError naming the first offending key.
+ */
+export function assertRestorableConfig(text: string, kind: pve.GuestKind): void {
+  const cfg = parseGuestConfigText(text);
+  for (const [key, value] of Object.entries(cfg)) {
+    const hostDevice =
+      /^(hostpci|usb)\d+$/.test(key) ||
+      (/^(serial|parallel)\d+$/.test(key) && value.trim().startsWith('/dev/')) ||
+      (kind === 'lxc' && /^dev\d+$/.test(key));
+    const hostPath = kind === 'lxc' && /^(rootfs|mp\d+)$/.test(key) && value.trim().startsWith('/');
+    if (hostDevice || hostPath || key === 'args' || key === 'hookscript' || key.startsWith('lxc.')) {
+      throw new RestoreUploadError(
+        `This backup can't be restored here: its configuration sets "${key}", which only an admin can set.`,
+      );
+    }
+  }
+  if (kind === 'lxc' && cfg['unprivileged']?.trim() !== '1') {
+    throw new RestoreUploadError("This backup can't be restored here: it is a privileged container.");
+  }
+}
+
 /** Best-effort removal of the uploaded archive (Proxmox API first, then the mount). */
 async function cleanupArchive(filename: string, node: string | null, storage: string, volid: string): Promise<void> {
   if (node) {
@@ -175,6 +209,7 @@ async function restoreFromUploadLocked(
   try {
     // Quota-check from the archive's embedded config BEFORE restoring anything.
     const rawCfg = await pve.extractBackupConfig(nodes[0]!, volid, client);
+    assertRestorableConfig(rawCfg, kind);
     const cfg = parseBackupConfig(rawCfg);
     await assertWithinQuota(user, {
       name: input.name,
@@ -227,6 +262,9 @@ async function restoreFromUploadLocked(
       created = true;
       // The archive's config carries the OLD guest's tags; tie the guest to this row.
       await markClonedGuest(vm, client);
+      // Read back what was actually restored: no PCI device is approved for a new
+      // guest, and the row's sizes come from the guest itself.
+      await syncRestoredGuest(vm, { approvedPci: [], client });
 
       // The restored config carries the OLD guest's name — apply the chosen one.
       await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);

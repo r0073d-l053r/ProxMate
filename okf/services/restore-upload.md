@@ -32,9 +32,9 @@ The migration path between clusters / ProxMate instances: a tenant uploads an ar
 
 1. Validate filename; infer `lxc`/`qemu` from the `vzdump-lxc-` prefix.[^ru]
 2. Volid `<backup_storage>:backup/<filename>`; `getBackupNodes` must see it, else delete and fail ("check BACKUP_DOWNLOAD_DIR is mounted from that storage's directory").
-3. Extract embedded config, `assertWithinQuota` for cores/memory/disk.
+3. Extract embedded config; `assertRestorableConfig` refuses (and drops) an archive that sets `hostpciN`, `usbN`, a `/dev/` serial/parallel port, `args`, `hookscript`, any `lxc.*` key, a container `devN` or host-path `rootfs`/`mpN`, or a container without `unprivileged: 1`; then `assertWithinQuota` for cores/memory/disk.
 4. Require `default_storage`; `pickBestNode` among nodes that see the file, arch `amd64`; `getNextVmId`.
-5. Create the `VirtualMachine` row (`status: 'creating'`), `restoreNewGuest` onto `default_storage` (unique=1, fresh MACs), wait up to 30 min.
+5. Create the `VirtualMachine` row (`status: 'creating'`), `restoreNewGuest` onto `default_storage` (unique=1, fresh MACs, containers always `unprivileged=1`), wait up to 30 min, tag the guest, then `syncRestoredGuest` with no approved PCI devices (re-reads the row's sizes from the restored guest).
 6. Rename to chosen name, `applyDefaultBridge`, configure isolation before first boot if `isolation_enabled !== 'false'`.
 7. Start, mark `running`, delete the archive.
 

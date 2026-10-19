@@ -2662,6 +2662,9 @@ export async function restoreNewGuest(
   if (kind === 'lxc') {
     params.set('ostemplate', opts.volid);
     params.set('restore', '1');
+    // Same as createContainer: a tenant's container is always unprivileged,
+    // whatever the archive's own config says.
+    params.set('unprivileged', '1');
   } else {
     params.set('archive', opts.volid);
   }

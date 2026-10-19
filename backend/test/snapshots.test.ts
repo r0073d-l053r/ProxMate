@@ -8,6 +8,7 @@ import {
   createSnapshot,
   deleteSnapshot,
   rollbackSnapshot,
+  restoreNewGuest,
 } from '../src/services/proxmox.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
 
@@ -55,5 +56,13 @@ describe('deleteSnapshot / rollbackSnapshot', () => {
     const c = fakeClient();
     await rollbackSnapshot('pve-1', 101, 'snap1', asClient(c));
     expect(c.post.mock.calls[0]![0]).toBe('/nodes/pve-1/qemu/101/snapshot/snap1/rollback');
+  });
+});
+
+describe('restoreNewGuest', () => {
+  it('always restores a container as unprivileged, whatever its archive says (BUG-027)', async () => {
+    const c = fakeClient();
+    await restoreNewGuest({ node: 'pve-1', vmid: 200, volid: 'b:backup/vzdump-lxc-1-x.tar.zst' }, asClient(c), 'lxc');
+    expect(bodyOf(c.post.mock.calls[0]!)['unprivileged']).toBe('1');
   });
 });

@@ -28,6 +28,7 @@ vi.mock('../src/services/vm.service.js', () => ({
   acquireQuotaLock: vi.fn(async () => () => undefined),
   markClonedGuest: vi.fn(async () => undefined),
   settleFailedCreate: vi.fn(async () => undefined),
+  syncRestoredGuest: vi.fn(async () => ({})),
 }));
 
 import { prisma } from '../src/lib/prisma.js';
@@ -35,8 +36,9 @@ import * as pve from '../src/services/proxmox.service.js';
 import { getConfig } from '../src/services/config.service.js';
 import { backupDir } from '../src/services/download.service.js';
 import { getBackupStorage } from '../src/services/matestate.service.js';
-import { assertWithinQuota, markClonedGuest, settleFailedCreate } from '../src/services/vm.service.js';
+import { assertWithinQuota, markClonedGuest, settleFailedCreate, syncRestoredGuest } from '../src/services/vm.service.js';
 import {
+  assertRestorableConfig,
   parseBackupConfig,
   restoreFromUpload,
   resolveUnderUploadDir,
@@ -60,6 +62,7 @@ scsi0: local-lvm:vm-104-disk-0,size=999G
 `;
 
 const LXC_CFG = `arch: amd64
+unprivileged: 1
 cores: 2
 hostname: ct-1
 memory: 1024
@@ -242,5 +245,47 @@ describe('restoreFromUpload', () => {
     await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow('start failed');
     expect(markClonedGuest).toHaveBeenCalledWith({ id: 'vm1' }, expect.anything());
     expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, err, true);
+  });
+
+  it('never restores an archive carrying a host device, and drops it (BUG-027)', async () => {
+    vi.mocked(pve.extractBackupConfig).mockResolvedValue(`hostpci0: mapping=gpu0\n${QEMU_CFG}`);
+    await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(RestoreUploadError);
+    expect(pve.restoreNewGuest).not.toHaveBeenCalled();
+    expect(pve.deleteBackup).toHaveBeenCalledWith('pve-0', 'backups', VOLID);
+  });
+
+  it('re-reads the restored guest (no PCI device approved) before it is started (BUG-027)', async () => {
+    await restoreFromUpload(user, { filename: FILENAME, name: 'x' });
+    expect(syncRestoredGuest).toHaveBeenCalledWith({ id: 'vm1' }, { approvedPci: [], client: expect.anything() });
+    expect(vi.mocked(syncRestoredGuest).mock.invocationCallOrder[0]!).toBeLessThan(
+      vi.mocked(pve.startVm).mock.invocationCallOrder[0]!,
+    );
+  });
+});
+
+describe('archive config keys an upload may not carry (BUG-027)', () => {
+  it('refuses host devices, host paths, raw arguments, hook scripts and raw LXC keys', () => {
+    const live = QEMU_CFG.split('[')[0];
+    for (const extra of [
+      'hostpci0: mapping=gpu0',
+      'usb0: host=1234:5678',
+      'serial0: /dev/ttyS0',
+      'args: -device foo',
+      'hookscript: local:snippets/x.sh',
+    ]) {
+      expect(() => assertRestorableConfig(`${live}${extra}\n`, 'qemu'), extra).toThrow(RestoreUploadError);
+    }
+    for (const extra of ['mp1: /srv/host,mp=/host', 'lxc.apparmor.profile: unconfined', 'dev0: /dev/kvm']) {
+      expect(() => assertRestorableConfig(`${LXC_CFG}${extra}\n`, 'lxc'), extra).toThrow(RestoreUploadError);
+    }
+  });
+
+  it('refuses a privileged container', () => {
+    expect(() => assertRestorableConfig(LXC_CFG.replace('unprivileged: 1\n', ''), 'lxc')).toThrow(/privileged/);
+  });
+
+  it('accepts an ordinary guest (a serial socket console is fine)', () => {
+    expect(() => assertRestorableConfig(`serial0: socket\n${QEMU_CFG}`, 'qemu')).not.toThrow();
+    expect(() => assertRestorableConfig(LXC_CFG, 'lxc')).not.toThrow();
   });
 });
