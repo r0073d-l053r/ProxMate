@@ -223,9 +223,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * tag — and the firewall as they were when the backup or snapshot was taken, so
  * a bridge, VLAN or rule change made since would otherwise be undone. Mirrors the
  * restore-from-upload path; the IDE's firewall pinhole is re-added while the IDE
- * is installed.
+ * is installed. Also run by an admin's adopt before it clears a hold.
  */
-async function reapplyIsolation(
+export async function reapplyIsolation(
   vm: VirtualMachine,
   client: Awaited<ReturnType<typeof pve.getClient>>,
 ): Promise<void> {

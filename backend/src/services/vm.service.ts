@@ -490,7 +490,8 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
  * The hold handling of an admin's adopt, once the guest is confirmed (or made)
  * the row's own and holds only its own volumes. An over-quota hold lifts only once
  * the row fits again (e.g. after the admin raised the owner's quota); any other
- * hold is the admin's call — they have checked the guest.
+ * hold is the admin's call — they have checked the guest — and is cleared once
+ * the guest has been made safe to run.
  */
 async function clearAdoptedHold(current: VirtualMachine): Promise<VirtualMachine> {
   if (current.holdReason === QUOTA_HOLD_MESSAGE) {
@@ -500,6 +501,25 @@ async function clearAdoptedHold(current: VirtualMachine): Promise<VirtualMachine
     return current;
   }
   if (isHeld(current)) {
+    // The guest may never have been made safe (a 1.0.x create that failed part-way,
+    // a restore that stopped early): before it can run, put it on the network
+    // placement and isolation it should have now and re-read its sizes into the row
+    // under the owner's quota, exactly as a restore does. Any failure keeps the hold.
+    const client = await pve.getClient();
+    try {
+      // Loaded lazily: matestate.service imports this module.
+      const { reapplyIsolation } = await import('./matestate.service.js');
+      await reapplyIsolation(current, client);
+      await syncRestoredGuest(current, { approvedPci: await approvedPciLines(current, client), client });
+    } catch (err) {
+      if (err instanceof QuotaError) {
+        // syncRestoredGuest has put the row on the over-quota hold.
+        throw new AdoptError(
+          "The guest is adopted, but its disks exceed the owner's quota, so it stays held. Raise the quota, then adopt again.",
+        );
+      }
+      throw new AdoptError(`The guest couldn't be made safe to run, so it stays held: ${pve.pveMessage(err)}`);
+    }
     return prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'stopped', holdReason: null } });
   }
   return current;

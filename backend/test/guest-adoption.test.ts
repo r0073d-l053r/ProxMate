@@ -15,6 +15,7 @@ vi.mock('../src/lib/prisma.js', () => ({
       delete: vi.fn(async () => ({})),
       count: vi.fn(async () => 0),
     },
+    user: { findUnique: vi.fn(async () => null) },
     resourceSample: { createMany: vi.fn(async () => ({})) },
     template: { findMany: vi.fn(async () => []), count: vi.fn(async () => 0) },
     ideGuestSecret: { deleteMany: vi.fn(async () => ({})) },
@@ -23,6 +24,12 @@ vi.mock('../src/lib/prisma.js', () => ({
   },
 }));
 vi.mock('../src/services/notify.service.js', () => ({ notify: vi.fn(async () => undefined) }));
+// Isolation off and no default bridge: an adopt's make-safe step (covered in
+// adopt-repair.test.ts) then only re-reads the guest's sizes.
+vi.mock('../src/services/config.service.js', () => ({
+  getConfig: vi.fn(async (key: string) => ({ isolation_enabled: 'false' })[key] ?? null),
+  setConfig: vi.fn(),
+}));
 vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/services/proxmox.service.js')>();
   return { ...actual, getClient: vi.fn() };
