@@ -34,7 +34,8 @@ vi.mock('../src/services/config.service.js', () => ({
 }));
 vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/services/proxmox.service.js')>();
-  return { ...actual, getClient: vi.fn() };
+  // The snapshot-delete route calls these without a client.
+  return { ...actual, getClient: vi.fn(), deleteSnapshot: vi.fn(async () => 'UPID:del'), waitForTask: vi.fn(async () => undefined) };
 });
 vi.mock('../src/services/vm.service.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/services/vm.service.js')>();
@@ -158,6 +159,23 @@ describe('MateState restore route (BUG-024)', () => {
     const res = await fetch(`${base}/vms/rowa/matestates/ms1/restore`, { method: 'POST' });
     expect(res.status).toBe(403);
     expect((await res.json()).details.cpu).toBeDefined();
+  });
+});
+
+describe('snapshot delete on a held machine (audit round 2)', () => {
+  it('is allowed (it only frees space), while creating one is not', async () => {
+    const held = row({ status: 'error', holdReason: 'Over quota after a restore.' });
+    vi.mocked(getVmWithCap).mockResolvedValue(held);
+    fakePve(LIVE, LIVE);
+    const del = await fetch(`${base}/vms/rowa/snapshots/snap1`, { method: 'DELETE' });
+    expect(del.status).toBe(200);
+    expect(pve.deleteSnapshot).toHaveBeenCalledWith('pve1', 100, 'snap1');
+    const create = await fetch(`${base}/vms/rowa/snapshots`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'snap2' }),
+    });
+    expect(create.status).toBeGreaterThanOrEqual(400);
   });
 });
 

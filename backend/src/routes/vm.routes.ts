@@ -1668,7 +1668,8 @@ router.delete('/:id/snapshots/:name', async (req: Request, res: Response) => {
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
   if (kindOf(vm) === 'lxc') { res.status(400).json({ error: 'Snapshots aren’t available for containers yet.' }); return; }
   try {
-    vm = await requireOurGuest(vm);
+    // Freeing a snapshot is cleanup, so it is allowed on a held machine.
+    vm = await requireOurGuest(vm, { allowError: true });
     const upid = await deleteSnapshot(vm.proxmoxNode, vm.proxmoxVmId, name);
     await waitForTask(vm.proxmoxNode, upid);
     await recordAudit({
