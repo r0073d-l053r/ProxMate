@@ -3,6 +3,11 @@ import { authenticator } from 'otplib';
 import QRCode from 'qrcode';
 import { prisma } from '../lib/prisma.js';
 import { encrypt, decrypt } from '../lib/crypto.js';
+import {
+  reserveSecondFactorAttempt,
+  registerFailedSecondFactor,
+  clearFailedSecondFactor,
+} from './account-lockout.service.js';
 
 const ISSUER = 'ProxMate';
 const RECOVERY_CODE_COUNT = 10;
@@ -27,13 +32,14 @@ export async function beginSetup(
   userId: string,
   accountLabel: string,
   currentCode?: string,
+  ip: string | null = null,
 ): Promise<{ otpauthUrl: string; secret: string; qrDataUrl: string }> {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) throw new Error('Account not found.');
   if (user.twoFactorEnabled) {
-    const ok =
-      !!currentCode && ((await verifyTotp(userId, currentCode)) || (await verifyRecoveryCode(userId, currentCode)));
-    if (!ok) throw new Error('Enter a current code from your authenticator (or a recovery code) to set up a new one.');
+    const missing = 'Enter a current code from your authenticator (or a recovery code) to set up a new one.';
+    if (!currentCode) throw new Error(missing);
+    if (!(await checkCurrentCode(user, currentCode, ip))) throw new Error(missing);
   }
   const secret = authenticator.generateSecret();
   await prisma.user.update({
@@ -91,10 +97,32 @@ export async function verifyRecoveryCode(userId: string, code: string): Promise<
   return count === 1;
 }
 
+/**
+ * Check a current TOTP or recovery code that confirms a change to 2FA (disable,
+ * or setting up a new authenticator). Guarded like the login's code check: an
+ * attempt is reserved against the account first (so a locked account checks
+ * nothing), a wrong code counts toward the lockout, a right one clears the count.
+ * Throws when the account is locked; otherwise returns whether the code was right.
+ */
+async function checkCurrentCode(
+  user: { id: string; email: string },
+  code: string,
+  ip: string | null,
+): Promise<boolean> {
+  if (!(await reserveSecondFactorAttempt(user, ip))) {
+    throw new Error('Too many incorrect codes — try again later.');
+  }
+  const ok = (await verifyTotp(user.id, code)) || (await verifyRecoveryCode(user.id, code));
+  if (ok) await clearFailedSecondFactor(user);
+  else await registerFailedSecondFactor(user, ip);
+  return ok;
+}
+
 /** Disable 2FA — requires a valid current TOTP or recovery code. */
-export async function disable(userId: string, code: string): Promise<void> {
-  const ok = (await verifyTotp(userId, code)) || (await verifyRecoveryCode(userId, code));
-  if (!ok) throw new Error('That code is incorrect.');
+export async function disable(userId: string, code: string, ip: string | null = null): Promise<void> {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new Error('Account not found.');
+  if (!(await checkCurrentCode(user, code, ip))) throw new Error('That code is incorrect.');
   await prisma.$transaction([
     prisma.user.update({
       where: { id: userId },

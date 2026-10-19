@@ -17,9 +17,15 @@ vi.mock('../src/lib/prisma.js', () => ({
 }));
 // Make the encrypted-secret round-trip an identity so the test secret is usable.
 vi.mock('../src/lib/crypto.js', () => ({ encrypt: (s: string) => s, decrypt: (s: string) => s }));
+vi.mock('../src/services/account-lockout.service.js', () => ({
+  reserveSecondFactorAttempt: vi.fn(async () => true),
+  registerFailedSecondFactor: vi.fn(async () => false),
+  clearFailedSecondFactor: vi.fn(async () => undefined),
+}));
 
 import { prisma } from '../src/lib/prisma.js';
-import { beginSetup, enable, verifyTotp, verifyRecoveryCode } from '../src/services/twofactor.service.js';
+import { beginSetup, enable, disable, verifyTotp, verifyRecoveryCode } from '../src/services/twofactor.service.js';
+import * as lockout from '../src/services/account-lockout.service.js';
 
 const findUser = vi.mocked(prisma.user.findUnique);
 
@@ -132,5 +138,42 @@ describe('re-running 2FA setup while 2FA is on', () => {
     findUser.mockResolvedValue({ id: 'u1', twoFactorEnabled: false, twoFactorSecret: null, twoFactorPendingSecret: secret } as never);
     const { recoveryCodes } = await enable('u1', authenticator.generate(secret));
     expect(recoveryCodes).toHaveLength(10);
+  });
+});
+
+describe('codes that confirm a 2FA change count toward the account lockout', () => {
+  const active = authenticator.generateSecret();
+  const enabledUser = { id: 'u1', email: 'a@b.c', twoFactorEnabled: true, twoFactorSecret: active, twoFactorPendingSecret: null };
+
+  beforeEach(() => {
+    findUser.mockResolvedValue(enabledUser as never);
+    vi.mocked(prisma.twoFactorRecoveryCode.findFirst).mockResolvedValue(null);
+    vi.mocked(lockout.reserveSecondFactorAttempt).mockResolvedValue(true);
+  });
+
+  it('a wrong code on disable is counted', async () => {
+    await expect(disable('u1', '000000')).rejects.toThrow(/incorrect/i);
+    expect(lockout.reserveSecondFactorAttempt).toHaveBeenCalledOnce();
+    expect(lockout.registerFailedSecondFactor).toHaveBeenCalledOnce();
+  });
+
+  it('a wrong current code on a new setup is counted', async () => {
+    await expect(beginSetup('u1', 'a@b.c', '000000')).rejects.toThrow(/current code/i);
+    expect(lockout.registerFailedSecondFactor).toHaveBeenCalledOnce();
+  });
+
+  it('while the account is locked, no code is checked at all', async () => {
+    vi.mocked(lockout.reserveSecondFactorAttempt).mockResolvedValue(false);
+    await expect(disable('u1', authenticator.generate(active))).rejects.toThrow(/too many/i);
+    await expect(beginSetup('u1', 'a@b.c', authenticator.generate(active))).rejects.toThrow(/too many/i);
+    expect(prisma.twoFactorRecoveryCode.findFirst).not.toHaveBeenCalled();
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('a correct code clears the count', async () => {
+    vi.mocked(prisma.user.update).mockResolvedValue({} as never);
+    await disable('u1', authenticator.generate(active));
+    expect(lockout.clearFailedSecondFactor).toHaveBeenCalledOnce();
+    expect(lockout.registerFailedSecondFactor).not.toHaveBeenCalled();
   });
 });

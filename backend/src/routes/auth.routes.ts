@@ -491,7 +491,7 @@ router.post('/2fa/setup', requireAuthOrEnrollment, requireSession, async (req: R
   if (!parsed.success) { res.status(400).json({ error: 'Validation failed' }); return; }
   const u = (req as AuthRequest).user;
   try {
-    res.json(await twofa.beginSetup(u.id, u.email, parsed.data?.currentCode));
+    res.json(await twofa.beginSetup(u.id, u.email, parsed.data?.currentCode, req.ip ?? null));
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : '2FA setup failed' });
   }
@@ -517,7 +517,7 @@ router.post('/2fa/disable', requireAuth, requireSession, async (req: Request, re
   if (!parsed.success) { res.status(400).json({ error: 'Enter a code to confirm.' }); return; }
   const u = (req as AuthRequest).user;
   try {
-    await twofa.disable(u.id, parsed.data.code);
+    await twofa.disable(u.id, parsed.data.code, req.ip ?? null);
     await recordAudit({ action: 'auth.2fa_disabled', actor: u, req });
     res.json({ success: true });
   } catch (err) {

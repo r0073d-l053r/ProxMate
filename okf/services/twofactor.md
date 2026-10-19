@@ -19,11 +19,11 @@ Authenticator-app second factor (issuer `ProxMate`) built on `otplib` and `qrcod
 
 | Function | Signature summary | What it does |
 |---|---|---|
-| `beginSetup` | `(userId, accountLabel, currentCode?) => { otpauthUrl, secret, qrDataUrl }` | Generates a secret and stages it encrypted in `twoFactorPendingSecret`; the active secret and `twoFactorEnabled` are left as they are. When 2FA is already on, requires a valid current TOTP or recovery code. |
+| `beginSetup` | `(userId, accountLabel, currentCode?, ip?) => { otpauthUrl, secret, qrDataUrl }` | Generates a secret and stages it encrypted in `twoFactorPendingSecret`; the active secret and `twoFactorEnabled` are left as they are. When 2FA is already on, requires a valid current TOTP or recovery code. |
 | `enable` | `(userId, code) => { recoveryCodes }` | Verifies the code against the staged secret; transaction moves it into `twoFactorSecret`, enables 2FA, clears the staged secret and replaces recovery codes with 10 new ones (5 random bytes hex, shown as `xxxxx-xxxxx`). |
 | `verifyTotp` | `(userId, code) => boolean` | Requires 2FA enabled. |
 | `verifyRecoveryCode` | `(userId, code) => boolean` | Normalises (alphanumerics, lowercase), matches unused hash, marks `usedAt` with a write conditional on it still being unused (a code presented twice at once is accepted once). |
-| `disable` | `(userId, code)` | Needs a valid TOTP or recovery code; clears the active and staged secrets and all recovery codes. |
+| `disable` | `(userId, code, ip?)` | Needs a valid TOTP or recovery code; clears the active and staged secrets and all recovery codes. |
 | `getStatus` | `(userId) => { enabled, recoveryCodesLeft }` | |
 
 # Data
@@ -33,6 +33,7 @@ Authenticator-app second factor (issuer `ProxMate`) built on `otplib` and `qrcod
 # Gotchas
 
 - `authenticator.options = { window: 1 }` allows plus/minus one 30 s step for clock skew.[^tf]
+- The code that confirms `disable` or a new setup while 2FA is on goes through the account lockout like a login code: an attempt is reserved first (a locked account checks nothing and gets "Too many incorrect codes"), a wrong code counts toward `twoFactorFailedAttempts`, a right one clears it.[^tf]
 - Re-starting setup only replaces the staged secret; an active factor keeps working until `enable` confirms the new one. A setup begun before staging existed (secret in `twoFactorSecret` with 2FA off) can still be confirmed.[^tf]
 
 # Relationships
