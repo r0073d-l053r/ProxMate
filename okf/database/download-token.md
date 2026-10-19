@@ -4,7 +4,7 @@ title: DownloadToken
 description: A single-use one-hour token, emailed to a tenant, that streams one MateState backup file off an admin-mounted backup share.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/schema.prisma
 tags: [proxmate, database, prisma, backup, download]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: schema
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/schema.prisma

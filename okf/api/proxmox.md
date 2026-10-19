@@ -4,7 +4,7 @@ title: Proxmox introspection router
 description: Read-only cluster introspection (resources, nodes, ISOs, storage) for any signed-in user, mounted at /api/proxmox.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/proxmox.routes.ts
 tags: [proxmate, api, proxmox, cluster]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/proxmox.routes.ts

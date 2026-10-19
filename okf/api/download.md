@@ -4,7 +4,7 @@ title: Backup download router
 description: Public single-use token endpoint that streams a MateState vzdump backup file, mounted at /api/downloads.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/download.routes.ts
 tags: [proxmate, api, backups, download, public]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/download.routes.ts

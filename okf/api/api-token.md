@@ -4,7 +4,7 @@ title: API token router
 description: Lists, creates and revokes the caller's personal API tokens (pm_ prefixed Bearer credentials) under /api/api-tokens.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/api-token.routes.ts
 tags: [proxmate, api, auth, api-tokens]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/api-token.routes.ts

@@ -4,7 +4,7 @@ title: Proxmox VE API surface
 description: How ProxMate's backend builds its Proxmox VE REST client (API-token auth, TLS, retries, credential redaction, task polling, error mapping) and every Proxmox path it calls.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts
 tags: [proxmate, proxmox, api, http-client, integration]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: pve
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts

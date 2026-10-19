@@ -4,7 +4,7 @@ title: Setup wizard router
 description: Unauthenticated first-run wizard (create admin, Proxmox connection, defaults, finalize) that locks itself once setup_complete is set, mounted at /api/setup.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/setup.routes.ts
 tags: [proxmate, api, setup, onboarding]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/setup.routes.ts

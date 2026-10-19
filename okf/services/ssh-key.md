@@ -4,7 +4,7 @@ title: SSH-key service
 description: Validates single-line OpenSSH public keys and manages a user's saved keys (max 25, de-duplicated) for injection into guest cloud-init.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/ssh-key.service.ts
 tags: [proxmate, ssh, cloud-init, security]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: ssh
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/ssh-key.service.ts

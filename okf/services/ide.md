@@ -4,7 +4,7 @@ title: IDE service (ProxMate IDE admin policy)
 description: Config-only admin policy for the in-guest ProxMate IDE - availability tier, BYO-key switch, admin-sourced local models with visibility, legacy shared models and the ingress CIDR - and per-user capability resolution.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/ide.service.ts
 tags: [proxmate, ide, llm, policy]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: ide
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/ide.service.ts

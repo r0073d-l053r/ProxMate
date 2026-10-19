@@ -4,7 +4,7 @@ title: Docker Compose environment
 description: The docker-compose.yml services, volumes, ports, build args and the .env.docker.example variables they consume for a containerised ProxMate deployment.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/docker-compose.yml
 tags: [proxmate, env, docker, deployment, compose]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: compose
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/docker-compose.yml

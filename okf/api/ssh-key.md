@@ -4,7 +4,7 @@ title: SSH key router
 description: Manages the caller's saved OpenSSH public keys (account keychain), mounted at /api/ssh-keys.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/ssh-key.routes.ts
 tags: [proxmate, api, ssh, keys]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/ssh-key.routes.ts

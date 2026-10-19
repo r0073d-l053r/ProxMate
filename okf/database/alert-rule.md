@@ -4,7 +4,7 @@ title: AlertRule
 description: A tenant-defined threshold alert on one VM (cpu, memory, disk or down), evaluated every 5 minutes and delivered by email and admin webhook.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/schema.prisma
 tags: [proxmate, database, prisma, alerts, monitoring]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: schema
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/schema.prisma

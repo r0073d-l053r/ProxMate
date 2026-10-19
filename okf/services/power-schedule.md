@@ -4,7 +4,7 @@ title: Power-schedule service (auto start/stop and cron evaluator)
 description: Minimal 5-field cron evaluator plus the per-minute tick that auto-starts and gracefully stops VMs whose `startCron`/`stopCron` fires.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/power-schedule.service.ts
 tags: [proxmate, scheduler, cron, power]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: power
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/power-schedule.service.ts

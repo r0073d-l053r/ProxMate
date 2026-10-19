@@ -4,7 +4,7 @@ title: Update service (self-update check and host-mediated apply)
 description: Compares the running version with the latest GitHub Release and, when enabled, queues an update by writing a request file into a bind-mounted control directory watched by a host-side updater.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/update.service.ts
 tags: [proxmate, update, deploy, github]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: upd
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/update.service.ts

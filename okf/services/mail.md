@@ -4,7 +4,7 @@ title: Mail service (SMTP)
 description: Reads and saves SMTP settings from SystemConfig (password encrypted) and sends mail through a fresh nodemailer transport per message.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/mail.service.ts
 tags: [proxmate, email, smtp]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: mail
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/mail.service.ts

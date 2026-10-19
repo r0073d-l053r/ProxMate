@@ -4,7 +4,7 @@ title: Auth service (passwords, JWT sessions, challenge tokens)
 description: Bcrypt password hashing, HS256 JWT session minting backed by a Session row with a CSRF token, session verification, and short-lived 2FA challenge and enrollment tokens.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/auth.service.ts
 tags: [proxmate, auth, jwt, session, security]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: auth
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/auth.service.ts

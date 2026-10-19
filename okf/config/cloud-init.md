@@ -4,7 +4,7 @@ title: Cloud-init feature selection
 description: SystemConfig keys recording which cloud-init catalog features are offered to tenants as checkboxes and which are always installed on every cloud-init VM.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/template.service.ts
 tags: [proxmate, config, cloud-init, templates]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: template-svc
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/template.service.ts

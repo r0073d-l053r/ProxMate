@@ -4,7 +4,7 @@ title: Deploy-lock service (cloud-init deploy lock)
 description: Tracks a freshly deployed guest as `deploying` until the guest agent reports cloud-init finished (or 8 minutes pass), then sets the pending login password in-guest and unlocks.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/deploy-lock.service.ts
 tags: [proxmate, cloud-init, deploy, guest-agent, security]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: lock
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/deploy-lock.service.ts

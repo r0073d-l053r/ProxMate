@@ -4,7 +4,7 @@ title: Access service (tenant compute-access windows)
 description: Pure helpers that decide whether a tenant's compute-access window has lapsed and build the refusal returned by every session-minting login path.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/access.service.ts
 tags: [proxmate, auth, access-expiry, tenancy, security]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: access
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/access.service.ts

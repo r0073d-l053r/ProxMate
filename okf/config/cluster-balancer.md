@@ -4,7 +4,7 @@ title: Cluster balancer settings
 description: SystemConfig keys configuring the DRS-style memory-load balancer, covering its mode, imbalance threshold, per-pass migration cap and excluded VMIDs.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/cluster-balancer.service.ts
 tags: [proxmate, config, balancer, migration, scheduler]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: balancer
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/cluster-balancer.service.ts

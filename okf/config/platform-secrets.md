@@ -4,7 +4,7 @@ title: Platform secrets and internal state
 description: SystemConfig keys for the JWT signing secret, the setup-complete flag, the kiosk exit PIN hash, the public frontend URL override and the MateState scheduler last-run marker.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/setup.service.ts
 tags: [proxmate, config, secrets, jwt, setup]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: setup-svc
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/setup.service.ts

@@ -4,7 +4,7 @@ title: Proxmox service
 description: The single Proxmox VE REST client and every guest, storage, network, backup, firewall and cluster operation built on it.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts
 tags: [proxmate, service, proxmox, api-client]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: pve
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts

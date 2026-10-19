@@ -4,7 +4,7 @@ title: Quota request router
 description: Tenant endpoints to ask an admin for a higher CPU/RAM/storage quota and list their own requests, mounted at /api/quota-requests.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/quota-request.routes.ts
 tags: [proxmate, api, quota, requests]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/quota-request.routes.ts

@@ -4,7 +4,7 @@ title: Invite router
 description: Admin-only creation, emailing, listing and revocation of registration invite tokens, mounted at /api/invites.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/invite.routes.ts
 tags: [proxmate, api, admin, invites, onboarding]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/invite.routes.ts

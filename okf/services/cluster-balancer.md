@@ -4,7 +4,7 @@ title: Cluster-balancer service (DRS-style balancing and node drain)
 description: Pure memory-load balancing and node-drain planners plus orchestrators that gather a live cluster snapshot and live-migrate ProxMate-managed VMs, optionally on a 15-minute auto schedule.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/cluster-balancer.service.ts
 tags: [proxmate, cluster, migration, balancer, scheduler]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: bal
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/cluster-balancer.service.ts

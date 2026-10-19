@@ -4,7 +4,7 @@ title: ProxMate HTTP API
 description: Overview of the ProxMate backend HTTP and WebSocket surface under /api, covering middleware order, cookie/JWT/API-token auth, CSRF, rate limits, OpenAPI and every router.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/app.ts
 tags: [proxmate, api, http, auth, middleware]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: app
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/app.ts

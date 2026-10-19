@@ -4,7 +4,7 @@ title: Tenant LLM-key service (bring-your-own AI keys)
 description: Stores tenant and admin LLM provider keys AES-256-GCM encrypted, enforces provider/base-URL allow-lists and SSRF checks, and resolves keys for the IDE gateway.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/tenant-llm-key.service.ts
 tags: [proxmate, ide, llm, encryption, ssrf]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: llm
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/tenant-llm-key.service.ts

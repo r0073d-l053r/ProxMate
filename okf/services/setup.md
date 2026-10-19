@@ -4,7 +4,7 @@ title: Setup service
 description: First-run wizard logic, covering the admin account, Proxmox connection and privilege test, resource discovery, defaults and completion.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/setup.service.ts
 tags: [proxmate, service, setup, proxmox]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: setup
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/setup.service.ts

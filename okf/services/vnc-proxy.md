@@ -4,7 +4,7 @@ title: VNC-proxy service (console tickets and WebSocket relay)
 description: Obtains Proxmox vncproxy/termproxy tickets and relays browser WebSockets to the node's vncwebsocket endpoint using the stored API token, for graphical and serial consoles.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/vnc-proxy.service.ts
 tags: [proxmate, console, vnc, websocket, proxmox]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: vnc
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/vnc-proxy.service.ts

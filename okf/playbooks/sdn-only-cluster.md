@@ -3,7 +3,7 @@ type: Playbook
 title: Setting up ProxMate on an SDN-only cluster
 description: Steps to pick an SDN VNet as the default network when the cluster has no Linux bridge for guests.
 tags: [proxmate, playbook, sdn, networking, setup]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: networking
     resource: /proxmox/networking.md

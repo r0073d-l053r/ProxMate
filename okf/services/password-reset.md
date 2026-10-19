@@ -4,7 +4,7 @@ title: Password-reset service
 description: Forgot-password flow that emails a single-use one-hour reset link when SMTP is on, or queues a request for an admin otherwise, without revealing whether the email exists.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/password-reset.service.ts
 tags: [proxmate, auth, password-reset, security]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: reset
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/password-reset.service.ts

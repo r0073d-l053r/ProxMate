@@ -4,7 +4,7 @@ title: Notify service (admin event notifications)
 description: Best-effort fan-out of admin event notifications to an SSRF-guarded outgoing webhook and/or email, with per-event toggles.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/notify.service.ts
 tags: [proxmate, notifications, webhook, email]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: notify
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/notify.service.ts

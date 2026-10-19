@@ -4,7 +4,7 @@ title: SMTP (outgoing email) settings
 description: SystemConfig keys configuring the nodemailer SMTP transport that ProxMate uses for invites, password resets, notifications, broadcasts and backup-download links.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/mail.service.ts
 tags: [proxmate, config, smtp, email]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: mail
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/mail.service.ts

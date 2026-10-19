@@ -4,7 +4,7 @@ title: IDE-gateway service (ProxMate LLM gateway policy)
 description: Per-VM `pmide_` bearer tokens and the model-routing policy behind the OpenAI-compatible `/api/ide/:id/llm/v1` endpoint used by the in-guest OpenCode agent.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/ide-gateway.service.ts
 tags: [proxmate, ide, llm, gateway, security]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: gw
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/ide-gateway.service.ts

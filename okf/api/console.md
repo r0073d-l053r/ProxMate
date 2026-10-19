@@ -4,7 +4,7 @@ title: Console WebSocket relay
 description: WebSocket upgrade handler that relays the browser's noVNC and xterm.js consoles to Proxmox vncproxy/termproxy for /api/vms/:id/console and /api/vms/:id/serial.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/console.routes.ts
 tags: [proxmate, api, websocket, console, vnc]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/console.routes.ts

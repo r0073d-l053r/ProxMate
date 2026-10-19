@@ -4,7 +4,7 @@ title: Event notification settings
 description: SystemConfig keys configuring admin event notifications, covering the outgoing webhook, the email channel and its recipient, the enabled event list and the event-list schema version.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/notify.service.ts
 tags: [proxmate, config, notifications, webhook, email]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: notify
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/notify.service.ts

@@ -4,7 +4,7 @@ title: SystemConfig key index
 description: Alphabetical list of every SystemConfig key the ProxMate backend reads or writes, with its encryption status and the configuration group that documents it.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/config.service.ts
 tags: [proxmate, config, reference, system-config]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: config-svc
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/config.service.ts

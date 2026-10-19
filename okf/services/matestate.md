@@ -4,7 +4,7 @@ title: MateState service (VM backups)
 description: Creates, prunes, restores and deletes MateState vzdump backups of guests, runs the weekly cluster-wide backup and the per-minute per-VM backup schedules.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/matestate.service.ts
 tags: [proxmate, backup, vzdump, scheduler]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: ms
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/matestate.service.ts

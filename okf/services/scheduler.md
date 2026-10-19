@@ -4,7 +4,7 @@ title: Scheduler service (node-cron jobs)
 description: Starts every in-process node-cron job after the HTTP server listens, each guarded by its own in-memory running flag, with env-overridable schedules and boot-time catch-up for weekly backups and access expiry.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/scheduler.service.ts
 tags: [proxmate, scheduler, cron, jobs]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: sch
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/scheduler.service.ts

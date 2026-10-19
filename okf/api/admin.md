@@ -4,7 +4,7 @@ title: Admin router
 description: Admin-only platform settings, cluster health and isolation, audit log, quota and passthrough approvals, broadcasts, balancer and self-update endpoints, mounted at /api/admin.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/admin.routes.ts
 tags: [proxmate, api, admin, settings, cluster]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/admin.routes.ts

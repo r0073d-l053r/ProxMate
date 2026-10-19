@@ -4,7 +4,7 @@ title: Two-factor service (TOTP and recovery codes)
 description: TOTP enrollment with an encrypted secret and QR code, login verification with one step of clock skew, and ten single-use SHA-256-hashed recovery codes.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/twofactor.service.ts
 tags: [proxmate, auth, 2fa, totp]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: tf
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/twofactor.service.ts

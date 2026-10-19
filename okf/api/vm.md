@@ -4,7 +4,7 @@ title: VM router
 description: Tenant VM and LXC lifecycle API (create, restore, power, resize, disks, shares, schedules, alerts, snapshots, MateState backups, rescue, console tickets), mounted at /api/vms.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/vm.routes.ts
 tags: [proxmate, api, vm, lxc, lifecycle]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/vm.routes.ts

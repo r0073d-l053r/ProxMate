@@ -4,7 +4,7 @@ title: Tenant isolation settings
 description: SystemConfig keys controlling per-guest firewall isolation, the DNS allow-list and the tenant VLAN tag applied to guest NICs.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/admin.routes.ts
 tags: [proxmate, config, firewall, isolation, vlan]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: admin-routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/admin.routes.ts

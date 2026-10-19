@@ -4,7 +4,7 @@ title: Passthrough-request service (PCI/GPU passthrough workflow)
 description: Tenant requests for PCI/GPU passthrough and the admin two-phase approval that places the VM on a node hosting the Proxmox PCI mapping, attaches `hostpci0`, and recovers interrupted applies on startup.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/passthrough-request.service.ts
 tags: [proxmate, passthrough, pci, gpu, migration]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: pt
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/passthrough-request.service.ts

@@ -4,7 +4,7 @@ title: SSO service (OpenID Connect)
 description: OIDC authorization-code + PKCE login via openid-client, cached discovery, and mapping of ID-token claims to a local user with optional JIT provisioning and admin-group promotion.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/sso.service.ts
 tags: [proxmate, auth, sso, oidc]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: sso
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/sso.service.ts

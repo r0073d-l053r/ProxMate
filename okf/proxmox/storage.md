@@ -4,7 +4,7 @@ title: Proxmox storage usage
 description: How ProxMate discovers Proxmox storages by content type and uses them for VM disks, ISOs, LXC templates, cloud images, cloud-init snippets, vzdump backups and data disks.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts
 tags: [proxmate, proxmox, storage, iso, backup]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: pve
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts

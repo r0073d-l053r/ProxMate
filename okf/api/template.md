@@ -4,7 +4,7 @@ title: Template router
 description: Template Store listing and deploy for users plus admin management of templates, cloud images and cloud-init extras, mounted at /api/templates.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/template.routes.ts
 tags: [proxmate, api, templates, cloud-init, provisioning]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/template.routes.ts

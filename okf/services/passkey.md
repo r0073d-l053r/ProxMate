@@ -4,7 +4,7 @@ title: Passkey service (WebAuthn)
 description: WebAuthn passkey registration, usernameless authentication and management using @simplewebauthn/server with an RP derived from FRONTEND_URL.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/passkey.service.ts
 tags: [proxmate, auth, webauthn, passkey]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: passkey
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/passkey.service.ts

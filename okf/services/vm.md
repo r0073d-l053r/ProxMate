@@ -4,7 +4,7 @@ title: VM service (guest lifecycle orchestration)
 description: Central orchestration for tenant guests - quota checks, create (ISO, LXC, template deploy, duplicate, rebuild), access/capability resolution, power actions with owner access-window guard, migration, resize, rescue mode, guest-agent helpers and the storage-pinning report.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/vm.service.ts
 tags: [proxmate, vm, lifecycle, quota, authorization]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: vm
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/vm.service.ts

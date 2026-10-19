@@ -4,7 +4,7 @@ title: Disk service (extra data disks)
 description: Lists, attaches, grows and removes a VM's extra data disks on the root disk's bus and storage, keeping `VirtualMachine.storage` and the owner's storage quota in step.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/disk.service.ts
 tags: [proxmate, storage, disks, quota]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: disk
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/disk.service.ts

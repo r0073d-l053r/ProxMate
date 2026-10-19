@@ -4,7 +4,7 @@ title: Config service (SystemConfig key/value store)
 description: Thin get/set wrapper over the SystemConfig table that transparently encrypts and decrypts rows flagged sensitive.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/config.service.ts
 tags: [proxmate, config, encryption, system-config]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: config
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/config.service.ts

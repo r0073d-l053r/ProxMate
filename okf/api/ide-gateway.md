@@ -4,7 +4,7 @@ title: IDE LLM gateway router
 description: OpenAI-compatible LLM proxy that the in-guest AI agent calls with a per-VM gateway Bearer token at /api/ide/:id/llm/v1.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/ide-gateway.routes.ts
 tags: [proxmate, api, ide, llm, gateway]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/ide-gateway.routes.ts

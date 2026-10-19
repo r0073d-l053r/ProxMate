@@ -4,7 +4,7 @@ title: IDE-proxy service (code-server reverse proxy)
 description: HTTP and WebSocket reverse proxy that serves a guest's code-server at `/api/ide/:id/proxy/`, authenticated by session cookie, VM `ide` capability and the admin IDE policy.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/ide-proxy.service.ts
 tags: [proxmate, ide, proxy, websocket, security]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: proxy
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/ide-proxy.service.ts

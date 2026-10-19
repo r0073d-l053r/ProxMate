@@ -4,7 +4,7 @@ title: Guest networking and network discovery
 description: How ProxMate discovers the bridges and SDN VNets a guest NIC can attach to, stores the default, and applies it to every new guest.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts
 tags: [proxmate, proxmox, networking, sdn, bridge]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: pve
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts

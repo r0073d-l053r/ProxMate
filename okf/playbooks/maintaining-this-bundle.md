@@ -4,7 +4,7 @@ title: Maintaining this OKF bundle
 description: How to keep the okf/ knowledge bundle conformant and in sync when the ProxMate code changes.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/test/okf-bundle.test.ts
 tags: [proxmate, playbook, okf, documentation]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: test
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/test/okf-bundle.test.ts

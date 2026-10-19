@@ -4,7 +4,7 @@ title: Backend environment variables
 description: Every process environment variable the ProxMate Express backend reads, with its default, whether it is required, and what it controls.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/.env.example
 tags: [proxmate, env, backend, configuration, deployment]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: env-example
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/.env.example

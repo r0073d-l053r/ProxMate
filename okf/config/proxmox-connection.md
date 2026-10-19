@@ -4,7 +4,7 @@ title: Proxmox connection settings
 description: SystemConfig keys holding the Proxmox VE API endpoint, API token and TLS-verification flag that every Proxmox client ProxMate builds is created from.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts
 tags: [proxmate, config, proxmox, api-token, secrets]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: pve
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts

@@ -4,7 +4,7 @@ title: Guest lifecycle on Proxmox
 description: How ProxMate creates, clones, templates, powers, migrates, backs up, restores, deletes and consoles QEMU VMs and LXC containers on Proxmox VE, including VMID allocation, bridge/VLAN application and tenant firewall isolation.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/vm.service.ts
 tags: [proxmate, proxmox, vm, lxc, isolation]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: pve
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/proxmox.service.ts

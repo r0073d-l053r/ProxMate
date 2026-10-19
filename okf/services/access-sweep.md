@@ -4,7 +4,7 @@ title: Access-sweep service (access-window warnings and suspension)
 description: Hourly sweep that emails tenants 7 and 1 days before their compute-access window closes and powers off lapsed tenants' guests, latching a suspension and notifying admins.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/access-sweep.service.ts
 tags: [proxmate, access-expiry, scheduler, tenancy]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: sweep
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/access-sweep.service.ts

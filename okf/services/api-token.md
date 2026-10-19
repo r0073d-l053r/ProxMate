@@ -4,7 +4,7 @@ title: API-token service (personal access tokens)
 description: Mints, lists, revokes and verifies `pm_`-prefixed personal API tokens stored only as an HMAC-SHA256 hash peppered with ENCRYPTION_KEY.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/api-token.service.ts
 tags: [proxmate, auth, api-token, security]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: token
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/api-token.service.ts

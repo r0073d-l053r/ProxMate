@@ -4,7 +4,7 @@ title: ProxMate backend and system architecture
 description: How ProxMate is put together - Express 5 + Prisma/SQLite backend entrypoints and middleware order, route → service → proxmox.service/Prisma layering, scheduler jobs, the optional module seam, the Next.js frontend route groups, the in-guest IDE, and Docker Compose deployment.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/app.ts
 tags: [proxmate, architecture, backend, deployment, overview]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: index
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/index.ts

@@ -4,7 +4,7 @@ title: Broadcast opt-out service
 description: Stateless HMAC unsubscribe tokens for admin broadcast emails and the per-user `broadcastOptOut` flag they toggle.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/broadcast-optout.service.ts
 tags: [proxmate, email, broadcast, hmac]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: optout
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/broadcast-optout.service.ts

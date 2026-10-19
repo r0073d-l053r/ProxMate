@@ -4,7 +4,7 @@ title: Broadcast unsubscribe router
 description: Public HMAC-token unsubscribe page for admin announcement emails, mounted at /api/broadcast.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/broadcast.routes.ts
 tags: [proxmate, api, email, broadcast, public]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/broadcast.routes.ts

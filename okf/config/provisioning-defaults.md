@@ -4,7 +4,7 @@ title: Provisioning defaults
 description: SystemConfig keys choosing the disk pool, network, ISO/snippet storage, backup storage and rescue ISO that guest creation, cloning, restores and rescue boot use.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/setup.service.ts
 tags: [proxmate, config, storage, networking, provisioning]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: setup-svc
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/setup.service.ts

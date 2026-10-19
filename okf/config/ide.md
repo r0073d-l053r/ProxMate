@@ -4,7 +4,7 @@ title: ProxMate IDE settings
 description: SystemConfig keys controlling the in-guest ProxMate IDE (code-server plus the OpenCode agent), covering who may use it, BYO keys, model catalogs, the legacy model gateway, the firewall ingress CIDR and the RAM floor.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/ide.service.ts
 tags: [proxmate, config, ide, llm, code-server]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: ide
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/ide.service.ts

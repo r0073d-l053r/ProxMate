@@ -4,7 +4,7 @@ title: Alert service (per-VM resource alerts)
 description: Evaluates tenant-defined per-VM alert rules (cpu, memory, disk, down) against a live cluster sample every 5 minutes and emails the owner plus the admin webhook when a sustained breach fires.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/alert.service.ts
 tags: [proxmate, monitoring, alerts, scheduler]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: alert
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/alert.service.ts

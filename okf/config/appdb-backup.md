@@ -4,7 +4,7 @@ title: App-database backup settings
 description: SystemConfig keys configuring the nightly VACUUM INTO snapshot of ProxMate's own SQLite database, namely the target directory and rolling retention.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/appdb-backup.service.ts
 tags: [proxmate, config, backup, sqlite, scheduler]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: appdb
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/appdb-backup.service.ts

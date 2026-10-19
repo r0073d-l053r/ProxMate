@@ -4,7 +4,7 @@ title: Template service (Template Store and cloud-image builder)
 description: Manages the Template Store (register, discover, convert, unregister), builds cloud-init templates from cloud-image URLs with a guest-agent bake, refreshes them monthly, and holds the admin cloud-init feature/snippet configuration.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/template.service.ts
 tags: [proxmate, templates, cloud-init, images, scheduler]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: tpl
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/template.service.ts

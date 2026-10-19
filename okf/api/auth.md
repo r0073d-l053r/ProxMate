@@ -4,7 +4,7 @@ title: Auth router
 description: Registration, password/2FA/passkey/SSO login, sessions, kiosk exit, account MFA management and password reset, mounted at /api/auth.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/auth.routes.ts
 tags: [proxmate, api, auth, mfa, sso, passkeys]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/auth.routes.ts

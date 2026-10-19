@@ -4,7 +4,7 @@ title: User management router
 description: Admin-only listing, quota/access-window edits and deletion of user accounts, mounted at /api/users.
 resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/user.routes.ts
 tags: [proxmate, api, admin, users, quota]
-generated: { by: claude-code/okf-bootstrap, at: 2026-10-19T12:00:00Z }
+generated: { by: okf-bootstrap/0.1, at: 2026-10-19T12:00:00Z }
 sources:
   - id: routes
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/routes/user.routes.ts
