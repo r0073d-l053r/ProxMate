@@ -179,11 +179,13 @@ literal path segment); rows marked qemu use the `qemu` segment only. Paths are r
 | GET | `/nodes/{node}/qemu/{vmid}/snapshot` | `listSnapshots` | Snapshots (synthetic `current` dropped) |
 | POST | `/nodes/{node}/qemu/{vmid}/snapshot` | `createSnapshot` | `snapname`, optional `description`, `vmstate=1` |
 | DELETE | `/nodes/{node}/qemu/{vmid}/snapshot/{snapname}` | `deleteSnapshot` | Delete snapshot |
+| GET | `/nodes/{node}/qemu/{vmid}/snapshot/{snapname}/config` | `getSnapshotConfig` | Config a rollback would bring back (quota pre-check) |
 | POST | `/nodes/{node}/qemu/{vmid}/snapshot/{snapname}/rollback` | `rollbackSnapshot` | Roll back |
 | POST | `/nodes/{node}/vzdump` | `startBackup` | vzdump with `compress=zstd`, `remove=0`; returns UPID |
 | GET | `/nodes/{node}/vzdump/extractconfig?volume={volid}` | `extractBackupConfig` | Guest config embedded in an archive (quota pre-check) |
 | GET | `/nodes/{node}/tasks/{upid}/status` | `waitForTask` | Task completion polling |
-| GET | `/nodes/{node}/tasks/{upid}/log?limit=0` | `getMigrationProgress` | Full migration log, parsed for per-drive progress |
+| GET | `/nodes/{node}/tasks/{upid}/log?limit=0` | `getMigrationProgress`, `getTaskLog` | Full task log: migration progress; the archive a vzdump task wrote |
+| DELETE | `/nodes/{node}/tasks/{upid}` | `stopTask` | Stop a vzdump task a MateState run gave up waiting for |
 | GET | `/nodes/{node}/hardware/pci` | `getNodePciDevices` | Live PCI devices + IOMMU groups (passthrough preflight) |
 | PUT | `/nodes/{node}/{kind}/{vmid}/firewall/options` | `configureVmIsolation` | Guest firewall on, policies, macfilter |
 | GET | `/nodes/{node}/{kind}/{vmid}/firewall/rules` | `configureVmIsolation`, `ensureIdePinhole`, `removeIdePinhole` | Read rules to reconcile by comment |

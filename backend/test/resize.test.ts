@@ -74,7 +74,7 @@ describe('resizeVm', () => {
     const result = await resizeVm(user(), vm(), { cpu: 4, ram: 8192 });
 
     const cfgPut = client.put.mock.calls.find((c) => /\/config$/.test(c[0] as string));
-    expect(bodyOf(cfgPut!)).toEqual({ cores: '4', memory: '8192' });
+    expect(bodyOf(cfgPut!)).toEqual({ sockets: '1', cores: '4', memory: '8192', delete: 'vcpus' });
     // No disk change requested → no resize call.
     expect(client.put.mock.calls.some((c) => /\/resize$/.test(c[0] as string))).toBe(false);
     expect(update).toHaveBeenCalledWith({ where: { id: 'db-1' }, data: { cpu: 4, ram: 8192 } });

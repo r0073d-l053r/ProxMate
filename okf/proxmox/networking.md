@@ -104,6 +104,8 @@ flag a network that is missing from some nodes.[^setup]
   tag is also applied on top of a VNet, whose zone usually sets the tag itself. See
   [tenant isolation](/config/tenant-isolation.md).[^pve]
 
+- Tenant NICs never carry `trunks=`: `ensureNicFirewall` (post-clone, duplicate, MateState restore, snapshot rollback) and `setVmVlanTag` remove it, and restore-from-upload rebuilds every NIC without it.[^pve]
+
 # Relationships
 
 - Stored in: [provisioning defaults](/config/provisioning-defaults.md) (`default_bridge`).

@@ -69,6 +69,12 @@ async function runWeeklyBackups(reason: string): Promise<void> {
     const result = await runScheduledBackups();
     await setConfig(LAST_RUN_KEY, new Date().toISOString());
     console.log(`[scheduler] done: ${result.ran} ok, ${result.failed} failed in ${Math.round((Date.now() - t0) / 1000)}s`);
+  } catch (err) {
+    // The cron callback can't await this, so an error escaping here (the VM query
+    // or the marker write — per-VM failures are already caught) would be an
+    // unhandled rejection and take the whole process down. The marker stays old,
+    // so the next boot's catch-up retries the window.
+    console.error('[scheduler] weekly MateState backups failed:', err);
   } finally {
     running = false;
   }
@@ -178,20 +184,7 @@ export function startScheduler(): void {
 
   // Per-minute tick that takes per-VM scheduled backups as their cron fires.
   // Separate lock from power actions: a slow vzdump must never block start/stop.
-  backupTask = cron.schedule('* * * * *', async () => {
-    if (backupRunning) return; // a previous (slow) backup tick is still working — skip
-    backupRunning = true;
-    try {
-      const r = await runDueBackups(new Date());
-      if (r.ran || r.failed) {
-        console.log(`[scheduler] per-VM backups: ${r.ran} ok, ${r.failed} failed`);
-      }
-    } catch (err) {
-      console.error('[scheduler] per-VM backup tick failed:', err);
-    } finally {
-      backupRunning = false;
-    }
-  });
+  backupTask = cron.schedule('* * * * *', () => void perVmBackupTick());
 
   console.log('[scheduler] per-VM backup schedules active (1-min tick)');
 
@@ -296,6 +289,43 @@ export function startScheduler(): void {
   setTimeout(() => void accessTick(), 15_000);
 
   console.log(`[scheduler] access-expiry sweep scheduled (${accessExpr})`);
+}
+
+/** SystemConfig key: ISO timestamp of the minute the last per-VM backup tick covered. */
+const VM_BACKUP_TICK_KEY = 'matestate_vm_tick_last';
+
+/** The minute the last per-VM backup tick covered (null until the first one runs). */
+let lastBackupTickAt: Date | null = null;
+
+/**
+ * One per-VM backup tick. Backups run one after another and each can take many
+ * minutes, so ticks that fire meanwhile return at once — and the next tick that
+ * does run covers every minute since the last one that ran, so a schedule that
+ * fired during someone else's vzdump is still backed up. Exported for tests.
+ */
+export async function perVmBackupTick(now: Date = new Date()): Promise<void> {
+  if (backupRunning) return; // a previous (slow) backup tick is still working — the next one catches up
+  backupRunning = true;
+  try {
+    // The marker is also kept in SystemConfig, so schedules that fired while the
+    // backend was down (up to the 24 h catch-up cap) are backed up after a restart.
+    let since = lastBackupTickAt ?? undefined;
+    if (!since) {
+      const stored = await Promise.resolve(getConfig(VM_BACKUP_TICK_KEY)).catch(() => null);
+      const parsed = stored ? new Date(stored) : null;
+      since = parsed && !Number.isNaN(parsed.getTime()) && parsed < now ? parsed : undefined;
+    }
+    lastBackupTickAt = now;
+    await Promise.resolve(setConfig(VM_BACKUP_TICK_KEY, now.toISOString())).catch(() => undefined);
+    const r = await runDueBackups(now, since);
+    if (r.ran || r.failed) {
+      console.log(`[scheduler] per-VM backups: ${r.ran} ok, ${r.failed} failed`);
+    }
+  } catch (err) {
+    console.error('[scheduler] per-VM backup tick failed:', err);
+  } finally {
+    backupRunning = false;
+  }
 }
 
 async function accessTick(): Promise<void> {

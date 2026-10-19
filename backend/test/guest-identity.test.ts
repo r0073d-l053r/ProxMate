@@ -99,7 +99,7 @@ describe('failed create', () => {
 
     await expect(createVm(user, input)).rejects.toThrow(/parameter verification/);
     expect(del).toHaveBeenCalledWith({ where: { id: 'rowa' } });
-    expect(update).not.toHaveBeenCalledWith(expect.objectContaining({ data: { status: 'error' } }));
+    expect(update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'error' }) }));
   });
 
   it('drops the row when the VMID turned out to hold another row\'s guest', async () => {
@@ -119,7 +119,7 @@ describe('failed create', () => {
 
     await expect(createVm(user, input)).rejects.toThrow(/start failed/);
     expect(del).not.toHaveBeenCalled();
-    expect(update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: { status: 'error' } });
+    expect(update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: expect.objectContaining({ status: 'error', holdReason: expect.any(String) }) });
   });
 
   it('tags the new guest with its row marker at create time', async () => {
@@ -234,6 +234,22 @@ describe('destroy when the guest\'s whereabouts are unknown', () => {
   it('drops only the row when the cluster confirms the VMID is empty', async () => {
     pveWith(null);
     await destroyVm(row());
+    expect(del).toHaveBeenCalledWith({ where: { id: 'rowa' } });
+  });
+
+  it('a row-only delete is refused while the cluster lookup fails (C2)', async () => {
+    const c = pveWith(null);
+    const base = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) =>
+      url === '/cluster/resources' ? Promise.reject(new Error('cluster unreachable')) : base(url),
+    );
+    await expect(destroyVm(row(), { rowOnly: true })).rejects.toThrow(/try again/i);
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it('a row-only delete still removes the row once the cluster confirms the VMID is empty (C2)', async () => {
+    pveWith(null);
+    await destroyVm(row(), { rowOnly: true });
     expect(del).toHaveBeenCalledWith({ where: { id: 'rowa' } });
   });
 });

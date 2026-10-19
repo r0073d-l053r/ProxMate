@@ -1,7 +1,7 @@
 import type { VirtualMachine } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import * as pve from './proxmox.service.js';
-import { syncVmNode, migrateVmToNode, startVm, requireOurGuest, guestIdentity } from './vm.service.js';
+import { syncVmNode, migrateVmToNode, startVm, requireOurGuest, guestIdentity, isHeld } from './vm.service.js';
 import { getConfig } from './config.service.js';
 import { recordAudit } from './audit.service.js';
 import { notify } from './notify.service.js';
@@ -678,14 +678,16 @@ export async function denyPassthroughRequest(
 export async function detachPassthrough(vm: VirtualMachine, index: number): Promise<void> {
   if (vm.type !== 'qemu') throw new PassthroughRequestError('PCI passthrough is only available for VMs.', 400);
   const client = await pve.getClient();
-  const current = await requireOurGuest(vm, { client });
+  const current = await requireOurGuest(vm, { allowError: true, client });
 
   try {
     const st = await pve.getVmStatus(current.proxmoxNode, current.proxmoxVmId, client, 'qemu');
     if (st.status !== 'stopped') {
       await pve.stopVm(current.proxmoxNode, current.proxmoxVmId, client, 'qemu');
       await waitStopped(current.proxmoxNode, current.proxmoxVmId, client);
-      await prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'stopped' } });
+      if (!isHeld(current)) {
+        await prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'stopped' } });
+      }
     }
   } catch {
     /* status unknown — proceed to detach */

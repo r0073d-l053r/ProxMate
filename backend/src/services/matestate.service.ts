@@ -4,7 +4,20 @@ import { getConfig, setConfig } from './config.service.js';
 import { cronMatches } from './power-schedule.service.js';
 import { notify } from './notify.service.js';
 import * as pve from './proxmox.service.js';
-import { requireOurGuest, markClonedGuest } from './vm.service.js';
+import {
+  requireOurGuest,
+  markClonedGuest,
+  approvedPciLines,
+  reserveRestoreGrowth,
+  releaseRestoreReservation,
+  holdErroredRow,
+  RESTORE_FAILED_MESSAGE,
+  type RestoreReservation,
+  syncRestoredGuest,
+  assertOwnerAccessActive,
+  assertOwnVolumes,
+} from './vm.service.js';
+import { parseGuestConfigText, pciLines } from '../lib/guest-config.js';
 
 /** Rolling retention: only this many MateStates are kept per VM. */
 export const MATESTATE_RETENTION = 2;
@@ -77,7 +90,7 @@ export async function createMateState(
 ): Promise<MateState> {
   const client = await pve.getClient();
   // Never back up a guest that isn't this row's into this row's backup list.
-  vm = await requireOurGuest(vm, { client });
+  vm = await requireOurGuest(vm, { allowError: true, client });
   const storage = await getBackupStorage();
 
   // Snapshot the set of existing backups for this VM so we can identify the new one.
@@ -99,18 +112,31 @@ export async function createMateState(
     },
   });
 
+  let upid: string | undefined;
+  let unidentified = false;
   try {
-    const upid = await pve.startBackup(
+    upid = await pve.startBackup(
       { node: vm.proxmoxNode, vmid: vm.proxmoxVmId, storage, mode: 'snapshot' },
       client,
     );
     // vzdump can take a while on real workloads — give it up to 30 minutes.
     await pve.waitForTask(vm.proxmoxNode, upid, client, 30 * 60 * 1000);
 
-    // Find the volume that wasn't there before.
+    // Record the volume this task wrote, as its own log names it. Any backup file
+    // for this VMID that merely appeared meanwhile (an uploaded archive can carry
+    // any VMID in its name) is not evidence of what this run produced. Only when
+    // the log names nothing is a lone new volume accepted.
     const after = (await pve.listBackups(storage, client)).filter((b) => b.vmid === vm.proxmoxVmId);
-    const fresh = after.find((b) => !before.has(b.volid));
-    if (!fresh) throw new Error('Backup finished but no new volume was found on Proxmox.');
+    const logged = pve.backupVolidFromLog(
+      await pve.getTaskLog(vm.proxmoxNode, upid, client).catch(() => [] as string[]),
+      storage,
+    );
+    const added = after.filter((b) => !before.has(b.volid));
+    const fresh = logged ? after.find((b) => b.volid === logged) : added.length === 1 ? added[0] : undefined;
+    if (!fresh) {
+      unidentified = true;
+      throw new Error('Backup finished but its volume could not be identified on Proxmox.');
+    }
 
     const updated = await prisma.mateState.update({
       where: { id: placeholder.id },
@@ -121,11 +147,87 @@ export async function createMateState(
     return updated;
   } catch (err) {
     await prisma.mateState.update({ where: { id: placeholder.id }, data: { status: 'error' } });
+    if (upid && /timed out/i.test(pve.pveMessage(err))) {
+      await abandonBackup(vm.proxmoxNode, upid, storage, vm.proxmoxVmId, client);
+    } else if (upid && unidentified) {
+      // Nothing records this run's archive either — remove it the same way.
+      await removeTaskArchive(vm.proxmoxNode, upid, storage, vm.proxmoxVmId, client);
+    }
     throw err;
   }
 }
 
+/**
+ * Give up on a vzdump task we stopped waiting for. Left running, it would still
+ * write an archive that no MateState row records — and retention only prunes
+ * recorded ones, while vzdump's own pruning is off (`remove=0`) — so every slow
+ * run would leave a full-size file behind until the backup storage filled up.
+ * Stop the task, then delete whatever archive its log says it wrote. Best-effort.
+ */
+async function abandonBackup(
+  node: string,
+  upid: string,
+  storage: string,
+  vmid: number,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<void> {
+  try {
+    await pve.stopTask(node, upid, client);
+    await pve.waitForTask(node, upid, client, 60_000).catch(() => undefined);
+  } catch (err) {
+    console.warn(`[matestate] Failed to stop backup task ${upid}: ${pve.pveMessage(err)}`);
+  }
+  await removeTaskArchive(node, upid, storage, vmid, client);
+}
+
+/**
+ * Delete the archive a vzdump task's log names — only when it is listed on the
+ * backup storage as this guest's (same VMID), so nothing else is ever removed.
+ * Best-effort.
+ */
+async function removeTaskArchive(
+  node: string,
+  upid: string,
+  storage: string,
+  vmid: number,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<void> {
+  try {
+    const volid = pve.backupVolidFromLog(await pve.getTaskLog(node, upid, client), storage);
+    if (!volid) return;
+    const present = (await pve.listBackups(storage, client)).find((b) => b.volid === volid && b.vmid === vmid);
+    if (present) await pve.deleteBackup(present.node, storage, volid, client);
+  } catch (err) {
+    console.warn(`[matestate] Failed to remove the archive of backup task ${upid}: ${pve.pveMessage(err)}`);
+  }
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Put a restored guest back on the network placement and isolation it has NOW.
+ * An in-place restore (and a rollback) brings back the NIC line — bridge, VLAN
+ * tag — and the firewall as they were when the backup or snapshot was taken, so
+ * a bridge, VLAN or rule change made since would otherwise be undone. Mirrors the
+ * restore-from-upload path; the IDE's firewall pinhole is re-added while the IDE
+ * is installed.
+ */
+async function reapplyIsolation(
+  vm: VirtualMachine,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<void> {
+  const kind: pve.GuestKind = vm.type === 'lxc' ? 'lxc' : 'qemu';
+  await pve.applyDefaultBridge(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
+  if ((await getConfig('isolation_enabled')) === 'false') return;
+  await pve.configureVmIsolation(vm.proxmoxNode, vm.proxmoxVmId, await pve.readIsolationOptions(), client, kind);
+  await pve.ensureNicFirewall(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
+  const ingress = (await getConfig('ide_ingress_cidr'))?.trim();
+  if (vm.ideState === 'ready' && ingress) {
+    // Same port the IDE installer opens (ide-provision.service).
+    const port = Number(process.env['IDE_GUEST_PORT'] || 8080);
+    await pve.ensureIdePinhole(vm.proxmoxNode, vm.proxmoxVmId, { port, source: ingress }, client, kind);
+  }
+}
 
 /**
  * Restore a VM from one of its MateStates. Stops the VM (if running), waits
@@ -139,65 +241,179 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
   const client = await pve.getClient();
   const kind: pve.GuestKind = vm.type === 'lxc' ? 'lxc' : 'qemu';
   // A restore overwrites the guest at this VMID — only ever this row's (or an empty slot).
-  vm = await requireOurGuest(vm, { allowAbsent: true, client });
+  vm = await requireOurGuest(vm, { allowAbsent: true, allowError: true, client });
 
-  // Stop first if running — Proxmox refuses to restore over a running guest, and
-  // stop is async (same pattern as destroyVm).
+  // The guest may have moved since the backup (Proxmox HA, the PVE UI). On
+  // node-local backup storage the archive is only on the node it was taken on, so
+  // say so plainly rather than let the restore fail inside Proxmox.
+  const backupNodes = await pve.getBackupNodes(mateState.storage, mateState.volid, client);
+  if (!backupNodes.includes(vm.proxmoxNode)) {
+    throw new Error(
+      backupNodes.length > 0
+        ? `This backup is stored on ${backupNodes.join(', ')}, but the VM is now on ${vm.proxmoxNode}. Move the VM back to restore it.`
+        : 'This backup is not available on any online node.',
+    );
+  }
+
+  // The archive brings back the guest's whole config as it was at backup time.
+  // Note which PCI devices are approved now (a device detached since the backup
+  // must not return), then reserve the archive's sizes against the owner's quota
+  // (refused when they don't fit).
+  const archiveCfg = parseGuestConfigText(await pve.extractBackupConfig(vm.proxmoxNode, mateState.volid, client));
+  const approvedPci = await approvedPciLines(vm, client);
+  const reservation = await reserveRestoreGrowth(vm, archiveCfg);
+  let taskStarted = false;
   try {
-    const status = await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
-    if (status.status !== 'stopped') {
-      await pve.stopVm(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
-      const deadline = Date.now() + 30_000;
-      while (Date.now() < deadline) {
-        await sleep(1000);
-        try {
-          if ((await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client, kind)).status === 'stopped') break;
-        } catch {
-          break;
+    // Stop first if running — Proxmox refuses to restore over a running guest, and
+    // stop is async (same pattern as destroyVm).
+    try {
+      const status = await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
+      if (status.status !== 'stopped') {
+        await pve.stopVm(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
+        const deadline = Date.now() + 30_000;
+        while (Date.now() < deadline) {
+          await sleep(1000);
+          try {
+            if ((await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client, kind)).status === 'stopped') break;
+          } catch {
+            break;
+          }
         }
       }
+    } catch {
+      /* status unknown — try anyway */
     }
-  } catch {
-    /* status unknown — try anyway */
-  }
 
-  // LXC restore must target a container-capable rootfs storage: the backup
-  // storage (often a directory like `local`) usually can't hold a container
-  // rootfs, so Proxmox 400s unless we pass one. Reuse the container's current
-  // rootfs pool, falling back to the configured default. (QEMU reads the target
-  // from the vzdump config, so it needs no explicit storage.)
-  let restoreStorage: string | undefined;
-  if (kind === 'lxc') {
-    const cfg = await pve
-      .getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, 'lxc')
-      .catch(() => ({}) as Record<string, string>);
-    restoreStorage = cfg.rootfs?.split(':')[0] || (await getConfig('default_storage')) || undefined;
-  }
+    // LXC restore must target a container-capable rootfs storage: the backup
+    // storage (often a directory like `local`) usually can't hold a container
+    // rootfs, so Proxmox 400s unless we pass one. Reuse the container's current
+    // rootfs pool, falling back to the configured default. (QEMU reads the target
+    // from the vzdump config, so it needs no explicit storage.)
+    let restoreStorage: string | undefined;
+    if (kind === 'lxc') {
+      const cfg = await pve
+        .getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, 'lxc')
+        .catch(() => ({}) as Record<string, string>);
+      restoreStorage = cfg.rootfs?.split(':')[0] || (await getConfig('default_storage')) || undefined;
+    }
 
-  await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'restoring' } });
-  try {
+    await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'restoring' } });
     const upid = await pve.restoreBackup(
       { node: vm.proxmoxNode, vmid: vm.proxmoxVmId, volid: mateState.volid, storage: restoreStorage },
       client,
       kind,
     );
+    taskStarted = true;
     await pve.waitForTask(vm.proxmoxNode, upid, client, 30 * 60 * 1000);
-    // The archive's config replaces the guest's, tags included (a backup taken
-    // before ownership tags existed has none) — tag it as this row's again.
-    await markClonedGuest(vm, client);
     await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'ready' } });
-    // Restore creates a fresh config; re-assert tenant isolation on the NIC.
-    const isolate = (await getConfig('isolation_enabled')) !== 'false';
-    if (isolate) {
-      try {
-        await pve.ensureNicFirewall(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
-      } catch {
-        /* not fatal */
-      }
-    }
-    await pve.startVm(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
+    vm = await settleRestoredGuest(vm, approvedPci, client);
+    // Powering on is what every start path gates on the owner's compute-access
+    // window; a restore by a share-holder must not revive a suspended owner's
+    // machine. The data is restored either way; the guest just stays off.
+    const ownerActive = await assertOwnerAccessActive(vm).then(() => true, () => false);
+    if (ownerActive) await pve.startVm(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
+    await prisma.virtualMachine.update({
+      where: { id: vm.id },
+      data: { status: ownerActive ? 'running' : 'stopped', holdReason: null },
+    });
   } catch (err) {
     await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'ready' } });
+    await afterFailedRestore(vm, reservation, taskStarted, err);
+    throw err;
+  }
+}
+
+/**
+ * Once a restore or rollback task has replaced the guest's config, in this order
+ * and before anything may start it: tag it as this row's, put it back on the
+ * network placement and isolation it has now (even when tagging failed), then
+ * re-sync the row's sizes and strip PCI devices that aren't approved.
+ */
+async function settleRestoredGuest(
+  vm: VirtualMachine,
+  approvedPci: string[],
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<VirtualMachine> {
+  try {
+    // The config came back with its tags (a backup or snapshot from before
+    // ownership tags existed has none) — tag it as this row's again.
+    await markClonedGuest(vm, client);
+  } finally {
+    await reapplyIsolation(vm, client);
+  }
+  // Only this guest's own volumes, whatever the archive or snapshot referenced.
+  await assertOwnVolumes(vm, client);
+  return syncRestoredGuest(vm, { approvedPci, client });
+}
+
+/**
+ * A restore or rollback failed. Before its task started the guest is unchanged:
+ * give back the reserved quota. After, the guest's state is unknown — keep the
+ * reservation (it never undercounts), stop it if it is running, and put the row
+ * in `error` so nothing starts it until a repair. An over-quota hold set by
+ * syncRestoredGuest is left as it is.
+ */
+async function afterFailedRestore(
+  vm: VirtualMachine,
+  reservation: RestoreReservation,
+  taskStarted: boolean,
+  err: unknown,
+): Promise<void> {
+  if (!taskStarted) {
+    await releaseRestoreReservation(vm, reservation).catch(() => undefined);
+    return;
+  }
+  const kind: pve.GuestKind = vm.type === 'lxc' ? 'lxc' : 'qemu';
+  try {
+    const st = await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, undefined, kind);
+    if (st.status !== 'stopped') await pve.stopVm(vm.proxmoxNode, vm.proxmoxVmId, undefined, kind);
+  } catch {
+    /* gone or unreachable — the error state below still keeps it from being started */
+  }
+  // Held already, with a more specific reason, by syncRestoredGuest / assertOwnVolumes.
+  if (err instanceof Error && (err.name === 'QuotaError' || err.name === 'ForeignVolumeError')) return;
+  await holdErroredRow(vm, RESTORE_FAILED_MESSAGE).catch(() => undefined);
+}
+
+/**
+ * Roll a VM back to one of its Proxmox snapshots. The snapshot holds the whole
+ * guest config as it was then — cores, memory, disks, PCI devices — so it is
+ * refused when that config would grow the guest past its owner's quota, and
+ * afterwards the row is re-synced from the guest and PCI devices not approved
+ * now are removed. Returns the re-synced row.
+ */
+export async function rollbackToSnapshot(vm: VirtualMachine, snapname: string): Promise<VirtualMachine> {
+  const client = await pve.getClient();
+  vm = await requireOurGuest(vm, { allowError: true, client });
+  const snapCfg = await pve.getSnapshotConfig(vm.proxmoxNode, vm.proxmoxVmId, snapname, client);
+  // A snapshot with RAM state comes back running, so it is a power-on like any
+  // other and needs the owner's compute-access window open.
+  if (snapCfg['vmstate']) await assertOwnerAccessActive(vm);
+  const approvedPci = await approvedPciLines(vm, client);
+  // A RAM snapshot comes back running with its devices attached, before anything
+  // could strip them — so a snapshot holding a PCI device that isn't approved now
+  // is refused outright rather than cleaned up afterwards.
+  const unapproved = pciLines(snapCfg).filter((l) => !approvedPci.includes(l.value));
+  if (unapproved.length > 0) {
+    throw new Error(
+      `This snapshot has a PCI device (${unapproved.map((l) => l.key).join(', ')}) that isn't approved for this VM any more, so it can't be rolled back to.`,
+    );
+  }
+  const reservation = await reserveRestoreGrowth(vm, snapCfg);
+
+  let taskStarted = false;
+  try {
+    const upid = await pve.rollbackSnapshot(vm.proxmoxNode, vm.proxmoxVmId, snapname, client);
+    taskStarted = true;
+    await pve.waitForTask(vm.proxmoxNode, upid, client, 300_000);
+    // The snapshot's tags, NIC line (bridge, VLAN tag), sizes and devices came back with it.
+    const synced = await settleRestoredGuest(vm, approvedPci, client);
+    return await prisma.virtualMachine.update({
+      where: { id: synced.id },
+      data: { status: snapCfg['vmstate'] ? 'running' : 'stopped', holdReason: null },
+    });
+  } catch (err) {
+    await afterFailedRestore(vm, reservation, taskStarted, err);
     throw err;
   }
 }
@@ -230,15 +446,40 @@ export function isBackupDue(vm: Pick<VirtualMachine, 'backupCron'>, now: Date): 
   return !!vm.backupCron && cronMatches(vm.backupCron, now);
 }
 
+/** Longest stretch of missed minutes a late per-VM backup tick still catches up. */
+const MAX_CATCH_UP_MINUTES = 24 * 60;
+
+/**
+ * Whether a VM's own backup schedule fired at any minute after `since` up to and
+ * including `now`'s minute (just `now`'s minute when `since` is omitted).
+ */
+export function isBackupDueSince(vm: Pick<VirtualMachine, 'backupCron'>, now: Date, since?: Date): boolean {
+  if (!vm.backupCron) return false;
+  const end = new Date(now);
+  end.setSeconds(0, 0);
+  const start = new Date(since ?? end);
+  start.setSeconds(0, 0);
+  if (since) start.setMinutes(start.getMinutes() + 1);
+  const floor = end.getTime() - MAX_CATCH_UP_MINUTES * 60_000;
+  if (start.getTime() < floor) start.setTime(floor);
+  for (const d = start; d.getTime() <= end.getTime(); d.setMinutes(d.getMinutes() + 1)) {
+    if (cronMatches(vm.backupCron, d)) return true;
+  }
+  return false;
+}
+
 /**
  * Per-minute tick for VMs with their own backup schedule: back up each one whose
- * `backupCron` fires this minute (retention honors its `backupKeep`).
+ * `backupCron` fires this minute (retention honors its `backupKeep`). `since` is
+ * the minute the previous tick covered: a tick that comes late because the one
+ * before it was still busy backing up also takes the schedules that fired in
+ * between, each VM once.
  */
-export async function runDueBackups(now: Date = new Date()): Promise<{ ran: number; failed: number }> {
+export async function runDueBackups(now: Date = new Date(), since?: Date): Promise<{ ran: number; failed: number }> {
   const vms = await prisma.virtualMachine.findMany({
     where: { status: { not: 'creating' }, backupCron: { not: null } },
   });
-  return backupEach(vms.filter((vm) => isBackupDue(vm, now)));
+  return backupEach(vms.filter((vm) => isBackupDueSince(vm, now, since)));
 }
 
 /** Back up a list of VMs sequentially, isolating per-VM failures. */

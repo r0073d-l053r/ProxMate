@@ -1449,6 +1449,19 @@ export async function cloneVm(
   return res.data.data;
 }
 
+/** A task's current status (`running` / `stopped`, with `exitstatus` once stopped). */
+export async function getTaskStatus(
+  node: string,
+  upid: string,
+  client?: AxiosInstance,
+): Promise<{ status: string; exitstatus?: string }> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: { status: string; exitstatus?: string } }>(
+    `/nodes/${node}/tasks/${encodeURIComponent(upid)}/status`,
+  );
+  return res.data.data;
+}
+
 /** Poll a Proxmox task (UPID) until it finishes; throws if it failed. */
 export async function waitForTask(
   node: string,
@@ -1487,10 +1500,14 @@ export async function setVmResources(
   kind: GuestKind = 'qemu',
 ): Promise<void> {
   const c = client ?? (await getClient());
-  await c.put(
-    `/nodes/${node}/${kind}/${vmid}/config`,
-    new URLSearchParams({ cores: String(cores), memory: String(memory) }),
-  );
+  // A QEMU guest runs sockets × cores vCPUs (or `vcpus` of them). ProxMate's `cpu`
+  // is the total, so it is always written as one socket of that many cores —
+  // otherwise a restored config's `sockets: 4` would multiply every later resize.
+  const params: Record<string, string> =
+    kind === 'qemu'
+      ? { sockets: '1', cores: String(cores), memory: String(memory), delete: 'vcpus' }
+      : { cores: String(cores), memory: String(memory) };
+  await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams(params));
 }
 
 /** Set a VM's display name (the Proxmox `name`/hostname config field). */
@@ -2530,6 +2547,38 @@ export async function startBackup(
   return res.data.data;
 }
 
+/** A task's log lines (all of them — `limit: 0` is Proxmox's "no limit"). */
+export async function getTaskLog(node: string, upid: string, client?: AxiosInstance): Promise<string[]> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Array<{ t: string }> }>(
+    `/nodes/${node}/tasks/${encodeURIComponent(upid)}/log`,
+    { params: { limit: 0 } },
+  );
+  return (res.data.data ?? []).map((l) => l.t);
+}
+
+/** Stop a running Proxmox task. */
+export async function stopTask(node: string, upid: string, client?: AxiosInstance): Promise<void> {
+  const c = client ?? (await getClient());
+  await c.delete(`/nodes/${node}/tasks/${encodeURIComponent(upid)}`);
+}
+
+/**
+ * The backup volid a vzdump task wrote, read from its own log ("creating vzdump
+ * archive '<path>'", or "creating Proxmox Backup Server archive '<name>'"), or
+ * null when the log doesn't name one.
+ */
+export function backupVolidFromLog(lines: string[], storage: string): string | null {
+  for (const line of lines) {
+    const m = /creating (?:vzdump|Proxmox Backup Server) archive '([^']+)'/.exec(line);
+    if (!m) continue;
+    const archive = m[1]!;
+    // A directory storage logs a file path; its volid names only the file.
+    return `${storage}:backup/${archive.startsWith('/') ? archive.slice(archive.lastIndexOf('/') + 1) : archive}`;
+  }
+  return null;
+}
+
 export interface PveBackup {
   volid: string;
   storage: string;
@@ -2631,6 +2680,9 @@ export async function restoreNewGuest(
   if (kind === 'lxc') {
     params.set('ostemplate', opts.volid);
     params.set('restore', '1');
+    // Same as createContainer: a tenant's container is always unprivileged,
+    // whatever the archive's own config says.
+    params.set('unprivileged', '1');
   } else {
     params.set('archive', opts.volid);
   }
@@ -2742,6 +2794,22 @@ export async function deleteSnapshot(
   return res.data.data;
 }
 
+/** The guest config a snapshot holds (what a rollback to it brings back). */
+export async function getSnapshotConfig(
+  node: string,
+  vmid: number,
+  snapname: string,
+  client?: AxiosInstance,
+): Promise<Record<string, string>> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Record<string, unknown> }>(
+    `/nodes/${node}/qemu/${vmid}/snapshot/${encodeURIComponent(snapname)}/config`,
+  );
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(res.data.data ?? {})) out[k] = String(v);
+  return out;
+}
+
 /** Roll the VM back to a snapshot (reverts disk + RAM if captured). Task UPID. */
 export async function rollbackSnapshot(
   node: string,
@@ -2767,11 +2835,24 @@ export async function ensureNicFirewall(
   const c = client ?? (await getClient());
   const cfg = await getVmConfig(node, vmid, c, kind);
   for (const k of Object.keys(cfg).filter((key) => /^net\d+$/.test(key))) {
-    const val = cfg[k]!;
-    if (/\bfirewall=1\b/.test(val)) continue;
-    const updated = /\bfirewall=0\b/.test(val) ? val.replace(/\bfirewall=0\b/, 'firewall=1') : `${val},firewall=1`;
+    const val = withoutTrunks(cfg[k]!);
+    const updated = /\bfirewall=1\b/.test(val)
+      ? val
+      : /\bfirewall=0\b/.test(val)
+        ? val.replace(/\bfirewall=0\b/, 'firewall=1')
+        : `${val},firewall=1`;
+    if (updated === cfg[k]) continue;
     await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams({ [k]: updated }));
   }
+}
+
+/**
+ * A NIC line without `trunks=`. Trunks let a guest's NIC carry several VLANs, i.e.
+ * reach segments other than the one tenant isolation puts it on — a tenant guest
+ * never gets them, whatever its config (a restored archive or snapshot) says.
+ */
+export function withoutTrunks(nic: string): string {
+  return nic.replace(/,?\btrunks=[^,]*/g, '').replace(/^,/, '');
 }
 
 /**
@@ -2808,17 +2889,21 @@ export async function setVmVlanTag(
   const c = client ?? (await getClient());
   const cfg = await getVmConfig(node, vmid, c, kind);
   for (const k of Object.keys(cfg).filter((key) => /^net\d+$/.test(key))) {
-    const val = cfg[k]!;
+    // Never leave trunks on a tenant NIC (see withoutTrunks).
+    const val = withoutTrunks(cfg[k]!);
     const current = /\btag=(\d+)\b/.exec(val);
     if (tag === null) {
-      if (!current) continue;
+      if (!current && val === cfg[k]) continue;
       await c.put(
         `/nodes/${node}/${kind}/${vmid}/config`,
         new URLSearchParams({ [k]: val.replace(/,?\btag=\d+\b/, '') }),
       );
       continue;
     }
-    if (current && Number(current[1]) === tag) continue;
+    if (current && Number(current[1]) === tag) {
+      if (val !== cfg[k]) await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams({ [k]: val }));
+      continue;
+    }
     const updated = current ? val.replace(/\btag=\d+\b/, `tag=${tag}`) : `${val},tag=${tag}`;
     await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams({ [k]: updated }));
   }

@@ -60,6 +60,16 @@ describe('catchUpMissedBackups', () => {
     expect(r.caughtUp).toBe(true);
   });
 
+  it('a failing weekly run is logged, not thrown, and leaves the marker for the next attempt (BUG-065)', async () => {
+    getCfg.mockResolvedValue(new Date(2026, 5, 21, 3, 0, 0).toISOString() as never);
+    runBackups.mockRejectedValue(new Error('database is locked'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await expect(catchUpMissedBackups(wed)).resolves.toBeDefined();
+    expect(setCfg).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
   it('does nothing when the last run already covers the most recent window', async () => {
     getCfg.mockResolvedValue(new Date(2026, 5, 28, 3, 5, 0).toISOString() as never); // just after the window
     const r = await catchUpMissedBackups(wed);

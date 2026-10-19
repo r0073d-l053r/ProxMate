@@ -11,6 +11,8 @@ import * as pve from './proxmox.service.js';
 import { getOfferedFeatureIds, getBaseFeatureIds } from './template.service.js';
 import { isValidPublicKey } from './ssh-key.service.js';
 import { diskSizeGb } from './disk.service.js';
+import { guestConfigSizes, pciLines, foreignVolumeKeys } from '../lib/guest-config.js';
+import { recordAudit } from './audit.service.js';
 import { ALL_CAPS, CAPS_BY_ROLE, normalizeShareRole, type ShareRole, type VmCap } from './vm-share.service.js';
 
 /** The Proxmox guest kind for a VM row (defaults to QEMU for legacy/unset rows). */
@@ -18,7 +20,9 @@ export const kindOf = (vm: { type?: string | null }): pve.GuestKind => (vm.type 
 
 /** Flag a VM as failed in the DB and fire a best-effort vm.error notification. */
 async function markVmError(vmId: string, name: string, err: unknown): Promise<void> {
-  await prisma.virtualMachine.update({ where: { id: vmId }, data: { status: 'error' } });
+  // Held as well: a guest whose provisioning didn't finish never got its isolation
+  // or sizing applied, so nothing may start it (see requireOurGuest).
+  await prisma.virtualMachine.update({ where: { id: vmId }, data: { status: 'error', holdReason: PROVISION_FAILED_MESSAGE } });
   await notify({
     event: 'vm.error',
     title: name,
@@ -167,11 +171,53 @@ export async function assertGuestIsOurs(
  */
 export async function requireOurGuest(
   vm: VirtualMachine,
-  opts: { allowAbsent?: boolean; client?: Awaited<ReturnType<typeof pve.getClient>> } = {},
+  opts: {
+    allowAbsent?: boolean;
+    /** A repair or teardown path (stop, restore, rebuild, disk removal, device detach) — allowed on an `error` row. */
+    allowError?: boolean;
+    client?: Awaited<ReturnType<typeof pve.getClient>>;
+  } = {},
 ): Promise<VirtualMachine> {
+  if (!opts.allowError) assertNotErrored(vm);
   const current = await syncVmNode(vm);
   await assertGuestIsOurs(current, opts);
   return current;
+}
+
+/** holdReason of a row whose create, clone, upload restore or rebuild didn't finish. */
+export const PROVISION_FAILED_MESSAGE =
+  "This machine's provisioning didn't finish, so it can't be started. Delete it, restore a backup or rebuild it — or ask an admin to check it.";
+
+/** Thrown for anything but repair or delete on a held row (or one in `error`). */
+export class GuestErroredError extends Error {
+  constructor(detail?: string | null) {
+    super(
+      detail ||
+        "This machine is in an error state. It can only be deleted, restored from a backup, or rebuilt — or ask an admin to check it.",
+    );
+    this.name = 'GuestErroredError';
+  }
+}
+
+/**
+ * A row ProxMate left in `error` — a create, clone or restore that didn't finish,
+ * or a restore that left it over quota — holds a guest that never got (or lost)
+ * the isolation, sizing and device checks a guest needs before it may run. So
+ * nothing may start it, open its console or install into it until a repair path
+ * (restore, rebuild, admin adoption) has put it right. Callers pass the row as
+ * loaded for this request.
+ */
+function assertNotErrored(vm: VirtualMachine): void {
+  if (vm.holdReason || vm.status === 'error') throw new GuestErroredError(vm.holdReason);
+}
+
+/**
+ * Whether a row's status must be left alone by status syncs and power actions:
+ * a held row (or one in `error`) keeps its state until a repair path clears it,
+ * so viewing or stopping it never makes it startable again.
+ */
+export function isHeld(vm: Pick<VirtualMachine, 'status' | 'holdReason'>): boolean {
+  return !!vm.holdReason || vm.status === 'error';
 }
 
 /**
@@ -372,7 +418,21 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
   const { vm: current, synced } = await syncVmNodeChecked(vm);
   const client = await pve.getClient();
   const identity = await guestIdentity(current, client);
-  if (identity === 'ours') return current;
+  if (identity === 'ours') {
+    // An admin's repair. An over-quota hold lifts only once the row fits again
+    // (e.g. after the admin raised the owner's quota); any other hold is the admin's
+    // call — they have checked the guest.
+    if (current.holdReason === QUOTA_HOLD_MESSAGE) {
+      if (await withQuotaLock(current.userId, () => liftQuotaHoldIfFits(current.id))) {
+        return (await prisma.virtualMachine.findUnique({ where: { id: current.id } })) ?? current;
+      }
+      return current;
+    }
+    if (isHeld(current)) {
+      return prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'stopped', holdReason: null } });
+    }
+    return current;
+  }
   if (identity === 'absent') {
     throw new AdoptError(
       synced ? 'There is no Proxmox guest at this VMID to adopt.' : "Couldn't reach the cluster to find this guest — try again.",
@@ -401,15 +461,36 @@ async function deleteVmRow(vmId: string): Promise<void> {
  * guest exists and is ours (`guestCreated`: our create/clone task finished), in
  * which case it stays in `error` for the owner to see and delete. When Proxmox
  * can't be asked, the row is kept — every later action re-checks the guest anyway.
+ *
+ * A clone or restore only gets the row's tag after its task finishes, so a task
+ * that outlived our wait leaves a guest carrying the source's tags (a template's
+ * or source machine's ProxMate tag, or none). `task` lets that be settled from the
+ * task itself: finished after all → the guest is ours and is tagged now; still
+ * running → the row is kept and the guest is tagged when the task completes.
+ * Without a verdict from the task, a guest that carries no OTHER machine's tag
+ * (`cloneSourceId` names the duplicate's source, whose tag a copy inherits) keeps
+ * the row in `error` rather than leaving a late clone unowned.
  */
-export async function settleFailedCreate(vm: VirtualMachine, err: unknown, guestCreated: boolean): Promise<void> {
+export async function settleFailedCreate(
+  vm: VirtualMachine,
+  err: unknown,
+  guestCreated: boolean,
+  opts: { task?: CreateTask; cloneSourceId?: string } = {},
+): Promise<{ following: boolean }> {
   let keep = guestCreated;
+  let following = false;
+  if (!keep && opts.task) {
+    const verdict = await settleCreateTask(vm, opts.task);
+    keep = verdict !== null;
+    following = verdict === 'following';
+  }
   if (!keep) {
-    keep = await guestIdentity(vm).then((id) => id === 'ours', () => true);
+    keep = await guestLeftByCreate(vm, opts.cloneSourceId).catch(() => true);
   }
   if (keep) {
-    await markVmError(vm.id, vm.name, err).catch(() => undefined);
-    return;
+    // A foreign-volume hold is already set and says more than the generic one.
+    if (!(err instanceof ForeignVolumeError)) await markVmError(vm.id, vm.name, err).catch(() => undefined);
+    return { following };
   }
   await deleteVmRow(vm.id).catch(() => undefined);
   await notify({
@@ -417,6 +498,84 @@ export async function settleFailedCreate(vm: VirtualMachine, err: unknown, guest
     title: vm.name,
     message: `Provisioning of "${vm.name}" failed: ${pve.pveMessage(err)}`,
   }).catch(() => undefined);
+  return { following };
+}
+
+/** How long a create/clone task that outlived its wait is still followed. */
+const LATE_TASK_FOLLOW_MS = 6 * 60 * 60 * 1000;
+
+type CreateTask = {
+  node: string;
+  upid: string;
+  /**
+   * Make the finished guest safe before it is tagged as the row's (an upload
+   * restore: rebuild its NICs, check its volumes, apply isolation, re-sync its
+   * sizes). If it throws, the guest is never tagged.
+   */
+  beforeTag?: () => Promise<void>;
+  /** Runs once the task has ended either way (e.g. remove an uploaded archive). */
+  afterTask?: () => Promise<void>;
+};
+
+/**
+ * Whether the create task behind a failed create produced (or is still producing)
+ * this row's guest: 'done' (finished OK — tagged now), 'following' (still running —
+ * followed in the background, tagged when it completes), or null (failed, or no
+ * verdict). The tag only lets the owner delete the guest with its row: the row
+ * stays in `error`, so nothing can start the guest. `afterTask` runs once the task
+ * has ended either way (e.g. to remove an uploaded archive the task was reading).
+ */
+async function settleCreateTask(vm: VirtualMachine, task: CreateTask): Promise<'done' | 'following' | null> {
+  let client: Awaited<ReturnType<typeof pve.getClient>>;
+  let st: { status: string; exitstatus?: string };
+  try {
+    client = await pve.getClient();
+    st = await pve.getTaskStatus(task.node, task.upid, client);
+  } catch {
+    return null; // no verdict from the task — fall back to what is at the VMID
+  }
+  if (st.status === 'stopped') {
+    if (st.exitstatus && st.exitstatus !== 'OK' && !st.exitstatus.startsWith('WARNINGS')) return null;
+    try {
+      await task.beforeTag?.();
+      await markClonedGuest(vm, client);
+    } catch (e) {
+      console.warn(`[vm] guest of failed create "${vm.name}" left untagged: ${pve.pveMessage(e)}`);
+    }
+    return 'done';
+  }
+  void pve
+    .waitForTask(task.node, task.upid, client, LATE_TASK_FOLLOW_MS)
+    .then(async () => {
+      // Only while the row still exists and still points at this VMID: once it has
+      // been deleted, the VMID is nobody's and the guest must not be claimed.
+      const row = await prisma.virtualMachine.findUnique({ where: { id: vm.id } });
+      if (!row || row.proxmoxVmId !== vm.proxmoxVmId || row.proxmoxNode !== task.node) return;
+      await task.beforeTag?.();
+      await markClonedGuest(row, client);
+    })
+    .catch((e) => console.warn(`[vm] late create task for "${vm.name}" did not complete: ${pve.pveMessage(e)}`))
+    .finally(() => task.afterTask?.().catch(() => undefined));
+  return 'following';
+}
+
+/**
+ * Whether the guest at a failed create's VMID may be what that create left behind:
+ * it exists and carries no ProxMate tag of another machine (this row's, a
+ * template's, the clone source's, or none at all).
+ */
+async function guestLeftByCreate(vm: VirtualMachine, cloneSourceId?: string): Promise<boolean> {
+  let cfg: Record<string, string>;
+  try {
+    cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, await pve.getClient(), kindOf(vm));
+  } catch (err) {
+    if (/does not exist|not found/i.test(pve.pveMessage(err))) return false;
+    throw err;
+  }
+  const allowed = new Set([guestMarker(vm.id), ...(cloneSourceId ? [guestMarker(cloneSourceId)] : [])]);
+  return !parsePveTags(cfg['tags']).some(
+    (t) => t.startsWith(MARKER_PREFIX) && !t.startsWith(`${MARKER_PREFIX}template-`) && !allowed.has(t),
+  );
 }
 
 /** Thrown when a VM request would push a user over one of their quota caps. */
@@ -1114,6 +1273,7 @@ async function deployFromTemplateLocked(
   release(); // usage now includes this row
 
   let created = false;
+  let cloneTask: { node: string; upid: string } | undefined;
   try {
     // Full-vs-linked and the target pool are decided together — see planTemplateClone.
     const plan = await planTemplateClone(node, template, client);
@@ -1128,6 +1288,7 @@ async function deployFromTemplateLocked(
       },
       client,
     );
+    cloneTask = { node, upid };
     await pve.waitForTask(node, upid, client, 600_000);
     created = true;
     await markClonedGuest(vm, client);
@@ -1155,7 +1316,7 @@ async function deployFromTemplateLocked(
       },
     });
   } catch (err) {
-    await settleFailedCreate(vm, err, created);
+    await settleFailedCreate(vm, err, created, { task: cloneTask });
     throw err;
   }
 }
@@ -1237,6 +1398,7 @@ async function duplicateVmLocked(
   release(); // usage now includes this row
 
   let created = false;
+  let cloneTask: { node: string; upid: string } | undefined;
   try {
     // Full clone (not linked): storage-agnostic and self-contained, so the copy
     // survives the original being deleted — and, being full, it can be placed on
@@ -1249,6 +1411,7 @@ async function duplicateVmLocked(
       { node, templateVmid: current.proxmoxVmId, newVmid: vmid, name: newName, full: true, storage },
       client,
     );
+    cloneTask = { node, upid };
     await pve.waitForTask(node, upid, client, 600_000);
     created = true;
     await markClonedGuest(vm, client); // the copy inherited the source's marker
@@ -1256,6 +1419,8 @@ async function duplicateVmLocked(
     // Same as every other clone path: the copy inherited the source's bridge, so the
     // admin's default is applied here (see pve.applyDefaultBridge for why it wins).
     await pve.applyDefaultBridge(node, vmid, client);
+    // The copy inherited the source's NIC lines: firewall flag on, no trunks.
+    await pve.ensureNicFirewall(node, vmid, client);
 
     if (isolate) {
       await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client);
@@ -1266,7 +1431,7 @@ async function duplicateVmLocked(
     await pve.waitForTask(node, startUpid, client);
     return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
   } catch (err) {
-    await settleFailedCreate(vm, err, created);
+    await settleFailedCreate(vm, err, created, { task: cloneTask, cloneSourceId: current.id });
     throw err;
   }
 }
@@ -1390,7 +1555,6 @@ export async function migrateVmToNode(
     timeoutMs?: number;
   } = {},
 ): Promise<VirtualMachine> {
-  if (targetNode === vm.proxmoxNode) throw new Error('The VM is already on that node.');
   // Containers can't be live-migrated in ProxMate's API-only model (LXC has no
   // live migration; a restart-migration would mean downtime), so they're excluded
   // from manual moves, the balancer, and drains. Keep them pinned.
@@ -1400,7 +1564,10 @@ export async function migrateVmToNode(
   // never applies there; it protects generic admin/balancer moves.)
   if (vm.hasPassthrough) throw new Error('A VM with PCI/GPU passthrough can’t be migrated. Detach the device first.');
   const client = await pve.getClient();
+  // Judged against where the guest actually is: the stored node is stale after a
+  // move made outside ProxMate (Proxmox HA, the PVE UI).
   vm = await requireOurGuest(vm, { client });
+  if (targetNode === vm.proxmoxNode) throw new Error('The VM is already on that node.');
 
   const nodes = await pve.getNodes(client);
   if (!nodes.some((n) => n.node === targetNode)) throw new Error(`No such node "${targetNode}".`);
@@ -1513,6 +1680,264 @@ export async function assertResizeWithinQuota(
     violations['storage'] = { used: usedStorage, requested: target.storage, max: user.maxStorage };
 
   if (Object.keys(violations).length > 0) throw new QuotaError(violations);
+}
+
+// ─── Restored guests ──────────────────────────────────────────
+//
+// A MateState restore, a snapshot rollback and a restore-from-upload all bring
+// back a whole earlier guest config: cores, memory, disks and PCI devices
+// included. Quota is summed from the rows, so after each one the row is re-read
+// from the guest, and the earlier config is never allowed to hand back more than
+// the owner's quota or a PCI device an admin has since taken away.
+
+/**
+ * The quota violations a size change would cause, counting only the dimensions it
+ * GROWS — a restore that keeps a dimension as it is never fails on it, even when an
+ * admin has since lowered the cap below what the owner already uses.
+ */
+async function growthViolations(
+  vm: VirtualMachine,
+  target: { cpu: number; ram: number; storage: number },
+): Promise<QuotaError['details']> {
+  // A row held for being over quota is judged on the full quota: a repeat restore
+  // or rollback that merely keeps the oversize must not count as a repair.
+  const full = vm.holdReason === QUOTA_HOLD_MESSAGE;
+  const owner = await prisma.user.findUnique({ where: { id: vm.userId } });
+  if (!owner) return {};
+  try {
+    await assertResizeWithinQuota(owner, vm, target);
+    return {};
+  } catch (err) {
+    if (!(err instanceof QuotaError)) throw err;
+    const grows: Record<string, boolean> = {
+      cpu: full || target.cpu > vm.cpu,
+      ram: full || target.ram > vm.ram,
+      storage: full || target.storage > vm.storage,
+    };
+    return Object.fromEntries(Object.entries(err.details).filter(([k]) => grows[k]));
+  }
+}
+
+export interface RestoreReservation {
+  /** The row's sizes before the reservation, put back if the restore never starts. */
+  previous: { cpu: number; ram: number; storage: number };
+}
+
+/**
+ * Reserve, under the owner's quota lock, what a restore or rollback to `cfg` (the
+ * config the guest will have afterwards — the archive's or the snapshot's) will
+ * use: refused with a QuotaError when it would grow the guest past the owner's
+ * quota, otherwise the row is grown to the larger of each size right away. A
+ * restore takes minutes; recording the growth up front means a create or resize
+ * for the same owner in the meantime is judged against it, not against the old
+ * size. syncRestoredGuest later writes what the guest really ended up with.
+ */
+export async function reserveRestoreGrowth(
+  vm: VirtualMachine,
+  cfg: Record<string, string>,
+): Promise<RestoreReservation> {
+  return withQuotaLock(vm.userId, async () => {
+    const row = (await prisma.virtualMachine.findUnique({ where: { id: vm.id } })) ?? vm;
+    const sizes = guestConfigSizes(cfg, kindOf(row));
+    const target = { cpu: sizes.cpu ?? row.cpu, ram: sizes.ram, storage: sizes.storage };
+    const violations = await growthViolations(row, target);
+    if (Object.keys(violations).length > 0) throw new QuotaError(violations);
+    const previous = { cpu: row.cpu, ram: row.ram, storage: row.storage };
+    await prisma.virtualMachine.update({
+      where: { id: row.id },
+      data: {
+        cpu: Math.max(row.cpu, target.cpu),
+        ram: Math.max(row.ram, target.ram),
+        storage: Math.max(row.storage, target.storage),
+      },
+    });
+    return { previous };
+  });
+}
+
+/** Undo a reservation for a restore whose task never started (the guest is unchanged). */
+export async function releaseRestoreReservation(vm: VirtualMachine, r: RestoreReservation): Promise<void> {
+  await withQuotaLock(vm.userId, () =>
+    prisma.virtualMachine.update({ where: { id: vm.id }, data: r.previous }),
+  );
+}
+
+/** holdReason of a row a restore left over its owner's storage quota. */
+export const QUOTA_HOLD_MESSAGE =
+  "After the restore this machine's disks exceed the owner's storage quota, so it can't be started. " +
+  'Remove a data disk (or ask an admin to raise the quota), then start it again — or delete it.';
+
+/** holdReason of a row whose restored guest referenced volumes that aren't its own. */
+export const FOREIGN_VOLUME_MESSAGE =
+  "The restored machine referenced disks that belong to another guest. They were detached and it can't be started — " +
+  'ask an admin to check it, or delete it.';
+
+/** Thrown when a restored guest references volumes that aren't its own. */
+export class ForeignVolumeError extends Error {
+  constructor(public readonly keys: string[]) {
+    super(FOREIGN_VOLUME_MESSAGE);
+    this.name = 'ForeignVolumeError';
+  }
+}
+
+/**
+ * After any restore or rollback: every volume the guest's config references must
+ * be its own VMID's. A tenant-built archive could otherwise point a disk line at
+ * another guest's volume, and whether Proxmox lets that through must not matter.
+ * Foreign lines that are attached are removed from the config with a plain delete
+ * (which only detaches them; nothing is ever freed here, so another guest's data
+ * is never touched); a container whose rootfs is foreign is destroyed without
+ * purging anything unreferenced. The row is then held, the event audited, and
+ * ForeignVolumeError thrown so the caller never starts the guest.
+ */
+export async function assertOwnVolumes(
+  vm: VirtualMachine,
+  client?: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<void> {
+  const c = client ?? (await pve.getClient());
+  const kind = kindOf(vm);
+  const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, c, kind);
+  const foreign = foreignVolumeKeys(cfg, vm.proxmoxVmId);
+  if (foreign.length === 0) return;
+  const attached = foreign.filter((k) => !/^unused\d+$/.test(k));
+  if (attached.includes('rootfs')) {
+    await c.delete(`/nodes/${vm.proxmoxNode}/${kind}/${vm.proxmoxVmId}`).catch(() => undefined);
+  } else if (attached.length > 0) {
+    await c.put(`/nodes/${vm.proxmoxNode}/${kind}/${vm.proxmoxVmId}/config`, new URLSearchParams({ delete: attached.join(',') }));
+  }
+  await holdErroredRow(vm, FOREIGN_VOLUME_MESSAGE);
+  await recordAudit({
+    action: 'vm.foreign_volume',
+    targetType: 'vm',
+    targetId: vm.id,
+    detail: `restored guest ${vm.proxmoxVmId} referenced volumes that aren't its own (${foreign.map((k) => `${k}=${cfg[k]}`).join('; ')}); detached and held`,
+  });
+  throw new ForeignVolumeError(foreign);
+}
+
+/** holdReason of a row whose restore or rollback did not finish. */
+export const RESTORE_FAILED_MESSAGE =
+  "A restore or rollback of this machine didn't finish, so it can't be started. " +
+  'Restore a backup again, rebuild it, or delete it.';
+
+/**
+ * Put a row into `error` with an explanation: its guest may not run until a
+ * repair path has re-checked it (see requireOurGuest).
+ */
+export async function holdErroredRow(vm: VirtualMachine, message: string): Promise<void> {
+  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'error', holdReason: message } });
+}
+
+/**
+ * Lift a restore's over-quota hold once the row fits the owner's quota again (a
+ * data disk was removed, or an admin raised the quota). Call under the owner's
+ * quota lock. Returns whether the hold was lifted.
+ */
+export async function liftQuotaHoldIfFits(vmId: string): Promise<boolean> {
+  const row = await prisma.virtualMachine.findUnique({ where: { id: vmId } });
+  if (!row || row.holdReason !== QUOTA_HOLD_MESSAGE) return false;
+  const owner = await prisma.user.findUnique({ where: { id: row.userId } });
+  if (owner) {
+    try {
+      await assertResizeWithinQuota(owner, row, { cpu: row.cpu, ram: row.ram, storage: row.storage });
+    } catch (err) {
+      if (err instanceof QuotaError) return false;
+      throw err;
+    }
+  }
+  await prisma.virtualMachine.update({ where: { id: vmId }, data: { status: 'stopped', holdReason: null } });
+  return true;
+}
+
+/**
+ * The PCI lines a guest may keep through a restore or rollback: the ones attached
+ * to it right now, and only while the row says a device is approved. Read before
+ * the restore, since the restore replaces them.
+ */
+export async function approvedPciLines(
+  vm: VirtualMachine,
+  client?: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<string[]> {
+  if (!vm.hasPassthrough || kindOf(vm) !== 'qemu') return [];
+  const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, 'qemu').catch(() => ({}) as Record<string, string>);
+  return pciLines(cfg).map((l) => l.value);
+}
+
+/**
+ * After a restore or rollback: drop PCI devices that aren't approved for this VM,
+ * then re-read cpu/ram/storage from the guest into its row (under the owner's quota
+ * lock). A CPU or RAM size that no longer fits the owner's quota is set back to the
+ * row's current size; a disk total that doesn't fit is recorded as it is (disks
+ * can't shrink) and refused with a QuotaError so the caller leaves the guest off.
+ */
+export async function syncRestoredGuest(
+  vm: VirtualMachine,
+  opts: { approvedPci: string[]; client?: Awaited<ReturnType<typeof pve.getClient>> },
+): Promise<VirtualMachine> {
+  return withQuotaLock(vm.userId, async () => {
+    const client = opts.client ?? (await pve.getClient());
+    const fresh = await prisma.virtualMachine.findUnique({ where: { id: vm.id } });
+    const row = fresh ? { ...fresh, proxmoxNode: vm.proxmoxNode } : vm;
+    const kind = kindOf(row);
+    const path = `/nodes/${row.proxmoxNode}/${kind}/${row.proxmoxVmId}/config`;
+    const cfg = await pve.getVmConfig(row.proxmoxNode, row.proxmoxVmId, client, kind);
+
+    const approved = new Set(opts.approvedPci);
+    const unapproved = pciLines(cfg).filter((l) => !approved.has(l.value)).map((l) => l.key);
+    if (unapproved.length > 0) {
+      await client.put(path, new URLSearchParams({ delete: unapproved.join(',') }));
+      for (const k of unapproved) delete cfg[k];
+    }
+
+    // A disk the earlier config doesn't have (added after the backup or snapshot)
+    // comes back detached, as an `unusedN` volume. ProxMate can neither reattach
+    // nor remove such a volume, so it would be storage the owner pays for and can
+    // never use or free; it is deleted, as removeDisk does with the volume a
+    // detach leaves behind. Proxmox refuses for a volume an existing snapshot still
+    // uses — that one stays until the snapshot is deleted.
+    const foreignUnused = new Set(foreignVolumeKeys(cfg, row.proxmoxVmId));
+    for (const key of Object.keys(cfg).filter((k) => /^unused\d+$/.test(k) && !foreignUnused.has(k))) {
+      try {
+        await client.put(path, new URLSearchParams({ delete: key }));
+        delete cfg[key];
+      } catch (err) {
+        console.warn(`[vm] kept ${key} of "${row.name}": ${pve.pveMessage(err)}`);
+      }
+    }
+
+    const sizes = guestConfigSizes(cfg, kind);
+    // A container with no `cores` line may use every host core; pin it to the row's.
+    let setResources = sizes.cpu === null;
+    // ProxMate's cpu is the total vCPU count, written as one socket of that many
+    // cores (see pve.setVmResources); a restored multi-socket or `vcpus` layout is
+    // rewritten in that form so later resizes act on the total.
+    if (kind === 'qemu' && ((cfg['sockets'] ?? '1') !== '1' || cfg['vcpus'] !== undefined || !/^\d+$/.test(cfg['memory'] ?? '0'))) {
+      setResources = true;
+    }
+    let cpu = sizes.cpu ?? row.cpu;
+    let ram = sizes.ram;
+    const violations = await growthViolations(row, { cpu, ram, storage: sizes.storage });
+    if (violations['cpu']) { cpu = row.cpu; setResources = true; }
+    if (violations['ram']) { ram = row.ram; setResources = true; }
+    if (setResources) await pve.setVmResources(row.proxmoxNode, row.proxmoxVmId, cpu, ram, client, kind);
+
+    const updated = await prisma.virtualMachine.update({
+      where: { id: row.id },
+      data: {
+        cpu,
+        ram,
+        storage: sizes.storage,
+        ...(kind === 'qemu' ? { hasPassthrough: pciLines(cfg).length > 0 } : {}),
+      },
+    });
+    if (violations['storage']) {
+      // Disks can't shrink: record what is really there, and keep the guest from
+      // running until the owner is back within quota.
+      await holdErroredRow(updated, QUOTA_HOLD_MESSAGE);
+      throw new QuotaError({ storage: violations['storage'] });
+    }
+    return updated;
+  });
 }
 
 export interface ResizeVmInput {
@@ -1684,7 +2109,8 @@ export async function getVmWithLiveStatus(
     }
 
     // Keep the DB status loosely in sync with reality.
-    if (live.status && live.status !== currentVm.status && currentVm.status !== 'creating') {
+    // A held row keeps its state: only a repair path may make it startable again.
+    if (live.status && live.status !== currentVm.status && currentVm.status !== 'creating' && !isHeld(currentVm)) {
       await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: live.status } });
       currentVm.status = live.status;
     }
@@ -1846,7 +2272,11 @@ export async function destroyVm(vm: VirtualMachine, opts: { rowOnly?: boolean } 
   if (opts.rowOnly) {
     // Removing only the record of a machine whose guest IS confirmed as its own would
     // orphan a live, tagged guest — that's what a normal delete is for.
-    if ((await guestIdentity(await syncVmNode(vm))) === 'ours') {
+    // And that is only known when the cluster-wide lookup worked: on a stale node an
+    // own guest that has moved reads as "absent".
+    const { vm: current, synced } = await syncVmNodeChecked(vm);
+    if (!synced) throw new Error("Couldn't confirm where this machine's guest is on the cluster — try again.");
+    if ((await guestIdentity(current)) === 'ours') {
       throw new GuestIdentityError('ours');
     }
     await deleteVmRow(vm.id);
@@ -1924,7 +2354,7 @@ async function rebuildVmLocked(
 ): Promise<VirtualMachine> {
   const client = await pve.getClient();
   // Never re-image a guest that isn't this row's. An empty VMID is fine to build into.
-  const current = await requireOurGuest(vm, { allowAbsent: true, client });
+  const current = await requireOurGuest(vm, { allowAbsent: true, allowError: true, client });
   const vmid = current.proxmoxVmId;
   const isolate = (await getConfig('isolation_enabled')) !== 'false';
 
@@ -2035,7 +2465,8 @@ async function rebuildVmLocked(
       );
     }
 
-    await prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'stopped' } });
+    // The rebuilt guest is configured from scratch: a successful rebuild is a repair.
+    await prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'stopped', holdReason: null } });
     const startUpid = await pve.startVm(targetNode, vmid, client);
     await pve.waitForTask(targetNode, startUpid, client);
     // A template rebuild re-runs cloud-init on the fresh clone, so lock it until
@@ -2106,7 +2537,7 @@ async function notifyOwnerOfFailedRebuild(vm: VirtualMachine, kept: boolean, err
  * access is fine holds the `power` capability, so one click on Start undoes the
  * suspension of the machine's actual owner.
  */
-async function assertOwnerAccessActive(vm: VirtualMachine): Promise<void> {
+export async function assertOwnerAccessActive(vm: VirtualMachine): Promise<void> {
   const owner = await prisma.user.findUnique({
     where: { id: vm.userId },
     select: { role: true, accessExpiresAt: true },
@@ -2124,11 +2555,13 @@ export async function startVm(vm: VirtualMachine): Promise<void> {
 }
 
 export async function stopVm(vm: VirtualMachine, force: boolean): Promise<void> {
-  const currentVm = await requireOurGuest(vm);
+  const currentVm = await requireOurGuest(vm, { allowError: true });
   const kind = kindOf(currentVm);
   if (force) await pve.stopVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind);
   else await pve.shutdownVm(currentVm.proxmoxNode, currentVm.proxmoxVmId, undefined, kind);
-  await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'stopped' } });
+  if (!isHeld(currentVm)) {
+    await prisma.virtualMachine.update({ where: { id: currentVm.id }, data: { status: 'stopped' } });
+  }
 }
 
 export async function restartVm(vm: VirtualMachine): Promise<void> {

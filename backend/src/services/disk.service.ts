@@ -1,7 +1,7 @@
 import type { VirtualMachine, User } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import * as pve from './proxmox.service.js';
-import { QuotaError, withQuotaLock, requireOurGuest, ourGuestOrNull } from './vm.service.js';
+import { QuotaError, withQuotaLock, requireOurGuest, ourGuestOrNull, liftQuotaHoldIfFits } from './vm.service.js';
 
 /**
  * Extra-data-disk management. A VM's `storage` column tracks **total** provisioned
@@ -138,7 +138,7 @@ export function removeDataDisk(vm: VirtualMachine, slot: string): Promise<void> 
 }
 
 async function removeDataDiskLocked(row: VirtualMachine, slot: string): Promise<void> {
-  const vm = await requireOurGuest(row);
+  const vm = await requireOurGuest(row, { allowError: true });
   const config = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId);
   if (!(slot in config)) throw new Error('Disk not found.');
   if (slot === pve.findPrimaryDisk(config)) throw new Error('The root disk cannot be removed.');
@@ -151,4 +151,6 @@ async function removeDataDiskLocked(row: VirtualMachine, slot: string): Promise<
     where: { id: vm.id },
     data: { storage: Math.max(0, (fresh?.storage ?? vm.storage) - freed) },
   });
+  // Removing a disk is how an owner gets a machine a restore left over quota back.
+  await liftQuotaHoldIfFits(vm.id);
 }

@@ -21,7 +21,7 @@ sources:
 
 ProxMate keeps its runtime settings in the [SystemConfig](/database/system-config.md) table (`key String @id`, `value String`, `sensitive Boolean @default(false)`, `updatedAt`).[^schema] All access goes through `getConfig(key)` and `setConfig(key, value, sensitive = false)` in config.service.ts. The one exception is `isSetupComplete()`, which reads `setup_complete` with Prisma directly. No other code touches `prisma.systemConfig`.[^config-svc]
 
-The key list was built by grepping every `getConfig('…')` / `setConfig('…')` call under `backend/src`, plus the two keys held in constants (`KIOSK_PIN_KEY = 'kiosk_exit_pin'`, `LAST_RUN_KEY = 'matestate_last_run'`). There are 54 keys.
+The key list was built by grepping every `getConfig('…')` / `setConfig('…')` call under `backend/src`, plus the three keys held in constants (`KIOSK_PIN_KEY = 'kiosk_exit_pin'`, `LAST_RUN_KEY = 'matestate_last_run'`, `VM_BACKUP_TICK_KEY = 'matestate_vm_tick_last'`). There are 55 keys.
 
 # Encryption
 
@@ -58,6 +58,7 @@ When `sensitive=true`, `setConfig` stores `encrypt(value)`: AES-256-GCM with a r
 | `jwt_secret` | **yes** | [platform-secrets](/config/platform-secrets.md) |
 | `kiosk_exit_pin` | **yes** (bcrypt hash, then encrypted; `''` plain when cleared) | [platform-secrets](/config/platform-secrets.md) |
 | `matestate_last_run` | no | [platform-secrets](/config/platform-secrets.md) |
+| `matestate_vm_tick_last` | no | [platform-secrets](/config/platform-secrets.md) |
 | `notify_email_enabled` | no | [notifications](/config/notifications.md) |
 | `notify_email_to` | no | [notifications](/config/notifications.md) |
 | `notify_events` | no | [notifications](/config/notifications.md) |
