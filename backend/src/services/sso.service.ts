@@ -21,6 +21,8 @@ export interface SsoConfig {
 export interface SsoClaims {
   sub: string;
   email?: string;
+  /** The ID token's `email_verified`; only a literal `true` counts. */
+  emailVerified?: boolean;
   name?: string;
   groups?: string[];
 }
@@ -178,6 +180,7 @@ export async function completeLogin(currentUrl: string, cookieValue: string): Pr
   const claims: SsoClaims = {
     sub: String(idClaims.sub),
     email: typeof idClaims.email === 'string' ? idClaims.email : undefined,
+    emailVerified: idClaims.email_verified === true,
     name:
       (typeof idClaims.name === 'string' && idClaims.name) ||
       (typeof idClaims.preferred_username === 'string' && idClaims.preferred_username) ||
@@ -195,7 +198,8 @@ function isAdminByGroup(claims: SsoClaims, cfg: SsoConfig): boolean {
 
 /**
  * Resolve an SSO identity to a local account: link by prior `sub`, else link an
- * existing local account by email, else JIT-provision (only when allowed).
+ * existing local account by email (only when both sides vouch for the address),
+ * else JIT-provision (only when allowed).
  * Admin group membership can *promote* (never auto-demotes, to avoid lockout).
  */
 export async function upsertSsoUser(claims: SsoClaims, cfg: SsoConfig): Promise<User> {
@@ -206,6 +210,17 @@ export async function upsertSsoUser(claims: SsoClaims, cfg: SsoConfig): Promise<
   if (!user && email) {
     const byEmail = await prisma.user.findUnique({ where: { email } });
     if (byEmail) {
+      // Linking hands the IdP identity (and any admin-group promotion below) to
+      // whoever holds the local account, so it is only safe when ProxMate knows
+      // the account's address is really theirs. A self-typed address proves
+      // nothing; that user signs in with their password instead. The IdP side
+      // must vouch for the address too, or any IdP account that merely claims an
+      // email would take over the matching local account.
+      if (!byEmail.emailBound || claims.emailVerified !== true) {
+        throw new Error(
+          'An account with this email already exists. Sign in with your password instead.',
+        );
+      }
       user = await prisma.user.update({ where: { id: byEmail.id }, data: { ssoSubject: claims.sub } });
     }
   }
@@ -223,6 +238,7 @@ export async function upsertSsoUser(claims: SsoClaims, cfg: SsoConfig): Promise<
         // SSO users authenticate via the IdP; give them an unusable random local password.
         passwordHash: await hashPassword(randomBytes(32).toString('hex')),
         ssoSubject: claims.sub,
+        emailBound: claims.emailVerified === true,
       },
     });
     return user;

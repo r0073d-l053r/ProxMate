@@ -9,6 +9,9 @@ vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
     virtualMachine: { findMany: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
     user: { findUnique: vi.fn() },
+    ideGuestSecret: { deleteMany: vi.fn(async () => ({})) },
+    ideGatewayToken: { deleteMany: vi.fn(async () => ({})) },
+    $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops)),
   },
 }));
 vi.mock('../src/services/config.service.js', () => ({

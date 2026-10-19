@@ -33,7 +33,7 @@ sources:
 
 | Service | Image / build | Ports | Volumes | Notes |
 |---|---|---|---|---|
-| `backend` | `proxmate-backend`, built from `./backend` | `${BIND_ADDR:-0.0.0.0}:${BACKEND_PORT:-4000}:4000` | `proxmate-data:/data` (SQLite DB); `${PROXMATE_BACKUP_DIR:-./backups}:/var/backups/proxmate`; commented optional mounts: `/snippets` (shared snippets dir), `/backups:ro` (vzdump dump for downloads), `/control` (self-update), `/certs/pve-ca.pem:ro` (private Proxmox CA) | `cap_drop: ALL` plus `CHOWN`, `DAC_OVERRIDE`, `SETUID`, `SETGID`; `no-new-privileges`. Healthcheck: `fetch http://127.0.0.1:4000/api/health` every 30 s (start period 40 s). `restart: unless-stopped`.[^compose] |
+| `backend` | `proxmate-backend`, built from `./backend` | `${BIND_ADDR:-0.0.0.0}:${BACKEND_PORT:-4000}:4000` | `proxmate-data:/data` (SQLite DB); `${PROXMATE_BACKUP_DIR:-./backups}:/var/backups/proxmate`; optional mounts go in an untracked `docker-compose.override.yml` (template `docker-compose.override.example.yml`): `/snippets` (shared snippets dir), `/backups:ro` (vzdump dump for downloads), `/control` (self-update), `/certs/pve-ca.pem:ro` (private Proxmox CA) | `cap_drop: ALL` plus `CHOWN`, `DAC_OVERRIDE`, `SETUID`, `SETGID`; `no-new-privileges`. Healthcheck: `fetch http://127.0.0.1:4000/api/health` every 30 s (start period 40 s). `restart: unless-stopped`.[^compose] |
 | `frontend` | `proxmate-frontend`, built from `./frontend` | `${BIND_ADDR:-0.0.0.0}:${FRONTEND_PORT:-3000}:3000` | none | `cap_drop: ALL`, `no-new-privileges`. `depends_on: backend` with `condition: service_healthy`. |
 
 ## Backend container environment
@@ -49,11 +49,11 @@ sources:
 | `BACKEND_PUBLIC_URL` | `${BACKEND_PUBLIC_URL:-http://localhost:4000}` | prod / SSO: yes | Used to build the SSO callback. |
 | `COOKIE_SECURE` | `${COOKIE_SECURE:-false}` | prod: `true` | Secure cookies. Passkeys need a secure context. |
 | `TRUST_PROXY` | `${TRUST_PROXY:-0}` | prod: `1` behind one proxy | Proxy hops. |
-| `REAL_IP_HEADER` | `${REAL_IP_HEADER-cf-connecting-ip}` (note: `-`, not `:-`) | no | An explicitly empty value is passed through and disables the header. |
+| `REAL_IP_HEADER` | `${REAL_IP_HEADER-cf-connecting-ip}` (note: `-`, not `:-`) | no | An explicitly empty value is passed through and disables the header (`install.sh --local` writes it empty). Only honoured when `TRUST_PROXY` ≥ 1. |
 | `WEBAUTHN_RP_ID` / `WEBAUTHN_ORIGIN` | `${…:-}` (empty) | prod: recommended | Passkey RP id and origin. |
 | `AUTH_RATE_LIMIT_MAX` / `AUTH_RATE_LIMIT_WINDOW_MS` | `20` / `900000` | no | Auth limiter. |
 | `AUTH_LOCKOUT_MAX` / `AUTH_LOCKOUT_MINUTES` | `10` / `15` | no | Account lockout. |
-| `PROXMOX_CA_CERT_FILE` | `${…:-}` | no | e.g. `/certs/pve-ca.pem` with the matching volume uncommented. |
+| `PROXMOX_CA_CERT_FILE` | `${…:-}` | no | e.g. `/certs/pve-ca.pem` with the matching volume in `docker-compose.override.yml`. |
 | `UPDATE_REPO` | `r0073d-l053r/ProxMate` | no | Release source. |
 | `SELF_UPDATE_ENABLED` | `false` | no | Also needs the `/control` mount and the host updater. |
 | `METRICS_TOKEN` | `${…:-}` | no | Without it `/metrics` returns 404 in production. |
@@ -62,6 +62,11 @@ sources:
 | `BACKUP_DOWNLOAD_DIR` | `${…:-}` | no | Tenant backup downloads. Needs the `/backups` mount. |
 | `RESTORE_UPLOAD_MAX_GB` | `${…:-}` | no | An empty value falls back to the built-in 50. |
 | `MATESTATE_CRON` / `ACCESS_EXPIRY_CRON` | `${…:-}` | no | Schedule overrides. Empty means the defaults. |
+| `APPDB_BACKUP_CRON` / `BALANCER_CRON` / `TEMPLATE_REFRESH_CRON` | `${…:-}` | no | Schedule overrides for app-DB snapshots, the balancer and template refresh. Empty or invalid means the defaults. |
+| `PROXMATE_MODULES` | `${…:-}` | no | Comma-separated optional modules; empty enables none. |
+| `LOG_LEVEL` | `info` | no | pino log level. |
+| `GITHUB_TOKEN` | `${…:-}` | no | Optional token for the release check. |
+| `IDE_GUEST_PORT` | `${…:-}` | no | code-server port in guests; empty means the built-in 8080. |
 
 ## Host-side and frontend variables (`.env`)
 
@@ -72,13 +77,13 @@ sources:
 | `PROXMATE_BACKUP_DIR` | `./backups` | backend volume | **Host** directory for app-DB snapshots. Changing it requires `docker compose up -d backend` (mounts are set at container creation), not just a restart.[^env-docker] |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:4000/api` | frontend **build arg** | API URL baked into the client bundle. The frontend code falls back to `http://localhost:4000/api` (`lib/api.ts`).[^fe-api] |
 | `NEXT_PUBLIC_SITE_URL` | `http://localhost:3000` | frontend build arg and runtime env | Public origin for SEO metadata (OG image, canonical, manifest). |
-| `CSP_CONNECT_SRC` | `''`, giving the default `'self' https: wss:` | frontend runtime env (`src/proxy.ts`) | Pins the CSP `connect-src`. In `.env` the whole value must be wrapped in double quotes. |
+| `CSP_CONNECT_SRC` | `''`, giving the default `'self' https: wss:` plus the `NEXT_PUBLIC_API_URL` origin and its `ws:`/`wss:` counterpart | frontend runtime env (`src/proxy.ts`) | Pins the CSP `connect-src`. In `.env` the whole value must be wrapped in double quotes. |
 
 # Gotchas
 
 - `NEXT_PUBLIC_*` values are inlined at **build** time (`frontend/Dockerfile` `ARG`/`ENV`). Changing them in the runtime environment without a rebuild has no effect.[^fe-dockerfile][^compose]
-- The entrypoint starts as root, runs `chown -R node:node /data`, and does a non-recursive `chown` of `$APPDB_BACKUP_DIR` (failure there is non-fatal). It then re-execs as `node` through `su-exec`, runs `npx prisma migrate deploy`, applies migrations for any modules in `PROXMATE_MODULES`, and starts the server.[^entrypoint]
-- Many backend variables are **not** forwarded by docker-compose.yml, so setting them in `.env` alone does nothing. Examples: `BALANCER_CRON`, `TEMPLATE_REFRESH_CRON`, `APPDB_BACKUP_CRON`, `LOG_LEVEL`, `PROXMOX_TIMEOUT_MS`, `PROXMOX_RETRIES`, `API_WRITE_RATE_LIMIT_*`, `PROXMATE_MODULES`, `GITHUB_TOKEN`, `IDE_*`. To use them, add them to the `backend.environment` block. `PROXMATE_MODULES` is documented only in `.env.example`, not in `.env.docker.example`.[^compose]
+- The entrypoint starts as root, runs `chown -R node:node /data`, and does non-recursive `chown`s of `$APPDB_BACKUP_DIR` and, when it exists, the self-update control dir `${UPDATE_CONTROL_DIR:-/control}` (failures there are non-fatal). It then re-execs as `node` through `su-exec`, runs `npx prisma migrate deploy`, applies migrations for any modules in `PROXMATE_MODULES`, and starts the server.[^entrypoint]
+- Only the variables listed in the `backend.environment` block reach the container; there is no `env_file`. The numeric tuning knobs (`PROXMOX_TIMEOUT_MS`, `PROXMOX_RETRIES`, `API_WRITE_RATE_LIMIT_*`, `PUBLIC_TOKEN_RATE_LIMIT_*`, `MODULE_RATE_LIMIT_*`, `RESOURCE_HISTORY_DAYS`, `ALERT_COOLDOWN_MIN`, `LIVE_FEED_INTERVAL_MS`) and `IDE_*_VERSION` are not forwarded; their readers use `??`, so forwarding an empty value would not fall back to the default. To use one, add it with an explicit default (`${VAR:-<default>}`), e.g. in `docker-compose.override.yml`.[^compose]
 - Because `ENCRYPTION_KEY` is required by compose (`:?`), the backend's auto-generate-and-write-to-`.env` path never runs in Docker. Back the key up together with the `proxmate-data` volume.
 
 # Relationships

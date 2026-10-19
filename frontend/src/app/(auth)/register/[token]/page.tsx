@@ -51,7 +51,10 @@ export default function RegisterPage() {
 
       try {
         const res = await api.get<InviteValidation>(`/auth/invite/${token}`);
-        if (active) setInvite(res.data);
+        if (active) {
+          setInvite(res.data);
+          if (res.data.email) setEmail(res.data.email);
+        }
       } catch {
         if (active) setInvalid(true);
       } finally {
@@ -179,7 +182,14 @@ export default function RegisterPage() {
             <Input id="displayName" value={displayName} onChange={(e) => setDisplayName(e.target.value)} autoFocus />
           </FormField>
           <FormField label="Email" htmlFor="email" error={errors.email}>
-            <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <Input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              // An invite sent to an address can only be redeemed with that address.
+              readOnly={!!invite?.email}
+            />
           </FormField>
           <FormField label="Password" htmlFor="password" error={errors.password}>
             <Input

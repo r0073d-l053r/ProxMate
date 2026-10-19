@@ -35,7 +35,7 @@ ProxMate registration is invite-only. An admin creates an invite (admin-only rou
 | token | String | `@unique`, `@@index` | 32 random bytes base64url, stored in clear (it is what the link carries).[^svc] |
 | createdById | String | FK | Admin who minted it. |
 | label | String? | | Admin label. |
-| email | String? | | Address the link was emailed to, if any. |
+| email | String? | | Address the link was emailed to, if any. When set, registration must use this address. |
 | maxCpu | Int | | vCPU quota granted. |
 | maxRam | Int | | RAM quota granted (MB). |
 | maxStorage | Int | | Disk quota granted (GB). |

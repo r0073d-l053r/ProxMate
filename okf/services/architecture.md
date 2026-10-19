@@ -46,7 +46,7 @@ ProxMate is an invite-only, self-service cloud dashboard on top of Proxmox VE. T
 
 `backend/src/index.ts`:[^index]
 
-1. Loads `.env`; if `ENCRYPTION_KEY` is missing, generates 32 random bytes hex and writes it into `.env` when that file exists (compose instead REQUIRES it to be set).
+1. Loads `.env`; if `ENCRYPTION_KEY` is missing, generates 32 random bytes hex and writes it into `.env` (mode 0600) when that file exists and `NODE_ENV` is not `production`; otherwise exits with instructions (compose REQUIRES it to be set).
 2. Creates `http.Server(app)` with `requestTimeout = 0` (multi-GB backup uploads), `keepAliveTimeout = 65s`, `headersTimeout = 66s`.
 3. One `upgrade` dispatcher: console relay (`handleConsoleUpgrade`, `/console` + `/serial`), then the IDE proxy (`handleIdeUpgrade`, `/api/ide/:id/proxy`), else destroy the socket.
 4. `await loadModules()` BEFORE listen; a broken named module exits the process.
@@ -133,7 +133,7 @@ Next.js App Router under `frontend/src/app/`:
 | `console-popout/[id]` | Pop-out console window |
 
 - `frontend/src/lib/api.ts` uses `withCredentials: true` so the httpOnly session cookie goes with every request.
-- `frontend/src/proxy.ts` (Next 16 "proxy", formerly middleware) sets a per-request nonce CSP; `connect-src` can be pinned with `CSP_CONNECT_SRC`.
+- `frontend/src/proxy.ts` (Next 16 "proxy", formerly middleware) sets a per-request nonce CSP; `connect-src` can be pinned with `CSP_CONNECT_SRC`; unpinned, it adds the `NEXT_PUBLIC_API_URL` origin and its WebSocket origin to a generic default (`src/lib/csp.ts`).
 - `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_SITE_URL` are baked in at build time.[^compose]
 
 # IDE component
@@ -148,7 +148,7 @@ Next.js App Router under `frontend/src/app/`:
 
 - `docker-compose.yml` defines `backend` (built from `./backend`, port 4000, named volume `proxmate-data:/data`, `${PROXMATE_BACKUP_DIR:-./backups}:/var/backups/proxmate`, `cap_drop: ALL` plus CHOWN/DAC_OVERRIDE/SETUID/SETGID, `no-new-privileges`, healthcheck on `/api/health`) and `frontend` (port 3000, `cap_drop: ALL`, waits for backend `service_healthy`). Optional commented mounts: snippets dir, backup-download dir, update control dir, private Proxmox CA. Ports bind to `${BIND_ADDR:-0.0.0.0}`. Env reference: [docker environment](/env/docker-environment.md), [backend environment](/env/backend-environment.md).[^compose]
 - `backend/docker-entrypoint.sh` starts as root only to `chown` `/data` (and the app-DB backup dir, non-recursively), drops to `node` via `su-exec`, runs `prisma migrate deploy`, then module migrations if `PROXMATE_MODULES` is set, then `node dist/index.js`.[^entry]
-- `install.sh` is a read-before-run installer: prerequisite checks (offers to install Docker, Compose v2, git, curl, openssl), `--local` (HTTP trial) or `--domain` (HTTPS behind a reverse proxy) mode, source checkout (`--ref`, default newest `vX.Y.Z` tag), writes `.env` with a generated `ENCRYPTION_KEY`, builds and starts, waits for API health. It deliberately stops at the browser setup wizard so the Proxmox token never touches shell history.[^install]
+- `install.sh` is a read-before-run installer: prerequisite checks (offers to install Docker, Compose v2, git, curl, openssl), `--local` (HTTP trial) or `--domain` (HTTPS behind a reverse proxy) mode, source checkout (`--ref`, default newest `vX.Y.Z` tag), writes `.env` with a generated `ENCRYPTION_KEY` (refusing to generate one while the `proxmate_proxmate-data` volume already exists, since a new key cannot read that database), builds and starts, waits for API health. It deliberately stops at the browser setup wizard so the Proxmox token never touches shell history.[^install]
 - Self-update: [update service](/services/update.md) writes a request into the control dir; `deploy/proxmate-updater.path` triggers `deploy/proxmate-updater.service` → `deploy/update.sh` on the host (checkout tag, rebuild, restart). `deploy/Caddyfile` is a reverse-proxy example.
 
 # Gotchas

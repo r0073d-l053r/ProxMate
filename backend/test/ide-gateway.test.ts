@@ -241,6 +241,14 @@ describe('issueGatewayToken', () => {
     await saveIdeConfig({ enabled: 'off', allowByoKeys: false, sharedModels: [] });
     expect(await issueGatewayToken(USER, 'vm1', 'https://x')).toBeNull();
   });
+
+  it('refuses an admin or sharee who can reach the VM but does not own it', async () => {
+    await setupSharedPolicy();
+    ownedVm.mockResolvedValue({ id: 'vm1', userId: 'tenant-owner' } as never);
+    expect(await issueGatewayToken({ id: 'admin1', role: 'admin' }, 'vm1', 'https://x')).toBeNull();
+    expect(await issueGatewayToken({ id: 'sharee1', role: 'user' }, 'vm1', 'https://x')).toBeNull();
+    expect(tokenUpsert).not.toHaveBeenCalled();
+  });
 });
 
 describe('probeModels (connection test)', () => {
@@ -315,6 +323,14 @@ describe('verifyGatewayToken', () => {
   it('rejects when the user has since lost access to the VM', async () => {
     tokenFindUnique.mockResolvedValue({ ...row } as never);
     ownedVm.mockResolvedValue(null as never);
+    expect(await verifyGatewayToken('pmide_abc', 'vm1')).toBeNull();
+  });
+
+  it("rejects a token held by someone other than the VM's owner", async () => {
+    // e.g. minted for an admin or sharee before tokens were owner-only
+    tokenFindUnique.mockResolvedValue({ ...row, userId: 'admin1' } as never);
+    userFindUnique.mockResolvedValue({ id: 'admin1', role: 'admin' } as never);
+    ownedVm.mockResolvedValue({ id: 'vm1', userId: 'u1' } as never);
     expect(await verifyGatewayToken('pmide_abc', 'vm1')).toBeNull();
   });
 

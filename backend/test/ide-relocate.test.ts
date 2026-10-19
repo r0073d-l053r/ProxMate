@@ -35,6 +35,10 @@ vi.mock('../src/services/ide-gateway.service.js', () => ({
   listModelPickerEntries: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../src/services/config.service.js', () => ({ getConfig: vi.fn() }));
+vi.mock('../src/services/ide-guest-auth.service.js', async (orig) => ({
+  ...(await orig<typeof import('../src/services/ide-guest-auth.service.js')>()),
+  saveIdeGuestSecret: vi.fn(),
+}));
 vi.mock('../src/services/ide-assets.generated.js', () => ({
   IDE_SETTINGS_JSON: '{}',
   IDE_AUTOSTART_PACKAGE_JSON: '{}',
@@ -76,6 +80,7 @@ let vmSeq = 0;
 function vm(overrides: Partial<VirtualMachine> = {}): VirtualMachine {
   return {
     id: `vm-${++vmSeq}`,
+    userId: 'u1',
     type: 'qemu',
     status: 'running',
     cpu: 2,

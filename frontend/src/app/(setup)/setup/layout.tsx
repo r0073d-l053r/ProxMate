@@ -77,6 +77,10 @@ export default function SetupLayout({ children }: { children: React.ReactNode })
         {user && (
           <button
             onClick={() => {
+              // Step 1 left a real admin session cookie in this browser; clearing
+              // only the cached profile would leave it valid. Best-effort, as in
+              // the dashboard topbar: a failing call must not block signing out.
+              api.post("/auth/logout").catch(() => {});
               useAuthStore.getState().clear();
               router.push("/login");
             }}

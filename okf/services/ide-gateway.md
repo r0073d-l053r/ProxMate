@@ -19,9 +19,9 @@ OpenCode runs inside the tenant VM with no ProxMate session cookie, and tenants 
 
 | Function | Signature summary | What it does |
 |---|---|---|
-| `issueGatewayToken` | `(user, vmId, publicApiBaseUrl) => { token, baseUrl } \| null` | Checks `ide` capability and policy; mints `pmide_` + 24 random bytes base64url; upserts on `(userId, vmId)` (rotation) storing SHA-256 `tokenHash` and 12-char `prefix`; returns `<base>/api/ide/<vmId>/llm/v1`. |
+| `issueGatewayToken` | `(user, vmId, publicApiBaseUrl) => { token, baseUrl } \| null` | Checks `ide` capability, that the user OWNS the VM, and policy; mints `pmide_` + 24 random bytes base64url; upserts on `(userId, vmId)` (rotation) storing SHA-256 `tokenHash` and 12-char `prefix`; returns `<base>/api/ide/<vmId>/llm/v1`. |
 | `revokeGatewayToken` | `(userId, vmId)` | Sets `revokedAt` on the active row. |
-| `verifyGatewayToken` | `(raw, pathVmId) => { user, vmId } \| null` | Hash lookup; token must be bound to the path VM; not revoked/expired; owner not access-expired; live `getVmWithCap` + `getIdeCapability`; stamps `lastUsedAt`. |
+| `verifyGatewayToken` | `(raw, pathVmId) => { user, vmId } \| null` | Hash lookup; token must be bound to the path VM; not revoked/expired; owner not access-expired; live `getVmWithCap` + VM ownership + `getIdeCapability`; stamps `lastUsedAt`. |
 | `listGatewayModels` | `(user) => OpenAiModel[]` | `/v1/models` shape: picker ids plus `byo:<keyId>` when BYO is allowed. |
 | `listModelPickerEntries` | `(user)` | Same with labels; used to build the guest's `opencode.json`. |
 | `probeModels` | `(baseUrl, apiKey?) => { ok, models, error? }` | GET `<base>/models` with 8 s timeout; never throws. |
@@ -37,6 +37,7 @@ OpenCode runs inside the tenant VM with no ProxMate session cookie, and tenants 
 
 - The gateway router mounts bare (no shared auth middleware), so the access-window check is enforced here; otherwise a lapsed tenant's agent would keep spending the admin's LLM credits.[^gw]
 - Mint-time checks are not enough; every request re-authorises ownership and the admin policy live.[^gw]
+- Tokens are issued to and honoured for the VM's owner only. The token lives inside the owner's guest, so it must never carry an admin's or sharee's identity, models or keys; a token held by anyone else is rejected.[^gw]
 - Re-provisioning a VM's IDE rotates its token (upsert).[^gw]
 - `resolveModelRoute` is the single choke point stopping access to an unshared model, or BYO keys when BYO is disabled.[^gw]
 - BYO forward-time SSRF re-check (`assertSafeOutboundUrl`) for non-`openai` providers blocks DNS rebinding or keys saved before the save-time guard; admins are exempt.[^gw]

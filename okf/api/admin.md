@@ -28,7 +28,7 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 |---|---|---|---|
 | GET | `/api/admin/audit` | admin | Audit log page (`?limit` default 100, `?offset` default 0). |
 | GET | `/api/admin/settings` | admin | Aggregated settings: proxmox (`hasSecret`, no secret), defaults, rescueIso, templateRefreshEnabled, smtp (`hasPass`), notify, sso (`hasSecret`, `callbackUrl`), ide (`hasGatewayKey`), appdbBackup (plus `mountedDir`), kiosk `pinSet`. |
-| PUT | `/api/admin/settings/kiosk` | admin | `{ pin }` 4-12 digits or `''` to clear. Audited `admin.kiosk_config`. |
+| PUT | `/api/admin/settings/kiosk` | admin + requireSession | `{ pin }` 4-12 digits or `''` to clear. Audited `admin.kiosk_config`. |
 | PUT | `/api/admin/settings/appdb-backup` | admin | `{ dir, keep (1..365, default 7) }`; probes the dir is writable. Audited `admin.appdb_backup_config`. |
 | POST | `/api/admin/settings/appdb-backup/run` | admin | Run an app-DB backup now; `{ ok, file, pruned }`. Audited `admin.appdb_backup_run`. |
 | PUT | `/api/admin/settings/smtp` | admin | `{ host, port, secure, user?, pass?, from? }`; blank `pass` keeps existing. |
@@ -39,10 +39,10 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 | GET | `/api/admin/ide/sources` | admin | Admin's own saved LLM keys (model sources). |
 | POST | `/api/admin/ide/test-source` | admin | `{ keyId }`; probe that key's endpoint models. |
 | POST | `/api/admin/ide/test-reachability` | admin | `{ vmId? }`; probe IDE reachability on a VM (if omitted, auto-picks a running QEMU VM with an IP, preferring one whose IDE is ready; 404 if none). |
-| PUT | `/api/admin/settings/sso` | admin | OIDC config `{ enabled, issuer (URL), clientId, clientSecret?, scopes?, groupsClaim?, adminGroup?, allowSignup?, buttonLabel? }`. Audited `admin.sso_config`. |
+| PUT | `/api/admin/settings/sso` | admin + requireSession | OIDC config `{ enabled, issuer (URL), clientId, clientSecret?, scopes?, groupsClaim?, adminGroup?, allowSignup?, buttonLabel? }`. Audited `admin.sso_config`. |
 | POST | `/api/admin/settings/sso/test` | admin | OIDC discovery check. |
 | GET | `/api/admin/password-requests` | admin | Pending password reset requests (no-SMTP flow). |
-| POST | `/api/admin/users/:id/reset-password` | admin | Set `{ password (min 8) }` for a user. Audited `admin.reset_password`. |
+| POST | `/api/admin/users/:id/reset-password` | admin + requireSession | Set `{ password (min 8) }` for a user. Audited `admin.reset_password`. |
 | PUT | `/api/admin/settings/proxmox` | admin | `{ host, tokenId, tokenSecret?, verifySsl }`; secret only replaced if non-blank and stored encrypted. |
 | POST | `/api/admin/settings/proxmox/test` | admin | Test Proxmox connection. |
 | PUT | `/api/admin/settings/defaults` | admin | `{ storage, bridge, isoStorage, backupStorage? }`; `bridge` must match `NETWORK_NAME_RE`, `backupStorage: ''` clears the override. Audited `admin.settings_defaults` with a before/after diff. |

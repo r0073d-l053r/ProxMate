@@ -1,0 +1,33 @@
+# Local additions to docker-compose.yml.
+#
+#   cp docker-compose.override.example.yml docker-compose.override.yml
+#
+# then uncomment the `services:` / `backend:` / `volumes:` lines plus the
+# mounts you need. docker compose merges docker-compose.override.yml into
+# docker-compose.yml automatically (no -f flag needed). The override file is
+# untracked (.gitignore), so updates — deploy/update.sh or a plain
+# `git checkout <tag>` — never touch it. Keep ALL local changes here rather than
+# editing docker-compose.yml itself: the updater refuses to run over local edits
+# to tracked files instead of discarding them.
+#
+# Volumes listed here are ADDED to the backend's mounts in docker-compose.yml.
+# After editing: docker compose up -d backend  (mounts apply at container create).
+
+# services:
+#   backend:
+#     volumes:
+#       # On-demand cloud-init snippet writing. The host side must be the
+#       # snippets/ dir of a SHARED Proxmox storage; set SNIPPET_DIR=/snippets
+#       # (and SNIPPET_STORAGE) in .env.
+#       - /mnt/pve/shared/snippets:/snippets
+#
+#       # Let tenants download guest backups; set BACKUP_DOWNLOAD_DIR=/backups in .env.
+#       - /mnt/pve/backups/dump:/backups:ro
+#
+#       # One-click updates (the host updater watches this dir). Create it owned
+#       # by the container user first:
+#       #   sudo install -d -m 0775 -o 1000 -g 1000 deploy/update-control
+#       - ./deploy/update-control:/control
+#
+#       # Trust a private Proxmox CA; set PROXMOX_CA_CERT_FILE=/certs/pve-ca.pem in .env.
+#       - ./deploy/pve-ca.pem:/certs/pve-ca.pem:ro

@@ -30,7 +30,7 @@ the admin settings page, which reuses the connection test, the resource discover
 | `testProxmoxConnection` | `()` → `{ connected, version, nodeCount, vmCount, storageCount, warnings }` | Checks that the token can actually *do* things, not just authenticate (see below). |
 | `getProxmoxResources` | `()` → `{ storages, bridges, nodeCount, isoStorages, backupStorages }` | Storages filtered by content (`images` / `iso` / `backup`), plus guest networks from `getGuestNetworks` (see [networking](/proxmox/networking.md)). |
 | `saveDefaults` | `({ storage, bridge, isoStorage, backupStorage? })` | Writes the [provisioning defaults](/config/provisioning-defaults.md). `backup_storage` is written only when provided. |
-| `completeSetup` | `()` | Requires the admin, ensures `jwt_secret`, sets `setup_complete=true`, opens a session. |
+| `completeSetup` | `()` | Requires the admin, ensures `jwt_secret`, sets `setup_complete=true`; opens no session (the route is reached only by the admin's own session). |
 
 # Connection test
 

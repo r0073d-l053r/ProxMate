@@ -21,6 +21,22 @@ export function allowExpiredAccess(req: Request, _res: Response, next: NextFunct
   next();
 }
 
+/**
+ * Refuse callers authenticated by a `pm_…` API token. Mount AFTER requireAuth (or
+ * requireAuthOrEnrollment) on every route that changes how the account itself is
+ * secured: session refresh, 2FA, passkeys, the kiosk re-auth check, API-token
+ * management. An API token is scoped programmatic access; if it could reach these
+ * it could turn itself into a browser session, enroll new factors or mint more
+ * tokens, so revoking it would no longer end the access it granted.
+ */
+export function requireSession(req: Request, res: Response, next: NextFunction): void {
+  if (isApiToken((req as AuthRequest).sessionToken)) {
+    res.status(403).json({ error: 'API tokens cannot manage account security — use the web app.' });
+    return;
+  }
+  next();
+}
+
 export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   // Prefer the httpOnly session cookie (browser); fall back to a Bearer token
   // for non-browser API clients.

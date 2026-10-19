@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { ArrowUpCircle, Loader2, Send } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import type { Quota } from "@/lib/types";
+import { ramGbField, ramMbToSave } from "@/lib/quota";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/form-field";
@@ -28,7 +29,7 @@ interface MyRequest {
 export function RequestQuotaDialog({ quota }: { quota: Quota }) {
   const [open, setOpen] = useState(false);
   const [cpu, setCpu] = useState(quota.cpu.max);
-  const [ramGb, setRamGb] = useState(Math.round(quota.ram.max / 1024));
+  const [ramGb, setRamGb] = useState(ramGbField(quota.ram.max));
   const [storage, setStorage] = useState(quota.storage.max);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -47,7 +48,7 @@ export function RequestQuotaDialog({ quota }: { quota: Quota }) {
     setOpen(o);
     if (o) {
       setCpu(quota.cpu.max);
-      setRamGb(Math.round(quota.ram.max / 1024));
+      setRamGb(ramGbField(quota.ram.max));
       setStorage(quota.storage.max);
     }
   }
@@ -55,7 +56,7 @@ export function RequestQuotaDialog({ quota }: { quota: Quota }) {
   async function submit() {
     setBusy(true);
     try {
-      await api.post("/quota-requests", { cpu, ram: ramGb * 1024, storage, reason: reason.trim() || undefined });
+      await api.post("/quota-requests", { cpu, ram: ramMbToSave(quota.ram.max, ramGb), storage, reason: reason.trim() || undefined });
       toast.success("Quota request sent to your administrator.");
       setOpen(false);
       setReason("");

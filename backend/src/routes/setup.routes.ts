@@ -13,6 +13,9 @@ import {
 import { NETWORK_NAME_RE } from '../services/proxmox.service.js';
 import { setAuthCookies } from '../lib/cookies.js';
 import { authLimiter } from '../middleware/rate-limit.js';
+import { requireAuth } from '../middleware/auth.js';
+import { requireAdmin } from '../middleware/admin.js';
+import type { AuthRequest } from '../types/index.js';
 
 const router = Router();
 
@@ -70,6 +73,15 @@ router.post('/admin', async (req: Request, res: Response) => {
     res.status(400).json({ error: msg });
   }
 });
+
+// ─── Guard: every later step needs the admin's session ───────
+
+// Step 1 is the only step open to an anonymous caller: it creates the single
+// admin and gives that browser a session. Everything after it (cluster
+// credentials, defaults, finishing) is admin configuration, so it requires that
+// session (cookie + CSRF header) like any other admin write. An operator who
+// lost the step-1 session signs in normally and the wizard picks up again.
+router.use(requireAuth, requireAdmin);
 
 // ─── Step 2: Save Proxmox connection config ───────────────────
 
@@ -146,11 +158,10 @@ router.post('/defaults', async (req: Request, res: Response) => {
 
 // ─── Step 4: Finalize setup ───────────────────────────────────
 
-router.post('/complete', async (_req: Request, res: Response) => {
+router.post('/complete', async (req: Request, res: Response) => {
   try {
-    const result = await completeSetup();
-    setAuthCookies(res, result.token, result.csrfToken, result.expiresAt);
-    res.json({ user: result.user, redirectTo: '/' });
+    await completeSetup();
+    res.json({ user: (req as AuthRequest).user, redirectTo: '/' });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Setup completion failed';
     res.status(500).json({ error: msg });

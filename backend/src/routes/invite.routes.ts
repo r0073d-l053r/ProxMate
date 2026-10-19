@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { InviteToken } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireSession } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/admin.js';
 import { generateToken, parseExpiry } from '../services/invite.service.js';
 import { ACCESS_DURATIONS } from '../services/access.service.js';
@@ -12,6 +12,8 @@ import { inviteEmail } from '../lib/email-templates.js';
 const router = Router();
 
 router.use(requireAuth, requireAdmin);
+// Creating, sending and listing invites hand out links that create accounts, so
+// those routes also carry `requireSession`: not obtainable with an API token.
 
 /** Public registration URL for an invite token. */
 function inviteUrlFor(token: string): string {
@@ -63,7 +65,7 @@ const CreateInviteSchema = z.object({
   accessDuration: z.enum(ACCESS_DURATIONS).optional(),
 });
 
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', requireSession, async (req: Request, res: Response) => {
   const parsed = CreateInviteSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
@@ -84,7 +86,9 @@ router.post('/', async (req: Request, res: Response) => {
       token,
       createdById: (req as any).user.id,
       label: parsed.data.label,
-      email: parsed.data.email ?? null,
+      // Bound only after the link has actually been emailed (below): an address
+      // the link never reached must not decide who may register with it.
+      email: null,
       maxCpu: parsed.data.maxCpu,
       maxRam: parsed.data.maxRam,
       maxStorage: parsed.data.maxStorage,
@@ -104,6 +108,10 @@ router.post('/', async (req: Request, res: Response) => {
   let emailError: string | null = null;
   if (parsed.data.email) {
     emailError = await emailInvite(parsed.data.email, invite, (req as any).user.displayName);
+    if (!emailError) {
+      invite.email = parsed.data.email;
+      await prisma.inviteToken.update({ where: { id: invite.id }, data: { email: parsed.data.email } });
+    }
   }
 
   res.status(201).json({
@@ -128,7 +136,7 @@ router.post('/', async (req: Request, res: Response) => {
 
 const SendInviteSchema = z.object({ email: z.string().trim().email().max(254) });
 
-router.post('/:id/send', async (req: Request, res: Response) => {
+router.post('/:id/send', requireSession, async (req: Request, res: Response) => {
   const parsed = SendInviteSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Enter a valid email address.' });
@@ -149,9 +157,24 @@ router.post('/:id/send', async (req: Request, res: Response) => {
     return;
   }
 
-  const emailError = await emailInvite(parsed.data.email, invite, (req as any).user.displayName);
+  // `invite.email` is the address registration binds the account to, so it must
+  // only ever name an address the CURRENT link was delivered to. Sending to a new
+  // address therefore issues a new token: whoever holds the old link (an earlier
+  // recipient, or anyone it was copied to) can no longer register under the new
+  // address. Resending to the same address keeps the link.
+  const to = parsed.data.email.toLowerCase();
+  const readdressed = to !== (invite.email?.toLowerCase().trim() ?? null);
+  const outgoing = readdressed ? { ...invite, token: generateToken() } : invite;
+
+  let emailError = await emailInvite(parsed.data.email, outgoing, (req as any).user.displayName);
   if (!emailError) {
-    await prisma.inviteToken.update({ where: { id: invite.id }, data: { email: parsed.data.email } });
+    // Conditional on the old token still being live and unredeemed, so a
+    // registration racing this send can't be overwritten.
+    const updated = await prisma.inviteToken.updateMany({
+      where: { id: invite.id, token: invite.token, usedById: null },
+      data: { email: parsed.data.email, token: outgoing.token },
+    });
+    if (updated.count === 0) emailError = 'The invite changed while sending — the emailed link will not work; reload and try again.';
   }
 
   // Return 200 with a structured result rather than a 5xx an upstream proxy might
@@ -161,7 +184,7 @@ router.post('/:id/send', async (req: Request, res: Response) => {
 
 // ─── GET /api/invites ─────────────────────────────────────────
 
-router.get('/', async (_req: Request, res: Response) => {
+router.get('/', requireSession, async (_req: Request, res: Response) => {
   const invites = await prisma.inviteToken.findMany({
     orderBy: { createdAt: 'desc' },
     include: { usedBy: { select: { email: true, displayName: true } } },

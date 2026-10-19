@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
@@ -14,6 +14,10 @@ const create = vi.mocked(prisma.auditLog.create);
 const findMany = vi.mocked(prisma.auditLog.findMany);
 const count = vi.mocked(prisma.auditLog.count);
 const userFindMany = vi.mocked(prisma.user.findMany);
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -46,6 +50,7 @@ describe('recordAudit', () => {
   it('prefers the real-client header (CF-Connecting-IP) over the proxy socket req.ip', async () => {
     // Behind Cloudflare Tunnel, req.ip is the tunnel for every request — the real
     // client is in CF-Connecting-IP. Without this, the audit log shows one IP for all.
+    vi.stubEnv('TRUST_PROXY', '1');
     await recordAudit({
       action: 'auth.login',
       actor: { id: 'u1' },
@@ -55,12 +60,47 @@ describe('recordAudit', () => {
   });
 
   it('takes the first hop of a comma-listed forwarded header', async () => {
+    vi.stubEnv('TRUST_PROXY', '1');
     await recordAudit({
       action: 'auth.login',
       actor: { id: 'u1' },
       req: { ip: '127.0.0.1', headers: { 'cf-connecting-ip': '198.51.100.9, 10.0.0.1' } } as never,
     });
     expect(create.mock.calls[0]![0].data.ip).toBe('198.51.100.9');
+  });
+
+  it('ignores the real-client header when no proxy is trusted (direct connections)', async () => {
+    // With TRUST_PROXY=0 the API is reached directly, so any such header was
+    // written by the client itself and says nothing about who it is.
+    vi.stubEnv('TRUST_PROXY', '0');
+    await recordAudit({
+      action: 'auth.login',
+      actor: { id: 'u1' },
+      req: { ip: '203.0.113.5', headers: { 'cf-connecting-ip': '10.9.9.9' } } as never,
+    });
+    expect(create.mock.calls[0]![0].data.ip).toBe('203.0.113.5');
+  });
+
+  it('ignores the header when TRUST_PROXY is unset', async () => {
+    vi.stubEnv('TRUST_PROXY', undefined);
+    await recordAudit({
+      action: 'auth.login',
+      actor: { id: 'u1' },
+      req: { ip: '203.0.113.5', headers: { 'cf-connecting-ip': '10.9.9.9' } } as never,
+    });
+    expect(create.mock.calls[0]![0].data.ip).toBe('203.0.113.5');
+  });
+
+  it('for X-Forwarded-For uses req.ip (trust-proxy hop count applied), not the client-supplied first element', async () => {
+    // A proxy that appends to XFF leaves whatever the client sent at the front.
+    vi.stubEnv('TRUST_PROXY', '1');
+    vi.stubEnv('REAL_IP_HEADER', 'x-forwarded-for');
+    await recordAudit({
+      action: 'auth.login',
+      actor: { id: 'u1' },
+      req: { ip: '198.51.100.20', headers: { 'x-forwarded-for': '10.9.9.9, 198.51.100.20' } } as never,
+    });
+    expect(create.mock.calls[0]![0].data.ip).toBe('198.51.100.20');
   });
 
   it('falls back to req.ip when no real-client header is present', async () => {

@@ -39,36 +39,37 @@ No router-level middleware; each route picks its own:[^routes]
 - **`requireAuth`**: session routes; `allowExpiredAccess` is placed before it only on `GET /me` and `POST /logout` so a tenant with a lapsed compute window can still see why and log out.[^mw-auth]
 - **`requireAuthOrEnrollment`**: first-factor enrollment (TOTP setup/enable, passkey register); accepts a real session or a 15-minute scoped enrollment token that only works while the user still needs MFA setup.[^mw-enroll][^authsvc]
 - **`kioskExitLimiter` + `requireAuth` + admin role check**: kiosk exit (default 10 / 5 min / IP).[^ratelimit]
+- **`requireSession`** (after `requireAuth` / `requireAuthOrEnrollment`): 403 for a caller authenticated with a `pm_` API token. On session refresh, kiosk exit, every 2FA route except `/2fa/verify`, and passkey register/list/delete.[^mw-auth]
 - No `enforceMfaSetup` on this router (it hosts the enrollment flows).
 
 # Endpoints
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/auth/register` | public + authLimiter | Redeem invite `{ email, password (min 8), displayName, inviteToken }`. 201 with user + cookies, or `{ mfaEnrollmentRequired, enrollmentToken }` when the invite requires 2FA (no session). |
+| POST | `/api/auth/register` | public + authLimiter | Redeem invite `{ email, password (min 8), displayName, inviteToken }`. When the invite has an `email`, the registration email must match it (case-insensitive), else 400; the account then gets `emailBound`. 201 with user + cookies, or `{ mfaEnrollmentRequired, enrollmentToken }` when the invite requires 2FA (no session). |
 | POST | `/api/auth/login` | public + authLimiter | `{ email, password }`. Returns user + cookies, or `{ twoFactorRequired, challenge }`, or `{ mfaEnrollmentRequired, enrollmentToken }`, or 401 `passkey_required`, or 403 access-expired. |
 | POST | `/api/auth/2fa/verify` | public + authLimiter | Exchange `{ challenge, code }` (TOTP or recovery code) for a session. |
 | POST | `/api/auth/logout` | allowExpiredAccess + requireAuth | Deletes the `Session` row, clears cookies. |
-| POST | `/api/auth/session/refresh` | requireAuth | Mint a fresh 24 h session, set cookies, retire old session with a ~90 s grace, prune the user's expired sessions. |
-| POST | `/api/auth/kiosk-exit` | kioskExitLimiter + requireAuth + admin | `{ method: 'pin' or 'password', value }` unlock check; `{ ok: true }` or 401. |
-| POST | `/api/auth/kiosk-exit/passkey-options` | kioskExitLimiter + requireAuth + admin | WebAuthn assertion options; sets challenge cookie. |
-| POST | `/api/auth/kiosk-exit/passkey-verify` | kioskExitLimiter + requireAuth + admin | Verify that the passkey belongs to the current admin; mints no session. |
+| POST | `/api/auth/session/refresh` | requireAuth + requireSession | Mint a fresh 24 h session, set cookies, retire old session with a ~90 s grace, prune the user's expired sessions. |
+| POST | `/api/auth/kiosk-exit` | kioskExitLimiter + requireAuth + requireSession + admin | `{ method: 'pin' or 'password', value }` unlock check; `{ ok: true }` or 401. |
+| POST | `/api/auth/kiosk-exit/passkey-options` | kioskExitLimiter + requireAuth + requireSession + admin | WebAuthn assertion options; sets challenge cookie. |
+| POST | `/api/auth/kiosk-exit/passkey-verify` | kioskExitLimiter + requireAuth + requireSession + admin | Verify that the passkey belongs to the current admin; mints no session. |
 | GET | `/api/auth/me` | allowExpiredAccess + requireAuth | Current user, 2FA/passkey/MFA flags, `broadcastOptOut`, `accessExpiresAt`, server-computed `accessExpired`, quota usage. In OpenAPI doc. |
 | PUT | `/api/auth/email-preferences` | requireAuth | `{ broadcastOptOut: boolean }`. Audited. |
-| POST | `/api/auth/2fa/setup` | requireAuthOrEnrollment | Begin TOTP setup. |
-| POST | `/api/auth/2fa/enable` | requireAuthOrEnrollment | `{ code }`; returns `{ recoveryCodes }`. Audited `auth.2fa_enabled`. |
-| POST | `/api/auth/2fa/disable` | requireAuth | `{ code }`. Audited `auth.2fa_disabled`. |
-| GET | `/api/auth/2fa/status` | requireAuth | TOTP status. |
+| POST | `/api/auth/2fa/setup` | requireAuthOrEnrollment + requireSession | Begin TOTP setup. |
+| POST | `/api/auth/2fa/enable` | requireAuthOrEnrollment + requireSession | `{ code }`; returns `{ recoveryCodes }`. Audited `auth.2fa_enabled`. |
+| POST | `/api/auth/2fa/disable` | requireAuth + requireSession | `{ code }`. Audited `auth.2fa_disabled`. |
+| GET | `/api/auth/2fa/status` | requireAuth + requireSession | TOTP status. |
 | POST | `/api/auth/passkeys/auth/options` | public + authLimiter | Usernameless passkey login options; sets `proxmate_webauthn` cookie (5 min). |
 | POST | `/api/auth/passkeys/auth/verify` | public + authLimiter | Verify assertion and issue a session. |
-| POST | `/api/auth/passkeys/register/options` | requireAuthOrEnrollment | Passkey registration options. |
-| POST | `/api/auth/passkeys/register/verify` | requireAuthOrEnrollment | `{ response, name? }`; stores the passkey. Audited `auth.passkey_added`. |
-| GET | `/api/auth/passkeys` | requireAuth | List caller's passkeys. |
-| DELETE | `/api/auth/passkeys/:id` | requireAuth | Remove a passkey. Audited `auth.passkey_removed`. |
+| POST | `/api/auth/passkeys/register/options` | requireAuthOrEnrollment + requireSession | Passkey registration options. |
+| POST | `/api/auth/passkeys/register/verify` | requireAuthOrEnrollment + requireSession | `{ response, name? }`; stores the passkey. Audited `auth.passkey_added`. |
+| GET | `/api/auth/passkeys` | requireAuth + requireSession | List caller's passkeys. |
+| DELETE | `/api/auth/passkeys/:id` | requireAuth + requireSession | Remove a passkey. Audited `auth.passkey_removed`. |
 | GET | `/api/auth/sso/info` | public | Whether to show an SSO button and its label. |
 | GET | `/api/auth/sso/login` | public | Sets `proxmate_sso` cookie (state/nonce/PKCE, 10 min) and 302s to the IdP. |
 | GET | `/api/auth/sso/callback` | public (SSO cookie) | Completes OIDC, sets session cookies, redirects to `FRONTEND_URL/`; errors redirect to `/login?sso_error=…`. |
-| GET | `/api/auth/invite/:token` | public + publicTokenLimiter | Validate an invite; returns quotas, expiry, label, `require2fa`; 404 if used/expired. |
+| GET | `/api/auth/invite/:token` | public + publicTokenLimiter | Validate an invite; returns quotas, expiry, label, `require2fa`, `email` (the invited address or null); 404 if used/expired. |
 | POST | `/api/auth/forgot-password` | public + authLimiter | `{ email }`. Email a reset link if SMTP is configured, else file an admin request; returns `{ method: 'email' or 'admin', message }`, where `method` reflects SMTP config only and the message does not reveal whether the account exists. |
 | POST | `/api/auth/reset-password` | public + authLimiter | `{ token, password (min 8) }`. Audited `auth.password_reset`. |
 

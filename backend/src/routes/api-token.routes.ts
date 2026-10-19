@@ -1,22 +1,14 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireSession } from '../middleware/auth.js';
 import { recordAudit } from '../services/audit.service.js';
-import { createApiToken, listApiTokens, revokeApiToken, isApiToken } from '../services/api-token.service.js';
+import { createApiToken, listApiTokens, revokeApiToken } from '../services/api-token.service.js';
 import type { AuthRequest } from '../types/index.js';
 
 const router = Router();
-router.use(requireAuth);
-
-// Defense in depth: a token must not be able to mint or revoke tokens — managing
-// them requires a real (browser) session, so a leaked token can't bootstrap more.
-router.use((req: Request, res: Response, next) => {
-  if (isApiToken((req as AuthRequest).sessionToken)) {
-    res.status(403).json({ error: 'API tokens cannot manage API tokens — use the web app.' });
-    return;
-  }
-  next();
-});
+// A token must not be able to mint or revoke tokens — managing them requires a
+// real (browser) session, so a leaked token can't bootstrap more.
+router.use(requireAuth, requireSession);
 
 router.get('/', async (req: Request, res: Response) => {
   res.json(await listApiTokens((req as AuthRequest).user.id));

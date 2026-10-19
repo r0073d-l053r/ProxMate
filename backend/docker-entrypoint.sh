@@ -27,6 +27,16 @@ if [ "$(id -u)" = "0" ]; then
       || echo "warning: could not chown $APPDB_BACKUP_DIR — app-database backups may fail to write there"
   fi
 
+  # Same for the one-click-update control dir (optional bind mount): Docker
+  # creates a missing bind source root-owned, and the app must be able to write
+  # its request and status files there or "Install update" fails. Only the
+  # directory itself; the host updater's own files are replaced, not edited.
+  control_dir="${UPDATE_CONTROL_DIR:-/control}"
+  if [ -d "$control_dir" ]; then
+    chown node:node "$control_dir" 2>/dev/null \
+      || echo "warning: could not chown $control_dir — one-click updates may fail to queue"
+  fi
+
   exec su-exec node:node "$0" "$@"
 fi
 
