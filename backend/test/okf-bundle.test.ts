@@ -42,10 +42,15 @@ const rel = (f: string) => path.relative(BUNDLE, f).split(path.sep).join('/');
 const files = existsSync(BUNDLE) ? walk(BUNDLE).filter((f) => f.endsWith('.md')) : [];
 const concepts = files.filter((f) => !RESERVED.has(path.basename(f)));
 
+/** Body text with fenced blocks and inline code removed, so `[^/]+` in a regex isn't a footnote. */
+function prose(body: string): string {
+  return body.replace(/^(```|~~~)[\s\S]*?^\1/gm, '').replace(/^(?: {4}|\t).*$/gm, '').replace(/`[^`\n]*`/g, '');
+}
+
 /** Markdown link targets in a body, minus external URLs and in-page anchors. */
 function internalLinks(body: string): string[] {
   const out: string[] = [];
-  for (const m of body.matchAll(/\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
+  for (const m of prose(body).matchAll(/\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
     const target = m[1]!.split('#')[0]!;
     if (!target || /^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
     out.push(target);
@@ -120,7 +125,7 @@ describe('okf/ bundle — house style', () => {
     const sources = (fm!['sources'] ?? []) as Array<{ id?: string; resource?: string }>;
     for (const s of sources) expect(String(s.resource ?? '').trim(), 'sources[].resource').not.toBe('');
     const ids = new Set(sources.map((s) => s.id).filter(Boolean));
-    const labels = new Set([...body.matchAll(/\[\^([^\]]+)\]/g)].map((m) => m[1]!));
+    const labels = new Set([...prose(body).matchAll(/\[\^([^\]]+)\]/g)].map((m) => m[1]!));
     for (const l of labels) expect(ids, `footnote [^${l}] has no matching sources id`).toContain(l);
   });
 
@@ -166,6 +171,14 @@ describe('okf/ bundle — in sync with the code', () => {
       .filter((f) => f.endsWith('.routes.ts'))
       .map((f) => f.replace(/\.routes\.ts$/, ''));
     const missing = routers.filter((r) => !existsSync(path.join(BUNDLE, 'api', `${r}.md`)));
+    expect(missing).toEqual([]);
+  });
+
+  it('documents every backend service under services/', () => {
+    const services = readdirSync(path.join(REPO, 'backend/src/services'))
+      .filter((f) => f.endsWith('.service.ts'))
+      .map((f) => f.replace(/\.service\.ts$/, ''));
+    const missing = services.filter((s) => !existsSync(path.join(BUNDLE, 'services', `${s}.md`)));
     expect(missing).toEqual([]);
   });
 
