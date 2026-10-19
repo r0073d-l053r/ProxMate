@@ -217,3 +217,18 @@ most missing privileges, these two included.
 - [ ] Set **`METRICS_TOKEN`** if you scrape `/metrics` in production (otherwise it returns 404); or keep the scrape on localhost only.
 - [ ] Prefer a private-CA `PROXMOX_CA_CERT_FILE` over `verifySsl=false` so the API token can't be MITM'd on an untrusted segment.
 - [ ] Keep Proxmox VE patched (guest→host isolation ultimately depends on the hypervisor).
+
+## 5. Supported versions and reporting a security issue
+
+Security fixes go into the latest release line. Upgrade to it before reporting.
+
+| Version | Security fixes |
+|---|---|
+| 1.1.x | ✅ |
+| 1.0.x and earlier | ❌ — upgrade to 1.1.x |
+
+Please **don't open a public issue** for a security problem. Report it privately from the
+repository's **Security** tab → **Report a vulnerability** (GitHub private vulnerability
+reporting). Include the version, what you did, what happened and what you expected; a
+minimal reproduction helps most. You'll get a reply there, and a fix ships in a release
+with credit if you'd like it.
