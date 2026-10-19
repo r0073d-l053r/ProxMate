@@ -173,6 +173,14 @@ export default function VmDetailPage() {
   // locked (the backend rejects console/stop/delete) and we show a loading state,
   // then open the editor once the guest is serving.
   const [ideInstalling, setIdeInstalling] = useState(false);
+  // The install / relocate waits run for minutes; they stop once the page is left.
+  const pageAlive = useRef(true);
+  useEffect(() => {
+    pageAlive.current = true;
+    return () => {
+      pageAlive.current = false;
+    };
+  }, []);
 
   async function openIde() {
     if (!vm) return;
@@ -205,7 +213,7 @@ export default function VmDetailPage() {
         done: (state) => state === "ready" || state === "failed",
         intervalMs: 3000,
         timeoutMs: 12 * 60 * 1000,
-        cancelled: () => !mounted.current,
+        cancelled: () => !pageAlive.current,
       });
       if (r.status === "done" && r.value === "ready") {
         popupOrOffer("ProxMate IDE is ready.");
@@ -253,7 +261,7 @@ export default function VmDetailPage() {
         done: (st) => st.state !== "running",
         intervalMs: 5000,
         timeoutMs: 45 * 60 * 1000,
-        cancelled: () => !mounted.current,
+        cancelled: () => !pageAlive.current,
       });
       if (poll.status === "cancelled") return;
       if (poll.status === "timeout") {
