@@ -8,10 +8,11 @@ import {
   getVersion,
   getNodes,
   getStorages,
-  getBridges,
+  getGuestNetworks,
   getEffectivePermissions,
   getClusterVmCount,
   heldPrivileges,
+  type GuestNetwork,
 } from './proxmox.service.js';
 
 // Re-export config helpers so existing imports from setup.service keep working.
@@ -106,6 +107,28 @@ const OPERATIONAL_PRIVILEGES: ReadonlyArray<readonly [string, string]> = [
 ];
 
 /**
+ * SDN privileges, checked separately because what they gate depends on the release.
+ * From Proxmox VE 8, attaching a NIC needs SDN.Use on `/sdn/zones/<zone>/<bridge>` on
+ * top of VM.Config.Network, plain bridges included (they sit in the implicit
+ * `localnetwork` zone). Without SDN.Audit, `/cluster/sdn/vnets` is refused and SDN
+ * VNets are missing from the network picker on releases that do not also list them
+ * per node.
+ */
+const SDN_USE_WARNING =
+  'SDN.Use is missing — Proxmox VE 8+ checks it on /sdn/zones/<zone>/<bridge> whenever a ' +
+  'guest NIC is attached, so creating or re-networking a guest will fail with a 403. ' +
+  'Grant it on /sdn/zones (PVESDNUser carries it), or at least on the zone of the default network.';
+const SDN_AUDIT_WARNING =
+  'SDN.Audit is missing — SDN VNets cannot be listed, so the network picker may only show ' +
+  'local bridges. This only matters if the cluster uses SDN; a VNet can still be typed in by name.';
+
+/** Major version of a Proxmox VE version string ("8.2.4" → 8), or null if unparseable. */
+function pveMajor(version: string): number | null {
+  const m = /^(\d+)\./.exec(version.trim());
+  return m ? Number(m[1]) : null;
+}
+
+/**
  * Prove the configured token can actually DO something, not merely authenticate.
  *
  * The old version asked for `/version` and `/nodes` and reported success. Both answer
@@ -194,6 +217,9 @@ export async function testProxmoxConnection(): Promise<ProxmoxConnectionResult> 
   for (const [priv, what] of OPERATIONAL_PRIVILEGES) {
     if (!held.has(priv)) warnings.push(`${priv} is missing — ${what} will fail.`);
   }
+  const major = pveMajor(version);
+  if (major !== null && major >= 8 && !held.has('SDN.Use')) warnings.push(SDN_USE_WARNING);
+  if (!held.has('SDN.Audit')) warnings.push(SDN_AUDIT_WARNING);
   if (nodes.length === 0) {
     warnings.push('No nodes are visible. Sys.Audit governs node health and capacity readings.');
   }
@@ -212,14 +238,17 @@ export async function testProxmoxConnection(): Promise<ProxmoxConnectionResult> 
 
 export async function getProxmoxResources(): Promise<{
   storages: Array<{ name: string; type: string }>;
-  bridges: Array<{ name: string }>;
+  bridges: GuestNetwork[];
+  /** Online node count, so a picker can flag a network that is not on every node. */
+  nodeCount: number;
   isoStorages: Array<{ name: string; type: string }>;
   backupStorages: Array<{ name: string; type: string }>;
 }> {
   const client = await getClient();
-  const [storages, bridges] = await Promise.all([
+  const [storages, networks, nodes] = await Promise.all([
     getStorages(client),
-    getBridges(undefined, client),
+    getGuestNetworks(client),
+    getNodes(client),
   ]);
 
   return {
@@ -227,7 +256,8 @@ export async function getProxmoxResources(): Promise<{
     storages: storages
       .filter((s) => s.content?.includes('images'))
       .map((s) => ({ name: s.storage, type: s.type })),
-    bridges: bridges.map((b) => ({ name: b.iface })),
+    bridges: networks,
+    nodeCount: nodes.filter((n) => n.status === 'online').length,
     isoStorages: storages
       .filter((s) => s.content?.includes('iso'))
       .map((s) => ({ name: s.storage, type: s.type })),

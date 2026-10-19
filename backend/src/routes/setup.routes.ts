@@ -10,6 +10,7 @@ import {
   completeSetup,
   hasAdmin,
 } from '../services/setup.service.js';
+import { NETWORK_NAME_RE } from '../services/proxmox.service.js';
 import { setAuthCookies } from '../lib/cookies.js';
 import { authLimiter } from '../middleware/rate-limit.js';
 
@@ -122,7 +123,9 @@ router.get('/proxmox/resources', async (_req: Request, res: Response) => {
 
 const DefaultsSchema = z.object({
   storage: z.string().min(1),
-  bridge: z.string().min(1),
+  // May be typed by hand when discovery can't list it, so it gets the same check the
+  // NIC writer applies rather than failing later on every deploy.
+  bridge: z.string().trim().regex(NETWORK_NAME_RE, "Network names start with a letter and use only letters, digits, '.', '_' or '-' (max 32), e.g. vmbr0 or a VNet ID."),
   isoStorage: z.string().min(1),
 });
 

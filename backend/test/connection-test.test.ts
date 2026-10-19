@@ -15,7 +15,7 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
     getVersion: vi.fn(async () => '9.2.3'),
     getNodes: vi.fn(async () => [{ node: 'pve', status: 'online' }]),
     getStorages: vi.fn(async () => [{ storage: 'local', type: 'dir' }]),
-    getBridges: vi.fn(async () => []),
+    getGuestNetworks: vi.fn(async () => []),
     getEffectivePermissions: vi.fn(async () => ({})),
     getClusterVmCount: vi.fn(async () => 3),
   };
@@ -52,6 +52,7 @@ const FULL = {
     'VM.Audit': 1, 'VM.Allocate': 1, 'VM.Config.Disk': 1, 'VM.Config.Network': 1,
     'VM.Config.Cloudinit': 1, 'VM.PowerMgmt': 1, 'VM.Console': 1, 'VM.Clone': 1,
     'VM.Snapshot': 1, 'Datastore.Audit': 1, 'Datastore.AllocateSpace': 1, 'Sys.Audit': 1,
+    'SDN.Audit': 1, 'SDN.Use': 1,
   },
 };
 
@@ -163,6 +164,40 @@ describe('privileges that are not blocking but will bite later', () => {
 
     const r = await testProxmoxConnection();
     expect(r.connected).toBe(true);
+    expect(r.warnings).toEqual([]);
+  });
+});
+
+describe('SDN privileges (issue #126)', () => {
+  const without = (...drop: string[]) =>
+    Object.fromEntries(Object.entries(FULL['/']).filter(([k]) => !drop.includes(k)));
+
+  it('warns that NIC attachment will 403 on Proxmox VE 8+ without SDN.Use', async () => {
+    perms.mockResolvedValue({ '/': without('SDN.Use') });
+    const r = await testProxmoxConnection();
+    expect(r.connected).toBe(true);
+    expect(r.warnings.join('\n')).toMatch(/SDN\.Use is missing.*\/sdn\/zones/);
+  });
+
+  it('does not ask for SDN.Use on a release that never checks it', async () => {
+    version.mockResolvedValue('7.4-17');
+    perms.mockResolvedValue({ '/': without('SDN.Use') });
+    const r = await testProxmoxConnection();
+    expect(r.warnings).toEqual([]);
+  });
+
+  it('warns that VNets cannot be listed without SDN.Audit, and that typing one still works', async () => {
+    perms.mockResolvedValue({ '/': without('SDN.Audit') });
+    const r = await testProxmoxConnection();
+    expect(r.connected).toBe(true);
+    const all = r.warnings.join('\n');
+    expect(all).toMatch(/SDN\.Audit is missing/);
+    expect(all).toMatch(/typed in by name/);
+  });
+
+  it('accepts SDN privileges granted on the zones subtree, as PVESDNUser would be', async () => {
+    perms.mockResolvedValue({ '/': without('SDN.Audit', 'SDN.Use'), '/sdn/zones': { 'SDN.Audit': 1, 'SDN.Use': 1 } });
+    const r = await testProxmoxConnection();
     expect(r.warnings).toEqual([]);
   });
 });

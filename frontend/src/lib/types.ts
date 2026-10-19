@@ -401,9 +401,22 @@ export interface ResourceHistory {
   usage: UserUsage[];
 }
 
+/** Something a guest NIC can be attached to (Linux bridge, OVS bridge or SDN VNet). */
+export interface GuestNetwork {
+  name: string;
+  kind: "bridge" | "ovs" | "vnet";
+  /** SDN zone, for a VNet. */
+  zone?: string;
+  comment?: string;
+  /** Nodes it is known to exist on. */
+  nodes: string[];
+}
+
 export interface ProxmoxResources {
   storages: Array<{ name: string; type: string }>;
-  bridges: Array<{ name: string }>;
+  bridges: GuestNetwork[];
+  /** Online node count; a network on fewer nodes than this is flagged in the picker. */
+  nodeCount?: number;
   isoStorages: Array<{ name: string; type: string }>;
   backupStorages: Array<{ name: string; type: string }>;
 }

@@ -64,7 +64,7 @@ export default function SetupCompletePage() {
             }
           />
           <Row label="Storage pool" value={setup.defaultStorage} />
-          <Row label="Network bridge" value={setup.defaultBridge} />
+          <Row label="Default network" value={setup.defaultBridge} />
           <Row label="ISO storage" value={setup.isoStorage} />
         </div>
 

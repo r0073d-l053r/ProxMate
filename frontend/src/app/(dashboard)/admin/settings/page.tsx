@@ -34,6 +34,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/form-field";
+import { NetworkPicker } from "@/components/network-picker";
+import { networkNameError } from "@/lib/networks";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
@@ -316,15 +318,20 @@ export default function SettingsPage() {
 
   async function saveDefaults(e: React.FormEvent) {
     e.preventDefault();
-    if (!storage || !bridge || !isoStorage) {
+    if (!storage || !bridge.trim() || !isoStorage) {
       toast.error("Select a value for each default.");
+      return;
+    }
+    const bridgeError = networkNameError(bridge);
+    if (bridgeError) {
+      toast.error(bridgeError);
       return;
     }
     setSavingDefaults(true);
     try {
       await api.put("/admin/settings/defaults", {
         storage,
-        bridge,
+        bridge: bridge.trim(),
         isoStorage,
         backupStorage: backupStorage === BACKUP_AUTO ? "" : backupStorage,
       });
@@ -588,19 +595,14 @@ export default function SettingsPage() {
                       </SelectContent>
                     </Select>
                   </FormField>
-                  <FormField label="Default network bridge">
-                    <Select value={bridge} onValueChange={(v) => setBridge(v as string)}>
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="Select a bridge" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {resources.bridges.map((b) => (
-                          <SelectItem key={b.name} value={b.name}>
-                            {b.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                  <FormField label="Default network" htmlFor="default-network">
+                    <NetworkPicker
+                      id="default-network"
+                      networks={resources.bridges}
+                      nodeCount={resources.nodeCount}
+                      value={bridge}
+                      onChange={setBridge}
+                    />
                   </FormField>
                   <FormField label="ISO storage">
                     <Select value={isoStorage} onValueChange={(v) => setIsoStorage(v as string)}>

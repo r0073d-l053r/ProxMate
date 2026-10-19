@@ -10,6 +10,8 @@ import type { ProxmoxResources } from "@/lib/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/form-field";
+import { NetworkPicker } from "@/components/network-picker";
+import { networkNameError } from "@/lib/networks";
 import {
   Select,
   SelectContent,
@@ -69,13 +71,18 @@ export default function SetupDefaultsPage() {
   }, [load]);
 
   async function onSubmit() {
-    if (!storage || !bridge || !isoStorage) {
+    if (!storage || !bridge.trim() || !isoStorage) {
       toast.error("Please select a value for each default.");
+      return;
+    }
+    const bridgeError = networkNameError(bridge);
+    if (bridgeError) {
+      toast.error(bridgeError);
       return;
     }
     setSubmitting(true);
     try {
-      await api.post("/setup/defaults", { storage, bridge, isoStorage });
+      await api.post("/setup/defaults", { storage, bridge: bridge.trim(), isoStorage });
       // Save the cloud-init always-on base (best-effort — editable later in the
       // Template Store, so a failure here never blocks finishing setup).
       if (ciCatalog.length > 0) {
@@ -83,7 +90,7 @@ export default function SetupDefaultsPage() {
           .put("/templates/cloud-init-config", { offered: ciOffered, base: [...ciBase] })
           .catch(() => {});
       }
-      setSetup({ defaultStorage: storage, defaultBridge: bridge, isoStorage });
+      setSetup({ defaultStorage: storage, defaultBridge: bridge.trim(), isoStorage });
       router.push("/setup/complete");
     } catch (err) {
       toast.error(apiError(err));
@@ -97,8 +104,8 @@ export default function SetupDefaultsPage() {
       <CardHeader>
         <CardTitle>Choose defaults</CardTitle>
         <CardDescription>
-          These defaults are applied when users create VMs — the disk storage pool, network bridge,
-          and where ISO images live.
+          These defaults are applied when users create VMs — the disk storage pool, the network
+          (bridge or SDN VNet), and where ISO images live.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -131,19 +138,18 @@ export default function SetupDefaultsPage() {
               </Select>
             </FormField>
 
-            <FormField label="Default network bridge">
-              <Select value={bridge} onValueChange={(v) => setBridge(v as string)}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select a network bridge" />
-                </SelectTrigger>
-                <SelectContent>
-                  {resources?.bridges.map((b) => (
-                    <SelectItem key={b.name} value={b.name}>
-                      {b.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <FormField
+              label="Default network"
+              htmlFor="default-network"
+              hint="The Linux bridge, OVS bridge or SDN VNet new guests' NICs are attached to"
+            >
+              <NetworkPicker
+                id="default-network"
+                networks={resources?.bridges ?? []}
+                nodeCount={resources?.nodeCount}
+                value={bridge}
+                onChange={setBridge}
+              />
             </FormField>
 
             <FormField label="ISO storage" hint="Where installer images are stored">

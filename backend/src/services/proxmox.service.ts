@@ -590,16 +590,125 @@ export async function getStorages(client?: AxiosInstance): Promise<PveStorage[]>
   return res.data.data;
 }
 
-export interface PveBridge {
-  iface: string;
-  type: string;
+/**
+ * What a guest NIC's `bridge=` may name. A netN value is comma-separated `key=value`
+ * pairs, so a name containing a comma, an equals sign or whitespace would corrupt the
+ * line rather than move the NIC. Covers Linux bridges (vmbr0), OVS bridges and SDN
+ * VNets (whose IDs are at most 8 lowercase alphanumerics, so always a subset).
+ */
+export const NETWORK_NAME_RE = /^[A-Za-z][A-Za-z0-9_.-]{0,31}$/;
+
+export type GuestNetworkKind = 'bridge' | 'ovs' | 'vnet';
+
+/** Something a guest NIC can be attached to, as the network pickers present it. */
+export interface GuestNetwork {
+  name: string;
+  kind: GuestNetworkKind;
+  /** SDN zone, for a VNet. */
+  zone?: string;
+  /** VNet alias or interface comment, when Proxmox has one. */
+  comment?: string;
+  /**
+   * Nodes it is known to exist on. A local bridge is per node, so one defined on a
+   * single node of a cluster makes every guest placed elsewhere fail to start.
+   */
+  nodes: string[];
 }
 
-export async function getBridges(node?: string, client?: AxiosInstance): Promise<PveBridge[]> {
+interface PveNetworkIface {
+  iface: string;
+  type: string;
+  comments?: string;
+}
+
+interface PveSdnVnet {
+  vnet: string;
+  zone?: string;
+  alias?: string;
+}
+
+interface PveSdnZone {
+  zone: string;
+  /** Comma-separated node restriction; absent means every node. */
+  nodes?: string;
+}
+
+/**
+ * Every network a guest NIC can be attached to, across the whole cluster: Linux and
+ * OVS bridges from each online node, plus SDN VNets.
+ *
+ * This used to ask only the first node for `?type=bridge`, which returns Linux
+ * bridges and nothing else. An SDN-only cluster (VXLAN/EVPN zones, no vmbrN for
+ * guests) therefore got an empty picker and could not finish setup (issue #126), an
+ * OVS cluster got the same, and a bridge missing from some nodes looked fine.
+ *
+ * `any_bridge` covers both bridge types and, on Proxmox VE 8+, also lists applied
+ * VNets; `/cluster/sdn/vnets` is asked as well so VNets appear on older releases and
+ * carry their zone. Either half failing (an offline node, no SDN package, no
+ * SDN.Audit) only drops what it would have added: this feeds a picker, and a partial
+ * list beats none.
+ */
+export async function getGuestNetworks(client?: AxiosInstance): Promise<GuestNetwork[]> {
   const c = client ?? (await getClient());
-  const targetNode = node ?? (await getDefaultNode(c));
-  const res = await c.get<{ data: PveBridge[] }>(`/nodes/${targetNode}/network?type=bridge`);
-  return res.data.data;
+  const nodes = (await getNodes(c)).filter((n) => n.status === 'online').map((n) => n.node);
+
+  const [perNode, vnetsRes, zonesRes] = await Promise.all([
+    Promise.allSettled(
+      nodes.map((node) => c.get<{ data: PveNetworkIface[] }>(`/nodes/${node}/network?type=any_bridge`)),
+    ),
+    c.get<{ data: PveSdnVnet[] }>('/cluster/sdn/vnets').catch(() => null),
+    c.get<{ data: PveSdnZone[] }>('/cluster/sdn/zones').catch(() => null),
+  ]);
+
+  const byName = new Map<string, GuestNetwork>();
+
+  const zoneNodes = new Map<string, string[]>();
+  for (const z of zonesRes?.data.data ?? []) {
+    const restricted = (z.nodes ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+    zoneNodes.set(z.zone, restricted.length > 0 ? restricted.filter((n) => nodes.includes(n)) : nodes);
+  }
+  for (const v of vnetsRes?.data.data ?? []) {
+    if (!v.vnet) continue;
+    byName.set(v.vnet, {
+      name: v.vnet,
+      kind: 'vnet',
+      ...(v.zone ? { zone: v.zone } : {}),
+      ...(v.alias ? { comment: v.alias } : {}),
+      nodes: (v.zone && zoneNodes.get(v.zone)) || nodes,
+    });
+  }
+
+  perNode.forEach((result, i) => {
+    if (result.status !== 'fulfilled') return;
+    const node = nodes[i]!;
+    for (const iface of result.value.data.data ?? []) {
+      const kind: GuestNetworkKind | null =
+        iface.type === 'bridge' ? 'bridge'
+        : iface.type === 'OVSBridge' ? 'ovs'
+        : iface.type === 'vnet' ? 'vnet'
+        : null;
+      if (!kind || !iface.iface) continue;
+      const existing = byName.get(iface.iface);
+      if (existing) {
+        // Seen on another node already, or a VNet /cluster/sdn listed: a node that
+        // reports it locally definitely has it.
+        if (!existing.nodes.includes(node)) existing.nodes.push(node);
+        continue;
+      }
+      byName.set(iface.iface, {
+        name: iface.iface,
+        kind,
+        ...(iface.comments?.trim() ? { comment: iface.comments.trim() } : {}),
+        nodes: [node],
+      });
+    }
+  });
+
+  const order: Record<GuestNetworkKind, number> = { bridge: 0, ovs: 1, vnet: 2 };
+  return [...byName.values()]
+    .filter((n) => NETWORK_NAME_RE.test(n.name))
+    .map((n) => ({ ...n, nodes: [...n.nodes].sort() }))
+    .sort((a, b) => order[a.kind] - order[b.kind] || a.name.localeCompare(b.name, undefined, { numeric: true }));
 }
 
 export interface PveIso {
@@ -2740,9 +2849,7 @@ export async function setVmBridge(
   client?: AxiosInstance,
   kind: GuestKind = 'qemu',
 ): Promise<void> {
-  // A netN value is comma-separated `key=value` pairs, so a name containing a comma,
-  // an equals sign or whitespace would corrupt the line rather than move the NIC.
-  if (!/^[A-Za-z][A-Za-z0-9_.-]{0,31}$/.test(bridge)) {
+  if (!NETWORK_NAME_RE.test(bridge)) {
     throw new Error(`Invalid bridge name "${bridge}" — expected something like "vmbr0".`);
   }
   const c = client ?? (await getClient());
