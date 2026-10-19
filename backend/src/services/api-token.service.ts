@@ -57,11 +57,19 @@ export async function revokeApiToken(userId: string, id: string): Promise<boolea
   return r.count > 0;
 }
 
+/** A valid token whose owner's compute-access window has lapsed. */
+export interface ApiTokenAccessExpired {
+  accessExpired: true;
+  accessExpiresAt: Date | null;
+}
+
 /**
  * Resolve a raw API token to the user it authenticates, or null if it's unknown or
- * expired. Best-effort updates `lastUsedAt` without blocking the request.
+ * expired. A valid token whose owner's access window has lapsed resolves to
+ * {@link ApiTokenAccessExpired} so the caller can say so instead of answering as
+ * if the token were bad. Best-effort updates `lastUsedAt` without blocking the request.
  */
-export async function verifyApiToken(raw: string): Promise<AuthUser | null> {
+export async function verifyApiToken(raw: string): Promise<AuthUser | ApiTokenAccessExpired | null> {
   if (!isApiToken(raw)) return null;
   const row = await prisma.apiToken.findUnique({
     where: { tokenHash: hashToken(raw) },
@@ -79,7 +87,7 @@ export async function verifyApiToken(raw: string): Promise<AuthUser | null> {
   });
   if (!row) return null;
   if (row.expiresAt && row.expiresAt.getTime() < Date.now()) return null;
-  if (isAccessExpired(row.user)) return null;
+  if (isAccessExpired(row.user)) return { accessExpired: true, accessExpiresAt: row.user.accessExpiresAt };
   prisma.apiToken.update({ where: { id: row.id }, data: { lastUsedAt: new Date() } }).catch(() => undefined);
   const { id, email, role, displayName } = row.user;
   return { id, email, role, displayName };

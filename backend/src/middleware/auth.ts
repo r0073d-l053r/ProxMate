@@ -52,6 +52,13 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       res.status(401).json({ error: 'Invalid or expired API token' });
       return;
     }
+    // Same 403 the session path gives, so a script can tell "access ended" from
+    // "bad token". Unlike a session, a token gets no lenient routes: nothing a
+    // token may call is useful to an account whose access has ended.
+    if ('accessExpired' in user) {
+      res.status(403).json({ error: accessExpiredMessage(user.accessExpiresAt), code: ACCESS_EXPIRED_CODE });
+      return;
+    }
     const ar = req as AuthRequest;
     ar.user = user;
     ar.sessionToken = bearer;

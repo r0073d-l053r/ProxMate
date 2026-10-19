@@ -75,6 +75,15 @@ describe('verifyApiToken', () => {
     findUnique.mockResolvedValueOnce({ id: 't2', expiresAt: new Date(Date.now() - 1000), user: {} } as never);
     expect(await verifyApiToken('pm_expired')).toBeNull();
   });
+  it("reports a lapsed compute-access window instead of treating the token as unknown", async () => {
+    const ended = new Date(Date.now() - 60_000);
+    findUnique.mockResolvedValue({
+      id: 't3', expiresAt: null,
+      user: { id: 'u1', email: 'a@b.c', role: 'user', displayName: 'A', accessExpiresAt: ended },
+    } as never);
+    expect(await verifyApiToken('pm_lapsed')).toEqual({ accessExpired: true, accessExpiresAt: ended });
+    expect(update).not.toHaveBeenCalled();
+  });
 });
 
 describe('revokeApiToken', () => {
