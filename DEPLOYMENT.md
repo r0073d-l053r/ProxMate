@@ -542,6 +542,8 @@ applies DB migrations on boot (`docker-entrypoint.sh`). **Back up the DB first**
    the host's status file and shows progress, then a **Reload** when it's done. If any
    step fails (fetch, checkout, build, restart — or the run is killed), the card shows an
    error naming the step; the full output is in `journalctl -u proxmate-updater`.
+   The updater runs git (including the fetch) as the checkout's owner, not root, so if you
+   track a private fork its credentials must work for that account without a prompt.
 
 > **Security note:** the app itself never runs Docker or git — it only writes one JSON
 > flag in the bind-mounted control dir. All privileged work lives in `update.sh`, run by
@@ -566,16 +568,18 @@ over after this update. So, **before** you update:
    ```bash
    cd /opt/proxmate
    git diff docker-compose.yml                     # your local edits
-   cp docker-compose.override.example.yml docker-compose.override.yml
+   # The template is new in this release, so take it from the release tag:
+   git fetch --tags
+   git show <new-tag>:docker-compose.override.example.yml > docker-compose.override.yml
    nano docker-compose.override.yml                # uncomment the same mounts
    git checkout -- docker-compose.yml
-   docker compose config >/dev/null && echo ok     # the merged file still parses
+   sudo docker compose config >/dev/null && echo ok   # the merged file still parses
    ```
-   `docker-compose.override.example.yml` only exists from this release on; on a 1.0.x
-   checkout write the override by hand (a `services:` → `backend:` → `volumes:` block
-   listing the same mount lines). The old updater's `docker compose up -d` also reads the
-   override, so the mounts survive this update — whether you use the in-app button or not.
-2. **Update** as usual (**Install update**, or `./deploy/update.sh <tag>`).
+   The old updater's `docker compose up -d` also reads the override, so the mounts survive
+   this update — whether you use the in-app button or not.
+2. **Update** as usual (**Install update**, or `sudo ./deploy/update.sh <new-tag>`). If the
+   card stays on *queued*, run `sudo ./deploy/update.sh <new-tag>` by hand; files that an
+   earlier `sudo` run left owned by root are handed back to the checkout's owner first.
 3. **Re-install the systemd units** — the service now marks killed runs as failed
    (`ExecStopPost`):
    ```bash
