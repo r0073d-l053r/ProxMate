@@ -88,3 +88,27 @@ describe('refreshTemplate', () => {
     await expect(refreshTemplate('nope')).rejects.toThrow(/not found/i);
   });
 });
+
+describe('cloud-image build VMID handling', () => {
+  it('takes the VMID only after the image download finishes', async () => {
+    findUnique.mockResolvedValue(cloudTpl());
+    await refreshTemplate('t1');
+    const dl = vi.mocked(pve.downloadUrlToStorage).mock.invocationCallOrder[0]!;
+    const id = vi.mocked(pve.getNextVmId).mock.invocationCallOrder[0]!;
+    expect(id).toBeGreaterThan(dl);
+  });
+
+  it('never deletes the VMID when its own create failed (the id may belong to another guest)', async () => {
+    findUnique.mockResolvedValue(cloudTpl());
+    vi.mocked(pve.createCloudInitVm).mockRejectedValueOnce(new Error('VM 9100 already exists'));
+    await expect(refreshTemplate('t1')).rejects.toThrow(/already exists/);
+    expect(deleteVm).not.toHaveBeenCalled();
+  });
+
+  it('cleans up its own half-built VM when a later step fails', async () => {
+    findUnique.mockResolvedValue(cloudTpl());
+    vi.mocked(pve.convertToTemplate).mockRejectedValueOnce(new Error('convert failed'));
+    await expect(refreshTemplate('t1')).rejects.toThrow(/convert failed/);
+    expect(deleteVm).toHaveBeenCalledWith('pve-0', 9100, expect.anything());
+  });
+});

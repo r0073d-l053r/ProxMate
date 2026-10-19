@@ -544,13 +544,22 @@ async function buildCloudTemplateVm(opts: {
   const safeName = opts.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'cloud-image';
   const filename = `${safeName}-${Date.now()}.qcow2`;
   const importFrom = `${importStorage}:import/${filename}`;
-  const vmid = await pve.getNextVmId(client);
 
   const dlUpid = await pve.downloadUrlToStorage(node, importStorage, { url: opts.imageUrl, filename }, client);
   await pve.waitForTask(node, dlUpid, client, 900_000);
 
+  // Take the VMID only now: nothing occupies it until the create below, so taking
+  // it before a download of up to 15 minutes would leave it free for any other
+  // provision to claim in the meantime.
+  let vmid = 0;
+  // Set once Proxmox has accepted OUR create for this VMID. Only then is whatever
+  // sits at the VMID ours to clean up — if the create itself was refused (e.g. the
+  // id was taken after all), that guest belongs to someone else.
+  let created = false;
   try {
+    vmid = await pve.getNextVmId(client);
     const createUpid = await pve.createCloudInitVm({ node, vmid, name: safeName, importFrom, diskStorage, bridge }, client);
+    created = true;
     await pve.waitForTask(node, createUpid, client, 600_000);
     const diskGb = pve.primaryDiskSizeGb(await pve.getVmConfig(node, vmid, client));
     // Bake the agent in BEFORE converting: a template cannot be booted, and the Proxmox
@@ -561,7 +570,7 @@ async function buildCloudTemplateVm(opts: {
     return { node, vmid, diskGb, arch, guestAgent };
   } catch (err) {
     await pve.deleteStorageVolume(node, importFrom, client).catch(() => {});
-    await pve.deleteVm(node, vmid, client).catch(() => {});
+    if (created) await pve.deleteVm(node, vmid, client).catch(() => {});
     throw err;
   }
 }

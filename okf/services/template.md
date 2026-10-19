@@ -43,9 +43,9 @@ Templates are Proxmox template VMs registered as [Template](/database/template.m
 
 1. Require `default_storage` and `default_bridge`; arch from URL unless pinned; node from `pickBestNode` matching arch unless given.
 2. Pick an import-capable storage on the node (prefer `iso_storage`); download the image via `download-url` (15 min timeout).
-3. `createCloudInitVm` importing the disk (10 min), read disk size.
+3. Take the next VMID only now (after the download), then `createCloudInitVm` importing the disk (10 min), read disk size.
 4. `bakeGuestAgent`: write a `guest-agent` cloud-init snippet, set `cicustom`, `ipconfig0=ip=dhcp`, `agent=enabled=1`, boot, poll the agent up to 6 min; on success run `cloud-init clean --logs --seed`, vacuum journals/logs, truncate `/etc/machine-id`; always shut down and strip `cicustom`/`ipconfig0`.
-5. Convert to template, delete the imported image; on failure delete the image and the VM.
+5. Convert to template, delete the imported image; on failure delete the image, and the VM only if Proxmox accepted this build's own create for that VMID.
 
 # Data
 
