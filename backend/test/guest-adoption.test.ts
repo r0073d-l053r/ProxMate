@@ -44,6 +44,7 @@ import {
   getLiveUsage,
   guestMarker,
   GuestIdentityError,
+  isHeld,
 } from '../src/services/vm.service.js';
 import { sampleResourceUsage } from '../src/services/resource-history.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
@@ -170,6 +171,25 @@ describe('adoptGuest (admin)', () => {
     const held = row({ status: 'error', holdReason: "This machine's provisioning didn't finish." });
     await adoptGuest(held);
     expect(prisma.virtualMachine.update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: { status: 'stopped', holdReason: null } });
+  });
+
+  it('a 1.0.x error row whose untagged guest is adopted becomes startable in one step', async () => {
+    const c = pveWith({ name: 'web', scsi0: 'local-lvm:vm-100-disk-0,size=10G' });
+    const errored = row({ status: 'error', holdReason: null });
+    vi.mocked(prisma.virtualMachine.update).mockImplementation(
+      async ({ data }: { data: Record<string, unknown> }) => ({ ...(errored as object), ...data }) as never,
+    );
+    const adopted = await adoptGuest(errored);
+    expect(c.put).toHaveBeenCalled(); // tagged first
+    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: { status: 'stopped', holdReason: null } });
+    expect(isHeld(adopted)).toBe(false);
+  });
+
+  it('an untagged held row referencing another guest\'s volume is refused and stays held', async () => {
+    const c = pveWith({ name: 'web', scsi1: 'local-lvm:vm-200-disk-0,size=10G' });
+    await expect(adoptGuest(row({ status: 'error', holdReason: null }))).rejects.toThrow(/aren't its own/);
+    expect(c.put).not.toHaveBeenCalled();
+    expect(prisma.virtualMachine.update).not.toHaveBeenCalled();
   });
 
   it('refuses to adopt an untagged guest that references another guest\'s volume', async () => {

@@ -419,16 +419,7 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
   const client = await pve.getClient();
   const identity = await guestIdentity(current, client);
   if (identity === 'ours') {
-    // An admin's repair. An over-quota hold lifts only once the row fits again
-    // (e.g. after the admin raised the owner's quota); any other hold is the admin's
-    // call — they have checked the guest.
-    if (current.holdReason === QUOTA_HOLD_MESSAGE) {
-      if (await withQuotaLock(current.userId, () => liftQuotaHoldIfFits(current.id))) {
-        return (await prisma.virtualMachine.findUnique({ where: { id: current.id } })) ?? current;
-      }
-      return current;
-    }
-    if (isHeld(current)) {
+    if (current.holdReason !== QUOTA_HOLD_MESSAGE && isHeld(current)) {
       // Never lift a hold while the guest still references a volume that isn't its
       // own: that is what a foreign-volume hold is about, and a guest whose
       // provisioning didn't finish was never checked.
@@ -439,9 +430,8 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
           `The guest still references disks that aren't its own (${foreign.join(', ')}). Detach them in Proxmox first.`,
         );
       }
-      return prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'stopped', holdReason: null } });
     }
-    return current;
+    return clearAdoptedHold(current);
   }
   if (identity === 'absent') {
     throw new AdoptError(
@@ -456,6 +446,28 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
     throw new AdoptError(`The guest references disks that aren't its own (${foreign.join(', ')}). Detach them in Proxmox first.`);
   }
   await markClonedGuest(current, client);
+  // The guest has just been checked (own volumes only) and tagged, so a row held or
+  // left in `error` (a 1.0.x create that failed, a guest that only lacked its tag)
+  // is settled here too — adopting it once is enough to make it startable.
+  return clearAdoptedHold(current);
+}
+
+/**
+ * The hold handling of an admin's adopt, once the guest is confirmed (or made)
+ * the row's own and holds only its own volumes. An over-quota hold lifts only once
+ * the row fits again (e.g. after the admin raised the owner's quota); any other
+ * hold is the admin's call — they have checked the guest.
+ */
+async function clearAdoptedHold(current: VirtualMachine): Promise<VirtualMachine> {
+  if (current.holdReason === QUOTA_HOLD_MESSAGE) {
+    if (await withQuotaLock(current.userId, () => liftQuotaHoldIfFits(current.id))) {
+      return (await prisma.virtualMachine.findUnique({ where: { id: current.id } })) ?? current;
+    }
+    return current;
+  }
+  if (isHeld(current)) {
+    return prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'stopped', holdReason: null } });
+  }
   return current;
 }
 
