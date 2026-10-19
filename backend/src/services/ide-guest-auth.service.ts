@@ -180,6 +180,7 @@ async function freshIdeTarget(vm: IdeGuestVm, env: NodeJS.ProcessEnv): Promise<s
 // credential used. A different recorded address, a new secret, a stopped VM or
 // age all drop it. Single-process backend, so an in-memory map is enough.
 const PROOF_TTL_MS = 5 * 60 * 1000;
+const PROOF_REFRESH_MS = 60 * 1000;
 const proofs = new Map<string, { target: string; cred: string; until: number }>();
 
 // Single-flight: one agent read + one /login proof per VM and credential at a
@@ -212,6 +213,17 @@ export async function proveIdeGuestTarget(
   const cred = ideGuestCookieValue(secret);
   const hit = proofs.get(vm.id);
   if (hit && hit.cred === cred && hit.until > Date.now() && hit.target === resolveIdeTargetUrl(vm, env)) {
+    // Near expiry, re-prove at the same target in the background so an open IDE
+    // doesn't stall on a fresh proof; the entry stays valid meanwhile and is
+    // extended only on success (a failed re-proof just lets it expire).
+    if (hit.until - Date.now() < PROOF_REFRESH_MS) {
+      void singleFlight(`${vm.id}|${cred}`, async () => {
+        if (!(await proveIdeGuest(hit.target, secret))) return null;
+        const cur = proofs.get(vm.id);
+        if (cur && cur.target === hit.target && cur.cred === cred) cur.until = Date.now() + PROOF_TTL_MS;
+        return hit.target;
+      });
+    }
     return hit.target;
   }
   proofs.delete(vm.id);

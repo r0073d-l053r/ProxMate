@@ -126,6 +126,56 @@ describe('proveIdeGuestTarget — fresh address, running VM', () => {
     expect(logins).toBe(1);
   });
 
+  it('re-proves in the background near expiry, serving the valid entry meanwhile, and extends it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const t0 = new Date('2026-10-19T12:00:00Z').getTime();
+      vi.setSystemTime(t0);
+      vi.mocked(getVmIps).mockResolvedValue({ ip: '127.0.0.1', tailscaleIp: null } as never);
+      const target = await proveIdeGuestTarget(vm(), SECRET);
+      expect(logins).toBe(1);
+
+      // 30 s before the 5-minute expiry: answered at once from the cache, and a
+      // background proof at the same target (no new agent read) starts.
+      vi.setSystemTime(t0 + 5 * 60_000 - 30_000);
+      expect(await proveIdeGuestTarget(vm(), SECRET)).toBe(target);
+      await vi.waitFor(() => expect(logins).toBe(2));
+      expect(vi.mocked(getVmIps)).toHaveBeenCalledTimes(1);
+
+      // Past the original expiry, the extended entry still serves without a new proof.
+      vi.setSystemTime(t0 + 5 * 60_000 + 60_000);
+      expect(await proveIdeGuestTarget(vm(), SECRET)).toBe(target);
+      expect(logins).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps serving until real expiry when the background re-proof fails, then fails closed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const t0 = new Date('2026-10-19T12:00:00Z').getTime();
+      vi.setSystemTime(t0);
+      vi.mocked(getVmIps).mockResolvedValue({ ip: '127.0.0.1', tailscaleIp: null } as never);
+      const target = await proveIdeGuestTarget(vm(), SECRET);
+
+      // The guest stops answering the proof.
+      server.removeAllListeners('request');
+      server.on('request', (_req, res) => {
+        logins++;
+        res.writeHead(200).end('login');
+      });
+      vi.setSystemTime(t0 + 5 * 60_000 - 30_000);
+      expect(await proveIdeGuestTarget(vm(), SECRET)).toBe(target);
+      await vi.waitFor(() => expect(logins).toBe(2));
+
+      vi.setSystemTime(t0 + 5 * 60_000 + 1);
+      expect(await proveIdeGuestTarget(vm(), SECRET)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('refuses when the guest at the current address cannot prove the secret', async () => {
     vi.mocked(getVmIps).mockResolvedValue({ ip: '127.0.0.1', tailscaleIp: null } as never);
     expect(await proveIdeGuestTarget(vm(), 'a-different-vms-secret')).toBeNull();
