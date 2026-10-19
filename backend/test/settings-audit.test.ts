@@ -139,6 +139,24 @@ describe('admin settings', () => {
   });
 });
 
+describe('notification settings', () => {
+  it('audits what changed about the webhook, email and events, never the URL', async () => {
+    const put = (body: unknown) => call('PUT', '/admin/settings/notifications', body);
+    expect(
+      (await put({ webhookUrl: 'https://hooks.example.com/SECRET-PATH', emailEnabled: true, events: ['vm.error', 'auth.lockout'] }))
+        .status,
+    ).toBe(200);
+    expect(auditEntry('admin.notify_config').detail).toBe('webhook replaced, email on, 2 events');
+    vi.mocked(recordAudit).mockClear();
+    await put({ clearWebhookUrl: true, emailEnabled: false, events: [] });
+    expect(auditEntry('admin.notify_config').detail).toBe('webhook removed, email off, 0 events');
+    vi.mocked(recordAudit).mockClear();
+    await put({ emailEnabled: false, events: ['vm.error'] });
+    expect(auditEntry('admin.notify_config').detail).toBe('webhook kept, email off, 1 event');
+    expect(allAuditText()).not.toContain('SECRET-PATH');
+  });
+});
+
 describe('tenant isolation', () => {
   it('audits isolation settings changes', async () => {
     expect((await call('PUT', '/admin/isolation', { enabled: false })).status).toBe(200);

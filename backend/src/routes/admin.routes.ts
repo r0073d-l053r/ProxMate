@@ -310,7 +310,15 @@ router.put('/settings/notifications', async (req: Request, res: Response) => {
     emailTo: parsed.data.emailTo,
     events: parsed.data.events,
   });
-  await recordAudit({ action: 'admin.notify_config', actor: (req as AuthRequest).user, req });
+  // What changed, never the URL itself (it carries the receiver's token).
+  const webhook = parsed.data.clearWebhookUrl ? 'removed' : url ? 'replaced' : 'kept';
+  const n = parsed.data.events.length;
+  await recordAudit({
+    action: 'admin.notify_config',
+    actor: (req as AuthRequest).user,
+    detail: `webhook ${webhook}, email ${parsed.data.emailEnabled ? 'on' : 'off'}, ${n} event${n === 1 ? '' : 's'}`,
+    req,
+  });
   res.json({ success: true });
 });
 

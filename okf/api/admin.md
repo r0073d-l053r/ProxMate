@@ -33,7 +33,7 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 | POST | `/api/admin/settings/appdb-backup/run` | admin | Run an app-DB backup now; `{ ok, file, pruned }`. Audited `admin.appdb_backup_run`. |
 | PUT | `/api/admin/settings/smtp` | admin | `{ host, port, secure, user?, pass?, from? }`; blank `pass` keeps existing. |
 | POST | `/api/admin/settings/smtp/test` | admin | Verify SMTP. |
-| PUT | `/api/admin/settings/notifications` | admin | `{ webhookUrl?, clearWebhookUrl?, emailEnabled, emailTo?, events }`; a blank `webhookUrl` keeps the stored one, `clearWebhookUrl: true` removes it. Audited `admin.notify_config`. |
+| PUT | `/api/admin/settings/notifications` | admin | `{ webhookUrl?, clearWebhookUrl?, emailEnabled, emailTo?, events }`; a blank `webhookUrl` keeps the stored one, `clearWebhookUrl: true` removes it. Audited `admin.notify_config` with detail `webhook replaced\|removed\|kept, email on\|off, N events` (never the URL). |
 | POST | `/api/admin/settings/notifications/test` | admin | Send a test notification. |
 | PUT | `/api/admin/settings/ide` | admin | IDE policy `{ enabled: off/admin/tenants, allowByoKeys, localModels?, sharedModels?, gatewayUrl?, gatewayKey?, ingressCidr? }`. Audited `admin.ide_config`. |
 | GET | `/api/admin/ide/sources` | admin | Admin's own saved LLM keys (model sources). |
