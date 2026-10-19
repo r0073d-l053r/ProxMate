@@ -2,6 +2,7 @@
 
 import axios, { AxiosError } from "axios";
 import { getCsrfToken, useAuthStore } from "./auth-store";
+import { isSessionLoss } from "./session-loss";
 
 /** Base URL of the ProxMate API (also used for full-page redirects like SSO). */
 export const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api";
@@ -21,11 +22,13 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// On 401, clear auth so guards bounce the user to /login.
+// When the session is gone (401), clear auth so guards bounce the user to /login.
+// A rejected re-auth (e.g. a wrong kiosk-exit PIN) is also a 401 but leaves the
+// session intact, so it is surfaced to the caller without signing out.
 api.interceptors.response.use(
   (res) => res,
   (error: AxiosError) => {
-    if (error.response?.status === 401) {
+    if (isSessionLoss(error.response?.status, error.config?.url, error.response?.data)) {
       useAuthStore.getState().clear();
     }
     return Promise.reject(error);

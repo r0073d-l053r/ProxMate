@@ -48,9 +48,14 @@ export default function LoginPage() {
           }
         })
         .catch(() => {
-          if (active) router.replace("/");
+          // Don't send the cached user back to "/": the dashboard guard would fail
+          // the same way and return here, looping while the API is down. Show the
+          // sign-in form instead.
+          if (active) setReady(true);
         });
-      return;
+      return () => {
+        active = false;
+      };
     }
 
     api

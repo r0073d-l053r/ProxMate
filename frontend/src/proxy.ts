@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { buildConnectSrc } from "@/lib/csp";
 
 /**
  * Per-request nonce CSP (Next 16 "proxy" — formerly middleware).
@@ -13,8 +14,8 @@ import { NextResponse, type NextRequest } from "next/server";
  *  - style-src allows 'unsafe-inline' (React sets inline style= attributes everywhere;
  *    style injection is far lower-risk than script injection).
  *  - connect-src is permissive (or operator-pinned via CSP_CONNECT_SRC) because the
- *    API + console WebSocket can live on a different origin (NEXT_PUBLIC_API_URL),
- *    unknown to this server process.
+ *    API + console WebSocket can live on a different origin (NEXT_PUBLIC_API_URL);
+ *    that origin and its ws/wss twin are always added (see src/lib/csp.ts).
  *  - dev needs 'unsafe-eval' (React debug) + 'unsafe-inline' (Turbopack HMR).
  */
 export function proxy(request: NextRequest) {
@@ -23,9 +24,14 @@ export function proxy(request: NextRequest) {
 
   // Operators behind a known API origin can pin this to e.g.
   // "'self' https://proxmate.example.com wss://proxmate.example.com". A blank/unset
-  // value (e.g. an empty `${CSP_CONNECT_SRC:-}` from compose) falls back to the default.
-  const pinnedConnect = process.env.CSP_CONNECT_SRC?.trim();
-  const connectSrc = pinnedConnect || (isDev ? "'self' https: http: wss: ws:" : "'self' https: wss:");
+  // value (e.g. an empty `${CSP_CONNECT_SRC:-}` from compose) falls back to the default,
+  // which also allows the origin the browser will actually call: NEXT_PUBLIC_API_URL,
+  // with the same fallback `src/lib/api.ts` uses when it is unset.
+  const connectSrc = buildConnectSrc({
+    pinned: process.env.CSP_CONNECT_SRC,
+    apiUrl: process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api",
+    isDev,
+  });
 
   // `upgrade-insecure-requests` rewrites every http:// URL on the page to https://.
   // On an HTTPS deployment that is useful hardening; on a plain-HTTP one it is fatal

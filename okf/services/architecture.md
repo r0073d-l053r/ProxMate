@@ -133,7 +133,7 @@ Next.js App Router under `frontend/src/app/`:
 | `console-popout/[id]` | Pop-out console window |
 
 - `frontend/src/lib/api.ts` uses `withCredentials: true` so the httpOnly session cookie goes with every request.
-- `frontend/src/proxy.ts` (Next 16 "proxy", formerly middleware) sets a per-request nonce CSP; `connect-src` can be pinned with `CSP_CONNECT_SRC`.
+- `frontend/src/proxy.ts` (Next 16 "proxy", formerly middleware) sets a per-request nonce CSP; `connect-src` can be pinned with `CSP_CONNECT_SRC`; unpinned, it adds the `NEXT_PUBLIC_API_URL` origin and its WebSocket origin to a generic default (`src/lib/csp.ts`).
 - `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_SITE_URL` are baked in at build time.[^compose]
 
 # IDE component
