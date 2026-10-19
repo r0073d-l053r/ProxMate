@@ -54,4 +54,14 @@ describe("ResizeDialog memory", () => {
     await waitFor(() => expect(patch).toHaveBeenCalled());
     expect(patch).toHaveBeenCalledWith("/vms/vm1", { ram: 2560 });
   });
+
+  it("shows an awkward size rounded, but keeps the exact value unless the user edits it", async () => {
+    renderDialog(vm({ ram: 1000 }));
+    expect((screen.getByLabelText(/memory/i) as HTMLInputElement).value).toBe("0.98");
+    expect((apply() as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText(/disk/i), { target: { value: "30" } });
+    fireEvent.click(apply());
+    await waitFor(() => expect(patch).toHaveBeenCalled());
+    expect(patch).toHaveBeenCalledWith("/vms/vm1", { storage: 30 });
+  });
 });
