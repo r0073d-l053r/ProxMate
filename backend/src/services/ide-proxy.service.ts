@@ -83,8 +83,14 @@ export function sanitizeGuestResponseHeaders(headers: IncomingHttpHeaders): void
   const set = headers['set-cookie'];
   if (!set) return;
   const kept = set.filter((line) => {
-    const name = (line.split('=', 1)[0] ?? '').trim();
-    return !name.startsWith(PROXMATE_COOKIE_PREFIX) && !name.startsWith(IDE_GUEST_COOKIE);
+    const pair = line.split(';', 1)[0] ?? '';
+    const name = (pair.split('=', 1)[0] ?? '').trim();
+    // Browsers differ on nameless cookies (`=a=b` can be stored as cookie `a`),
+    // so drop any without a name, and judge the rest by the pair with leading
+    // '=' and whitespace removed as well as by the parsed name.
+    if (!name) return false;
+    const bare = pair.replace(/^[\s=]+/, '');
+    return ![name, bare].some((s) => s.startsWith(PROXMATE_COOKIE_PREFIX) || s.startsWith(IDE_GUEST_COOKIE));
   });
   if (kept.length) headers['set-cookie'] = kept;
   else delete headers['set-cookie'];

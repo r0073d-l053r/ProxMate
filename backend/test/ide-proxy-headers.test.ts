@@ -21,7 +21,7 @@ vi.mock('../src/services/ide-guest-auth.service.js', async (orig) => ({
 import { verifyToken } from '../src/services/auth.service.js';
 import { getVmWithCap } from '../src/services/vm.service.js';
 import { getIdeCapability } from '../src/services/ide.service.js';
-import { mountIdeProxy, handleIdeUpgrade } from '../src/services/ide-proxy.service.js';
+import { mountIdeProxy, handleIdeUpgrade, sanitizeGuestResponseHeaders } from '../src/services/ide-proxy.service.js';
 
 /** Upstream response headers a guest could send back. */
 const GUEST_RESPONSE_HEADERS = {
@@ -155,6 +155,23 @@ describe('IDE proxy — WebSocket upgrade headers', () => {
     const setCookies = ([] as string[]).concat(res.headers['set-cookie'] ?? []);
     expect(setCookies.some((c) => c.startsWith('proxmate_') || c.startsWith('code-server-session'))).toBe(false);
     expect(res.headers['service-worker-allowed']).toBeUndefined();
+  });
+});
+
+describe('sanitizeGuestResponseHeaders — Set-Cookie name edge cases', () => {
+  it('drops nameless cookies and ProxMate / code-server names hidden behind "=" or whitespace', () => {
+    const headers = {
+      'set-cookie': [
+        '=proxmate_session=planted; Path=/',
+        ' =\tproxmate_csrf=planted',
+        '==code-server-session=x',
+        '=just-a-value',
+        '  proxmate_sso=planted',
+        'editor_pref=dark; Path=/',
+      ],
+    };
+    sanitizeGuestResponseHeaders(headers);
+    expect(headers['set-cookie']).toEqual(['editor_pref=dark; Path=/']);
   });
 });
 
