@@ -7,6 +7,7 @@ import {
   migratableTargets,
   migratePreflight,
   describeMigrateRefusal,
+  MIGRATE_REFUSAL_UNSPECIFIED,
   getPlacementDiagnostics,
   getNodeImagesStorages,
   getVolumeStorages,
@@ -310,6 +311,46 @@ describe('migratePreflight — surfacing WHY a node was refused', () => {
     const c = fakeClient();
     c.get.mockRejectedValue(new Error('boom'));
     expect(await migratePreflight('pve-0', 100, asClient(c))).toBeNull();
+  });
+
+  // Regression: Proxmox lists EVERY other node in not_allowed_nodes and fills in a
+  // cause only where there is one, so a live cluster answers with the same nodes in
+  // both lists. Reporting those as refusals told an admin that every destination was
+  // forbidden while the same nodes were being offered as targets.
+  it('does not report a node as blocked when it has no cause and is in allowed_nodes', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue({
+      data: {
+        data: {
+          allowed_nodes: ['pve-4', 'pve-1', 'pve-0', 'pve-3', 'pve-2'],
+          not_allowed_nodes: {
+            'pve-3': {},
+            'pve-2': {},
+            'pve-1': {},
+            'pve-4': {},
+            'pve-0': {},
+            pve: { unavailable_storages: ['tank-files'] },
+          },
+        },
+      },
+    });
+    const pre = await migratePreflight('pve-5', 106, asClient(c));
+    expect(pre!.allowed).toEqual(['pve-4', 'pve-1', 'pve-0', 'pve-3', 'pve-2']);
+    // Only the node with a real cause survives, and it is one that is NOT allowed.
+    expect(pre!.blocked).toEqual([
+      { node: 'pve', reason: 'storage not available there: tank-files' },
+    ]);
+    for (const b of pre!.blocked) expect(pre!.allowed).not.toContain(b.node);
+  });
+
+  it('still reports a causeless refusal when the node is absent from allowed_nodes', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValue({
+      data: { data: { allowed_nodes: ['pve-1'], not_allowed_nodes: { 'pve-2': {} } } },
+    });
+    const pre = await migratePreflight('pve-0', 100, asClient(c));
+    // No cause given, but Proxmox did not allow it either — the admin still needs telling.
+    expect(pre!.blocked).toEqual([{ node: 'pve-2', reason: MIGRATE_REFUSAL_UNSPECIFIED }]);
   });
 });
 

@@ -1717,12 +1717,20 @@ export async function migratePreflight(
     }>(`/nodes/${node}/qemu/${vmid}/migrate`);
     const d = r.data.data ?? {};
 
+    let allowed = d.allowed_nodes ?? [];
+
+    // Proxmox returns BOTH an allow list and a map that mentions every OTHER node,
+    // filling in a cause only where there is one — so `{'pve-3': {}}` arriving
+    // alongside `allowed_nodes: ['pve-3']` is not a refusal, just a node being
+    // listed. Pushing those anyway reported every possible destination as forbidden
+    // while the very same nodes were being offered as targets.
+    const allowedNodes = new Set(allowed);
     const blocked: MigrateBlocker[] = [];
     for (const [name, raw] of Object.entries(d.not_allowed_nodes ?? {})) {
-      blocked.push({ node: name, reason: describeMigrateRefusal(raw) });
+      const reason = describeMigrateRefusal(raw);
+      if (reason === MIGRATE_REFUSAL_UNSPECIFIED && allowedNodes.has(name)) continue;
+      blocked.push({ node: name, reason });
     }
-
-    let allowed = d.allowed_nodes ?? [];
 
     // ── ProxMate's own guardrails, on top of Proxmox's ────────────────────────
     // Proxmox permits both of the migrations below. Both break the guest.
@@ -1802,6 +1810,13 @@ export async function migratePreflight(
   }
 }
 
+/**
+ * Reason text used when Proxmox refuses a node without naming a cause. It doubles
+ * as the "no cause given" marker for {@link migratePreflight}, which must not treat
+ * such an entry as a refusal while the node sits in `allowed_nodes`.
+ */
+export const MIGRATE_REFUSAL_UNSPECIFIED = 'not permitted by Proxmox';
+
 /** Turn one `not_allowed_nodes` entry into a human sentence. */
 export function describeMigrateRefusal(raw: unknown): string {
   if (typeof raw === 'string' && raw.trim()) return raw.trim();
@@ -1818,7 +1833,7 @@ export function describeMigrateRefusal(raw: unknown): string {
     }
     if (parts.length > 0) return parts.join('; ');
   }
-  return 'not permitted by Proxmox';
+  return MIGRATE_REFUSAL_UNSPECIFIED;
 }
 
 /**
