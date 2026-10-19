@@ -402,7 +402,14 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
   const { vm: current, synced } = await syncVmNodeChecked(vm);
   const client = await pve.getClient();
   const identity = await guestIdentity(current, client);
-  if (identity === 'ours') return current;
+  if (identity === 'ours') {
+    // An admin's repair: lift a restore's over-quota hold once the row fits again
+    // (e.g. after the admin raised the owner's quota).
+    if (await withQuotaLock(current.userId, () => liftQuotaHoldIfFits(current.id))) {
+      return (await prisma.virtualMachine.findUnique({ where: { id: current.id } })) ?? current;
+    }
+    return current;
+  }
   if (identity === 'absent') {
     throw new AdoptError(
       synced ? 'There is no Proxmox guest at this VMID to adopt.' : "Couldn't reach the cluster to find this guest — try again.",
@@ -1665,15 +1672,87 @@ async function growthViolations(
   }
 }
 
+export interface RestoreReservation {
+  /** The row's sizes before the reservation, put back if the restore never starts. */
+  previous: { cpu: number; ram: number; storage: number };
+}
+
 /**
- * Refuse to restore or roll a guest back to a config that would grow it past its
- * owner's quota. `cfg` is the config the guest will have afterwards (the archive's
- * or the snapshot's).
+ * Reserve, under the owner's quota lock, what a restore or rollback to `cfg` (the
+ * config the guest will have afterwards — the archive's or the snapshot's) will
+ * use: refused with a QuotaError when it would grow the guest past the owner's
+ * quota, otherwise the row is grown to the larger of each size right away. A
+ * restore takes minutes; recording the growth up front means a create or resize
+ * for the same owner in the meantime is judged against it, not against the old
+ * size. syncRestoredGuest later writes what the guest really ended up with.
  */
-export async function assertRestoreWithinQuota(vm: VirtualMachine, cfg: Record<string, string>): Promise<void> {
-  const sizes = guestConfigSizes(cfg, kindOf(vm));
-  const violations = await growthViolations(vm, { cpu: sizes.cpu ?? vm.cpu, ram: sizes.ram, storage: sizes.storage });
-  if (Object.keys(violations).length > 0) throw new QuotaError(violations);
+export async function reserveRestoreGrowth(
+  vm: VirtualMachine,
+  cfg: Record<string, string>,
+): Promise<RestoreReservation> {
+  return withQuotaLock(vm.userId, async () => {
+    const row = (await prisma.virtualMachine.findUnique({ where: { id: vm.id } })) ?? vm;
+    const sizes = guestConfigSizes(cfg, kindOf(row));
+    const target = { cpu: sizes.cpu ?? row.cpu, ram: sizes.ram, storage: sizes.storage };
+    const violations = await growthViolations(row, target);
+    if (Object.keys(violations).length > 0) throw new QuotaError(violations);
+    const previous = { cpu: row.cpu, ram: row.ram, storage: row.storage };
+    await prisma.virtualMachine.update({
+      where: { id: row.id },
+      data: {
+        cpu: Math.max(row.cpu, target.cpu),
+        ram: Math.max(row.ram, target.ram),
+        storage: Math.max(row.storage, target.storage),
+      },
+    });
+    return { previous };
+  });
+}
+
+/** Undo a reservation for a restore whose task never started (the guest is unchanged). */
+export async function releaseRestoreReservation(vm: VirtualMachine, r: RestoreReservation): Promise<void> {
+  await withQuotaLock(vm.userId, () =>
+    prisma.virtualMachine.update({ where: { id: vm.id }, data: r.previous }),
+  );
+}
+
+/** statusMessage of a row a restore left over its owner's storage quota. */
+export const QUOTA_HOLD_MESSAGE =
+  "After the restore this machine's disks exceed the owner's storage quota, so it can't be started. " +
+  'Remove a data disk (or ask an admin to raise the quota), then start it again — or delete it.';
+
+/** statusMessage of a row whose restore or rollback did not finish. */
+export const RESTORE_FAILED_MESSAGE =
+  "A restore or rollback of this machine didn't finish, so it can't be started. " +
+  'Restore a backup again, rebuild it, or delete it.';
+
+/**
+ * Put a row into `error` with an explanation: its guest may not run until a
+ * repair path has re-checked it (see requireOurGuest).
+ */
+export async function holdErroredRow(vm: VirtualMachine, message: string): Promise<void> {
+  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'error', statusMessage: message } });
+}
+
+/**
+ * Lift a restore's over-quota hold once the row fits the owner's quota again (a
+ * data disk was removed, or an admin raised the quota). Call under the owner's
+ * quota lock. Returns whether the hold was lifted.
+ */
+export async function liftQuotaHoldIfFits(vmId: string): Promise<boolean> {
+  const row = await prisma.virtualMachine.findUnique({ where: { id: vmId } });
+  if (!row || row.status !== 'error' || row.statusMessage !== QUOTA_HOLD_MESSAGE) return false;
+  const owner = await prisma.user.findUnique({ where: { id: row.userId } });
+  if (owner) {
+    try {
+      await assertResizeWithinQuota(owner, row, { cpu: row.cpu, ram: row.ram, storage: row.storage });
+    } catch (err) {
+      if (err instanceof QuotaError) return false;
+      throw err;
+    }
+  }
+  await prisma.virtualMachine.update({ where: { id: vmId }, data: { status: 'stopped', statusMessage: null } });
+  return true;
 }
 
 /**
@@ -1741,7 +1820,12 @@ export async function syncRestoredGuest(
         ...(kind === 'qemu' ? { hasPassthrough: pciLines(cfg).length > 0 } : {}),
       },
     });
-    if (violations['storage']) throw new QuotaError({ storage: violations['storage'] });
+    if (violations['storage']) {
+      // Disks can't shrink: record what is really there, and keep the guest from
+      // running until the owner is back within quota.
+      await holdErroredRow(updated, QUOTA_HOLD_MESSAGE);
+      throw new QuotaError({ storage: violations['storage'] });
+    }
     return updated;
   });
 }
