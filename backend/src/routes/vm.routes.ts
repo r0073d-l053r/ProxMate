@@ -477,11 +477,11 @@ router.post('/bulk', async (req: Request, res: Response) => {
       return { id, ok: false, error: pveMessage(err) };
     }
   };
-  // A stop waits for each guest to go down (bounded per guest), so stops run side by
-  // side: one after another, a handful of slow guests would outlast a reverse proxy's
-  // request timeout. The other actions keep their one-at-a-time order.
+  // Start, stop and restart each wait for their guest's task (bounded per guest), so
+  // they run side by side: one after another, a handful of slow guests would outlast
+  // a reverse proxy's request timeout. Deletes keep their one-at-a-time order.
   const results: Array<{ id: string; ok: boolean; error?: string }> = [];
-  if (action === 'stop') results.push(...(await Promise.all(ids.map(one))));
+  if (action !== 'delete') results.push(...(await Promise.all(ids.map(one))));
   else for (const id of ids) results.push(await one(id));
   const ok = results.filter((r) => r.ok).length;
   await recordAudit({

@@ -20,13 +20,15 @@ vi.mock('../src/services/proxmox.service.js', async () => {
     getVmConfig: vi.fn(),
     stopVm: vi.fn(),
     shutdownVm: vi.fn(),
+    startVm: vi.fn(),
+    rebootVm: vi.fn(),
     waitForTask: vi.fn(),
   };
 });
 
 import { prisma } from '../src/lib/prisma.js';
 import * as pve from '../src/services/proxmox.service.js';
-import { stopVm } from '../src/services/vm.service.js';
+import { stopVm, startVm, restartVm } from '../src/services/vm.service.js';
 
 const ROW_ID = 'cmtest00000000000000000a';
 const row = () =>
@@ -148,5 +150,43 @@ describe('stopVm — the task outcome decides, not the request', () => {
     for (const call of update.mock.calls) {
       expect((call[0] as { data?: { status?: string } }).data?.status).not.toBe('stopped');
     }
+  });
+});
+
+describe('startVm and restartVm — the task outcome decides too', () => {
+  const statuses = () => update.mock.calls.map((c) => (c[0] as { data?: { status?: string } }).data?.status);
+
+  it('marks the guest running only after the start task finished', async () => {
+    vi.mocked(pve.startVm).mockResolvedValue('UPID:pve-3:start');
+    vi.mocked(pve.waitForTask).mockResolvedValue(undefined);
+
+    await expect(startVm(row())).resolves.toBeUndefined();
+
+    expect(pve.waitForTask).toHaveBeenCalledWith('pve-3', 'UPID:pve-3:start', undefined, expect.any(Number));
+    expect(statuses()).toContain('running');
+  });
+
+  it('reports a failed start and writes nothing', async () => {
+    vi.mocked(pve.startVm).mockResolvedValue('UPID:pve-3:start');
+    vi.mocked(pve.waitForTask).mockRejectedValue(new Error('Proxmox task failed: storage not available'));
+
+    await expect(startVm(row())).rejects.toThrow(/storage not available/);
+    expect(statuses()).not.toContain('running');
+  });
+
+  it('turns a restart that outlives our deadline into advice, and writes nothing', async () => {
+    vi.mocked(pve.rebootVm).mockResolvedValue('UPID:pve-3:reboot');
+    vi.mocked(pve.waitForTask).mockRejectedValue(new Error('Proxmox task timed out'));
+
+    await expect(restartVm(row())).rejects.toThrow(/has not restarted yet.*stop it forcibly/);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed reboot instead of claiming the guest restarted', async () => {
+    vi.mocked(pve.rebootVm).mockResolvedValue('UPID:pve-3:reboot');
+    vi.mocked(pve.waitForTask).mockRejectedValue(new Error('Proxmox task failed: VM quit/powerdown failed - got timeout'));
+
+    await expect(restartVm(row())).rejects.toThrow(/powerdown failed/);
+    expect(update).not.toHaveBeenCalled();
   });
 });

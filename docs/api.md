@@ -88,10 +88,11 @@ curl -H "$AUTH" -H 'content-type: application/json' -X POST \
 
 ## Responses worth knowing
 
-- **Stop** (`POST /vms/:id/stop`) waits up to 45 seconds for Proxmox to confirm the guest
-  is down, then answers `{ success, status: "stopped", forced }`. A graceful stop the guest
-  ignores answers **502** with an error asking you to wait or stop it forcibly
-  (`?force=true`).
+- **Start, stop and restart** wait up to 45 seconds for Proxmox to confirm the task
+  finished before answering (stop answers `{ success, status: "stopped", forced }`). A
+  task Proxmox reports as failed answers **502** with its message. A graceful stop or
+  restart the guest ignores answers **502** with an error asking you to wait or stop it
+  forcibly (`?force=true`).
 - **Migration targets** (`GET /vms/:id/migrate-targets`) answers
   `{ current, targets, blockers, localDisks }`: `targets` are the online nodes Proxmox
   allows, `blockers` is a list of `{ node, reason }` for the nodes it can't move to (`node`

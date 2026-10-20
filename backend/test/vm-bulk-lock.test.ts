@@ -109,6 +109,19 @@ describe('POST /api/vms/bulk', () => {
     expect(maxInFlight).toBe(2);
   });
 
+  it('restarts several VMs side by side too', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    vi.mocked(vmService.restartVm).mockImplementation(async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 30));
+      inFlight--;
+    });
+    await post('/vms/bulk', { action: 'restart', ids: ['ready', 'ready2'] });
+    expect(maxInFlight).toBe(2);
+  });
+
   it('still starts a locked VM, as the single-VM start route does', async () => {
     await post('/vms/bulk', { action: 'start', ids: ['deploying'] });
     expect(vmService.startVm).toHaveBeenCalledTimes(1);

@@ -180,7 +180,8 @@ See [cloud-init config](/config/cloud-init.md).
 - Start/shutdown/stop/reboot: `POST /nodes/{node}/{kind}/{vmid}/status/<action>`. ProxMate `stopVm`
   with `force=false` calls `shutdown`; `force=true` calls `stop`; either way it waits up to 45 s for
   the returned task and records `stopped` only when the task succeeds (a graceful stop still running
-  at the deadline is reported to the user with a hint to force it). Pause/resume are QEMU-only
+  at the deadline is reported to the user with a hint to force it). Start and reboot wait for their
+  task the same way and record `running` only on success. Pause/resume are QEMU-only
   (`suspend`/`resume`). Every power-on path (start, reboot, resume, rescue enter/exit) calls
   `assertOwnerAccessActive` before powering on (the owner's compute access window, not the caller's). All power actions run `syncVmNode` first, which re-reads
   `/cluster/resources` and updates `proxmoxNode` if the guest moved.[^vm]
