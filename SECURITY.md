@@ -234,8 +234,8 @@ Security fixes go into the latest release line. Upgrade to it before reporting.
 
 | Version | Security fixes |
 |---|---|
-| 1.1.x | ✅ |
-| 1.0.x and earlier | ❌ — upgrade to 1.1.x |
+| 1.2.x | ✅ |
+| 1.1.x and earlier | ❌ — upgrade to 1.2.x |
 
 Please **don't open a public issue** for a security problem. Report it privately from the
 repository's **Security** tab → **Report a vulnerability** (GitHub private vulnerability

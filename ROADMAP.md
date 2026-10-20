@@ -14,10 +14,9 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 ### Still open from v1.0.0 verification
 
-- **Verify the least-privilege token on a live cluster.** `deploy/proxmox-token.sh` and the
-  connection test now cover every privilege ProxMate's code uses. Still to confirm on real Proxmox
-  VE 8 and 9 nodes: the PVE 9 guest-agent privileges for password apply and command exec, whether
-  `cicustom` snippets need `Datastore.Allocate`, the `download-url` check, and non-root restores.
+- **Verify the least-privilege role on Proxmox VE 8.** `deploy/proxmox-token.sh` was run end to end
+  on a Proxmox VE 9.2 cluster with every feature passing. The PVE 8 variant (`VM.Monitor` instead of
+  the `VM.GuestAgent.*` privileges) has not been run on real hardware yet.
 
 ### Placement & reliability
 
@@ -112,6 +111,11 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 
 Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
 
+- **v1.2.0 — sharing, placement and least privilege.** Share a VM with someone before they sign
+  up (pending shares, claimed only by a confirmed address); template deploys on shared storage
+  spread across nodes, respecting the cloud-init snippet storage; `deploy/proxmox-token.sh` for a
+  least-privilege Proxmox token, verified on a 7-node PVE 9.2 cluster, and a connection test that
+  checks every privilege ProxMate uses; start and restart wait for Proxmox like stop.
 - **v1.1.1 — follow-up.** Personal API tokens of an account whose access window has ended answer
   `403 access_expired`; Compose forwards `ALERT_COOLDOWN_MIN` and the public-token rate-limit
   settings; non-numeric `PORT` / `RESTORE_UPLOAD_MAX_GB` fall back to defaults; the access-expiry

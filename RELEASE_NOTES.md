@@ -1,6 +1,26 @@
-ProxMate 1.1.1 is a small follow-up to 1.1.0. **Coming from 1.0.x?** Read the 1.1.0 notes below first: they include the upgrade steps.
+ProxMate 1.2.0 adds sharing with people who haven't signed up yet, spreads template deploys across the cluster, and ships a least-privilege Proxmox token. **Coming from 1.0.x?** Read the 1.1.0 notes below first: they include the upgrade steps.
 
-## Changes in 1.1.1
+## New in 1.2.0
+
+- **Share a VM before someone signs up.** Sharing with an address that has no account keeps a pending share. It starts when an account is created with that address and the address is confirmed: registration through an invite sent to that address, or SSO sign-up with an email the identity provider verified. A self-typed address on an open invite never picks it up. Pending and live shares look the same in the owner's list, so sharing still doesn't reveal who has an account, and either kind can be revoked. A pending share doesn't invite anyone: send an invite to the same address. A VM can hold up to 100 shares.
+- **Template deploys spread across the cluster.** A deploy that is a full clone, with the template's disks and the destination storage on shared storage (Ceph, NFS), goes to the node with the most free capacity instead of the template's node. It only picks nodes that can serve the deploy's cloud-init snippet. Linked clones and anything on node-local storage stay on the template's node as before.
+- **Least-privilege Proxmox token.** `deploy/proxmox-token.sh` creates a `proxmate@pve` user, a `ProxMate` role holding only the privileges ProxMate uses, and a privilege-separated token. It picks the guest-agent privileges for your Proxmox release and can be re-run safely. It was run end to end on a 7-node Proxmox VE 9.2 cluster with every feature working through it. See DEPLOYMENT.md §2.2.
+- **Connection test checks every privilege.** It now warns about each privilege ProxMate uses, including backups, migration, the cluster firewall and the guest-agent privileges that changed in Proxmox VE 9.
+
+## Fixes in 1.2.0
+
+- **Start and restart report what Proxmox did.** Like stop in 1.1.0, they wait up to 45 seconds for Proxmox to confirm the task. A failed start now returns its error instead of marking the VM running, and a restart the guest ignores returns advice to wait or stop it forcibly. Bulk start, stop and restart run side by side.
+
+## Upgrading from 1.1.x
+
+No configuration changes are needed. A database migration adds the pending-shares table on first start.
+
+- Admins using a narrower Proxmox token than root or Administrator may see new connection-test warnings: each names a privilege a feature needs. Re-run `deploy/proxmox-token.sh`, or grant the named privileges.
+- On clusters with shared VM storage, new template deploys may land on a different node from the template.
+
+---
+
+## 1.1.1
 
 - **API tokens and ended access.** A personal API token whose owner's compute access window has ended now answers **403** with `code: "access_expired"`, the same as a browser session. It used to answer 401, which looked like a bad token. Unknown, revoked or expired tokens still answer 401.
 - **Docker Compose settings.** `ALERT_COOLDOWN_MIN`, `PUBLIC_TOKEN_RATE_LIMIT_MAX` and `PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS` are now passed through to the backend, so setting them in `.env` takes effect.
