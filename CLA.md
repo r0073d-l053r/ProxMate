@@ -13,7 +13,7 @@ following with respect to all past and future contributions you submit:
    including modifications or additions, that you intentionally submit to the
    project (for example, via pull request or patch).
 
-2. **Copyright license.** You grant Brandon Jewell ("the Maintainer") and
+2. **Copyright license.** You grant Jewell Net LLC ("the Maintainer") and
    recipients of software distributed by the Maintainer a perpetual, worldwide,
    non-exclusive, royalty-free, irrevocable copyright license to reproduce,
    prepare derivative works of, publicly display, sublicense, and distribute your

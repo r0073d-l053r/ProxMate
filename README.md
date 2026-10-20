@@ -314,7 +314,7 @@ Questions, ideas, or a homelab to show off? Join the
 
 ## License
 
-Copyright © 2026 Brandon Jewell.
+Copyright © 2026 Jewell Net LLC.
 
 ProxMate is **open core**:
 
@@ -324,7 +324,7 @@ ProxMate is **open core**:
   under a separate [commercial license](./COMMERCIAL-LICENSE.md).
 
 See [LICENSING.md](./LICENSING.md) for the full picture, including dual-licensing
-options for businesses. "ProxMate" is a trademark of Brandon Jewell.
+options for businesses. "ProxMate" is a trademark of Jewell Net LLC.
 
 ---
 

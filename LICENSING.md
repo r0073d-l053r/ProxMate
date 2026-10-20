@@ -10,9 +10,9 @@ This page explains, in plain language, who can use what.
 
 ## Copyright
 
-Copyright © 2026 Brandon Jewell. All rights reserved.
+Copyright © 2026 Jewell Net LLC. All rights reserved.
 
-"ProxMate" and the ProxMate logo are trademarks of Brandon Jewell and are **not**
+"ProxMate" and the ProxMate logo are trademarks of Jewell Net LLC and are **not**
 licensed under the open-source license below — see *Trademark* at the bottom.
 
 ---
@@ -53,7 +53,7 @@ basics.
 
 ## Dual licensing for businesses
 
-Because the author holds the copyright to the Community Edition, it can also be
+Because Jewell Net LLC holds the copyright to the Community Edition, it can also be
 offered under a **separate commercial license** if the AGPL's source-sharing
 obligation does not fit your organization. Contact **licensing@proxmate.host**.
 
