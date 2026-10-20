@@ -56,6 +56,8 @@ function fakeCluster(opts: {
   resourcesFail?: boolean;
   /** Storage id → the only nodes it is available on, as /cluster/resources reports it. */
   storageNodes?: Record<string, string[]>;
+  /** Nodes holding a hand-placed `local:snippets/proxmate-docker.yaml`. */
+  handPlacedSnippetOn?: string[];
 }) {
   const c = fakeClient();
   const ok = (data: unknown) => Promise.resolve({ data: { data } });
@@ -76,6 +78,11 @@ function fakeCluster(opts: {
           nodes.map((node) => ({ type: 'storage', storage, node, status: 'available', maxdisk: 10 * GB, disk: GB })),
         ),
       ]);
+    }
+    const snippetList = /^\/nodes\/([^/]+)\/storage\/local\/content\?content=snippets$/.exec(url);
+    if (snippetList) {
+      const held = (opts.handPlacedSnippetOn ?? []).includes(snippetList[1]!);
+      return ok(held ? [{ volid: 'local:snippets/proxmate-docker.yaml' }] : []);
     }
     if (/\/nodes\/[^/]+\/storage$/.test(url)) {
       return ok(pools.map((storage) => ({ storage, type: 'rbd', active: 1, shared: opts.storages[storage] ? 1 : 0 })));
@@ -175,6 +182,8 @@ describe('deployFromTemplate placement', () => {
       storageNodes: { snippets: [HOME] }, // the idle node cannot serve the vendor snippet
     });
     getClient.mockResolvedValue(asClient(c));
+    // On-demand snippets: both the writable dir and the storage id are set.
+    vi.stubEnv('SNIPPET_DIR', '/nonexistent-snippet-dir');
     vi.stubEnv('SNIPPET_STORAGE', 'snippets');
 
     await deployFromTemplate(user, template(), input);
@@ -192,6 +201,8 @@ describe('deployFromTemplate placement', () => {
       storageNodes: { snippets: [HOME, IDLE] },
     });
     getClient.mockResolvedValue(asClient(c));
+    // On-demand snippets: both the writable dir and the storage id are set.
+    vi.stubEnv('SNIPPET_DIR', '/nonexistent-snippet-dir');
     vi.stubEnv('SNIPPET_STORAGE', 'snippets');
 
     await deployFromTemplate(user, template(), input);
@@ -225,5 +236,32 @@ describe('volumeStoragesOf', () => {
         scsi1: 'tank:vm-1-disk-2,size=1G',
       }).sort(),
     ).toEqual(['ceph', 'tank']);
+  });
+});
+
+describe('deployFromTemplate placement with hand-placed snippets', () => {
+  it('keeps a deploy that asked for an extra on a node that holds that snippet file', async () => {
+    configuredAs({ default_storage: 'ceph-vm' });
+    const c = fakeCluster({
+      templateDisks: ['ceph-vm', 'ceph-vm'],
+      storages: { 'ceph-vm': true },
+      handPlacedSnippetOn: [HOME], // only the busy node has proxmate-docker.yaml
+    });
+    getClient.mockResolvedValue(asClient(c));
+
+    await deployFromTemplate(user, template(), { ...input, features: ['docker'] } as never);
+
+    expect(bodyOf(cloneCall(c))['target']).toBeUndefined();
+    expect(rowNode()).toBe(HOME);
+  });
+
+  it('spreads a deploy that asked for no extras, since it needs no snippet', async () => {
+    configuredAs({ default_storage: 'ceph-vm' });
+    const c = fakeCluster({ templateDisks: ['ceph-vm', 'ceph-vm'], storages: { 'ceph-vm': true }, handPlacedSnippetOn: [HOME] });
+    getClient.mockResolvedValue(asClient(c));
+
+    await deployFromTemplate(user, template(), input);
+
+    expect(rowNode()).toBe(IDLE);
   });
 });
