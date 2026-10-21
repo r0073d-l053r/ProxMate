@@ -34,6 +34,13 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
   tenant AI keys, and TOTP secrets in one stroke. The docs runbook pairs key backup with DB backups
   explicitly; still open: an admin Settings warning that persists until the key is confirmed backed
   up.
+- **Pool-scoped Proxmox token (optional).** The `ProxMate` role is granted on `/`, because placement,
+  migration and the balancer work across every node, so the per-guest boundary today is ProxMate's
+  ownership-tag check rather than a Proxmox permission. Offer a mode where the role is granted on a
+  Proxmox resource pool instead: ProxMate puts every guest it creates, clones or restores into that
+  pool, and Proxmox itself denies the token any guest outside it. Needs the node, storage and SDN
+  paths the role still requires outside the pool worked out, a connection-test check that the pool
+  exists, and `deploy/proxmox-token.sh` support.
 - **Production validation passes.** The shipped OIDC SSO flow and the full 2FA/passkey matrix
   (TOTP, recovery codes, passkeys, invite-enforced 2FA) each need a documented end-to-end QA pass
   on a live deployment.
