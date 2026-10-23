@@ -18,6 +18,7 @@ The backend REST/WebSocket surface: one concept per Express router.
 * [IDE router](ide.md) - Session-authed ProxMate IDE endpoints (capability, gateway-token minting, in-guest provisioning, AVX relocation, BYO AI keys) under /api/ide.
 * [Invite router](invite.md) - Admin-only creation, emailing, listing and revocation of registration invite tokens, mounted at /api/invites.
 * [Passthrough request router](passthrough-request.md) - Tenant endpoints to request GPU/PCI passthrough for a VM and list their own requests, mounted at /api/passthrough-requests.
+* [Project router](project.md) - Tenant and admin Projects view (VMs grouped by a project tag with allocation and usage rollups) and moving VMs into or out of a project, mounted at /api/projects.
 * [Proxmox introspection router](proxmox.md) - Read-only cluster introspection (resources, nodes, ISOs, storage) for any signed-in user, mounted at /api/proxmox.
 * [Quota request router](quota-request.md) - Tenant endpoints to ask an admin for a higher CPU/RAM/storage quota and list their own requests, mounted at /api/quota-requests.
 * [Setup wizard router](setup.md) - Unauthenticated first-run wizard (create admin, Proxmox connection, defaults, finalize) that locks itself once setup_complete is set, mounted at /api/setup.

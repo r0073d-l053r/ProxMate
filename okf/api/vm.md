@@ -47,7 +47,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | GET | `/api/vms/:id/metrics` | viewable | RRD history `?timeframe=hour/day/week/month/year` (default hour). |
 | GET | `/api/vms/:id/passthrough` | viewable | Attached `hostpciN` devices (empty for LXC). |
 | GET | `/api/vms/:id/activity` | viewable | Last 20 audit entries for the VM (no IPs/actor ids; non-admins do not see admin actions except by the owner). |
-| PATCH | `/api/vms/:id` | `configure` | Notes, rename (pushed to Proxmox), tags, resize cpu/ram/storage. Audited `vm.update` / `vm.resize`. |
+| PATCH | `/api/vms/:id` | `configure` | Notes, rename (pushed to Proxmox), tags, resize cpu/ram/storage. `tags` are the plain labels: the VM's `project:` tag is kept (set it via the [project router](/api/project.md)). Audited `vm.update` / `vm.resize`. |
 | GET | `/api/vms/:id/schedule` | viewable | `{ startCron, stopCron }`. |
 | PUT | `/api/vms/:id/schedule` | `configure` | Set power schedule (nullable crons). Audited `vm.schedule`. |
 | GET | `/api/vms/:id/backup-policy` | viewable | `{ backupCron, backupKeep }`. |

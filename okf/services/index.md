@@ -39,6 +39,7 @@ The service layer under backend/src/services.
 * [Password-reset service](password-reset.md) - Forgot-password flow that emails a single-use one-hour reset link when SMTP is on, or queues a request for an admin otherwise, without revealing whether the email exists.
 * [Power-schedule service (auto start/stop and cron evaluator)](power-schedule.md) - Minimal 5-field cron evaluator plus the per-minute tick that auto-starts and gracefully stops VMs whose `startCron`/`stopCron` fires.
 * [Proxmox service](proxmox.md) - The single Proxmox VE REST client and every guest, storage, network, backup, firewall and cluster operation built on it.
+* [Project service (project tags and rollups)](project.md) - Treats a `project:<name>` VM tag as the VM's project, builds the scoped Projects view with allocation and usage rollups from the DB alone, and moves owned VMs between projects.
 * [Quota-request service](quota-request.md) - Tenant requests for higher absolute CPU/RAM/storage caps and the admin approve/deny queue that applies them.
 * [Resource-history service (per-tenant usage samples)](resource-history.md) - Samples every running managed VM's CPU and memory every 5 minutes into ResourceSample, prunes a rolling window, and aggregates usage per owner for the admin usage view.
 * [Restore-upload service (restore a guest from an uploaded vzdump)](restore-upload.md) - Restores a tenant-uploaded vzdump archive, written into the mounted backup share, as a brand-new quota-checked and isolated guest, then deletes the archive.

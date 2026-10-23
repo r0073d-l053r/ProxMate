@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-10-23
+* **Creation**: Documented Projects: the [project router](/api/project.md) and [project service](/services/project.md), and the `project:` tag on [VirtualMachine](/database/virtual-machine.md).
+
 ## 2026-10-20
 * **Update**: Documented [pending shares](/database/pending-vm-share.md), template deploy placement, start/restart waiting for the Proxmox task, and the least-privilege token in [privileges](/proxmox/privileges.md), with what a live Proxmox VE 9.2 cluster proved.
 

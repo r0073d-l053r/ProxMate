@@ -64,7 +64,7 @@ Maps a ProxMate VM id to a Proxmox guest (`proxmoxVmId` on `proxmoxNode`) and ow
 | pendingCiPassword | String? | | AES-256-GCM encrypted tenant login password, held only until the guest agent applies it, then nulled. |
 | quotaExempt | Boolean | `@default(false)` | Admin grant excluded from quota usage. |
 | adminManaged | Boolean | `@default(false)` | Admin deployed it for the tenant; tenant may operate but not resize. |
-| tags | String? | | Lowercase, trimmed, deduped CSV.[^vm-svc] |
+| tags | String? | | Lowercase, trimmed, deduped CSV. At most one `project:<name>` entry is the VM's project (see the [project service](/services/project.md)).[^vm-svc] |
 | startCron | String? | | 5-field cron (server TZ) for auto-start. |
 | stopCron | String? | | 5-field cron for graceful auto-shutdown. |
 | backupCron | String? | | Per-VM backup cron; null = cluster-wide weekly default. |
