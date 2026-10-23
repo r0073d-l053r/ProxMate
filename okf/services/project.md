@@ -25,6 +25,7 @@ Groups VMs by project without a new table: the project is one entry in `VirtualM
 | `rollupProject` | Pure. Totals vCPU/RAM/disk, counts `status === 'running'`, and folds per-VM usage: `avgCpuPct` is the sample-weighted mean CPU fraction ×100; `avgMemBytes` is the sum of each VM's average memory. VMs without samples count toward allocation only. |
 | `groupByProject` | Named projects alphabetically, then the no-project group. |
 | `getProjectsView` | Tenant: own VMs by project, plus VMs shared with them as one flat group with no tags. Admin: every owner, ordered like the admin VM list. Usage window clamped 1–90 days. |
+| `tagsForAccess` | The tag list as a caller may see it: owner and admin get it whole; a sharee gets it without the `project:` tag. Applied by `annotateAccess` (VM list), `GET /api/vms/:id` and `PATCH /api/vms/:id`. |
 | `assignProject` | Owner-or-admin per VM (one `findMany` scoped by `userId` for tenants); unknown or foreign ids report `not found`. |
 
 # Gotchas

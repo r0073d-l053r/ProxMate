@@ -33,7 +33,7 @@ export default function ProjectsPage() {
     let live = true;
     api
       .get<ProjectsView>("/projects", { params: { days } })
-      .then((res) => { if (live) setView(res.data); })
+      .then((res) => { if (live) { setView(res.data); setError(null); } })
       .catch((err) => { if (live) setError(apiError(err)); });
     return () => { live = false; };
   }, [days]);
@@ -41,6 +41,8 @@ export default function ProjectsPage() {
   // Project power actions go through the same bulk endpoint as the VMs list, so
   // every per-VM lock and ownership check applies; failures are reported per VM.
   async function runBulk(key: string, action: BulkPower, ids: string[]) {
+    // One project action at a time, so one finishing can't clear another's spinner.
+    if (busyKey) return;
     setBusyKey(key);
     try {
       let ok = 0;
@@ -82,7 +84,7 @@ export default function ProjectsPage() {
 
       {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
 
-      {view === null ? (
+      {view === null && error ? null : view === null ? (
         <Card>
           <CardContent className="grid gap-2">
             <Skeleton className="h-10" />

@@ -9,7 +9,7 @@ import { useAuthStore } from "@/lib/auth-store";
 import type { VirtualMachine, UserGroup } from "@/lib/types";
 import { formatRam, formatDate } from "@/lib/format";
 import { visibleSelection } from "@/lib/selection";
-import { projectNames } from "@/lib/projects";
+import { plainTags, projectNames } from "@/lib/projects";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { OwnerGroupHeader } from "@/components/dashboard/owner-group-header";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
@@ -39,8 +39,9 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
+/** The labels shown as chips and filters; the project tag has its own page. */
 export function parseTags(csv: string | null): string[] {
-  return (csv ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+  return plainTags(csv);
 }
 
 /**

@@ -13,6 +13,7 @@ import { isValidPublicKey } from './ssh-key.service.js';
 import { diskSizeGb } from './disk.service.js';
 import { guestConfigSizes, pciLines, foreignVolumeKeys } from '../lib/guest-config.js';
 import { recordAudit } from './audit.service.js';
+import { tagsForAccess } from './project.service.js';
 import { ALL_CAPS, CAPS_BY_ROLE, normalizeShareRole, type ShareRole, type VmCap } from './vm-share.service.js';
 
 /** The Proxmox guest kind for a VM row (defaults to QEMU for legacy/unset rows). */
@@ -1700,7 +1701,8 @@ export async function annotateAccess<T extends { id: string; userId: string }>(
         : user.role === 'admin' ? 'admin'
           : normalizeShareRole(sharedRoles.get(v.id) ?? '');
     const caps = access === 'owner' || access === 'admin' ? ALL_CAPS : CAPS_BY_ROLE[access];
-    return { ...v, access, caps: [...caps] };
+    const tags = 'tags' in v ? { tags: tagsForAccess((v as { tags: string | null }).tags, access) } : {};
+    return { ...v, ...tags, access, caps: [...caps] };
   });
 }
 
