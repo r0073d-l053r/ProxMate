@@ -208,7 +208,8 @@ describe('getProjectsView scoping', () => {
   });
 
   it('clamps the usage window', async () => {
-    expect((await getProjectsView(alice, 0)).days).toBe(7);
+    expect((await getProjectsView(alice, 0)).days).toBe(1);
+    expect((await getProjectsView(alice, Number.NaN)).days).toBe(7);
     expect((await getProjectsView(alice, 500)).days).toBe(90);
     expect((await getProjectsView(alice, 3)).days).toBe(3);
   });

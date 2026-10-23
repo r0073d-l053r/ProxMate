@@ -51,6 +51,15 @@ export function withProject(csv: string | null | undefined, name: string | null)
   return next.length > 0 ? [...new Set(next)].join(',') : null;
 }
 
+/**
+ * The tag CSV as a caller with `access` may see it. The project is the owner's way of
+ * organising their machines, so only the owner and admins see it; a sharee gets the
+ * plain labels.
+ */
+export function tagsForAccess(csv: string | null, access: string): string | null {
+  return access === 'owner' || access === 'admin' ? csv : withProject(csv, null);
+}
+
 // ─── Rollup ──────────────────────────────────────────────────
 
 export interface VmUsageStat {
@@ -81,7 +90,7 @@ export interface ProjectRollup {
   storage: number; // allocated GB
   usage: {
     samples: number;
-    /** Sample-weighted average CPU, as % of the sampled VMs' allocated vCPUs. */
+    /** Average CPU busy across the sampled VMs (each as % of its own vCPUs), weighted by sample count. */
     avgCpuPct: number;
     /** Sum of each VM's average memory in use: the project's typical combined footprint. */
     avgMemBytes: number;
@@ -189,7 +198,7 @@ export async function getProjectsView(
   days = DEFAULT_USAGE_DAYS,
   now: Date = new Date(),
 ): Promise<ProjectsView> {
-  const window = Math.min(Math.max(Math.floor(days) || DEFAULT_USAGE_DAYS, 1), 90);
+  const window = Math.min(Math.max(Number.isFinite(days) ? Math.floor(days) : DEFAULT_USAGE_DAYS, 1), 90);
   const since = new Date(now.getTime() - window * DAY_MS);
 
   if (user.role === 'admin') {

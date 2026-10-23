@@ -80,7 +80,7 @@ import {
   MIN_RAM_MB,
 } from '../services/vm.service.js';
 import { isValidPublicKey } from '../services/ssh-key.service.js';
-import { projectOf, withProject } from '../services/project.service.js';
+import { projectOf, tagsForAccess, withProject } from '../services/project.service.js';
 import { isIdeInstalling } from '../services/ide-provision.service.js';
 import { isDeploying, refreshDeployState } from '../services/deploy-lock.service.js';
 import { getLiveStats } from '../services/live-stats.service.js';
@@ -99,6 +99,7 @@ import {
 import { envNumber } from '../lib/env-number.js';
 import type { RebuildSource } from '../services/vm.service.js';
 import type { AuthRequest } from '../types/index.js';
+import type { VirtualMachine } from '@prisma/client';
 
 const router = Router();
 
@@ -510,7 +511,14 @@ router.get('/:id', async (req: Request, res: Response) => {
   const rescueAvailable = kindOf(resolved.vm) !== 'lxc' && !!(await getConfig('rescue_iso'));
   // `caps` is what the UI gates on (per-capability buttons/tabs); `access` is the
   // display badge. Owner/admin get every capability.
-  res.json({ ...withStatus, deployState, access: resolved.access, caps: [...resolved.caps], rescueAvailable });
+  res.json({
+    ...withStatus,
+    tags: tagsForAccess(withStatus.tags, resolved.access),
+    deployState,
+    access: resolved.access,
+    caps: [...resolved.caps],
+    rescueAvailable,
+  });
 });
 
 // ─── GET /api/vms/:id/metrics ─────────────────────────────────
@@ -619,6 +627,9 @@ router.patch('/:id', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   let vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  // A Manager-level sharee can edit labels but never sees the owner's project tag.
+  const access = vm.userId === user.id ? 'owner' : user.role === 'admin' ? 'admin' : 'shared';
+  const view = (v: VirtualMachine) => ({ ...v, tags: tagsForAccess(v.tags, access) });
 
   const parsed = UpdateVmSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -645,7 +656,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
   };
   const resizing = Object.keys(resizeInput).length > 0;
 
-  if (!metaChanged && !resizing) { res.json(vm); return; }
+  if (!metaChanged && !resizing) { res.json(view(vm)); return; }
   // Resizing an admin-managed VM is admin-only (rename/tags stay open to the owner).
   if (resizing && rejectIfSizeLocked(vm, user, res)) return;
 
@@ -680,7 +691,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
       });
     }
 
-    res.json(vm);
+    res.json(view(vm));
   } catch (err) {
     if (err instanceof QuotaError) {
       res.status(403).json({ error: 'Quota exceeded', details: err.details });
