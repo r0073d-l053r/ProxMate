@@ -30,6 +30,7 @@ import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import {
   Table,
   TableBody,
@@ -485,7 +486,6 @@ function EditQuotaDialog({ user, onDone }: { user: ManagedUser; onDone: () => vo
   const [access, setAccess] = useState("keep");
   const [busy, setBusy] = useState(false);
 
-  const num = (v: string) => Math.max(0, Math.floor(Number(v) || 0));
 
   // Seed the fields from the latest values each time the dialog opens.
   function onOpenChange(o: boolean) {
@@ -542,18 +542,17 @@ function EditQuotaDialog({ user, onDone }: { user: ManagedUser; onDone: () => vo
         </AlertDialogHeader>
         <div className="grid items-start gap-3 py-1 sm:grid-cols-3">
           <FormField label="vCPU" htmlFor="q-cpu" hint={`in use: ${user.quota.cpu.used}`}>
-            <Input id="q-cpu" type="number" min={0} value={cpu} onChange={(e) => setCpu(num(e.target.value))} />
+            <NumberInput id="q-cpu" min={0} value={cpu} onValueChange={setCpu} />
           </FormField>
           <FormField label="RAM (GB)" htmlFor="q-ram" hint={`in use: ${formatRam(user.quota.ram.used)}`}>
-            <Input id="q-ram" type="number" min={0} value={ramGb} onChange={(e) => setRamGb(num(e.target.value))} />
+            <NumberInput id="q-ram" min={0} value={ramGb} onValueChange={setRamGb} />
           </FormField>
           <FormField label="Storage (GB)" htmlFor="q-storage" hint={`in use: ${user.quota.storage.used} GB`}>
-            <Input
+            <NumberInput
               id="q-storage"
-              type="number"
               min={0}
               value={storage}
-              onChange={(e) => setStorage(num(e.target.value))}
+              onValueChange={setStorage}
             />
           </FormField>
         </div>

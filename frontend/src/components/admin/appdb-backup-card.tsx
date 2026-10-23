@@ -7,6 +7,7 @@ import { api, apiError } from "@/lib/api";
 import type { AdminSettings } from "@/lib/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/form-field";
 
@@ -106,13 +107,12 @@ export function AppDbBackupCard() {
             />
           </FormField>
           <FormField label="Keep" hint="Rolling snapshots">
-            <Input
-              type="number"
+            <NumberInput
               min={1}
               max={365}
               value={keep}
               disabled={loading}
-              onChange={(e) => setKeep(Math.max(1, Math.min(365, Number(e.target.value) || 7)))}
+              onValueChange={setKeep}
             />
           </FormField>
         </div>

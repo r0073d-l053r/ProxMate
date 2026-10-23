@@ -9,6 +9,7 @@ import type { BackupPolicy } from "@/lib/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 
 type Freq = "default" | "daily" | "weekly" | "monthly";
 
@@ -152,13 +153,12 @@ export function BackupPolicyPanel({ vmId }: { vmId: string }) {
                   <div className="grid gap-1.5">
                     <label className="text-xs text-muted-foreground" htmlFor="bk-keep">Keep (most recent)</label>
                     {isAdmin ? (
-                      <Input
+                      <NumberInput
                         id="bk-keep"
-                        type="number"
                         min={1}
                         max={14}
                         value={keep}
-                        onChange={(e) => setKeep(Math.min(14, Math.max(1, Math.floor(Number(e.target.value) || 1))))}
+                        onValueChange={setKeep}
                         className="w-24"
                       />
                     ) : (
@@ -194,13 +194,12 @@ export function BackupPolicyPanel({ vmId }: { vmId: string }) {
                 {freq === "monthly" && (
                   <div className="grid gap-1.5">
                     <label className="text-xs text-muted-foreground" htmlFor="bk-dom">Day of month</label>
-                    <Input
+                    <NumberInput
                       id="bk-dom"
-                      type="number"
                       min={1}
                       max={28}
                       value={dom}
-                      onChange={(e) => setDom(Math.min(28, Math.max(1, Math.floor(Number(e.target.value) || 1))))}
+                      onValueChange={setDom}
                       className="w-24"
                     />
                   </div>

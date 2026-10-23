@@ -12,6 +12,7 @@ import { formatRam } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/form-field";
 import { TemplateIcon } from "@/components/template-icon";
@@ -568,12 +569,11 @@ export default function NewVmWizard() {
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <FormField label="vCPU cores" htmlFor="cpu" error={errors.cpu}>
-                    <Input
+                    <NumberInput
                       id="cpu"
-                      type="number"
                       min={1}
                       value={cpu}
-                      onChange={(e) => setCpu(Number(e.target.value))}
+                      onValueChange={setCpu}
                     />
                   </FormField>
 
@@ -603,12 +603,11 @@ export default function NewVmWizard() {
                       : undefined
                   }
                 >
-                  <Input
+                  <NumberInput
                     id="storage"
-                    type="number"
                     min={minDisk}
                     value={storageGb}
-                    onChange={(e) => setStorageGb(Number(e.target.value))}
+                    onValueChange={setStorageGb}
                   />
                 </FormField>
                 </>

@@ -33,6 +33,7 @@ import { AppDbBackupCard } from "@/components/admin/appdb-backup-card";
 import { KioskSettingsCard } from "@/components/admin/kiosk-settings-card";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/form-field";
 import { NetworkPicker } from "@/components/network-picker";
@@ -803,11 +804,12 @@ export default function SettingsPage() {
                 </FormField>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <FormField label="Port" htmlFor="smtpPort">
-                    <Input
+                    <NumberInput
                       id="smtpPort"
-                      type="number"
+                      min={1}
+                      max={65535}
                       value={smtpPort}
-                      onChange={(e) => setSmtpPort(Number(e.target.value))}
+                      onValueChange={setSmtpPort}
                     />
                   </FormField>
                   <FormField label="From address" htmlFor="smtpFrom">

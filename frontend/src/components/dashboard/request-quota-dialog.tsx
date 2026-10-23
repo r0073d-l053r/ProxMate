@@ -7,7 +7,7 @@ import { api, apiError } from "@/lib/api";
 import type { Quota } from "@/lib/types";
 import { ramGbField, ramMbToSave } from "@/lib/quota";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { FormField } from "@/components/form-field";
 import {
   AlertDialog,
@@ -42,7 +42,6 @@ export function RequestQuotaDialog({ quota }: { quota: Quota }) {
       .catch(() => undefined);
   }, []);
 
-  const num = (v: string) => Math.max(1, Math.floor(Number(v) || 1));
 
   function onOpenChange(o: boolean) {
     setOpen(o);
@@ -96,13 +95,13 @@ export function RequestQuotaDialog({ quota }: { quota: Quota }) {
           </AlertDialogHeader>
           <div className="grid items-start gap-3 py-1 sm:grid-cols-3">
             <FormField label="vCPU" htmlFor="rq-cpu">
-              <Input id="rq-cpu" type="number" min={1} value={cpu} onChange={(e) => setCpu(num(e.target.value))} />
+              <NumberInput id="rq-cpu" min={1} value={cpu} onValueChange={setCpu} />
             </FormField>
             <FormField label="RAM (GB)" htmlFor="rq-ram">
-              <Input id="rq-ram" type="number" min={1} value={ramGb} onChange={(e) => setRamGb(num(e.target.value))} />
+              <NumberInput id="rq-ram" min={1} value={ramGb} onValueChange={setRamGb} />
             </FormField>
             <FormField label="Storage (GB)" htmlFor="rq-storage">
-              <Input id="rq-storage" type="number" min={1} value={storage} onChange={(e) => setStorage(num(e.target.value))} />
+              <NumberInput id="rq-storage" min={1} value={storage} onValueChange={setStorage} />
             </FormField>
           </div>
           <FormField label="Reason (optional)" htmlFor="rq-reason">

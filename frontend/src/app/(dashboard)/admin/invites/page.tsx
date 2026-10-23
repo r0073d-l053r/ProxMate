@@ -9,6 +9,7 @@ import { formatRam, formatDate } from "@/lib/format";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { FormField } from "@/components/form-field";
@@ -240,13 +241,13 @@ export default function InvitesPage() {
           <form onSubmit={onCreate} className="grid gap-4">
             <div className="grid gap-4 sm:grid-cols-3">
               <FormField label="Max vCPU" htmlFor="cpu">
-                <Input id="cpu" type="number" min={1} value={cpu} onChange={(e) => setCpu(Number(e.target.value))} />
+                <NumberInput id="cpu" min={1} value={cpu} onValueChange={setCpu} />
               </FormField>
               <FormField label="Max RAM (GB)" htmlFor="ram">
-                <Input id="ram" type="number" min={1} value={ramGb} onChange={(e) => setRamGb(Number(e.target.value))} />
+                <NumberInput id="ram" min={1} value={ramGb} onValueChange={setRamGb} />
               </FormField>
               <FormField label="Max storage (GB)" htmlFor="storage">
-                <Input id="storage" type="number" min={1} value={storage} onChange={(e) => setStorage(Number(e.target.value))} />
+                <NumberInput id="storage" min={1} value={storage} onValueChange={setStorage} />
               </FormField>
             </div>
             {/* The two clocks sit side by side: they're easy to confuse, so
