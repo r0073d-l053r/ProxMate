@@ -207,6 +207,23 @@ describe('snapshot rollback (BUG-039)', () => {
     expect(rolledBack(c)).toBe(false);
   });
 
+  it('refuses a snapshot holding host-level settings or another guest’s volume, whatever the live config', async () => {
+    for (const extra of [
+      { args: '-drive file=/dev/sdb' },
+      { usb0: 'host=1234:5678' },
+      { serial0: '/dev/ttyS0' },
+      { hookscript: 'local:snippets/hook.sh' },
+      { virtiofs0: 'dirid=share' },
+      { scsi3: 'local-lvm:vm-999-disk-0,size=5G' },
+    ]) {
+      const { c } = fakePve(LIVE, { ...LIVE, ...extra });
+      const res = await rollback();
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect((await res.json()).error).toMatch(new RegExp(`may not have \\(${Object.keys(extra)[0]}\\)`));
+      expect(rolledBack(c)).toBe(false);
+    }
+  });
+
   it('allows a snapshot whose PCI device is approved and attached now', async () => {
     const gpu = 'mapping=gpu0,pcie=1';
     vi.mocked(getVmWithCap).mockResolvedValue(row({ hasPassthrough: true }));
