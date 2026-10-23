@@ -128,35 +128,60 @@ retrying the call. Everything below is an observation from that cluster, not a r
 # Pool-scoped token (optional)
 
 `deploy/proxmox-token.sh --pool <name>` grants the guest privileges on a resource pool instead of
-on `/`, so Proxmox refuses the token every guest outside the pool, and ProxMate (with the same
-pool in `proxmox_pool`) creates every guest inside it.[^script][^pool] The split follows the path
-Proxmox checks each privilege on:
+on `/`, so Proxmox refuses the token guests outside the pool, and ProxMate (with the same pool in
+`proxmox_pool`) creates every guest inside it.[^script][^pool] The split follows the path Proxmox
+checks each privilege on:
 
 | Path | Propagate | Role | Privileges | What needs it there |
 |---|---|---|---|---|
-| `/pool/<name>` | yes | `ProxMate-Guest` | every `VM.*` the role holds (incl. the release's guest-agent ones, `VM.GuestAgent.FileWrite` with `--with-ide`), `Pool.Audit`, `Pool.Allocate` | Guests are checked on `/vms/<vmid>`, which a pool member inherits from `/pool/<name>`. Creating with `pool=<name>` needs `VM.Allocate` on the pool instead of on `/vms/<new id>` (create, clone, restore). `Pool.Audit` lets the connection test see the pool; `Pool.Allocate` lets the move action add guests (Proxmox also checks `VM.Allocate` on each). |
-| `/nodes` | yes | `ProxMate-Infra` | `Sys.Audit` | Node status, RRD and capacity, `/cluster/resources` node rows, network and PCI listings, other users' tasks. Not `Sys.Modify`, which on a node allows changing its configuration. |
-| `/storage` | yes | `ProxMate-Infra` | `Datastore.Allocate`, `.AllocateSpace`, `.AllocateTemplate`, `.Audit` | Disk allocation, ISO/template/snippet/import/backup volume access, `GET`/`PUT /storage/<id>`, content deletes, `download-url`'s storage half. |
+| `/pool/<name>` | yes | `ProxMate-Guest` | every `VM.*` the role holds (incl. the release's guest-agent ones), `Pool.Audit`, `Pool.Allocate` | Guests are checked on `/vms/<vmid>`, which a pool member inherits from `/pool/<name>`. Creating with `pool=<name>` needs `VM.Allocate` on the pool instead of on `/vms/<new id>` (create, clone, restore); a container create into the pool also checks `Pool.Allocate`. `Pool.Audit` lets the connection test see the pool; `Pool.Allocate` lets the move action add guests (Proxmox also checks `VM.Allocate` on each). |
+| `/nodes` | yes | `ProxMate-Infra` | `Sys.Audit`, and `Sys.AccessNetwork` on 8.2+ | Node status, RRD and capacity, `/cluster/resources` node rows, network and PCI listings, other users' tasks; `download-url` accepts `Sys.AccessNetwork` on the node instead of `Sys.Modify` on `/`. Not `Sys.Modify`, which on a node allows changing its configuration. |
+| `/storage` | yes | `ProxMate-Infra` | `Datastore.Audit`, `.AllocateSpace`, `.AllocateTemplate` | Disk allocation, ISO/template/snippet/import volume access, `download-url`'s storage half. |
+| `/storage/<id>` for the snippet and import storages (`--snippet-storage`, `--import-storage`, default `local`) and, optionally, `--backup-storage` | yes | `ProxMate-Storage` | the three above plus `Datastore.Allocate` | `GET`/`PUT /storage/<id>` (enabling snippets), deleting the downloaded import image, and reading an uploaded backup before its guest exists. A more specific ACL replaces what `/storage` passes down, hence the full set. |
 | `/sdn/zones` | yes | `ProxMate-Infra` | `SDN.Audit`, `SDN.Use` | `SDN.Use` on `/sdn/zones/<zone>/<bridge>` for every NIC (plain bridges are in `localnetwork`); `SDN.Audit` for VNet and zone listings. |
 | `/mapping` | yes, only with `--with-passthrough` | `ProxMate-Infra` | `Mapping.Audit`, `Mapping.Use` | `/mapping/pci/<id>` for GPU/PCI passthrough. |
-| `/` | **no** (this path only) | `ProxMate-Cluster` | `Sys.Audit`, `Sys.Modify` | The cluster firewall (`/cluster/firewall/*`), `/cluster/status`, and `download-url`'s `Sys.Audit`+`Sys.Modify` on `/`. Not propagated, so it gives nothing on `/nodes`, `/vms` or `/access`. |
+| `/` | **no** (this path only) | `ProxMate-Cluster` | `Sys.Audit`; `Sys.Modify` only with `--with-cluster-firewall` (or before 8.2) | `Sys.Audit`: `/cluster/status` and the cluster firewall reads. `Sys.Modify`: enabling the cluster firewall and writing ProxMate's management rules; before 8.2 also `download-url`. |
 
-`ProxMate-Infra` is one role on the infra paths; on each path only the privileges in the table
-gate anything. Calls that need no ACL: `/cluster/nextid`, `/access/permissions`, the token's own
-task status/log/stop, and `/cluster/resources` (filtered per object).[^script]
+What still reaches past the pool, and is therefore opt-in or narrowed:
+
+- **`Sys.Modify` on `/`** also allows cluster backup jobs (`/cluster/backup`, which run as root and
+  can back up every guest), the cluster firewall's groups, IP sets and aliases, `/cluster/options`
+  and other cluster settings. While the token holds it, the pool does not fully contain it; the
+  script and the connection test both say so. Without it, enable the cluster firewall once by hand
+  as root (Datacenter → Firewall: an accept rule for the management network on 8006 and 22, then
+  enable); the connection test warns until then.
+- **`Datastore.Allocate`** deletes any volume and edits the storage definition, so it is granted
+  only on the named storages. Granting it on all of `/storage` draws a connection-test warning.
 
 What changes with a pool-scoped token:
 
-- Guests outside the pool disappear from `/cluster/resources`, so ProxMate stops seeing them; their
-  rows read as unconfirmed (every action on them fails closed). Admin-registered templates must be
-  in the pool to be cloned (`VM.Clone` is checked on the template).
-- An earlier `ProxMate` grant on `/` is kept until `--drop-root-grant`. While it exists the
+- Guests outside the pool disappear from `/cluster/resources`, so ProxMate stops seeing them: their
+  rows read as unconfirmed (every action fails closed), the Cluster Balancer, alerts and live stats
+  only see pool guests, and "Import existing guests" only lists guests already in the pool.
+  Admin-registered templates must be in the pool to be cloned (`VM.Clone` is checked on the template).
+- Imported guests are added to the pool. An in-place backup restore sends no `pool` (the guest keeps
+  its membership).
+- **Uploaded backups**: Proxmox treats a backup as owned by the VMID in its file name, and outside
+  the pool the token has no `VM.Backup` on that VMID. ProxMate therefore takes the new VMID first and
+  renames the archive on the share to `vzdump-<kind>-<new vmid>-…` before Proxmox sees it, so the
+  restore reads an archive of the guest being restored. Listing the archive and reading its config
+  happen before that guest exists, which Proxmox allows only with `Datastore.Allocate` on the backup
+  storage (`--backup-storage`); the connection test warns when restore uploads are enabled without
+  it. Every `unusedN` on the freshly restored guest is treated as foreign, since the pre-restore
+  volume listing cannot see volumes of a VMID outside the pool.
+- **Backups of a deleted guest** leave the pool with it: the token can no longer list, read or delete
+  them. A machine whose rebuild failed after its guest was destroyed has no guest in the pool, so
+  restoring one of its backups needs root (or a rebuild first). The connection test lists such rows.
+- An earlier `ProxMate` grant on `/` is kept until `--drop-root-grant`, which runs after the token's
+  new ACLs are in place and warns when the pool holds no guests yet. While the grant exists the
   connection test warns that the pool limits nothing, and the admin "Move managed guests into the
-  pool" action can still reach (and move) every guest carrying a ProxMate ownership marker. After
-  it is removed, anything left outside needs root: `pveum pool modify <name> --vms <ids> --allow-move 1`.
+  pool" action can still reach every guest carrying a ProxMate ownership marker. It sends one request
+  per guest and reports each refusal (a guest in another pool also needs `Pool.Allocate` there).
 - The connection test checks, with a pool set: the pool exists (blocking if not, when the token
-  holds `Pool.Audit`), each guest privilege on `/pool/<name>`, guest privileges still on `/` or
-  `/vms`, managed guests outside the pool, and rows whose guest is not visible.[^pool]
+  holds `Pool.Audit`), `VM.Allocate` on the pool (blocking when held neither there nor on `/vms`),
+  each other guest privilege on `/pool/<name>`, guest privileges still on `/` or `/vms`,
+  `Sys.Modify` on `/`, `Datastore.Allocate` on `/storage` and on the storages that need it,
+  cloud-image download rights, managed guests outside the pool, and rows whose guest is not visible.[^pool]
 - Not yet proven on hardware: the table is derived from the documented ACL paths and the API calls
   ProxMate makes. ROADMAP.md lists it as needing live verification.[^roadmap]
 

@@ -38,7 +38,7 @@ A single fan-out of admin events to optional channels: a webhook (Discord, Slack
 
 A non-empty webhook URL must also pass `assertPublicHttpUrlShape` at save time, which rejects private, loopback and metadata hosts. At send time `assertSafeOutboundUrl` re-checks the URL, including DNS. Setting `ALLOW_PRIVATE_OUTBOUND_URLS=true` relaxes the private-host check (see [backend environment](/env/backend-environment.md)).[^notify]
 
-ntfy fields: `ntfyUrl` max 2000 optional, `ntfyToken` max 200 without spaces, `clearNtfy`, `clearNtfyToken`. A non-empty ntfy URL passes the same `assertPublicHttpUrlShape` check and must end in a topic (`parseNtfyTopicUrl`; no query string). Telegram fields: `telegramBotToken` must match `TELEGRAM_TOKEN_RE`, `telegramChatId` `TELEGRAM_CHAT_RE`, and a new bot token with an empty chat id is refused.[^admin-routes]
+ntfy fields: `ntfyUrl` max 2000 optional, `ntfyToken` max 200 without spaces, `clearNtfy`, `clearNtfyToken`. A non-empty ntfy URL passes the same `assertPublicHttpUrlShape` check and must end in a topic (`parseNtfyTopicUrl`; no query string). Telegram fields: `telegramBotToken` must match `TELEGRAM_TOKEN_RE`, `telegramChatId` `TELEGRAM_CHAT_RE`, and Telegram can't be left with a bot but no chat: an empty chat id (or a new bot token with none stored) is refused with 400 unless `clearTelegram` is set.[^admin-routes]
 
 # Gotchas
 

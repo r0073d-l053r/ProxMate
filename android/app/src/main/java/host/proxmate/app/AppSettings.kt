@@ -32,14 +32,18 @@ class AppSettings(context: Context) {
 
     fun pinForKey(pinKey: String): String? = pins.getString(pinKey, null)
 
+    /** Must be called on the main thread (it resets the WebView's certificate decisions). */
     fun setPin(server: ServerAddress, sha256: String) {
         pins.edit().putString(server.pinKey, sha256).apply()
+        clearWebCertificateDecisions(app)
     }
 
     fun hasPins(): Boolean = pins.all.isNotEmpty()
 
+    /** Must be called on the main thread (it resets the WebView's certificate decisions). */
     fun clearPins() {
         pins.edit().clear().apply()
+        clearWebCertificateDecisions(app)
     }
 
     fun apiClient(server: ServerAddress): ApiClient =
@@ -55,18 +59,37 @@ class AppSettings(context: Context) {
             host.proxmate.app.core.SessionCookies.hasSession(CookieManager.getInstance().getCookie(server.origin))
 
         /**
+         * Make the WebView forget every certificate error it was told to proceed
+         * past, so a removed or replaced pin can't be bypassed by a decision the
+         * WebView remembered. Main thread only.
+         */
+        fun clearWebCertificateDecisions(context: Context) {
+            withScratchWebView(context) { it.clearSslPreferences() }
+        }
+
+        private fun withScratchWebView(context: Context, block: (WebView) -> Unit) {
+            try {
+                val view = WebView(context.applicationContext)
+                try {
+                    block(view)
+                } finally {
+                    view.destroy()
+                }
+            } catch (_: RuntimeException) {
+                // No WebView provider available; there is nothing to clear.
+            }
+        }
+
+        /**
          * Forget everything the WebView keeps for the signed-in user: cookies,
-         * local/session storage and the HTTP cache. [onDone] runs on the main thread.
+         * local/session storage, the HTTP cache and remembered certificate
+         * decisions. Main thread only; [onDone] runs on the main thread.
          */
         fun clearWebSession(context: Context, onDone: () -> Unit = {}) {
             WebStorage.getInstance().deleteAllData()
-            try {
-                WebView(context.applicationContext).apply {
-                    clearCache(true)
-                    destroy()
-                }
-            } catch (_: RuntimeException) {
-                // No WebView provider available; nothing cached to clear.
+            withScratchWebView(context) {
+                it.clearCache(true)
+                it.clearSslPreferences()
             }
             val cookies = CookieManager.getInstance()
             cookies.removeAllCookies {

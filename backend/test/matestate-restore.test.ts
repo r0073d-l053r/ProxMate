@@ -289,15 +289,16 @@ describe('syncRestoredGuest', () => {
   });
 });
 
-describe('restore into the configured Proxmox pool', () => {
-  it('restates the pool on the in-place restore, so the guest stays reachable by a pool-scoped token', async () => {
+describe('restore with a Proxmox pool configured', () => {
+  it('sends no pool on the in-place restore (the guest keeps its membership)', async () => {
     const base = vi.mocked(getConfig).getMockImplementation()!;
     vi.mocked(getConfig).mockImplementation(async (key: string) => (key === 'proxmox_pool' ? 'proxmate' : base(key)));
     try {
       const { c } = fakePve(LIVE, { ...LIVE });
       await restoreFromMateState(row(), ms);
       const restore = c.post.mock.calls.find((x) => x[0] === '/nodes/pve1/qemu');
-      expect(bodyOf(restore!)).toMatchObject({ archive: VOLID, force: '1', pool: 'proxmate' });
+      expect(bodyOf(restore!)).toMatchObject({ archive: VOLID, force: '1' });
+      expect(bodyOf(restore!)).not.toHaveProperty('pool');
     } finally {
       vi.mocked(getConfig).mockImplementation(base);
     }

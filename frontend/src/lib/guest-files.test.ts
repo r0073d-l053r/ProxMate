@@ -49,6 +49,9 @@ describe("cleanLogText", () => {
   it("keeps the last state of carriage-return progress lines", () => {
     expect(cleanLogText("  0%\r 50%\r100%\r\nnext")).toBe("100%\nnext");
   });
+  it("strips bidirectional overrides and marks", () => {
+    expect(cleanLogText("a\u202eb\u200ec\u200fd\u061ce")).toBe("abcde");
+  });
   it("keeps markup as text", () => {
     expect(cleanLogText("<img src=x onerror=alert(1)>")).toBe("<img src=x onerror=alert(1)>");
   });

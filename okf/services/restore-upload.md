@@ -51,6 +51,7 @@ Creates [VirtualMachine](/database/virtual-machine.md); reads [User](/database/u
 
 # Gotchas
 
+- With a Proxmox pool configured (`proxmox_pool`), the new VMID is taken first and the archive is renamed on the share to `vzdump-<kind>-<new vmid>-…` (`renameArchiveForVmid`, same validation and containment as the upload) before Proxmox lists or reads it: Proxmox treats a backup as owned by the VMID in its name, and a pool-scoped token has no `VM.Backup` on the old one. Every `unusedN` on the restored guest is then treated as foreign (`assertOwnVolumes` `unusedAreForeign`), because the pre-restore volume listing cannot see volumes of a VMID outside the pool. See [Proxmox privileges](/proxmox/privileges.md).
 - The archive is ALWAYS removed afterwards (Proxmox API delete first, then direct unlink); leaving it would clutter backup listings under the old foreign VMID. Any pre-restore failure (quota, placement, extract) also drops it.[^ru]
 - The restored guest is tagged with the new row's marker (`markClonedGuest`). A failure after the row is created goes through `settleFailedCreate`: the row stays as `error` when the guest was restored, the restore task finishes later (it is then tagged), or the VMID holds a guest with no other machine's tag; otherwise it is deleted.[^ru]
 - ARM guest builds are not shipped, so uploaded backups are placed as x86 (`amd64`).[^ru]

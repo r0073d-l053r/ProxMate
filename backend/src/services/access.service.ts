@@ -69,6 +69,19 @@ export function isAccessExpired(user: AccessSubject, now: Date = new Date()): bo
   return user.accessExpiresAt.getTime() <= now.getTime();
 }
 
+/**
+ * Expired, or still latched as suspended by the sweep. Optional emails (activity
+ * notices, the usage digest) are not sent to such an account: its owner can no
+ * longer sign in to act on them.
+ */
+export function hasAccessEnded(
+  user: AccessSubject & { accessSuspendedAt?: Date | null },
+  now: Date = new Date(),
+): boolean {
+  if (user.role === 'admin') return false;
+  return isAccessExpired(user, now) || !!user.accessSuspendedAt;
+}
+
 /** Whole days until access ends; null when it never expires. Negative once lapsed. */
 export function daysUntilExpiry(user: AccessSubject, now: Date = new Date()): number | null {
   if (user.role === 'admin' || !user.accessExpiresAt) return null;

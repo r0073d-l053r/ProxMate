@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Admin import of a Proxmox guest ProxMate didn't create: only a guest nothing else
 // could claim is accepted, and an accepted one gets this row's tag (its other tags
@@ -55,7 +55,8 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
 });
 
 import * as pve from '../src/services/proxmox.service.js';
-import { importGuest, listImportableGuests, ImportError, hostLevelKeys } from '../src/services/guest-import.service.js';
+import { importGuest, listImportableGuests, ImportError } from '../src/services/guest-import.service.js';
+import { hostLevelKeys } from '../src/lib/guest-config.js';
 import { QuotaError, guestMarker } from '../src/services/vm.service.js';
 import { recordAudit } from '../src/services/audit.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
@@ -121,6 +122,53 @@ describe('listing importable guests', () => {
 });
 
 describe('importing a guest', () => {
+  describe('with a Proxmox pool configured', () => {
+    let base: ((key: string) => Promise<string | null>) | undefined;
+    beforeEach(async () => {
+      const { getConfig } = await import('../src/services/config.service.js');
+      base = vi.mocked(getConfig).getMockImplementation() as never;
+      vi.mocked(getConfig).mockImplementation(async (key: string) => (key === 'proxmox_pool' ? 'proxmate' : base!(key)));
+    });
+    afterEach(async () => {
+      const { getConfig } = await import('../src/services/config.service.js');
+      vi.mocked(getConfig).mockImplementation(base as never);
+    });
+
+    it('adds the imported guest to the pool and says so in the audit entry', async () => {
+      const c = cluster(BASE_CFG);
+      await importGuest(ADMIN, { vmid: 200, owner: owner() });
+      const put = c.put.mock.calls.find((x) => x[0] === '/pools');
+      expect(bodyOf(put!)).toEqual({ poolid: 'proxmate', vms: '200', 'allow-move': '1' });
+      expect(recordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'vm.import', detail: expect.stringMatching(/added to pool proxmate$/) }),
+      );
+    });
+
+    it('still imports when the pool refuses the guest, and records why', async () => {
+      const c = cluster(BASE_CFG);
+      c.put.mockImplementation((url: string) =>
+        url === '/pools' ? Promise.reject(new Error('Permission check failed')) : ok(''),
+      );
+      const vm = await importGuest(ADMIN, { vmid: 200, owner: owner() });
+      expect(vm).toMatchObject({ proxmoxVmId: 200 });
+      expect(recordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ detail: expect.stringMatching(/not added to pool proxmate: Permission check failed/) }),
+      );
+    });
+
+    it('leaves a guest that is already in the pool alone', async () => {
+      const c = cluster(BASE_CFG);
+      const baseGet = c.get.getMockImplementation()!;
+      c.get.mockImplementation((url: string) =>
+        url.startsWith('/cluster/resources')
+          ? ok([{ type: 'qemu', vmid: 200, node: 'pve1', name: 'legacy-web', tags: 'prod;web', pool: 'proxmate', status: 'running' }])
+          : baseGet(url),
+      );
+      await importGuest(ADMIN, { vmid: 200, owner: owner() });
+      expect(c.put.mock.calls.some((x) => x[0] === '/pools')).toBe(false);
+    });
+  });
+
   it('writes the marker (keeping its tags), applies isolation, records the row and audits it', async () => {
     const c = cluster(BASE_CFG);
     const vm = await importGuest(ADMIN, { vmid: 200, owner: owner() });
@@ -199,12 +247,74 @@ describe('importing a guest', () => {
     expect(rows.filter((r) => r['proxmoxVmId'] === 200)).toHaveLength(1);
   });
 
-  it('holds the row when isolation can’t be applied', async () => {
+  it('never tags a guest whose isolation couldn’t be applied, and says what state it is in', async () => {
     const c = cluster(BASE_CFG);
     c.put.mockImplementation((url: string) =>
       /firewall\/options$/.test(url) ? Promise.reject(new Error('firewall unavailable')) : ok(''),
     );
-    await expect(importGuest(ADMIN, { vmid: 200, owner: owner() })).rejects.toThrow(/isolation couldn't be applied/);
-    expect(rows[0]).toMatchObject({ status: 'error', holdReason: expect.stringMatching(/import didn't finish/) });
+    await expect(importGuest(ADMIN, { vmid: 200, owner: owner() })).rejects.toThrow(
+      /not imported: its isolation couldn't be applied.*still unmanaged and untagged/,
+    );
+    expect(rows).toHaveLength(0);
+    expect(c.put.mock.calls.some((x) => bodyOf(x)['tags'])).toBe(false);
+  });
+
+  it('keeps the row in creating until the guest is isolated and tagged', async () => {
+    const c = cluster(BASE_CFG);
+    const seen: unknown[] = [];
+    c.put.mockImplementation((url: string, body: URLSearchParams) => {
+      if (/firewall\/options$/.test(url) || body.get('tags')) seen.push(rows[0]?.['status']);
+      return ok('');
+    });
+    await importGuest(ADMIN, { vmid: 200, owner: owner() });
+    expect(seen.every((s) => s === 'creating')).toBe(true);
+    // Isolation is applied before the tag is written.
+    const order = c.put.mock.calls.map((x) => (bodyOf(x)['tags'] ? 'tag' : /firewall\/options$/.test(String(x[0])) ? 'fw' : null)).filter(Boolean);
+    expect(order.indexOf('fw')).toBeLessThan(order.indexOf('tag'));
+  });
+
+  it('refuses a guest whose snapshots hold what the live config may not', async () => {
+    for (const snapCfg of [
+      { args: '-drive file=/dev/sdb' },
+      { usb0: 'host=1234:5678' },
+      { serial0: '/dev/ttyS0' },
+      { hookscript: 'local:snippets/hook.sh' },
+      { virtiofs0: 'dirid=share' },
+      { hostpci0: '0000:01:00.0' },
+      { scsi1: 'local-lvm:vm-201-disk-0,size=10G' },
+    ]) {
+      rows.length = 0;
+      const c = cluster(BASE_CFG);
+      const base = c.get.getMockImplementation()!;
+      c.get.mockImplementation((url: string) => {
+        if (/\/qemu\/200\/snapshot$/.test(url)) return ok([{ name: 'before-upgrade' }, { name: 'current' }]);
+        if (/\/qemu\/200\/snapshot\/before-upgrade\/config$/.test(url)) return ok({ ...BASE_CFG, ...snapCfg });
+        return base(url);
+      });
+      await expect(importGuest(ADMIN, { vmid: 200, owner: owner() })).rejects.toThrow(
+        new RegExp(`snapshots holding .*"before-upgrade": ${Object.keys(snapCfg)[0]}.*Delete those snapshots`),
+      );
+      expect(rows).toHaveLength(0);
+      expect(c.put).not.toHaveBeenCalled();
+    }
+  });
+
+  it('accepts clean snapshots', async () => {
+    const c = cluster(BASE_CFG);
+    const base = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) => {
+      if (/\/qemu\/200\/snapshot$/.test(url)) return ok([{ name: 'clean' }, { name: 'current' }]);
+      if (/\/snapshot\/clean\/config$/.test(url)) return ok({ ...BASE_CFG, vmstate: 'local-lvm:vm-200-state-clean' });
+      return base(url);
+    });
+    await expect(importGuest(ADMIN, { vmid: 200, owner: owner() })).resolves.toMatchObject({ proxmoxVmId: 200 });
+  });
+
+  it('treats virtiofs and ivshmem as host-level', () => {
+    expect(hostLevelKeys({ virtiofs0: 'dirid=x', ivshmem: 'size=32', parallel0: '/dev/parport0' }, 'qemu')).toEqual([
+      'virtiofs0',
+      'ivshmem',
+      'parallel0',
+    ]);
   });
 });

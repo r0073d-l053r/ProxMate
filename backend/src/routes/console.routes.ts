@@ -5,7 +5,7 @@ import { verifyToken } from '../services/auth.service.js';
 import { SESSION_COOKIE } from '../lib/cookies.js';
 import { resolveVmAccess, syncVmNode, kindOf } from '../services/vm.service.js';
 import { consoleModeFor } from '../services/vm-share.service.js';
-import { connectVncTarget, connectSerialTarget, relay, takeConsoleGrant } from '../services/vnc-proxy.service.js';
+import { connectVncTarget, connectSerialTarget, relay, claimConsoleGrant } from '../services/vnc-proxy.service.js';
 import { RfbViewOnlyFilter, TermViewOnlyFilter } from '../lib/console-view-filter.js';
 
 const CONSOLE_PATH = /^\/api\/vms\/([^/]+)\/console$/;
@@ -76,14 +76,14 @@ export function handleConsoleUpgrade(req: IncomingMessage, socket: Duplex, head:
     }
 
     // The ticket must be one ProxMate minted, for this VM, user, transport and
-    // port; the grant is single use. Its recorded mode is the most this session
-    // gets — the browser never says whether it is view-only.
-    const grant = vncticket ? takeConsoleGrant(vncticket) : undefined;
+    // port; the grant is single use (a mismatched attempt leaves it unused). Its
+    // recorded mode is the most this session gets — the browser never says
+    // whether it is view-only.
     const transport = isSerial ? 'serial' : 'vnc';
-    if (
-      !vncticket || !port || !grant ||
-      grant.vmId !== vmId || grant.userId !== user.id || grant.transport !== transport || grant.port !== port
-    ) {
+    const grant = vncticket && port
+      ? claimConsoleGrant(vncticket, { vmId, userId: user.id, transport, port })
+      : undefined;
+    if (!vncticket || !port || !grant) {
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       socket.destroy();
       return;

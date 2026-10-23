@@ -1136,6 +1136,8 @@ export interface CloudInitVmConfig {
   bridge: string;
   cores?: number;
   memory?: number; // MB
+  /** Proxmox tags (`;`-separated), e.g. a build tag that marks the guest as this build's. */
+  tags?: string;
   /** Resource pool the new VM joins; see getGuestPool. */
   pool?: string;
 }
@@ -1167,6 +1169,7 @@ export async function createCloudInitVm(config: CloudInitVmConfig, client?: Axio
     ostype: 'l26',
     agent: '1',
   });
+  if (config.tags) params.set('tags', config.tags);
   if (config.pool) params.set('pool', config.pool);
   const res = await c.post<{ data: string }>(`/nodes/${config.node}/qemu`, params);
   return res.data.data;
@@ -2795,8 +2798,8 @@ export async function deleteBackup(
  * Restore a backup into an EXISTING VMID (overwrites the guest in place). The
  * guest must be stopped first. Returns the Proxmox task UPID. QEMU and LXC use
  * different restore shapes: QEMU takes `archive=<volid>` on POST /qemu; LXC takes
- * `ostemplate=<volid>` + `restore=1` on POST /lxc. `pool` restates the guest's pool
- * membership (a no-op for a guest already in it).
+ * `ostemplate=<volid>` + `restore=1` on POST /lxc. `pool`, when given, also adds the
+ * guest to that pool; an in-place restore keeps the membership it had without it.
  */
 export async function restoreBackup(
   opts: { node: string; vmid: number; volid: string; storage?: string; pool?: string },

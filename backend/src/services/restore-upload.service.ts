@@ -12,6 +12,7 @@ import {
   settleFailedCreate,
   syncRestoredGuest,
   assertOwnVolumes,
+  nextVmId,
 } from './vm.service.js';
 import { parseGuestConfigText, guestConfigSizes } from '../lib/guest-config.js';
 import * as pve from './proxmox.service.js';
@@ -263,6 +264,30 @@ async function rebuildRestoredGuestConfig(
   if ([...params.keys()].length > 0) await client.put(`/nodes/${node}/${kind}/${vmid}/config`, params);
 }
 
+/**
+ * Give an uploaded archive the VMID it is about to be restored to, in place on the
+ * share: `vzdump-qemu-<old>-<rest>` becomes `vzdump-qemu-<vmid>-<rest>`. Proxmox
+ * treats a backup as belonging to the VMID in its name, and lets a restore read
+ * an archive of the guest being restored, while one named for another VMID needs
+ * VM.Backup on that guest — which a pool-scoped token does not have. Both names go
+ * through the same validation and containment checks as the upload itself.
+ */
+export async function renameArchiveForVmid(filename: string, vmid: number): Promise<string> {
+  if (path.basename(filename) !== filename || !VZDUMP_UPLOAD_RE.test(filename)) {
+    throw new RestoreUploadError('That file is not a vzdump backup archive.');
+  }
+  const renamed = filename.replace(/^vzdump-(qemu|lxc)-\d+-/, (_m, kind: string) => `vzdump-${kind}-${vmid}-`);
+  const from = resolveUnderUploadDir(filename, VZDUMP_UPLOAD_RE);
+  const to = resolveUnderUploadDir(renamed, VZDUMP_UPLOAD_RE);
+  if (!from || !to) throw new RestoreUploadError('That file is not a vzdump backup archive.');
+  if (from === to) return filename;
+  if (existsSync(to)) {
+    throw new RestoreUploadError('Another upload for the same machine number is waiting to be restored. Try again.');
+  }
+  await fsp.rename(from, to);
+  return renamed;
+}
+
 /** Best-effort removal of the uploaded archive (Proxmox API first, then the mount). */
 async function cleanupArchive(filename: string, node: string | null, storage: string, volid: string): Promise<void> {
   if (node) {
@@ -303,13 +328,26 @@ async function restoreFromUploadLocked(
   input: { filename: string; name: string },
   release: () => void,
 ): Promise<VirtualMachine> {
-  const filename = path.basename(input.filename);
+  let filename = path.basename(input.filename);
   if (filename !== input.filename || !VZDUMP_UPLOAD_RE.test(filename)) {
     throw new RestoreUploadError('That file is not a vzdump backup archive.');
   }
   const kind: pve.GuestKind = filename.startsWith('vzdump-lxc-') ? 'lxc' : 'qemu';
 
   const client = await pve.getClient();
+  // With a pool-scoped token the archive must name the VMID it is restored to (see
+  // renameArchiveForVmid), so that VMID is taken first.
+  const pool = await pve.getGuestPool();
+  let presetVmid: number | undefined;
+  if (pool) {
+    presetVmid = await nextVmId(client);
+    try {
+      filename = await renameArchiveForVmid(filename, presetVmid);
+    } catch (err) {
+      await cleanupArchive(filename, null, '', '');
+      throw err;
+    }
+  }
   const storage = await getBackupStorage();
   const volid = `${storage}:backup/${filename}`;
 
@@ -358,7 +396,7 @@ async function restoreFromUploadLocked(
       // ARM guest builds aren't shipped, so uploaded backups are x86 today.
       'amd64',
     );
-    const vmid = await pve.getNextVmId(client);
+    const vmid = presetVmid ?? (await nextVmId(client));
 
     const vm = await prisma.virtualMachine.create({
       data: {
@@ -388,7 +426,7 @@ async function restoreFromUploadLocked(
       // must not end up attached to the restored guest; see assertOwnVolumes.
       const leftovers = await pve.listGuestVolumes(node, vmid, client);
       const upid = await pve.restoreNewGuest(
-        { node, vmid, volid, storage: defaultStorage, pool: await pve.getGuestPool() },
+        { node, vmid, volid, storage: defaultStorage, pool },
         client,
         kind,
       );
@@ -401,7 +439,7 @@ async function restoreFromUploadLocked(
         beforeTag: async () => {
           await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
           await stripRestoreFlags(node, vmid, client, kind);
-          await assertOwnVolumes(vm, client, leftovers);
+          await assertOwnVolumes(vm, client, leftovers, { unusedAreForeign: !!pool });
           await rebuildRestoredGuestConfig(node, vmid, isolate, client, kind);
           if (isolate) await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, kind);
           await syncRestoredGuest(vm, { approvedPci: [], client });
@@ -416,7 +454,7 @@ async function restoreFromUploadLocked(
       // be cleaned up by the volume check below, and nothing may start it on its own.
       await stripRestoreFlags(node, vmid, client, kind);
       // Every volume the restored config references must be this guest's own.
-      await assertOwnVolumes(vm, client, leftovers);
+      await assertOwnVolumes(vm, client, leftovers, { unusedAreForeign: !!pool });
 
       // Before anything else may happen to the guest: its name, network placement
       // and isolation are ours, not the archive's.

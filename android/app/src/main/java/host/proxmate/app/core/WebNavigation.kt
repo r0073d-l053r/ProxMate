@@ -16,6 +16,20 @@ enum class NavigationTarget {
     BLOCKED,
 }
 
+enum class NavigationDecision {
+    /** Let the WebView load it. */
+    LOAD,
+
+    /** Open it in another app (the browser). */
+    OPEN_EXTERNAL,
+
+    /** Drop it silently. */
+    BLOCK,
+
+    /** Drop it and tell the user it would have been unencrypted. */
+    BLOCK_CLEARTEXT,
+}
+
 object WebNavigation {
     /** Web pages that belong to signing in (or first-run setup) rather than the signed-in app. */
     private val AUTH_PREFIXES = listOf(
@@ -75,6 +89,27 @@ object WebNavigation {
         if (server.isSameOrigin(url)) return NavigationTarget.IN_APP
         if (webSignIn && scheme == "https") return NavigationTarget.IN_APP
         return NavigationTarget.EXTERNAL
+    }
+
+    /**
+     * What to do with a navigation the WebView reports. In-app pages load
+     * (unless they would break the cleartext rule). Outside pages go to another
+     * app only for a top-level navigation the user started with a gesture;
+     * anything else that would leave the app (a script redirect, an iframe) is
+     * blocked, so a page can't launch other apps on its own.
+     */
+    fun route(
+        url: String?,
+        server: ServerAddress,
+        webSignIn: Boolean,
+        isMainFrame: Boolean,
+        hasGesture: Boolean,
+    ): NavigationDecision = when (decide(url, server, webSignIn)) {
+        NavigationTarget.IN_APP ->
+            if (cleartextAllowed(url, server)) NavigationDecision.LOAD else NavigationDecision.BLOCK_CLEARTEXT
+        NavigationTarget.EXTERNAL ->
+            if (isMainFrame && hasGesture) NavigationDecision.OPEN_EXTERNAL else NavigationDecision.BLOCK
+        NavigationTarget.BLOCKED -> NavigationDecision.BLOCK
     }
 
     /**

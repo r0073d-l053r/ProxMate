@@ -18,13 +18,26 @@ vi.mock('../src/lib/prisma.js', () => ({
     },
   },
 }));
+// The caller's access window has ended: like the real middleware, requireAuth
+// refuses with ACCESS_EXPIRED unless the route opted in with allowExpiredAccess.
 vi.mock('../src/middleware/auth.js', () => ({
-  requireAuth: (req: { user?: unknown }, _res: unknown, next: () => void) => {
+  requireAuth: (
+    req: { user?: unknown; allowExpiredAccess?: boolean },
+    res: { status: (n: number) => { json: (b: unknown) => void } },
+    next: () => void,
+  ) => {
+    if (!req.allowExpiredAccess) {
+      res.status(403).json({ code: 'ACCESS_EXPIRED' });
+      return;
+    }
     req.user = { id: 'u1', role: 'user', email: 'u1@example.com', displayName: 'U1' };
     next();
   },
   requireSession: (_req: unknown, _res: unknown, next: () => void) => next(),
-  allowExpiredAccess: (_req: unknown, _res: unknown, next: () => void) => next(),
+  allowExpiredAccess: (req: { allowExpiredAccess?: boolean }, _res: unknown, next: () => void) => {
+    req.allowExpiredAccess = true;
+    next();
+  },
 }));
 vi.mock('../src/services/audit.service.js', () => ({ recordAudit: vi.fn(async () => undefined) }));
 vi.mock('../src/services/twofactor.service.js', () => ({}));
@@ -64,6 +77,10 @@ const put = (body: unknown) =>
   });
 
 describe('PUT /api/auth/email-preferences', () => {
+  it('is open to an account whose access has ended, so anyone can always opt out', async () => {
+    expect((await put({ usageDigestOptIn: false })).status).toBe(200);
+  });
+
   it('opts in to the weekly digest without touching the other preferences', async () => {
     const res = await put({ usageDigestOptIn: true });
     expect(res.status).toBe(200);

@@ -119,38 +119,54 @@ and braces there. The old `--with-ide` option is still accepted and changes noth
 
 **Pool-scoped token (optional).** With the grant on `/`, the boundary between guests is
 ProxMate's ownership-tag check, not a Proxmox permission. `--pool <name>` instead grants the
-guest privileges on a Proxmox resource pool, so Proxmox itself refuses the token every guest
-outside it:
+guest privileges on a Proxmox resource pool, so Proxmox itself refuses the token guests outside it:
 
 ```bash
 bash proxmox-token.sh --dry-run --pool proxmate   # prints the ACL plan and the commands
 bash proxmox-token.sh --pool proxmate             # creates the pool if missing
+#   --snippet-storage <id>   the SNIPPET_STORAGE ProxMate writes cloud-init snippets to (default local)
+#   --import-storage <id>    where cloud images are downloaded (the ISO storage; default local)
+#   --backup-storage <id>    the backup storage, if tenants restore uploaded backups
+#   --with-cluster-firewall  let ProxMate enable the cluster firewall (see below)
 ```
 
 | Path | Role | Privileges |
 | --- | --- | --- |
 | `/pool/<name>` | `ProxMate-Guest` | every `VM.*` privilege above, `Pool.Audit`, `Pool.Allocate` |
-| `/nodes` | `ProxMate-Infra` | `Sys.Audit` |
-| `/storage` | `ProxMate-Infra` | `Datastore.Allocate`, `.AllocateSpace`, `.AllocateTemplate`, `.Audit` |
+| `/nodes` | `ProxMate-Infra` | `Sys.Audit`, `Sys.AccessNetwork` (8.2+, cloud-image downloads) |
+| `/storage` | `ProxMate-Infra` | `Datastore.Audit`, `.AllocateSpace`, `.AllocateTemplate` |
+| `/storage/<snippet, import, backup storage>` | `ProxMate-Storage` | the same plus `Datastore.Allocate` |
 | `/sdn/zones` | `ProxMate-Infra` | `SDN.Audit`, `SDN.Use` |
 | `/mapping` (with `--with-passthrough`) | `ProxMate-Infra` | `Mapping.Audit`, `Mapping.Use` |
-| `/`, not propagated | `ProxMate-Cluster` | `Sys.Audit`, `Sys.Modify` (cluster firewall, cluster status, cloud-image downloads) |
+| `/`, not propagated | `ProxMate-Cluster` | `Sys.Audit`; `Sys.Modify` only with `--with-cluster-firewall` |
+
+`Sys.Modify` on `/` also opens cluster backup jobs, the cluster firewall's groups and IP sets and
+other cluster settings, so it is opt-in: while the token holds it the pool does not fully contain
+it. Without it, turn on tenant isolation's cluster firewall once by hand as root (Datacenter →
+Firewall: add an accept rule for your management network on ports 8006 and 22, then enable it);
+the connection test warns until it is on. Before Proxmox VE 8.2 there is no `Sys.AccessNetwork`,
+so the script grants `Sys.Modify` on `/` for cloud-image downloads and says so.
 
 Then set **Proxmox pool** to the same name (setup wizard, or Admin → Settings → Proxmox
-connection): every guest ProxMate creates, clones, restores or imports is placed in it. Setting it
-does not move existing guests. When switching an existing install over:
+connection): every guest ProxMate creates, clones, restores, imports or adopts through "Import
+existing guests" is placed in it. Setting it does not move existing guests. When switching an
+existing install over:
 
 1. Run the script with `--pool <name>`. It keeps the token's earlier `ProxMate` grant on `/`.
 2. Set the pool in ProxMate and run the connection test. It warns that the token still holds guest
    privileges on `/`, and lists the guests ProxMate manages that are outside the pool.
 3. Click **Move managed guests into the pool**. Only guests carrying a ProxMate ownership tag
-   (machines and Template Store templates) are moved; re-test until nothing is listed.
+   (machines and Template Store templates) are moved, one at a time; a template in another pool is
+   moved only after you confirm. Re-test until nothing is listed.
 4. Run `bash proxmox-token.sh --pool <name> --drop-root-grant` and test again: the `/` warning is
    gone. A guest left outside the pool is now invisible to ProxMate (its row reads as unconfirmed);
    as root, `pveum pool modify <name> --vms <vmid> --allow-move 1` puts it in.
 
-Templates you register by hand must be in the pool too, since cloning checks `VM.Clone` on the
-template. This mode has not yet been run end to end on a live cluster.
+With a pool-scoped token ProxMate only sees guests in the pool: the Cluster Balancer, alerts and
+"Import existing guests" work on those alone. Templates you register by hand must be in the pool,
+since cloning checks `VM.Clone` on the template. Backups of a guest that was deleted, or destroyed
+by a rebuild that then failed, are outside the pool with it: restore those as root. This mode has
+not yet been run end to end on a live cluster.
 
 ---
 
@@ -195,7 +211,7 @@ Fill in the **PRODUCTION** block (replace the domain). The key values:
 | `ALLOW_PRIVATE_OUTBOUND_URLS` | *(optional)* `true` | Admin-configured **webhooks** and **cloud-image URLs** are blocked from targeting private/loopback/metadata addresses (SSRF guard). Set `true` only if you legitimately point at a **LAN** service (self-hosted Mattermost/ntfy, a local image mirror). The scheme + no-credentials checks always stay enforced. |
 | `MATESTATE_CRON` / `ACCESS_EXPIRY_CRON` | *(optional)* 5-field cron | Override the guest-backup schedule (default Sundays 03:00) and the compute-access-window sweep (default hourly at :20). |
 | `APPDB_BACKUP_CRON` / `BALANCER_CRON` / `TEMPLATE_REFRESH_CRON` | *(optional)* 5-field cron | Override the app-database snapshot schedule (default nightly 02:30), the Cluster Balancer and the cloud-image template refresh. An unset or invalid expression uses the built-in schedule. |
-| `USAGE_DIGEST_CRON` | *(optional)* 5-field cron | Override when the weekly usage digest goes to users who opted in (default Mondays 08:00 server time). An unset or invalid expression uses the default. |
+| `USAGE_DIGEST_CRON` | *(optional)* 5-field cron | Override when the weekly usage digest goes to users who opted in (default Mondays 08:00). Like every schedule here it is read in the backend's local time, which is **UTC in the Docker image**. An invalid expression logs a warning and uses the default. |
 | `AUTH_RATE_LIMIT_MAX` / `_WINDOW_MS` | *(optional)* default `20` / `900000` | Login / register / invite throttle per IP. |
 | `AUTH_LOCKOUT_MAX` / `AUTH_LOCKOUT_MINUTES` | *(optional)* default `10` / `15` | Per-account lockout after consecutive failed passwords (auto-unlocks). |
 | `SHARE_RATE_LIMIT_MAX` / `_WINDOW_MS` | *(optional)* default `30` / `3600000` | Sharing a VM by email, per signed-in user. |

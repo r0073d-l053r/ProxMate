@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-23
+* **Creation**: Documented the optional pool-scoped Proxmox token: the `proxmox_pool` setting in [Proxmox connection](/config/proxmox-connection.md), the [guest-pool service](/services/guest-pool.md), and the per-path ACL split of `deploy/proxmox-token.sh --pool` in [privileges](/proxmox/privileges.md).
 * **Update**: Numeric form fields use a shared `NumberInput` (frontend/src/components/ui/number-input.tsx) that keeps the typed text and applies min/max on blur, so a field can be emptied and retyped.
 * **Update**: Roadmap corrected against the source: the reconciler gap is a backend restart mid-operation, the admin-managed explainer and the `ENCRYPTION_KEY` reminder are partly built, and two restore/delete ownership checks still need a live-cluster run.
 * **Creation**: Documented Projects: the [project router](/api/project.md) and [project service](/services/project.md), and the `project:` tag on [VirtualMachine](/database/virtual-machine.md).
@@ -9,7 +10,8 @@
 * **Creation**: Documented the [activity-mail](/services/activity-mail.md) and [usage-digest](/services/usage-digest.md) services and the [usage digest setting](/config/usage-digest.md).
 * **Update**: Added the ntfy and Telegram channels to [notifications](/config/notifications.md) and the [notify service](/services/notify.md); new [User](/database/user.md) email preferences, `USAGE_DIGEST_CRON`, and the share and deploy-for-tenant emails in the [VM](/api/vm.md), [template](/api/template.md), [auth](/api/auth.md) and [admin](/api/admin.md) APIs.
 * **Creation**: Documented the [guest import](/services/guest-import.md) and [bulk deploy](/services/bulk-deploy.md) services and their routes in the [admin](/api/admin.md) and [template](/api/template.md) routers, and VMID reservations in the [vm service](/services/vm.md).
-* **Creation**: Documented the optional pool-scoped Proxmox token: the `proxmox_pool` setting in [Proxmox connection](/config/proxmox-connection.md), the [guest-pool service](/services/guest-pool.md), and the per-path ACL split of `deploy/proxmox-token.sh --pool` in [privileges](/proxmox/privileges.md).
+* **Update**: Documented the view-only console: the `console_view` capability held by [Viewer shares](/database/vm-share.md), console ticket grants and the input filters in the [console relay](/api/console.md), and the `vm.console_open` / `vm.console_view_open` audit entries.
+* **Update**: Import checks every snapshot of the guest and isolates before tagging; snapshot rollback in [matestate](/services/matestate.md) refuses host-level settings and other guests' volumes; rows still `creating` are refused by `requireOurGuest` and the vm router.
 
 ## 2026-10-20
 * **Update**: Documented [pending shares](/database/pending-vm-share.md), template deploy placement, start/restart waiting for the Proxmox task, and the least-privilege token in [privileges](/proxmox/privileges.md), with what a live Proxmox VE 9.2 cluster proved.

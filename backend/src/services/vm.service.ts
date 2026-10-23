@@ -210,11 +210,18 @@ export async function requireOurGuest(
     client?: Awaited<ReturnType<typeof pve.getClient>>;
   } = {},
 ): Promise<VirtualMachine> {
+  // A row still being created (a create, import or rebuild in flight, or a bulk-deploy
+  // copy waiting for its turn) belongs to that create until it settles: nothing
+  // else may build into, change or start its guest meanwhile. It can be deleted.
+  if (vm.status === 'creating') throw new GuestErroredError(STILL_CREATING_MESSAGE);
   if (!opts.allowError) assertNotErrored(vm);
   const current = await syncVmNode(vm);
   await assertGuestIsOurs(current, opts);
   return current;
 }
+
+/** Why an action on a row in `creating` is refused. */
+export const STILL_CREATING_MESSAGE = "This machine is still being created — wait until it's ready (or delete it).";
 
 /** holdReason of a row whose create, clone, upload restore or rebuild didn't finish. */
 export const PROVISION_FAILED_MESSAGE =
@@ -761,22 +768,35 @@ const pendingVmids = new Set<number>();
 export async function nextVmId(client: Awaited<ReturnType<typeof pve.getClient>>): Promise<number> {
   const first = await pve.getNextVmId(client);
   if (!pendingVmids.has(first)) return first;
-  return (await freeVmIdsFrom(first + 1, 1, client, new Set()))[0]!;
+  return (await freeVmIdsFrom(first + 1, 1, client, new Set(), false))[0]!;
 }
 
-/** `count` free VMIDs from `start` up, skipping held ones and `skip`, each confirmed with Proxmox. */
+/**
+ * `count` free VMIDs from `start` up, skipping held ones and `skip`, each confirmed
+ * with Proxmox. With `hold`, each is held the moment it is confirmed (re-checked
+ * after the Proxmox round-trip), so two reservations running side by side can't
+ * both take it.
+ */
 async function freeVmIdsFrom(
   start: number,
   count: number,
   client: Awaited<ReturnType<typeof pve.getClient>>,
   skip: Set<number>,
+  hold: boolean,
 ): Promise<number[]> {
   const out: number[] = [];
-  // Bounded so a cluster that refuses every candidate fails instead of looping.
-  for (let id = start, tries = 0; out.length < count; id += 1, tries += 1) {
-    if (tries > count + 500) throw new Error('Could not find enough free VMIDs on the cluster.');
-    if (pendingVmids.has(id) || skip.has(id)) continue;
-    if (await pve.isVmIdFree(id, client)) out.push(id);
+  try {
+    // Bounded so a cluster that refuses every candidate fails instead of looping.
+    for (let id = start, tries = 0; out.length < count; id += 1, tries += 1) {
+      if (tries > count + 500) throw new Error('Could not find enough free VMIDs on the cluster.');
+      if (pendingVmids.has(id) || skip.has(id)) continue;
+      if (!(await pve.isVmIdFree(id, client)) || pendingVmids.has(id)) continue;
+      if (hold) pendingVmids.add(id);
+      out.push(id);
+    }
+  } catch (err) {
+    if (hold) for (const id of out) pendingVmids.delete(id);
+    throw err;
   }
   return out;
 }
@@ -797,9 +817,7 @@ export async function reserveVmIds(
   ]);
   const skip = new Set([...rows, ...templates].map((r) => r.proxmoxVmId));
   const first = await pve.getNextVmId(client);
-  const ids = await freeVmIdsFrom(first, count, client, skip);
-  for (const id of ids) pendingVmids.add(id);
-  return ids;
+  return freeVmIdsFrom(first, count, client, skip, true);
 }
 
 /** Give back a VMID reserved by reserveVmIds. */
@@ -1420,6 +1438,16 @@ async function snippetCapableNodes(
  * can't confirm (a node-local disk, an unreadable config, no node that fits) keeps
  * the template's node, which is what a deploy did before.
  */
+type TemplateFacts = [Record<string, string>, Awaited<ReturnType<typeof pve.getNodeImagesStorages>>];
+
+/** What placement needs to know about a template: its config and its node's storages. */
+function templateFacts(template: Template, client: Awaited<ReturnType<typeof pve.getClient>>): Promise<TemplateFacts> {
+  return Promise.all([
+    pve.getVmConfig(template.proxmoxNode, template.proxmoxVmId, client),
+    pve.getNodeImagesStorages(template.proxmoxNode, client),
+  ]);
+}
+
 async function pickTemplateDeployNode(
   template: Template,
   plan: { full: boolean; storage?: string },
@@ -1427,14 +1455,13 @@ async function pickTemplateDeployNode(
   cloud: CloudInitInput,
   client: Awaited<ReturnType<typeof pve.getClient>>,
   pending?: Map<string, { cpu: number; ramMb: number; storageGb: number }>,
+  /** The template's config and its node's storages, when the caller already has them. */
+  facts?: () => Promise<TemplateFacts>,
 ): Promise<string> {
   const home = template.proxmoxNode;
   if (!plan.full) return home;
   try {
-    const [cfg, storages] = await Promise.all([
-      pve.getVmConfig(home, template.proxmoxVmId, client),
-      pve.getNodeImagesStorages(home, client),
-    ]);
+    const [cfg, storages] = await (facts ? facts() : templateFacts(template, client));
     const shared = new Set(storages.filter((s) => s.shared).map((s) => s.storage));
     const sources = pve.volumeStoragesOf(cfg);
     const dest = plan.storage ?? pve.diskStorageOf(cfg);
@@ -1553,7 +1580,6 @@ async function provisionTemplateDeploy(
   plan: { full: boolean; storage?: string },
   client: Awaited<ReturnType<typeof pve.getClient>>,
 ): Promise<VirtualMachine> {
-  const isolate = (await getConfig('isolation_enabled')) !== 'false';
   const home = template.proxmoxNode;
   const node = vm.proxmoxNode;
   const vmid = vm.proxmoxVmId;
@@ -1562,6 +1588,7 @@ async function provisionTemplateDeploy(
   let created = false;
   let cloneTask: { node: string; upid: string } | undefined;
   try {
+    const isolate = (await getConfig('isolation_enabled')) !== 'false';
     const upid = await pve.cloneVm(
       {
         node: home,
@@ -1680,9 +1707,12 @@ export async function reserveTemplateBatch(
     // node that was emptiest when the batch started.
     const pending = new Map<string, { cpu: number; ramMb: number; storageGb: number }>();
     const nodes: string[] = [];
+    // The template is read once for the whole batch (the quota locks are held meanwhile).
+    let facts: Promise<TemplateFacts> | undefined;
+    const once = () => (facts ??= templateFacts(template, client));
     for (const item of items) {
       const want = { cpu: item.input.cpu, ramMb: item.input.ram, storageGb: templateDiskGb(template, item.input) };
-      const node = await pickTemplateDeployNode(template, plan, want, item.input, client, pending);
+      const node = await pickTemplateDeployNode(template, plan, want, item.input, client, pending, once);
       const p = pending.get(node) ?? { cpu: 0, ramMb: 0, storageGb: 0 };
       pending.set(node, { cpu: p.cpu + want.cpu, ramMb: p.ramMb + want.ramMb, storageGb: p.storageGb + want.storageGb });
       nodes.push(node);
@@ -1734,6 +1764,14 @@ export async function provisionReservedDeploy(
     }
     const client = await pve.getClient();
     if (!(await pve.isVmIdFree(vm.proxmoxVmId, client))) {
+      // A guest carrying this row's own tag at the reserved VMID was not made by
+      // this deploy, yet is tied to the row: moving the row away would leave a
+      // tagged guest no row accounts for. Hold the row for an admin instead.
+      if (await reservedVmidHoldsOurGuest(vm, client)) {
+        handedOver = true;
+        await holdErroredRow(vm, PROVISION_FAILED_MESSAGE);
+        throw new Error("A guest tagged as this machine's already exists at its VMID, so the deploy stopped. Ask an admin to check it.");
+      }
       const [fresh] = await reserveVmIds(1, client);
       held.push(fresh!);
       vm = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { proxmoxVmId: fresh! } });
@@ -1748,6 +1786,22 @@ export async function provisionReservedDeploy(
   } finally {
     for (const id of held) releaseVmId(id);
   }
+}
+
+/** Whether the guest at a reserved row's VMID (on whichever node) carries the row's tag. */
+async function reservedVmidHoldsOurGuest(
+  vm: VirtualMachine,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<boolean> {
+  const res = await client.get<{ data: Array<{ type: string; vmid?: number; node?: string; tags?: string }> }>(
+    '/cluster/resources?type=vm',
+  );
+  const guest = (res.data.data ?? []).find((r) => r.vmid === vm.proxmoxVmId);
+  if (!guest?.node) return false;
+  if (tagsMarkRow(guest.tags, vm.id)) return true;
+  const kind: pve.GuestKind = guest.type === 'lxc' ? 'lxc' : 'qemu';
+  const cfg = await pve.getVmConfig(guest.node, vm.proxmoxVmId, client, kind).catch(() => null);
+  return tagsMarkRow(cfg?.['tags'], vm.id);
 }
 
 /**
@@ -2229,11 +2283,23 @@ export async function assertOwnVolumes(
    * is not this guest's either.
    */
   preexisting?: Set<string>,
+  opts: {
+    /**
+     * Count every `unusedN` line as foreign. For a fresh restore with a pool-scoped
+     * token: the volume listing taken before the restore cannot see volumes of a
+     * VMID outside the pool, so leftovers would go unnoticed, and vzdump never
+     * backs up an unused disk, so none of them can be the archive's own.
+     */
+    unusedAreForeign?: boolean;
+  } = {},
 ): Promise<void> {
   const c = client ?? (await pve.getClient());
   const kind = kindOf(vm);
   const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, c, kind);
   const foreign = foreignVolumeKeys(cfg, vm.proxmoxVmId);
+  if (opts.unusedAreForeign) {
+    for (const key of Object.keys(cfg)) if (/^unused\d+$/.test(key) && !foreign.includes(key)) foreign.push(key);
+  }
   if (preexisting && preexisting.size > 0) {
     for (const [key, value] of Object.entries(cfg)) {
       const volume = (String(value).split(',')[0] ?? '').replace(/^file=/, '');

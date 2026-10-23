@@ -34,7 +34,7 @@ Creates [VirtualMachine](/database/virtual-machine.md) rows in `creating`, one p
 
 # Gotchas
 
-- VMIDs are reserved before their guests exist, so they are held in an in-process set that every create path (`nextVmId`) skips, and `reserveVmIds` also skips VMIDs any row or Template Store entry references. A copy whose VMID was taken outside ProxMate while it waited is moved to a fresh VMID before its clone.[^vm]
+- VMIDs are reserved before their guests exist, so they are held in an in-process set that every create path (`nextVmId`) skips, and `reserveVmIds` also skips VMIDs any row or Template Store entry references. A copy whose VMID was taken outside ProxMate while it waited is moved to a fresh VMID before its clone — unless the guest there carries the copy's own tag, in which case the copy stops and its row is held for an admin. A queued copy is `creating`, so nothing but deleting it is allowed meanwhile; one deleted before its turn is skipped. Each reserved VMID is held the moment Proxmox confirms it free, so reservations running side by side never share one.[^vm]
 - Placement counts the copies already placed in the batch (`pickBestNode`'s `pending` load), so a batch spreads across nodes instead of all landing on the node that was emptiest at the start. Linked clones stay on the template's node, as for a single deploy.[^vm]
 - A failed copy is settled like a failed single deploy (`settleFailedCreate`): its row is dropped when no guest of ours was left, otherwise kept in `error`. The other copies carry on.[^vm]
 - Batches are in memory: a restart loses the progress view, not the machines.[^bulk]

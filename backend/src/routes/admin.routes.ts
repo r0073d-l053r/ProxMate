@@ -366,9 +366,16 @@ router.put('/settings/notifications', async (req: Request, res: Response) => {
   }
   const tgToken = (d.telegramBotToken ?? '').trim();
   const tgChat = d.telegramChatId?.trim();
-  if (tgToken && !d.clearTelegram && tgChat === '') {
-    res.status(400).json({ error: 'Enter the Telegram chat id to send to.' });
-    return;
+  if (!d.clearTelegram && (tgToken || tgChat === '')) {
+    // A bot (supplied now or already stored) must keep a chat to send to: refuse
+    // clearing the chat id, or a new bot token with no chat id anywhere.
+    const stored = await getNotifyConfig();
+    const hasBot = !!tgToken || !!stored.telegramBotToken;
+    const chatAfter = tgChat ?? stored.telegramChatId;
+    if (hasBot && !chatAfter) {
+      res.status(400).json({ error: 'Enter the Telegram chat id to send to (or remove Telegram).' });
+      return;
+    }
   }
   await saveNotifyConfig({
     webhookUrl: url,
@@ -688,9 +695,12 @@ router.post('/settings/proxmox/pool/move-guests', async (req: Request, res: Resp
       action: 'admin.proxmox_pool_move',
       actor: (req as AuthRequest).user,
       detail:
-        result.moved.length > 0
+        (result.moved.length > 0
           ? `moved into ${result.pool}: ${result.moved.map((g) => g.vmid).join(', ')}`
-          : `nothing to move into ${result.pool}`,
+          : `nothing moved into ${result.pool}`) +
+        (result.failed.length > 0
+          ? `; refused: ${result.failed.map((g) => `${g.vmid} (${g.error})`).join(', ')}`
+          : ''),
       req,
     });
     res.json(result);

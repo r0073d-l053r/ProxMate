@@ -92,7 +92,7 @@ describe.each([
     expect(body.viewOnly).toBe(true);
     expect(takeConsoleGrant(body.ticket)).toEqual({ vmId: 'vm1', userId: 'u1', transport, port: body.port, mode: 'view' });
     expect(vi.mocked(recordAudit)).toHaveBeenCalledWith(expect.objectContaining({
-      action: 'vm.console_open', targetId: 'vm1', detail: `${label} console of web (view only)`,
+      action: 'vm.console_view_open', targetId: 'vm1', detail: `${label} console of web`,
     }));
   });
 

@@ -57,6 +57,40 @@ class WebNavigationTest {
     }
 
     @Test
+    fun routesInAppPages() {
+        assertEquals(
+            NavigationDecision.LOAD,
+            WebNavigation.route("https://pm.example.com/vms", https, webSignIn = false, isMainFrame = true, hasGesture = false),
+        )
+        assertEquals(
+            NavigationDecision.LOAD,
+            WebNavigation.route("http://192.168.1.20:3000/vms", http, webSignIn = false, isMainFrame = true, hasGesture = false),
+        )
+    }
+
+    @Test
+    fun opensOutsideLinksOnlyForATopLevelGesture() {
+        val link = "https://github.com/r0073d-l053r/ProxMate"
+        assertEquals(NavigationDecision.OPEN_EXTERNAL, WebNavigation.route(link, https, false, isMainFrame = true, hasGesture = true))
+        assertEquals(NavigationDecision.BLOCK, WebNavigation.route(link, https, false, isMainFrame = true, hasGesture = false))
+        assertEquals(NavigationDecision.BLOCK, WebNavigation.route(link, https, false, isMainFrame = false, hasGesture = true))
+    }
+
+    @Test
+    fun anOutsideHttpLinkGoesToTheBrowserNotTheCleartextError() {
+        val link = "http://example.org/docs"
+        assertEquals(NavigationDecision.OPEN_EXTERNAL, WebNavigation.route(link, https, false, isMainFrame = true, hasGesture = true))
+        assertEquals(NavigationDecision.BLOCK, WebNavigation.route(link, https, false, isMainFrame = true, hasGesture = false))
+        assertEquals(NavigationDecision.OPEN_EXTERNAL, WebNavigation.route(link, https, true, isMainFrame = true, hasGesture = true))
+    }
+
+    @Test
+    fun routesBlockedSchemes() {
+        assertEquals(NavigationDecision.BLOCK, WebNavigation.route("javascript:alert(1)", https, false, true, true))
+        assertEquals(NavigationDecision.BLOCK, WebNavigation.route("intent://x#Intent;end", https, false, true, true))
+    }
+
+    @Test
     fun cleartextOnlyToAnHttpServerItself() {
         assertTrue(WebNavigation.cleartextAllowed("https://cdn.example.com/x.js", https))
         assertFalse(WebNavigation.cleartextAllowed("http://pm.example.com/", https))

@@ -174,6 +174,13 @@ describe('POST /vms/:id/files — size cap and audit', () => {
     expect(entry.detail).not.toContain(content);
   });
 
+  it('a push that landed still answers 200 if auditing fails', async () => {
+    vi.mocked(recordAudit).mockRejectedValueOnce(new Error('db locked'));
+    const r = await push({ path: '/opt/app/.env' });
+    expect(r.status).toBe(200);
+    expect(vi.mocked(recordAudit).mock.calls.map((c) => c[0].action)).toEqual(['vm.file_push']);
+  });
+
   it('audits a failed push too', async () => {
     vi.mocked(pushGuestFile).mockRejectedValueOnce(new GuestFileError('User "x" does not exist in the guest'));
     const r = await push({ path: '/opt/app/.env', owner: 'x' });

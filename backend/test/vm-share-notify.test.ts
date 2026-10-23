@@ -60,6 +60,7 @@ vi.mock('../src/services/vm.service.js', async (importOriginal) => ({
 import vmRouter from '../src/routes/vm.routes.js';
 import { prisma } from '../src/lib/prisma.js';
 import { getMailConfig, sendMail } from '../src/services/mail.service.js';
+import { resetShareNoticeWindow } from '../src/services/activity-mail.service.js';
 
 let server: http.Server;
 let base: string;
@@ -75,6 +76,7 @@ beforeAll(async () => {
 afterAll(() => new Promise<void>((r) => server.close(() => r())));
 beforeEach(() => {
   vi.clearAllMocks();
+  resetShareNoticeWindow();
   vi.mocked(getMailConfig).mockResolvedValue({ host: 'smtp' } as never);
 });
 
@@ -93,6 +95,20 @@ const settle = async () => {
 const existing = { id: 'u2', email: 'exists@example.com', displayName: 'Exists', activityEmailOptOut: false };
 
 describe('share notifications', () => {
+  it('sends at most one email per recipient and VM in 24 h — later level flips are folded', async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(existing as never);
+    await share('exists@example.com', 'viewer');
+    await settle();
+    vi.mocked(prisma.vmShare.findFirst).mockResolvedValue({ id: 's1', role: 'viewer' } as never);
+    for (const role of ['manager', 'viewer', 'operator']) {
+      vi.mocked(prisma.vmShare.findFirst).mockResolvedValue({ id: 's1', role: role === 'manager' ? 'viewer' : 'manager' } as never);
+      expect((await share('exists@example.com', role)).status).toBe(202);
+    }
+    await settle();
+    expect(sendMail).toHaveBeenCalledTimes(1);
+    vi.mocked(prisma.vmShare.findFirst).mockResolvedValue(null);
+  });
+
   it('emails an existing account when a VM is shared with it', async () => {
     vi.mocked(prisma.user.findUnique).mockResolvedValue(existing as never);
     const res = await share('exists@example.com', 'operator');
@@ -103,10 +119,12 @@ describe('share notifications', () => {
       to: 'exists@example.com',
       subject: '[ProxMate] "web" was shared with you',
     });
-    expect(vi.mocked(sendMail).mock.calls[0]![0].text).toContain('Owen Owner shared "web" with you as Operator.');
+    expect(vi.mocked(sendMail).mock.calls[0]![0].text).toContain(
+      'Owen Owner (owner@example.com) shared "web" with you as Operator.',
+    );
   });
 
-  it('emails again when the level changes, and not when it is re-saved unchanged', async () => {
+  it('emails a level change, and not a re-save at the same level', async () => {
     vi.mocked(prisma.user.findUnique).mockResolvedValue(existing as never);
     vi.mocked(prisma.vmShare.findFirst).mockResolvedValue({ id: 's1', role: 'viewer' } as never);
     await share('exists@example.com', 'manager');
