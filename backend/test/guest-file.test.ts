@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, rmSync, readdirSync } from 'node:fs';
+import {
+  mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, lstatSync, rmSync, readdirSync,
+  chmodSync, chownSync, symlinkSync,
+} from 'node:fs';
 import path from 'node:path';
 
 vi.mock('../src/lib/prisma.js', () => ({ prisma: {} }));
@@ -30,9 +33,10 @@ import {
   PUSH_CHUNK_CHARS,
   ASSEMBLE_SCRIPT,
   assembleArgv,
-  mkdirArgv,
+  WRITE_AS_OWNER_SCRIPT,
   MKTEMP_ARGV,
   IDE_LOG_ARGV,
+  IDE_LOG_SIZE_ARGV,
   IDE_LOG_TAIL_BYTES,
   IDE_LOG_MAX_LINES,
   pushGuestFile,
@@ -166,17 +170,18 @@ describe('base64Chunks', () => {
 describe('argv construction', () => {
   const hostile = "/srv/x'; rm -rf / #$(reboot)`id`|&>.txt";
 
-  it('passes the destination only as a positional after the fixed script', () => {
-    const argv = assembleArgv('/tmp/pmpush.AbCd1234', hostile, '0644', 'ubuntu');
-    expect(argv).toEqual(['/bin/sh', '-c', ASSEMBLE_SCRIPT, 'sh', '/tmp/pmpush.AbCd1234', hostile, '0644', 'ubuntu']);
+  it('passes every value only as a positional after the fixed scripts', () => {
+    const argv = assembleArgv('/tmp/pmpush.AbCd1234', hostile, '0644', 'ubuntu', 3, true);
+    expect(argv).toEqual([
+      '/bin/sh', '-c', ASSEMBLE_SCRIPT, 'sh', WRITE_AS_OWNER_SCRIPT,
+      '/tmp/pmpush.AbCd1234', hostile, '0644', 'ubuntu', '3', '1',
+    ]);
     expect(ASSEMBLE_SCRIPT).not.toContain(hostile);
+    expect(WRITE_AS_OWNER_SCRIPT).not.toContain(hostile);
   });
 
-  it('builds mkdir as a plain argv with an end-of-options marker', () => {
-    expect(mkdirArgv('/srv/a b;c')).toEqual(['mkdir', '-p', '--', '/srv/a b;c']);
-  });
-
-  it('reads the IDE log with a fixed argv', () => {
+  it('reads the IDE log with fixed argvs', () => {
+    expect(IDE_LOG_SIZE_ARGV).toEqual(['stat', '-c', '%s', '/var/log/pmide-provision.log']);
     expect(IDE_LOG_ARGV).toEqual(['tail', '-c', String(IDE_LOG_TAIL_BYTES), '/var/log/pmide-provision.log']);
   });
 
@@ -193,9 +198,8 @@ describe('argv construction', () => {
     });
     const argvs = exec.mock.calls.map((c) => c[2]);
     expect(argvs).toEqual([
-      ['mkdir', '-p', '--', path.posix.dirname(hostile)],
       [...MKTEMP_ARGV],
-      ['/bin/sh', '-c', ASSEMBLE_SCRIPT, 'sh', '/tmp/pmpush.AbCd1234', hostile, '0600', 'ubuntu'],
+      ['/bin/sh', '-c', ASSEMBLE_SCRIPT, 'sh', WRITE_AS_OWNER_SCRIPT, '/tmp/pmpush.AbCd1234', hostile, '0600', 'ubuntu', '1', '1'],
     ]);
     // No argv runs a shell over request text: the only shell gets the constant script.
     for (const a of argvs) if (a[0] === '/bin/sh') expect(a[2]).toBe(ASSEMBLE_SCRIPT);
@@ -214,12 +218,8 @@ describe('pushGuestFile', () => {
     expect(writes.map((c) => c[2])).toEqual(['/tmp/pmpush.AbCd1234/p.00000', '/tmp/pmpush.AbCd1234/p.00001', '/tmp/pmpush.AbCd1234/p.00002']);
     expect(writes.map((c) => c[3]).join('')).toBe(content.toString('base64'));
     expect(requireOurGuest).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not create parent folders unless asked', async () => {
-    exec.mockResolvedValueOnce(ok('/tmp/pmpush.AbCd1234')).mockResolvedValueOnce(ok(sha));
-    await pushGuestFile(vm, { path: '/opt/app/data.bin', content, mode: '0644' });
-    expect(exec.mock.calls.some((c) => c[2][0] === 'mkdir')).toBe(false);
+    // The part count and create-parents flag ride along as positionals.
+    expect(exec.mock.calls[1]![2].slice(-2)).toEqual(['3', '0']);
   });
 
   it('refuses containers', async () => {
@@ -252,9 +252,21 @@ describe('pushGuestFile', () => {
     [4, /is a directory/],
     [5, /Create parent folders/],
     [6, /failed inside the guest/],
+    [7, /went missing/],
+    [8, /Choose the owner/],
+    [10, /setpriv, runuser or su/],
   ])('maps assemble exit %i to a clear error', async (code, msg) => {
     exec.mockResolvedValueOnce(ok('/tmp/pmpush.AbCd1234')).mockResolvedValueOnce({ exitcode: code, stdout: '', stderr: '' });
     await expect(pushGuestFile(vm, { path: '/etc/x', content, mode: '0644', owner: 'nobody2' })).rejects.toThrow(msg);
+  });
+
+  it('cleans and caps guest stderr in error messages', async () => {
+    const noisy = `\x1b[31mmv: cannot move\x1b[0m\r\n‮${'x'.repeat(2000)}`;
+    exec.mockResolvedValueOnce(ok('/tmp/pmpush.AbCd1234')).mockResolvedValueOnce({ exitcode: 6, stdout: '', stderr: noisy });
+    const err = await pushGuestFile(vm, { path: '/etc/x', content, mode: '0644' }).catch((e: Error) => e);
+    expect(err.message).toContain('mv: cannot move');
+    expect([...err.message].some((ch) => ch.charCodeAt(0) < 0x20 || ch === '\u202e')).toBe(false);
+    expect(err.message.length).toBeLessThan(450);
   });
 
   it('fails on a checksum mismatch', async () => {
@@ -271,49 +283,199 @@ describe('pushGuestFile', () => {
 });
 
 // Run the real assemble script with a local POSIX shell, so the positional
-// handling is proven rather than assumed.
-describe.runIf(process.platform === 'linux' && existsSync('/bin/sh') && existsSync('/tmp'))('ASSEMBLE_SCRIPT under sh', () => {
+// handling and the symlink rules are proven rather than assumed.
+const canSh = process.platform === 'linux' && existsSync('/bin/sh') && existsSync('/tmp');
+const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+const hasNobody = spawnSync('getent', ['passwd', 'nobody']).status === 0;
+
+describe.runIf(canSh)('ASSEMBLE_SCRIPT under sh', () => {
   let work: string;
   let staging: string;
   beforeEach(() => {
     work = mkdtempSync(path.join('/tmp', 'pmtest-'));
+    chmodSync(work, 0o755);
     staging = mkdtempSync('/tmp/pmpush.');
   });
   afterEach(() => {
     rmSync(work, { recursive: true, force: true });
     rmSync(staging, { recursive: true, force: true });
   });
-  const run = (dest: string, mode = '0640', owner = '') =>
-    spawnSync('/bin/sh', ['-c', ASSEMBLE_SCRIPT, 'sh', staging, dest, mode, owner], { encoding: 'utf8', cwd: work });
+  const stage = (content: Buffer) => {
+    const parts = base64Chunks(content);
+    parts.forEach((p, i) => writeFileSync(path.join(staging, `p.${String(i).padStart(5, '0')}`), p));
+    return parts.length;
+  };
+  const run = (dest: string, opts: { mode?: string; owner?: string; parts?: number; mkdir?: boolean } = {}) =>
+    spawnSync(
+      '/bin/sh',
+      [
+        '-c', ASSEMBLE_SCRIPT, 'sh', WRITE_AS_OWNER_SCRIPT, staging, dest, opts.mode ?? '0640', opts.owner ?? '',
+        String(opts.parts ?? 0), opts.mkdir ? '1' : '0',
+      ],
+      { encoding: 'utf8', cwd: work },
+    );
 
-  it('writes the decoded file with the mode, prints its hash and treats metacharacters as text', () => {
-    const content = Buffer.from(Array.from({ length: 150_000 }, (_, i) => (i * 7) % 256));
-    base64Chunks(content).forEach((p, i) => writeFileSync(path.join(staging, `p.${String(i).padStart(5, '0')}`), p));
-    const dest = path.join(work, "we ird;$(touch pwned)'`touch pwned2`.bin");
-    const r = run(dest);
-    expect(r.status).toBe(0);
-    expect(readFileSync(dest)).toEqual(content);
-    expect(statSync(dest).mode & 0o777).toBe(0o640);
-    expect(r.stdout.trim()).toBe(createHash('sha256').update(content).digest('hex'));
-    expect(readdirSync(work).filter((f) => f.startsWith('pwned'))).toEqual([]);
-    expect(existsSync(staging)).toBe(false);
+  it.runIf(!isRoot)('as a non-root user, refuses to write without an owner (exit 8)', () => {
+    expect(run(path.join(work, 'f')).status).toBe(8);
   });
 
-  it('writes an empty file from no parts', () => {
-    const dest = path.join(work, 'empty');
-    expect(run(dest).status).toBe(0);
-    expect(readFileSync(dest).length).toBe(0);
-  });
+  describe.runIf(isRoot)('as root', () => {
+    it('writes the decoded file with the mode, prints its hash and treats metacharacters as text', () => {
+      const content = Buffer.from(Array.from({ length: 150_000 }, (_, i) => (i * 7) % 256));
+      const parts = stage(content);
+      const dest = path.join(work, "we ird;$(touch pwned)'`touch pwned2`.bin");
+      const r = run(dest, { parts });
+      expect(r.status).toBe(0);
+      expect(readFileSync(dest)).toEqual(content);
+      expect(statSync(dest).mode & 0o777).toBe(0o640);
+      expect(r.stdout.trim()).toBe(createHash('sha256').update(content).digest('hex'));
+      expect(readdirSync(work).filter((f) => f.startsWith('pwned') || f.startsWith('.pmpush'))).toEqual([]);
+      expect(existsSync(staging)).toBe(false);
+    });
 
-  it('exits 5 when the parent folder is missing and 4 for a directory', () => {
-    expect(run(path.join(work, 'nope', 'file')).status).toBe(5);
-    mkdirSync(path.join(work, 'adir'));
-    expect(run(path.join(work, 'adir')).status).toBe(4);
-  });
+    it('writes an empty file from no parts', () => {
+      const dest = path.join(work, 'empty');
+      expect(run(dest).status).toBe(0);
+      expect(readFileSync(dest).length).toBe(0);
+    });
 
-  it('exits 3 for an owner that does not exist', () => {
-    if (spawnSync('getent', ['passwd', 'root']).status !== 0) return;
-    expect(run(path.join(work, 'f'), '0644', 'no-such-user-pm').status).toBe(3);
+    it('exits 7 when parts are missing, so no short file lands', () => {
+      stage(Buffer.from('hello'));
+      expect(run(path.join(work, 'f'), { parts: 2 }).status).toBe(7);
+      expect(existsSync(path.join(work, 'f'))).toBe(false);
+    });
+
+    it('exits 5 when the parent folder is missing and 4 for a directory', () => {
+      expect(run(path.join(work, 'nope', 'file')).status).toBe(5);
+      mkdirSync(path.join(work, 'adir'));
+      expect(run(path.join(work, 'adir')).status).toBe(4);
+    });
+
+    it('creates parent folders when asked', () => {
+      expect(run(path.join(work, 'a', 'b', 'file'), { mkdir: true }).status).toBe(0);
+      expect(existsSync(path.join(work, 'a', 'b', 'file'))).toBe(true);
+    });
+
+    it('exits 3 for an owner that does not exist', () => {
+      expect(run(path.join(work, 'f'), { mode: '0644', owner: 'no-such-user-pm' }).status).toBe(3);
+    });
+
+    it('replaces a symlink at the destination instead of writing through it', () => {
+      const victim = path.join(work, 'victim');
+      writeFileSync(victim, 'secret');
+      chmodSync(victim, 0o600);
+      symlinkSync(victim, path.join(work, 'dest'));
+      // The old fixed temp names: a pre-planted link there must not be followed either.
+      for (let pid = 1; pid < 64; pid++) symlinkSync(victim, path.join(work, `dest.pmpush.${pid}`));
+      const parts = stage(Buffer.from('new content'));
+      expect(run(path.join(work, 'dest'), { mode: '0644', parts }).status).toBe(0);
+      expect(readFileSync(victim, 'utf8')).toBe('secret');
+      expect(statSync(victim).mode & 0o777).toBe(0o600);
+      expect(lstatSync(path.join(work, 'dest')).isSymbolicLink()).toBe(false);
+      expect(readFileSync(path.join(work, 'dest'), 'utf8')).toBe('new content');
+    });
+
+    it('refuses to write as root into a folder reached through a symlink (exit 8)', () => {
+      mkdirSync(path.join(work, 'real'));
+      symlinkSync(path.join(work, 'real'), path.join(work, 'link'));
+      expect(run(path.join(work, 'link', 'f')).status).toBe(8);
+      expect(readdirSync(path.join(work, 'real'))).toEqual([]);
+    });
+
+    it('refuses to write as root into a folder other users can write to (exit 8)', () => {
+      const shared = path.join(work, 'shared');
+      mkdirSync(shared);
+      chmodSync(shared, 0o777);
+      expect(run(path.join(shared, 'f')).status).toBe(8);
+    });
+
+    it('chowns the file (not a link) in a root-only folder', () => {
+      if (!hasNobody) return;
+      const parts = stage(Buffer.from('x'));
+      expect(run(path.join(work, 'owned'), { owner: 'nobody', parts }).status).toBe(0);
+      expect(statSync(path.join(work, 'owned')).uid).toBe(65534);
+    });
+
+    describe.runIf(hasNobody)('in a folder the owner controls', () => {
+      let home: string;
+      beforeEach(() => {
+        home = path.join(work, 'home');
+        mkdirSync(home);
+        chownSync(home, 65534, 65534);
+      });
+
+      it('writes as the owner', () => {
+        const parts = stage(Buffer.from('dotfile'));
+        const r = run(path.join(home, '.bashrc'), { owner: 'nobody', mode: '0644', parts });
+        expect(r.status).toBe(0);
+        const st = statSync(path.join(home, '.bashrc'));
+        expect(st.uid).toBe(65534);
+        expect(readFileSync(path.join(home, '.bashrc'), 'utf8')).toBe('dotfile');
+        expect(r.stdout.trim()).toBe(createHash('sha256').update('dotfile').digest('hex'));
+      });
+
+      it('a planted symlink only reaches what the owner could write', () => {
+        const victim = path.join(work, 'shadow');
+        writeFileSync(victim, 'root only');
+        chmodSync(victim, 0o600);
+        symlinkSync(victim, path.join(home, '.bashrc'));
+        for (let pid = 1; pid < 64; pid++) symlinkSync(victim, path.join(home, `.bashrc.pmpush.${pid}`));
+        const parts = stage(Buffer.from('dotfile'));
+        expect(run(path.join(home, '.bashrc'), { owner: 'nobody', parts }).status).toBe(0);
+        expect(readFileSync(victim, 'utf8')).toBe('root only');
+        expect(statSync(victim).uid).toBe(0);
+        expect(lstatSync(path.join(home, '.bashrc')).isSymbolicLink()).toBe(false);
+      });
+
+      it('a parent folder swapped for a symlink to a root-only folder is not written', () => {
+        const rootOnly = path.join(work, 'rootssh');
+        mkdirSync(rootOnly);
+        chmodSync(rootOnly, 0o700);
+        symlinkSync(rootOnly, path.join(home, 'link'));
+        const parts = stage(Buffer.from('ssh-ed25519 AAAA'));
+        const r = run(path.join(home, 'link', 'authorized_keys'), { owner: 'nobody', parts });
+        expect(r.status).not.toBe(0);
+        expect(readdirSync(rootOnly)).toEqual([]);
+      });
+
+      // Guests differ in which tool switches users; hide the earlier ones from PATH.
+      it.each([
+        ['runuser', ['setpriv']],
+        ['su', ['setpriv', 'runuser']],
+      ])('falls back to %s', (_tool, hidden) => {
+        const bin = mkdtempSync(path.join('/tmp', 'pmbin-'));
+        chmodSync(bin, 0o755);
+        try {
+          const tools = ['sh', 'getent', 'id', 'find', 'mktemp', 'base64', 'chmod', 'chown', 'mv', 'rm', 'cat', 'cut',
+            'sha256sum', 'mkdir', 'setpriv', 'runuser', 'su'];
+          for (const t of tools) {
+            if (hidden.includes(t)) continue;
+            const where = spawnSync('/bin/sh', ['-c', 'command -v "$1"', 'sh', t], { encoding: 'utf8' }).stdout.trim();
+            if (where) symlinkSync(where, path.join(bin, t));
+          }
+          if (!existsSync(path.join(bin, _tool))) return;
+          const parts = stage(Buffer.from('fallback'));
+          const r = spawnSync(
+            '/bin/sh',
+            ['-c', ASSEMBLE_SCRIPT, 'sh', WRITE_AS_OWNER_SCRIPT, staging, path.join(home, 'f'), '0644', 'nobody', String(parts), '0'],
+            { encoding: 'utf8', cwd: work, env: { PATH: bin } },
+          );
+          expect(r.stderr).toBe('');
+          expect(r.status).toBe(0);
+          expect(statSync(path.join(home, 'f')).uid).toBe(65534);
+          expect(readFileSync(path.join(home, 'f'), 'utf8')).toBe('fallback');
+        } finally {
+          rmSync(bin, { recursive: true, force: true });
+        }
+      });
+
+      it('creates parent folders as the owner', () => {
+        const parts = stage(Buffer.from('x'));
+        expect(run(path.join(home, 'a', 'b', 'f'), { owner: 'nobody', parts, mkdir: true }).status).toBe(0);
+        expect(statSync(path.join(home, 'a')).uid).toBe(65534);
+        expect(statSync(path.join(home, 'a', 'b', 'f')).uid).toBe(65534);
+      });
+    });
   });
 });
 
@@ -327,7 +489,7 @@ describe('stripControlChars', () => {
     ['progress bars keep their last state', '  0%\r 50%\r100%\nnext', '100%\nnext'],
     ['CRLF', 'one\r\ntwo\r\n', 'one\ntwo\n'],
     ['other control chars', 'a\x00b\x07c\x08d\x7fe\tf', 'abcde\tf'],
-    ['bidi overrides', 'safe‮txt.exe', 'safetxt.exe'],
+    ['bidi overrides and marks', 'safe\u202etxt\u200e\u200f\u061c.exe', 'safetxt.exe'],
     ['html stays as text', '<script>alert(1)</script>', '<script>alert(1)</script>'],
   ])('%s', (_label, input, want) => {
     expect(stripControlChars(input)).toBe(want);
@@ -359,15 +521,20 @@ describe('shapeIdeLog', () => {
 });
 
 describe('readIdeInstallLog', () => {
-  it('runs the fixed tail command and cleans the output', async () => {
-    exec.mockResolvedValueOnce(ok('\x1b[31merror\x1b[0m: curl failed\n'));
+  it('runs the fixed stat and tail commands and cleans the output', async () => {
+    exec.mockResolvedValueOnce(ok('28')).mockResolvedValueOnce(ok('\x1b[31merror\x1b[0m: curl failed\n'));
     const r = await readIdeInstallLog(vm);
-    expect(exec.mock.calls[0]![2]).toEqual([...IDE_LOG_ARGV]);
+    expect(exec.mock.calls.map((c) => c[2])).toEqual([[...IDE_LOG_SIZE_ARGV], [...IDE_LOG_ARGV]]);
     expect(r).toEqual({ path: '/var/log/pmide-provision.log', log: 'error: curl failed', truncated: false, missing: false });
   });
   it('reports a missing log rather than failing', async () => {
-    exec.mockResolvedValueOnce({ exitcode: 1, stdout: '', stderr: "tail: cannot open '/var/log/pmide-provision.log': No such file or directory" });
+    exec.mockResolvedValueOnce({ exitcode: 1, stdout: '', stderr: "stat: cannot statx '/var/log/pmide-provision.log': No such file or directory" });
     expect(await readIdeInstallLog(vm)).toMatchObject({ missing: true, log: '' });
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+  it('flags truncation from the file size on the guest', async () => {
+    exec.mockResolvedValueOnce(ok('900000')).mockResolvedValueOnce(ok('partial\nwhole line\n'));
+    expect(await readIdeInstallLog(vm)).toMatchObject({ truncated: true, log: 'whole line' });
   });
   it('checks guest identity before reading', async () => {
     vi.mocked(requireOurGuest).mockRejectedValueOnce(new Error('not ours'));

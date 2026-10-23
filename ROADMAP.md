@@ -116,7 +116,7 @@ Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
   consoles. The relay enforces it: it parses the browser's RFB and termproxy streams and drops
   every keyboard, mouse, clipboard, resize-desktop and power message before Proxmox sees it, and
   forces a shared VNC session so a viewer never disconnects anyone else. Console opens are audited
-  (`vm.console_open`, marked "view only" for viewers).
+  (`vm.console_open`, or `vm.console_view_open` for a view-only session).
 - **View the IDE install log.** While the IDE installs, or after it failed, the VM's owner (or an
   admin) opens **View install log**: the tail of `/var/log/pmide-provision.log` read through the
   guest agent with a fixed command, cleaned of terminal control codes, with refresh and download.

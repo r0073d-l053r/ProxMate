@@ -25,7 +25,7 @@ Once a week, every user with `usageDigestOptIn` gets one branded email (`usageDi
 | `isUsageDigestEnabled` / `setUsageDigestEnabled` | `() => boolean` / `(enabled)` | The admin switch `usage_digest_enabled` (on unless `'false'`). |
 | `digestRows` | `(userId, vms, samples) => DigestVmRow[]` | Pure fold: drops samples of any other user, one row per current machine (0 h when idle), then one "Deleted machine" row per vmId no longer among them. Running hours = samples × `SAMPLE_INTERVAL_MINUTES` (5) / 60. |
 | `buildUsageDigest` | `(userId, now?) => { to, mail } \| null` | Reads the user, their VMs and their samples in `[now − 7 d, now)`, all filtered by that user id; quota counts non-exempt VMs, as the quota checks do. |
-| `runUsageDigest` | `(now?) => { ran, reason?, sent, failed }` | Skips when disabled or SMTP is off; otherwise one digest per opted-in user, a failure counted and logged without stopping the rest. |
+| `runUsageDigest` | `(now?) => { ran, reason?, sent, failed }` | Skips when disabled or SMTP is off; otherwise one digest per opted-in user whose access has not ended (`hasAccessEnded`), a failure counted and logged without stopping the rest. |
 
 # Gotchas
 

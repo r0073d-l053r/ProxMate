@@ -194,7 +194,7 @@ export function FilePushDialog({
                 label="Owner (optional)"
                 htmlFor="pushOwner"
                 error={ownerOk ? undefined : "Invalid username."}
-                hint="Guest user; root if empty."
+                hint="Guest user; root if empty. Written as this user in folders that are theirs."
               >
                 <Input
                   id="pushOwner"

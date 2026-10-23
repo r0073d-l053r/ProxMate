@@ -258,7 +258,9 @@ shows a **View only** label: the screen and terminal output are live, but keyboa
 clipboard and paste are not sent. This is enforced by ProxMate's console relay, which drops every
 input message from a view-only session before it reaches Proxmox, so a modified browser can't get
 around it. A viewer always joins as a shared session and never disconnects anyone else's console.
-Every console opened is recorded in the VM's activity feed (marked "view only" for viewers). The ProxMate IDE opens only for the
+Every console opened is recorded in the VM's activity feed ("Console opened", or "Console opened
+(view only)" for a viewer). A viewer's text console keeps its own size: it can't resize the
+terminal, so its view may wrap differently from the guest's. The ProxMate IDE opens only for the
 owner, never through a share. No share can ever delete, rebuild,
 migrate, or re-share the VM — those stay with the owner (and you, the admin). The API enforces
 every level server-side.
@@ -355,7 +357,7 @@ A few things worth knowing day-to-day:
   URLs and tokens are stored encrypted and only ever shown masked; **Send test** reports each
   channel separately.
 - **Weekly usage digest** (**Admin → Settings → Notifications**) — users who opt in (Security →
-  Email preferences; off by default) get a Monday 08:00 email with their own machines, running
+  Email preferences; off by default) get a Monday 08:00 (server time, UTC in Docker) email with their own machines, running
   hours, average CPU and memory over the week, and quota in use. Turn it off for everyone with the
   card's switch, or **Send me a preview** to see your own. Override the time with
   `USAGE_DIGEST_CRON`.

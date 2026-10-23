@@ -87,6 +87,16 @@ puts the API on a separate origin isn't supported.
   access turned off and no JavaScript interface. It denies camera, microphone and
   location requests. Downloads go to the browser, so the session cookie is never
   passed to another app.
+- Other links open in the browser only when you tap them in the page itself. A
+  redirect or script that tries to leave the app on its own is blocked.
+- Sign-out clears the local session at once. The server-side logout runs in the
+  background with the cookies captured beforehand, so closing the screen can't
+  cancel it. Sign-in, code and sign-out requests are never retried automatically.
+- When trusted certificates are added, removed or replaced, and on sign-out, the
+  WebView's remembered certificate decisions are cleared. That way a removed pin
+  can't be bypassed.
+- The sign-in and web screens are hidden from screenshots and the recent-apps
+  preview (`FLAG_SECURE`). Native API responses are capped at 256 KB.
 
 ### Known limitations
 
@@ -155,20 +165,21 @@ In CI, add these repository secrets (Settings → Secrets and variables → Acti
 | `ANDROID_KEY_ALIAS` | Key alias |
 | `ANDROID_KEY_PASSWORD` | Key password |
 
-When all four are set, the workflow decodes the keystore into the runner's temporary
-directory, builds `assembleRelease`, uploads `proxmate-android-release`, and deletes
-the keystore. When any is missing, it skips that part. Pull requests from forks never
-receive the secrets, so they build the debug APK only.
+When all four are set and the run is for `main` or a version tag (`v*`), the workflow
+decodes the keystore into the runner's temporary directory, builds `assembleRelease`,
+uploads `proxmate-android-release`, and deletes the keystore. Other branches and pull
+requests never build the signed APK, and it is skipped when any secret is missing.
 
 ## CI
 
 `.github/workflows/android.yml` runs on pushes that touch `android/**` or the
-workflow, on pull requests to `main` that touch `android/**`, and on manual dispatch.
+workflow, on version tags (`v*`), on pull requests to `main` that touch `android/**`,
+and on manual dispatch.
 It runs the unit tests, builds the debug APK, and runs lint (report only). It uploads:
 
 - `proxmate-android-debug`: `app-debug.apk`
 - `proxmate-android-reports`: unit test and lint reports
-- `proxmate-android-release`: the signed `app-release.apk` (only with signing secrets)
+- `proxmate-android-release`: the signed `app-release.apk` (only on `main` or a version tag, with signing secrets)
 
 ## Layout
 
