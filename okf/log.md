@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-10-23
+* **Creation**: Documented the [guest-file service](/services/guest-file.md): pushing a file into a QEMU guest (`POST /api/vms/:id/files`) and reading the IDE install log (`GET /api/ide/:id/install-log`), their rate limits and the `VM.GuestAgent.FileWrite` privilege now always in the least-privilege role on PVE 9.
+
 ## 2026-10-20
 * **Update**: Documented [pending shares](/database/pending-vm-share.md), template deploy placement, start/restart waiting for the Proxmox task, and the least-privilege token in [privileges](/proxmox/privileges.md), with what a live Proxmox VE 9.2 cluster proved.
 

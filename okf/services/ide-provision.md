@@ -34,7 +34,7 @@ On first "Open IDE", ProxMate runs a self-contained bootstrap through the guest 
 - [VirtualMachine](/database/virtual-machine.md): `ideState`, `ideStateAt`, `type`, `status`, `ram`, `ipAddress`, `hasPassthrough`, `deployState`.[^prov]
 - SystemConfig `ide_min_ram_mb` (default 8192), `ide_ingress_cidr` — see [ide config](/config/ide.md).
 - [IdeGuestSecret](/database/ide-guest-secret.md): the install's secret, encrypted, rotated on every (re)provision.
-- In guest: `/etc/proxmate-ide.env` (`PROXMATE_IDE_TOKEN`, `HASHED_PASSWORD` = SHA-256 of the guest secret, umask 077), `/etc/systemd/system/proxmate-ide.service`, `/root/.config/opencode/opencode.json`, log `/var/log/pmide-provision.log`.
+- In guest: `/etc/proxmate-ide.env` (`PROXMATE_IDE_TOKEN`, `HASHED_PASSWORD` = SHA-256 of the guest secret, umask 077), `/etc/systemd/system/proxmate-ide.service`, `/root/.config/opencode/opencode.json`, log `/var/log/pmide-provision.log` (the owner or an admin can read its tail with `GET /api/ide/:id/install-log`; see [guest-file](/services/guest-file.md)).
 - Env `IDE_GUEST_PORT` (default 8080: code-server's bind port, the pinhole port and the probe port), `IDE_TARGET_OVERRIDE`.
 
 # Gotchas

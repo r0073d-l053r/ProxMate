@@ -73,6 +73,9 @@ The backend loads `.env` with `import 'dotenv/config'` (the first line of `src/i
 | `AUTH_RATE_LIMIT_MAX` / `AUTH_RATE_LIMIT_WINDOW_MS` | `20` / `900000` (15 min) | `middleware/rate-limit.ts` | Auth limiter, also applied to mutating `/api/setup` calls. |
 | `API_WRITE_RATE_LIMIT_MAX` / `API_WRITE_RATE_LIMIT_WINDOW_MS` | `60` / `60000` | same | Mutating `/api` requests per IP. |
 | `SHARE_RATE_LIMIT_MAX` / `SHARE_RATE_LIMIT_WINDOW_MS` | `30` / `3600000` | same | `POST /api/vms/:id/shares` requests per signed-in user. Forwarded by `docker-compose.yml`. |
+| `GUEST_FILE_RATE_LIMIT_MAX` / `GUEST_FILE_RATE_LIMIT_WINDOW_MS` | `30` / `600000` | same | `POST /api/vms/:id/files` pushes per signed-in user. Forwarded by `docker-compose.yml`. |
+| `GUEST_LOG_RATE_LIMIT_MAX` | `30` | same | `GET /api/ide/:id/install-log` reads per signed-in user per minute. Forwarded by `docker-compose.yml`. |
+| `GUEST_FILE_PUSH_MAX_BYTES` | `1048576` | at most `8388608` | Largest file `POST /api/vms/:id/files` accepts (1 MiB default, 8 MiB ceiling). Forwarded by `docker-compose.yml`. |
 | `PUBLIC_TOKEN_RATE_LIMIT_MAX` / `PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS` | `60` / `900000` | same | Public token GETs (invite lookup, downloads). Forwarded by `docker-compose.yml`. |
 | `MODULE_RATE_LIMIT_MAX` / `MODULE_RATE_LIMIT_WINDOW_MS` | `300` / `60000` | same | Optional-module routes. |
 | `KIOSK_EXIT_RATE_LIMIT_MAX` / `KIOSK_EXIT_RATE_LIMIT_WINDOW_MS` | `10` / `300000` | same | `/api/auth/kiosk-exit*`. |

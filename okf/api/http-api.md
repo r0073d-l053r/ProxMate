@@ -115,11 +115,13 @@ Other gates:
 | `apiWriteLimiter` | 60 / 60 s | `API_WRITE_RATE_LIMIT_MAX`, `API_WRITE_RATE_LIMIT_WINDOW_MS` | all non-GET/HEAD/OPTIONS under `/api` |
 | `publicTokenLimiter` | 60 / 15 min | `PUBLIC_TOKEN_RATE_LIMIT_MAX`, `PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS` | invite lookup, downloads |
 | `shareLimiter` | 30 / 1 h per signed-in user | `SHARE_RATE_LIMIT_MAX`, `SHARE_RATE_LIMIT_WINDOW_MS` | `POST /api/vms/:id/shares` |
+| `guestFileLimiter` | 30 / 10 min per signed-in user | `GUEST_FILE_RATE_LIMIT_MAX`, `GUEST_FILE_RATE_LIMIT_WINDOW_MS` | `POST /api/vms/:id/files` |
+| `guestLogLimiter` | 30 / 60 s per signed-in user (a GET) | `GUEST_LOG_RATE_LIMIT_MAX` | `GET /api/ide/:id/install-log` |
 | `kioskExitLimiter` | 10 / 5 min | `KIOSK_EXIT_RATE_LIMIT_MAX`, `KIOSK_EXIT_RATE_LIMIT_WINDOW_MS` | kiosk exit |
 | `gatewayAuthLimiter` | 600 / 60 s | `IDE_GATEWAY_RATE_LIMIT_MAX`, `IDE_GATEWAY_RATE_LIMIT_WINDOW_MS` | IDE LLM gateway |
 | `moduleLimiter` | 300 / 60 s (reads too) | `MODULE_RATE_LIMIT_MAX`, `MODULE_RATE_LIMIT_WINDOW_MS` | `/api/ext/<module>` |
 
-All are IP-keyed except `shareLimiter`, which is keyed by the signed-in user; all send `draft-7` `RateLimit-*` headers and 429 JSON errors. A non-numeric env value falls back to the default.[^mw-rl]
+All are IP-keyed except `shareLimiter`, `guestFileLimiter` and `guestLogLimiter`, which are keyed by the signed-in user; all send `draft-7` `RateLimit-*` headers and 429 JSON errors. A non-numeric env value falls back to the default.[^mw-rl]
 
 # Endpoints
 

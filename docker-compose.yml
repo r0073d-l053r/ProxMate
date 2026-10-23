@@ -65,6 +65,12 @@ services:
       # Optional VM-share throttle (defaults: 30 share requests / hour / signed-in user).
       SHARE_RATE_LIMIT_MAX: ${SHARE_RATE_LIMIT_MAX:-30}
       SHARE_RATE_LIMIT_WINDOW_MS: ${SHARE_RATE_LIMIT_WINDOW_MS:-3600000}
+      # Optional guest-agent file tools: pushes per 10 min, install-log reads per
+      # minute (both per signed-in user) and the largest pushable file (max 8 MiB).
+      GUEST_FILE_RATE_LIMIT_MAX: ${GUEST_FILE_RATE_LIMIT_MAX:-30}
+      GUEST_FILE_RATE_LIMIT_WINDOW_MS: ${GUEST_FILE_RATE_LIMIT_WINDOW_MS:-600000}
+      GUEST_LOG_RATE_LIMIT_MAX: ${GUEST_LOG_RATE_LIMIT_MAX:-30}
+      GUEST_FILE_PUSH_MAX_BYTES: ${GUEST_FILE_PUSH_MAX_BYTES:-1048576}
       # Optional public-token throttle for invite lookups and downloads (defaults:
       # 60 requests / 15 min / IP).
       PUBLIC_TOKEN_RATE_LIMIT_MAX: ${PUBLIC_TOKEN_RATE_LIMIT_MAX:-60}

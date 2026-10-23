@@ -163,6 +163,7 @@ the cluster balancer pins containers and node-drain lists them as blockers.
 | Browser headers | The frontend sends `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`, HSTS, and a strict **nonce-based Content-Security-Policy** (`script-src 'self' 'nonce-…' 'strict-dynamic'`) so injected inline scripts can't execute. |
 | CORS | Restricted to `FRONTEND_URL`. |
 | Console tickets | One-time, short-lived Proxmox VNC tickets. The console WebSocket authenticates via the **httpOnly session cookie** (no token in the URL), checks `Origin` against `FRONTEND_URL`, and gates on the **`console` capability** — owner, admin, Operator and Manager shares pass; a Viewer share does not. |
+| Guest-agent tools | Password reset, SSH-key add and **file push** (QEMU only) need the **`configure` capability** (owner, admin, Manager share); Viewer and Operator shares are refused. Each first confirms the guest carries the row's ownership tag. Request values reach the guest only as argv entries or `file-write` content, never as shell text. A pushed file's path must be absolute and normalized (no `..`, no control characters, not under `/proc`, `/sys` or `/dev`), it is capped at 1 MiB by default (`GUEST_FILE_PUSH_MAX_BYTES`, at most 8 MiB), staged in a private temp directory and renamed into place, and every push is audited with path, size and SHA-256 (never the contents) and rate-limited per user. The **IDE install log** is read with a fixed `tail` command, for the VM's owner or an admin only, with control characters and ANSI escapes stripped and shown as plain text. |
 | Rate limiting | Built-in `express-rate-limit` on `/auth/login`, `/auth/register`, and public token lookups (invite lookup, backup downloads); the setup wizard's mutating steps are throttled too (env-tunable). A separate **write limiter covers all of `/api`**, skipping safe `GET`/`HEAD`/`OPTIONS`, so every mutating request is throttled (default 60 per 60 s per IP, `API_WRITE_RATE_LIMIT_MAX` / `_WINDOW_MS`). Honors `trust proxy`. |
 | Outbound requests (SSRF) | Admin-configured **notification webhooks** and **cloud-image URLs** are validated against a private-address blocklist (loopback, link-local / cloud-metadata `169.254.169.254`, RFC1918, CGNAT, IPv6 ULA / link-local, IPv4-mapped IPv6): shape-checked on save, DNS-resolved and re-checked immediately before the request, and redirects refused. Homelab installs that point at a LAN service can opt in with `ALLOW_PRIVATE_OUTBOUND_URLS=true` (scheme + no-credentials checks always stay enforced). |
 | Metrics endpoint | `GET /metrics` is token-gated; in **production** it returns 404 unless `METRICS_TOKEN` is set — including for localhost, so there is no unauthenticated local scrape. Scrapers send `Authorization: Bearer <token>`. |
@@ -200,9 +201,10 @@ firewall, cluster status and cloud-image downloads are checked there). The role 
 - `Datastore.Allocate`, `Datastore.AllocateSpace`, `Datastore.AllocateTemplate`,
   `Datastore.Audit`
 - `SDN.Audit`, `SDN.Use`, `Sys.Audit`, `Sys.Modify` (cluster firewall isolation)
-- the guest agent: `VM.Monitor` on Proxmox VE 8; `VM.GuestAgent.Audit` and
-  `VM.GuestAgent.Unrestricted` on 9 (plus `VM.GuestAgent.FileWrite` for the IDE — on
-  PVE 9.2.3 `Unrestricted` already covers `file-write`, so that one is belt-and-braces)
+- the guest agent: `VM.Monitor` on Proxmox VE 8; `VM.GuestAgent.Audit`,
+  `VM.GuestAgent.Unrestricted` and `VM.GuestAgent.FileWrite` on 9 (`file-write` carries
+  the IDE bootstrap and files pushed into a VM; on PVE 9.2.3 `Unrestricted` already
+  covers it, so `FileWrite` is belt-and-braces)
 - for GPU/PCI passthrough only: `Mapping.Audit`, `Mapping.Use`
 
 It needs no user, pool or permission management, and never the node shell. The connection

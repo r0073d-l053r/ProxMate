@@ -53,6 +53,9 @@ sources:
 | `WEBAUTHN_RP_ID` / `WEBAUTHN_ORIGIN` | `${…:-}` (empty) | prod: recommended | Passkey RP id and origin. |
 | `AUTH_RATE_LIMIT_MAX` / `AUTH_RATE_LIMIT_WINDOW_MS` | `20` / `900000` | no | Auth limiter. |
 | `SHARE_RATE_LIMIT_MAX` / `SHARE_RATE_LIMIT_WINDOW_MS` | `30` / `3600000` | no | VM-share throttle, per signed-in user. |
+| `GUEST_FILE_RATE_LIMIT_MAX` / `GUEST_FILE_RATE_LIMIT_WINDOW_MS` | `30` / `600000` | no | Guest file-push throttle, per signed-in user. |
+| `GUEST_LOG_RATE_LIMIT_MAX` | `30` | no | IDE install-log reads per signed-in user per minute. |
+| `GUEST_FILE_PUSH_MAX_BYTES` | `1048576` | no | Largest pushable file; capped at 8 MiB. |
 | `PUBLIC_TOKEN_RATE_LIMIT_MAX` / `PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS` | `60` / `900000` | no | Public token lookups (invite links, downloads), per IP. |
 | `ALERT_COOLDOWN_MIN` | `60` | no | Minutes before a firing alert rule can fire again (minimum 5). |
 | `AUTH_LOCKOUT_MAX` / `AUTH_LOCKOUT_MINUTES` | `10` / `15` | no | Account lockout. |
