@@ -19,7 +19,7 @@ import {
   FOREIGN_VOLUME_MESSAGE,
   PROVISION_FAILED_MESSAGE,
 } from './vm.service.js';
-import { parseGuestConfigText, pciLines, foreignVolumeKeys } from '../lib/guest-config.js';
+import { parseGuestConfigText, pciLines, foreignVolumeKeys, hostLevelKeys } from '../lib/guest-config.js';
 import { IDE_GUEST_PORT } from './ide-provision.service.js';
 
 /** Rolling retention: only this many MateStates are kept per VM. */
@@ -409,6 +409,18 @@ export async function rollbackToSnapshot(vm: VirtualMachine, snapname: string): 
   if (unapproved.length > 0) {
     throw new Error(
       `This snapshot has a PCI device (${unapproved.map((l) => l.key).join(', ')}) that isn't approved for this VM any more, so it can't be rolled back to.`,
+    );
+  }
+  // Likewise anything no tenant guest may have — a host device or host-level
+  // setting (raw `args`, host USB/serial, `virtiofs`, a hook script) or another
+  // guest's volume — whatever put it in the snapshot: refused up front, since a
+  // rollback (a RAM one especially) brings it back before anything could strip it.
+  const hostLevel = hostLevelKeys(snapCfg, vm.type === 'lxc' ? 'lxc' : 'qemu').filter((k) => !/^hostpci\d+$/.test(k));
+  const foreign = foreignVolumeKeys(snapCfg, vm.proxmoxVmId);
+  if (hostLevel.length > 0 || foreign.length > 0) {
+    throw new Error(
+      `This snapshot holds settings a machine here may not have (${[...hostLevel, ...foreign].join(', ')}), so it can't be rolled back to. ` +
+        'Delete the snapshot, or ask an admin.',
     );
   }
   const reservation = await reserveRestoreGrowth(vm, snapCfg);

@@ -79,6 +79,29 @@ export function pciLines(cfg: Record<string, string>): Array<{ key: string; valu
     .map(([key, value]) => ({ key, value: String(value) }));
 }
 
+/**
+ * Config lines a tenant's guest must never carry: host devices (PCI, USB,
+ * serial/parallel ports, container device nodes), host directories and shared
+ * host memory (`virtiofsN`, `ivshmem`), raw host-level options (QEMU `args`, LXC
+ * `lxc.*`), hook scripts (run on the host), and a privileged container.
+ * ProxMate's passthrough model only knows PCI devices an admin attached through
+ * an approved request — callers that allow those filter `hostpciN` out themselves.
+ */
+export function hostLevelKeys(cfg: Record<string, string>, kind: 'qemu' | 'lxc'): string[] {
+  const out: string[] = [];
+  for (const [key, raw] of Object.entries(cfg)) {
+    const value = String(raw);
+    if (key === 'hookscript') out.push(key);
+    else if (kind === 'qemu') {
+      if (/^hostpci\d+$/.test(key) || /^virtiofs\d+$/.test(key) || key === 'args' || key === 'ivshmem') out.push(key);
+      else if (/^usb\d+$/.test(key) && !/^spice\b/.test(value)) out.push(key);
+      else if (/^(serial|parallel)\d+$/.test(key) && value !== 'socket') out.push(key);
+    } else if (/^dev\d+$/.test(key) || key.startsWith('lxc')) out.push(key);
+  }
+  if (kind === 'lxc' && cfg['unprivileged'] !== '1') out.push('unprivileged');
+  return out;
+}
+
 const VOLUME_KEY = /^((ide|sata|scsi|virtio)\d+|efidisk0|tpmstate0|rootfs|mp\d+|unused\d+)$/;
 
 /**

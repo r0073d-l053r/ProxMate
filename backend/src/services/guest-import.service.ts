@@ -1,6 +1,6 @@
 import type { User, VirtualMachine } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { guestConfigSizes, foreignVolumeKeys } from '../lib/guest-config.js';
+import { guestConfigSizes, foreignVolumeKeys, hostLevelKeys } from '../lib/guest-config.js';
 import { recordAudit, type AuditActor } from './audit.service.js';
 import * as pve from './proxmox.service.js';
 import {
@@ -8,7 +8,6 @@ import {
   writeGuestMarker,
   withQuotaLock,
   assertWithinQuota,
-  holdErroredRow,
 } from './vm.service.js';
 
 /**
@@ -35,11 +34,6 @@ export class ImportError extends Error {
     this.name = 'ImportError';
   }
 }
-
-/** holdReason of an imported row whose isolation couldn't be applied. */
-export const IMPORT_FAILED_MESSAGE =
-  "This machine's import didn't finish (its isolation firewall couldn't be applied), so it can't be started. " +
-  'Ask an admin to adopt it again, or delete it.';
 
 export interface ImportableGuest {
   vmid: number;
@@ -102,24 +96,27 @@ export async function listImportableGuests(): Promise<ImportableGuest[]> {
 }
 
 /**
- * Config lines a tenant must not inherit with an imported guest: host devices
- * (PCI, USB, serial/parallel ports, container device nodes), raw host-level
- * options (QEMU `args`, LXC `lxc.*`), hook scripts, and a privileged container.
- * ProxMate's passthrough model only knows devices an admin attached through an
- * approved request, so these are refused rather than carried over.
+ * What any of the guest's snapshots holds that the import would refuse on the live
+ * config — another guest's volume, a host device or a host-level setting — as
+ * `"<snapshot>": <keys>` entries. Unreadable snapshots are refused too.
  */
-export function hostLevelKeys(cfg: Record<string, string>, kind: pve.GuestKind): string[] {
+async function snapshotBlockers(
+  node: string,
+  vmid: number,
+  kind: pve.GuestKind,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<string[]> {
+  const base = `/nodes/${node}/${kind}/${vmid}/snapshot`;
+  const res = await client.get<{ data: Array<{ name: string }> | null }>(base);
   const out: string[] = [];
-  for (const [key, raw] of Object.entries(cfg)) {
-    const value = String(raw);
-    if (key === 'hookscript') out.push(key);
-    else if (kind === 'qemu') {
-      if (/^hostpci\d+$/.test(key) || key === 'args') out.push(key);
-      else if (/^usb\d+$/.test(key) && !/^spice\b/.test(value)) out.push(key);
-      else if (/^(serial|parallel)\d+$/.test(key) && value !== 'socket') out.push(key);
-    } else if (/^dev\d+$/.test(key) || key.startsWith('lxc')) out.push(key);
+  for (const { name } of res.data.data ?? []) {
+    if (name === 'current') continue;
+    const snap = await client.get<{ data: Record<string, unknown> | null }>(`${base}/${encodeURIComponent(name)}/config`);
+    const cfg: Record<string, string> = {};
+    for (const [k, v] of Object.entries(snap.data.data ?? {})) cfg[k] = String(v);
+    const keys = [...new Set([...foreignVolumeKeys(cfg, vmid), ...hostLevelKeys(cfg, kind)])];
+    if (keys.length > 0) out.push(`"${name}": ${keys.join(', ')}`);
   }
-  if (kind === 'lxc' && cfg['unprivileged'] !== '1') out.push('unprivileged');
   return out;
 }
 
@@ -201,6 +198,15 @@ async function importGuestLocked(actor: AuditActor, input: ImportGuestInput): Pr
         (hostLevel.some((k) => k.startsWith('hostpci')) ? ', then attach the device through a passthrough request.' : '.'),
     );
   }
+  // A snapshot holds a whole earlier config, and its owner may roll back to it:
+  // every snapshot must pass the same checks as the live config.
+  const snapshotProblems = await snapshotBlockers(node, vmid, kind, client);
+  if (snapshotProblems.length > 0) {
+    throw new ImportError(
+      `The guest has snapshots holding what a tenant can't be given (${snapshotProblems.join('; ')}). ` +
+        'Delete those snapshots in Proxmox first.',
+    );
+  }
   const sizes = guestConfigSizes(cfg, kind);
   if (sizes.cpu === null) {
     throw new ImportError('The container has no CPU core limit. Set one in Proxmox first so its quota can be counted.');
@@ -243,31 +249,41 @@ async function importGuestLocked(actor: AuditActor, input: ImportGuestInput): Pr
     });
   });
 
-  try {
-    await writeGuestMarker(vm, client, cfg['tags']);
-  } catch (err) {
-    // Nothing on the guest changed: drop the row so the guest stays importable.
-    await prisma.virtualMachine.delete({ where: { id: vm.id } }).catch(() => undefined);
-    throw err;
-  }
-
+  // Isolation first, the tag last: the guest only becomes the owner's once it is
+  // isolated, so a failure part-way never leaves a tagged guest a tenant could use
+  // without its firewall. The row (in `creating`, which every tenant action refuses)
+  // only holds the quota meanwhile and is dropped again on failure.
+  const dropRow = () => prisma.virtualMachine.delete({ where: { id: vm.id } }).catch(() => undefined);
   try {
     // Network placement and isolation exactly as a new guest gets them. Loaded
     // lazily: matestate.service imports vm.service.
     const { reapplyIsolation } = await import('./matestate.service.js');
     await reapplyIsolation(vm, client);
   } catch (err) {
-    // The guest is tagged as this row's, but isn't isolated: hold it so nothing
-    // starts it through ProxMate until an admin's adopt re-applies isolation.
-    await holdErroredRow(vm, IMPORT_FAILED_MESSAGE).catch(() => undefined);
+    await dropRow();
     await recordAudit({
-      action: 'vm.import',
+      action: 'vm.import_failed',
       actor,
       targetType: 'vm',
-      targetId: vm.id,
-      detail: `${name} (vmid ${vmid}) imported for ${owner.email} but held: isolation failed (${pve.pveMessage(err)})`,
+      detail: `${name} (vmid ${vmid}) not imported for ${owner.email}: isolation failed (${pve.pveMessage(err)})`,
     });
-    throw new ImportError(`The guest was imported but its isolation couldn't be applied, so it is held: ${pve.pveMessage(err)}`, 502);
+    throw new ImportError(
+      `The guest was not imported: its isolation couldn't be applied (${pve.pveMessage(err)}). ` +
+        'It is still unmanaged and untagged, but its network settings may be partly changed ' +
+        '(default bridge, firewall) — check it in Proxmox before trying again.',
+      502,
+    );
+  }
+
+  try {
+    await writeGuestMarker(vm, client, cfg['tags']);
+  } catch (err) {
+    await dropRow();
+    throw new ImportError(
+      `The guest was not imported: its ProxMate tag couldn't be written (${pve.pveMessage(err)}). ` +
+        'It is still unmanaged, with its network now on the default bridge and the isolation firewall on.',
+      502,
+    );
   }
 
   const live = await pve.getVmStatus(node, vmid, client, kind).catch(() => null);
