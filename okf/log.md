@@ -10,6 +10,7 @@
 * **Update**: Added the ntfy and Telegram channels to [notifications](/config/notifications.md) and the [notify service](/services/notify.md); new [User](/database/user.md) email preferences, `USAGE_DIGEST_CRON`, and the share and deploy-for-tenant emails in the [VM](/api/vm.md), [template](/api/template.md), [auth](/api/auth.md) and [admin](/api/admin.md) APIs.
 * **Creation**: Documented the [guest import](/services/guest-import.md) and [bulk deploy](/services/bulk-deploy.md) services and their routes in the [admin](/api/admin.md) and [template](/api/template.md) routers, and VMID reservations in the [vm service](/services/vm.md).
 * **Update**: Documented the view-only console: the `console_view` capability held by [Viewer shares](/database/vm-share.md), console ticket grants and the input filters in the [console relay](/api/console.md), and the `vm.console_open` / `vm.console_view_open` audit entries.
+* **Update**: Import checks every snapshot of the guest and isolates before tagging; snapshot rollback in [matestate](/services/matestate.md) refuses host-level settings and other guests' volumes; rows still `creating` are refused by `requireOurGuest` and the vm router.
 
 ## 2026-10-20
 * **Update**: Documented [pending shares](/database/pending-vm-share.md), template deploy placement, start/restart waiting for the Proxmox task, and the least-privilege token in [privileges](/proxmox/privileges.md), with what a live Proxmox VE 9.2 cluster proved.

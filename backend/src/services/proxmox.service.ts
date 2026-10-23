@@ -1089,6 +1089,8 @@ export interface CloudInitVmConfig {
   bridge: string;
   cores?: number;
   memory?: number; // MB
+  /** Proxmox tags (`;`-separated), e.g. a build tag that marks the guest as this build's. */
+  tags?: string;
 }
 
 /**
@@ -1118,6 +1120,7 @@ export async function createCloudInitVm(config: CloudInitVmConfig, client?: Axio
     ostype: 'l26',
     agent: '1',
   });
+  if (config.tags) params.set('tags', config.tags);
   const res = await c.post<{ data: string }>(`/nodes/${config.node}/qemu`, params);
   return res.data.data;
 }
