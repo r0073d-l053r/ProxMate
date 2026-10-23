@@ -3479,7 +3479,27 @@ export async function resetRestoredFirewall(
   }
   const aliases = (await c.get<{ data: Array<{ name: string }> }>(`${base}/aliases`)).data.data ?? [];
   for (const { name } of aliases) await c.delete(`${base}/aliases/${encodeURIComponent(name)}`);
-  await c.put(`${base}/options`, new URLSearchParams({ delete: 'radv,log_level_in,log_level_out' }));
+  // With isolation on, configureVmIsolation sets enable and the policies next; with it
+  // off nothing would, so the archive's are removed too.
+  const isolate = (await getConfig('isolation_enabled')) !== 'false';
+  const stray = isolate ? 'radv,log_level_in,log_level_out' : 'radv,log_level_in,log_level_out,enable,policy_in,policy_out';
+  await c.put(`${base}/options`, new URLSearchParams({ delete: stray }));
+}
+
+/** Bring back up every NIC a hold set to `link_down=1`. */
+export async function clearLinkDown(
+  node: string,
+  vmid: number,
+  client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
+): Promise<void> {
+  const c = client ?? (await getClient());
+  const cfg = await getVmConfig(node, vmid, c, kind);
+  for (const [key, value] of Object.entries(cfg)) {
+    if (!/^net\d+$/.test(key) || !/(^|,)link_down=1(,|$)/.test(String(value))) continue;
+    const up = String(value).split(',').filter((p) => !/^link_down=/.test(p)).join(',');
+    await c.put(`/nodes/${node}/${kind}/${vmid}/config`, new URLSearchParams({ [key]: up }));
+  }
 }
 
 export async function configureVmIsolation(

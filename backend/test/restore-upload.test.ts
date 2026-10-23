@@ -583,6 +583,23 @@ describe('restoreFromUpload', () => {
       );
     });
 
+    it('drops autostart and protection right after the task, before the check and the firewall reset', async () => {
+      await restoreFromUpload(user, { filename: FILENAME, name: 'x' });
+      const strip = client.put.mock.calls.findIndex((x) => bodyOf(x)['delete'] === 'onboot');
+      expect(strip).toBeGreaterThanOrEqual(0);
+      const checked = client.get.mock.calls.findIndex((x) => String(x[0]).endsWith('/pending'));
+      expect(client.put.mock.invocationCallOrder[strip]!).toBeLessThan(client.get.mock.invocationCallOrder[checked]!);
+      expect(client.put.mock.invocationCallOrder[strip]!).toBeLessThan(vi.mocked(pve.resetRestoredFirewall).mock.invocationCallOrder[0]!);
+    });
+
+    it('neutralises (without deleting) a guest that passed the check when a later step fails', async () => {
+      vi.mocked(pve.startVm).mockRejectedValueOnce(new Error('start failed'));
+      restored.config = { net0: 'virtio=AA:BB,bridge=vmbr0,firewall=1' };
+      await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow('start failed');
+      expect(pve.deleteVm).not.toHaveBeenCalled();
+      expect(client.put.mock.calls.map(bodyOf)).toContainEqual({ net0: 'virtio=AA:BB,bridge=vmbr0,firewall=1,link_down=1' });
+    });
+
     it('refuses pending changes and snapshots too', async () => {
       restored.pending = [{ key: 'hostpci0', pending: '01:00.0' }];
       await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(/pending changes to "hostpci0"/);
@@ -602,9 +619,9 @@ describe('restoreFromUpload', () => {
     it('never tags a late-finishing guest that fails the check, and removes it', async () => {
       vi.mocked(pve.waitForTask).mockRejectedValueOnce(new Error('Proxmox task timed out'));
       await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(/timed out/);
-      const task = vi.mocked(settleFailedCreate).mock.calls[0]![3]!.task as { beforeTag: () => Promise<void> };
+      const task = vi.mocked(settleFailedCreate).mock.calls[0]![3]!.task as { verify: () => Promise<void> };
       restored.config = { dev0: '/dev/sda', onboot: 1 };
-      await expect(task.beforeTag()).rejects.toThrow(/won't restore/);
+      await expect(task.verify()).rejects.toMatchObject({ guestRemoved: true });
       expect(client.put.mock.calls.some((x) => bodyOf(x)['delete'] === 'onboot')).toBe(true);
       expect(pve.deleteVm).toHaveBeenCalledWith('pve-0', 200, expect.anything(), 'qemu');
       expect(markClonedGuest).not.toHaveBeenCalled();
@@ -670,6 +687,8 @@ describe('archive config keys an upload may not carry (BUG-027)', () => {
     expect(() => assertRestorableConfig(`${LXC_CFG}[not a section]\n`, 'lxc')).toThrow(/section/);
     expect(() => assertRestorableConfig(`${LXC_CFG}Dev0: /dev/sda\n`, 'lxc')).toThrow(/line/);
     expect(() => assertRestorableConfig(`${LXC_CFG}garbage without a colon\n`, 'lxc')).toThrow(/line/);
+    // A snapshot's vmstate must be a storage volume too.
+    expect(() => assertRestorableConfig(`${QEMU_CFG}vmstate: /dev/sdb\n`, 'qemu')).toThrow(/not a storage volume/);
     // A snapshot section's own keys are fine.
     expect(() =>
       assertRestorableConfig(`${QEMU_CFG}snaptime: 1700000000\nvmstate: local-lvm:vm-104-state-snap1\n`, 'qemu'),
