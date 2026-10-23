@@ -21,7 +21,6 @@ import {
   deleteVmRow,
   type VmOpKind,
 } from './vm.service.js';
-import { IMPORT_FAILED_MESSAGE } from './guest-import.service.js';
 
 // ─── Interrupted background operations ────────────────────────
 //
@@ -156,17 +155,15 @@ export async function reconcileCreatingVm(
   }
 
   if (kind === 'import') {
-    // An import adopts a guest someone else made: that guest is never ProxMate's to
-    // remove. Tagged already → held as an import whose isolation wasn't applied
-    // (an admin's adopt re-applies it); not yet tagged → nothing on the guest
-    // changed, so the row is dropped and the guest stays importable.
+    // An import isolates the guest first and writes its tag last: tagged → only the
+    // final status write was missing, so it is completed; not yet tagged → the
+    // import didn't happen, so the row is dropped and the guest stays importable.
+    // The guest is never ProxMate's to remove.
     if (cfg && tagsMarkRow(cfg['tags'], vm.id)) {
-      await holdErroredRow(vm, IMPORT_FAILED_MESSAGE);
-      await notify({
-        event: 'vm.error',
-        title: vm.name,
-        message: `The import of "${vm.name}" was interrupted by a ProxMate restart, so the machine is held. Adopt it again from Settings → Maintenance, or delete it.`,
-      }).catch(() => undefined);
+      const live = await pve.getVmStatus(vm.proxmoxNode, vm.proxmoxVmId, client, kindOf(vm)).catch(() => null);
+      const status = live?.status === 'running' || live?.status === 'paused' ? live.status : 'stopped';
+      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status, ...OP_SETTLED } });
+      return 'completed';
     } else {
       await deleteVmRow(vm.id);
     }
@@ -230,7 +227,7 @@ async function completeFirewallOnlyCreate(
   client: AxiosInstance,
 ): Promise<void> {
   // A rebuild is a repair path, so it may run on a row that was held before it.
-  const current = await requireOurGuest(vm, { client, allowError: kind === 'rebuild-iso' });
+  const current = await requireOurGuest(vm, { client, allowError: kind === 'rebuild-iso', settlingInterrupted: true });
   if ((await getConfig('isolation_enabled')) !== 'false') {
     await pve.configureVmIsolation(
       current.proxmoxNode,

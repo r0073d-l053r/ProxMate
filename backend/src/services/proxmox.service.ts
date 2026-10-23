@@ -1138,6 +1138,8 @@ export interface CloudInitVmConfig {
   memory?: number; // MB
   /** Resource pool the new VM joins; see getGuestPool. */
   pool?: string;
+  /** Proxmox tags (`;`-separated), e.g. a build tag that marks the guest as this build's. */
+  tags?: string;
 }
 
 /**
@@ -1168,6 +1170,7 @@ export async function createCloudInitVm(config: CloudInitVmConfig, client?: Axio
     agent: '1',
   });
   if (config.pool) params.set('pool', config.pool);
+  if (config.tags) params.set('tags', config.tags);
   const res = await c.post<{ data: string }>(`/nodes/${config.node}/qemu`, params);
   return res.data.data;
 }

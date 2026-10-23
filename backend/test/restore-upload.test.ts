@@ -36,6 +36,8 @@ vi.mock('../src/services/vm.service.js', () => ({
   assertOwnVolumes: vi.fn(async () => undefined),
   recordOpTask: vi.fn(async () => undefined),
   OP_SETTLED: { opKind: null, opStartedAt: null, opUpid: null },
+  // No reservations held: the next VMID is whatever Proxmox hands out.
+  nextVmId: vi.fn(async (client: unknown) => (await import('../src/services/proxmox.service.js')).getNextVmId(client as never)),
 }));
 
 import { prisma } from '../src/lib/prisma.js';

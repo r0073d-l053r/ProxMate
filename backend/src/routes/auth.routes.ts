@@ -488,7 +488,8 @@ router.get('/me', allowExpiredAccess, requireAuth, async (req: Request, res: Res
 //   broadcastOptOut     — Community Edition: admin broadcast (announcement) emails
 //   activityEmailOptOut — emails about a VM an admin set up for you or shared with you
 //   usageDigestOptIn    — the weekly usage digest (off by default)
-// Security / account / alert emails are unaffected by all of them.
+// Security / account / alert emails are unaffected by all of them. Open to an
+// account whose access window has ended too, so anyone can always opt out.
 
 const EmailPrefsSchema = z
   .object({
@@ -498,7 +499,7 @@ const EmailPrefsSchema = z
   })
   .refine((v) => Object.values(v).some((x) => x !== undefined));
 
-router.put('/email-preferences', requireAuth, async (req: Request, res: Response) => {
+router.put('/email-preferences', allowExpiredAccess, requireAuth, async (req: Request, res: Response) => {
   const parsed = EmailPrefsSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid preference.' }); return; }
   const u = (req as AuthRequest).user;

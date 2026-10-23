@@ -15,6 +15,7 @@ import {
   recordOpTask,
   OP_SETTLED,
   type VmOpKind,
+  nextVmId,
 } from './vm.service.js';
 import { beginInFlight } from '../lib/in-flight.js';
 import { parseGuestConfigText, guestConfigSizes } from '../lib/guest-config.js';
@@ -362,7 +363,7 @@ async function restoreFromUploadLocked(
       // ARM guest builds aren't shipped, so uploaded backups are x86 today.
       'amd64',
     );
-    const vmid = await pve.getNextVmId(client);
+    const vmid = await nextVmId(client);
 
     const vm = await prisma.virtualMachine.create({
       data: {

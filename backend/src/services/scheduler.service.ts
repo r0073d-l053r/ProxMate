@@ -321,10 +321,11 @@ export function startScheduler(): void {
   // Weekly usage digest to the tenants who opted in. A no-op while the admin has
   // it off or SMTP isn't set up. No catch-up: a digest missed while the backend
   // was down is simply skipped, rather than arriving at an odd hour.
-  const digestExpr =
-    process.env['USAGE_DIGEST_CRON'] && cron.validate(process.env['USAGE_DIGEST_CRON'])
-      ? process.env['USAGE_DIGEST_CRON']
-      : DEFAULT_USAGE_DIGEST_CRON;
+  const digestEnv = process.env['USAGE_DIGEST_CRON'];
+  if (digestEnv && !cron.validate(digestEnv)) {
+    console.warn(`[scheduler] invalid USAGE_DIGEST_CRON "${digestEnv}", falling back to "${DEFAULT_USAGE_DIGEST_CRON}"`);
+  }
+  const digestExpr = digestEnv && cron.validate(digestEnv) ? digestEnv : DEFAULT_USAGE_DIGEST_CRON;
   cron.schedule(digestExpr, () => void usageDigestTick());
 
   console.log(`[scheduler] usage digest scheduled (${digestExpr}, for users who opted in)`);

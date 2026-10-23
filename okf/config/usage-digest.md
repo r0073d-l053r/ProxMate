@@ -23,7 +23,8 @@ sources:
 # Gotchas
 
 - Default on is deliberate: nobody receives anything until they opt in on their Security page, so the switch exists to let an admin stop the digest for everyone.[^digest]
-- Schedule: `USAGE_DIGEST_CRON`, default `0 8 * * 1` (Mondays 08:00 server time). There is no catch-up: a run missed while the backend was down is skipped.[^digest]
+- Schedule: `USAGE_DIGEST_CRON`, default `0 8 * * 1` (Mondays 08:00 in the backend's local time — UTC in the Docker image). An invalid value logs a warning and falls back to the default. There is no catch-up: a run missed while the backend was down is skipped.[^digest]
+- Users whose access window has ended (expired or suspended) are skipped even if opted in; `PUT /api/auth/email-preferences` stays open to them (`allowExpiredAccess`) so they can still opt out.[^digest]
 - Needs SMTP. With SMTP off the tick logs `skipped: SMTP is not configured` and sends nothing.[^digest]
 - The digest covers 7 days of `ResourceSample` rows, so `RESOURCE_HISTORY_DAYS` below 7 shortens what it can show.
 - `POST /api/admin/settings/usage-digest/preview` emails the calling admin their own digest, for checking the format and SMTP delivery.[^admin-routes]
