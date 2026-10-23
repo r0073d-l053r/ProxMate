@@ -227,6 +227,20 @@ describe('deploying a batch', () => {
   });
 });
 
+describe('a copy removed while it waits', () => {
+  it('is not cloned, and the others carry on', async () => {
+    const c = cluster();
+    const copies = await planBatch(tenant, { namePattern: 'web-{n}', count: 4 });
+    const batch = await startTemplateBatch(tenant, template, copies, { ...input, cpu: 1 });
+    rows.splice(3, 1); // the owner deleted web-4 before its turn
+    await waitForBatch(batch.id);
+    const clones = c.post.mock.calls.filter((x) => /\/clone$/.test(String(x[0]))).map((x) => bodyOf(x)['newid']);
+    expect(clones).toEqual(['100', '101', '102']);
+    expect(getBatch(batch.id, tenant)!.items.map((i) => i.status)).toEqual(['done', 'done', 'done', 'failed']);
+    expect(getBatch(batch.id, tenant)!.items[3]!.error).toMatch(/removed before its turn/);
+  });
+});
+
 describe('placing the copies of a batch', () => {
   it('counts copies already placed on a node, so they spread out', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);

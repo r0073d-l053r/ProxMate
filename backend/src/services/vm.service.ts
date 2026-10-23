@@ -1717,6 +1717,12 @@ export async function provisionReservedDeploy(
   const held = [vm.proxmoxVmId];
   let handedOver = false;
   try {
+    // Deleted while it waited for its turn: nothing to deploy, and nothing to settle.
+    const current = await prisma.virtualMachine.findUnique({ where: { id: vm.id } });
+    if (!current || current.status !== 'creating') {
+      handedOver = true;
+      throw new Error('This machine was removed before its turn to deploy.');
+    }
     const client = await pve.getClient();
     if (!(await pve.isVmIdFree(vm.proxmoxVmId, client))) {
       const [fresh] = await reserveVmIds(1, client);
