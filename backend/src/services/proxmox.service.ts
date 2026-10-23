@@ -3468,6 +3468,35 @@ export async function readIsolationOptions(): Promise<{ dnsServers: string[]; vl
   return { dnsServers, ...(vlanTag !== undefined ? { vlanTag } : {}) };
 }
 
+/**
+ * Clear the guest-level firewall a restore brought back from the archive's
+ * `qemu-server.fw` / `pct.fw` — every rule, IP set and alias, and the options
+ * isolation does not set itself — so what applies afterwards is only what ProxMate
+ * writes (configureVmIsolation, the IDE pinhole). Rules go highest position first,
+ * since removing one renumbers those above it.
+ */
+export async function resetRestoredFirewall(
+  node: string,
+  vmid: number,
+  client?: AxiosInstance,
+  kind: GuestKind = 'qemu',
+): Promise<void> {
+  const c = client ?? (await getClient());
+  const base = `/nodes/${node}/${kind}/${vmid}/firewall`;
+  const rules = (await c.get<{ data: Array<{ pos: number }> }>(`${base}/rules`)).data.data ?? [];
+  for (const pos of rules.map((r) => r.pos).sort((a, b) => b - a)) await c.delete(`${base}/rules/${pos}`);
+  const ipsets = (await c.get<{ data: Array<{ name: string }> }>(`${base}/ipset`)).data.data ?? [];
+  for (const { name } of ipsets) {
+    const set = `${base}/ipset/${encodeURIComponent(name)}`;
+    const members = (await c.get<{ data: Array<{ cidr: string }> }>(set)).data.data ?? [];
+    for (const { cidr } of members) await c.delete(`${set}/${encodeURIComponent(cidr)}`);
+    await c.delete(set);
+  }
+  const aliases = (await c.get<{ data: Array<{ name: string }> }>(`${base}/aliases`)).data.data ?? [];
+  for (const { name } of aliases) await c.delete(`${base}/aliases/${encodeURIComponent(name)}`);
+  await c.put(`${base}/options`, new URLSearchParams({ delete: 'radv,log_level_in,log_level_out' }));
+}
+
 export async function configureVmIsolation(
   node: string,
   vmid: number,

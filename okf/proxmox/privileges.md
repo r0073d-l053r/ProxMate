@@ -180,12 +180,20 @@ What changes with a pool-scoped token:
   it finds in the extracted rootfs (the last one wins), so no archive pre-check can be
   authoritative. Right after the restore task — in both modes, and before the guest is tagged,
   re-networked or started — ProxMate reads the guest's config, its pending changes and its
-  snapshots back from Proxmox and applies the same allowlist. A guest that fails is removed (the
-  task that created it finished at a VMID it alone could have created) and the tenant is told the
-  backup contains settings ProxMate won't restore; if it cannot be removed, the row is held. An
-  in-place MateState restore of a container gets the same check and is held on failure. Uploaded
-  configs are also checked section by section (`[PENDING]`, `[special:cloudinit]`, snapshots), and
-  a line ProxMate can't read refuses the archive.
+  snapshots back from Proxmox and applies the same allowlist; a read failure counts as a failure.
+  A guest that fails first loses `protection`, `onboot` and `startup` (so Proxmox can delete it and
+  will not start it on its own), then is deleted — the task that created it finished at a VMID only
+  it could have created, without `force`. If the delete is still refused, every refused key the API
+  can remove goes, pending changes are reverted, every NIC gets `link_down=1`, and the row is held;
+  the tenant is told the backup contains settings ProxMate won't restore. The late-task follower
+  does the same before it would tag the guest. An in-place MateState restore of a container gets the
+  check with snapshots allowed (each snapshot's config is checked) and, on failure, the same
+  neutralising without the delete, then a hold. The archive's guest firewall (rules, IP sets,
+  aliases, `radv`/log options) is cleared before isolation is applied. An admin's adopt runs the
+  same check (approved PCI devices excepted) before it tags a guest or lifts a hold. Uploaded configs
+  are checked section by section (snapshots, `[special:cloudinit]`), a `[PENDING]` section is
+  refused up front, a disk line's volume is read from its `file=`/`volume=` item or bare first item,
+  and a line ProxMate can't read refuses the archive.
 - Every `unusedN` on the freshly restored guest is treated as foreign, since the pre-restore volume
   listing cannot see volumes of a VMID outside the pool. Uploads ProxMate wrote carry a
   `.proxmate-uploaded.<name>` marker noting the VMID being restored; a startup sweep removes marked

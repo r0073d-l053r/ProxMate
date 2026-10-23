@@ -315,7 +315,10 @@ describe('restore with a Proxmox pool configured', () => {
 });
 
 describe('container restore: the restored config is checked as Proxmox holds it', () => {
-  const CT = { arch: 'amd64', hostname: 'ct', unprivileged: '1', cores: '1', memory: '1024', tags: marker, rootfs: 'local-lvm:subvol-100-disk-0,size=32G' };
+  const CT = {
+    arch: 'amd64', hostname: 'ct', unprivileged: '1', cores: '1', memory: '1024', tags: marker,
+    rootfs: 'local-lvm:subvol-100-disk-0,size=32G', net0: 'name=eth0,bridge=vmbr0,firewall=1,ip=dhcp',
+  };
   const ctRow = () => row({ type: 'lxc' });
 
   it('refuses a restore that brought back a host device (a pct.conf inside the rootfs), and never starts it', async () => {
@@ -323,6 +326,12 @@ describe('container restore: the restored config is checked as Proxmox holds it'
     const { c } = fakePve(CT, { ...CT, dev0: '/dev/sda' });
     await expect(restoreFromMateState(ctRow(), ms)).rejects.toThrow(/settings ProxMate won't restore \("dev0"\)/);
     expect(c.post.mock.calls.some((x) => /status\/start$/.test(String(x[0])))).toBe(false);
+    // Kept (the tenant's own machine), but neutralised: no autostart, no device, NIC down.
+    const puts = c.put.mock.calls.filter((x) => /\/lxc\/100\/config$/.test(String(x[0]))).map(bodyOf);
+    expect(puts).toContainEqual({ delete: 'onboot' });
+    expect(puts).toContainEqual({ delete: 'dev0' });
+    expect(puts.some((b) => /link_down=1/.test(b['net0'] ?? ''))).toBe(true);
+    expect(c.delete).not.toHaveBeenCalledWith('/nodes/pve1/lxc/100');
     expect(prisma.virtualMachine.update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: expect.objectContaining({ status: 'error' }) });
   });
 

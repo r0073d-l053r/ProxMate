@@ -162,7 +162,13 @@ export const STRIPPED_AFTER_RESTORE = ['onboot', 'startup', 'protection'];
 function valueProblem(key: string, value: string): string | null {
   const v = value.trim();
   if (DISK_KEY.test(key)) {
-    const volume = v.split(',')[0] ?? '';
+    // The volume is the property string's `file=`/`volume=` item, or its bare first
+    // item (the default key). More than one of those, or none, is refused.
+    const parts = v.split(',').map((p) => p.trim());
+    const named = parts.filter((p) => /^(file|volume)=/.test(p)).map((p) => p.slice(p.indexOf('=') + 1));
+    const bare = parts[0] !== undefined && !/^[a-z_-]+=/.test(parts[0]) ? [parts[0]] : [];
+    const volumes = [...bare, ...named];
+    const volume = volumes.length === 1 ? volumes[0]! : '';
     // A storage volume (`pool:name`), `none`, or a cdrom ISO — never a host path or an import.
     if (volume.startsWith('/') || /(^|,)import-from=/.test(v) || (volume !== 'none' && !volume.includes(':'))) {
       return 'a disk that is not a storage volume';
@@ -211,8 +217,13 @@ export function assertRestorableConfig(text: string, kind: pve.GuestKind): void 
     if (line.startsWith('[')) {
       const m = SECTION_RE.exec(line);
       if (!m) throw new RestoreUploadError("This backup can't be restored here: its configuration has a section ProxMate can't read.");
+      if (m[1] === 'PENDING') {
+        throw new RestoreUploadError(
+          "This backup can't be restored here: it carries pending changes. Apply or revert them in Proxmox, then back it up again.",
+        );
+      }
       inMain = false;
-      extra = m[1] === 'PENDING' ? new Set(['delete']) : SNAPSHOT_SECTION_KEYS;
+      extra = SNAPSHOT_SECTION_KEYS;
       continue;
     }
     const m = /^([a-z][a-z0-9_.-]*):\s*(.*)$/.exec(line);
@@ -228,7 +239,13 @@ export function assertRestorableConfig(text: string, kind: pve.GuestKind): void 
 
 /** Thrown when a restored guest's own config carries something ProxMate does not restore. */
 export class RestoredConfigError extends RestoreUploadError {
-  constructor(public readonly problem: string) {
+  constructor(
+    public readonly problem: string,
+    /** Config keys of the guest itself that are refused. */
+    public readonly keys: string[] = [],
+    /** Keys with a pending change. */
+    public readonly pendingKeys: string[] = [],
+  ) {
     super(`The backup contains settings ProxMate won't restore (${problem}).`);
     this.name = 'RestoredConfigError';
   }
@@ -238,59 +255,104 @@ export class RestoredConfigError extends RestoreUploadError {
  * Check a restored guest's config as Proxmox now holds it, before the guest is
  * used. The archive pre-check cannot be authoritative: a container restore applies
  * the `etc/vzdump/pct.conf` found in the extracted rootfs (the last one wins), and
- * Proxmox's own reading of an archive may differ from ours. So the live config,
- * every pending change and (unless `allowSnapshots`) the absence of snapshots —
- * vzdump carries none — are checked with the same allowlist as the archive.
- * Throws RestoredConfigError; a read failure throws too (fail closed).
+ * Proxmox's own reading of an archive may differ from ours. So the live config and
+ * every pending change are checked with the same allowlist as the archive, and the
+ * snapshots: refused outright for a fresh restore (vzdump carries none), each one's
+ * config checked with `allowSnapshots`. `allowKey` lets a caller accept a line the
+ * allowlist refuses (an approved PCI device). Throws RestoredConfigError listing
+ * every problem; a read failure throws too (fail closed).
  */
 export async function assertRestoredGuestConfig(
   node: string,
   vmid: number,
   kind: pve.GuestKind,
   client: Awaited<ReturnType<typeof pve.getClient>>,
-  opts: { allowSnapshots?: boolean } = {},
+  opts: { allowSnapshots?: boolean; allowKey?: (key: string, value: string) => boolean } = {},
 ): Promise<void> {
   const base = `/nodes/${node}/${kind}/${vmid}`;
   const [cfgRes, pendingRes, snapRes] = await Promise.all([
     client.get<{ data: Record<string, unknown> }>(`${base}/config`),
     client.get<{ data: Array<{ key: string; value?: unknown; pending?: unknown; delete?: number }> }>(`${base}/pending`),
-    opts.allowSnapshots
-      ? Promise.resolve({ data: { data: [] as Array<{ name: string }> } })
-      : client.get<{ data: Array<{ name: string }> }>(`${base}/snapshot`),
+    client.get<{ data: Array<{ name: string }> }>(`${base}/snapshot`),
   ]);
+  const problems: string[] = [];
+  const check = (cfg: Record<string, unknown>, extra: ReadonlySet<string>): string[] => {
+    const bad: string[] = [];
+    for (const [key, value] of Object.entries(cfg)) {
+      const text = typeof value === 'string' ? value : typeof value === 'number' ? String(value) : null;
+      if (text !== null && opts.allowKey?.(key, text)) continue;
+      // Anything but a plain value (e.g. raw `lxc` entries, returned as a list) is refused.
+      const problem = text === null ? `"${key}"` : keyProblem(key, text, kind, extra);
+      if (problem) {
+        problems.push(problem);
+        bad.push(key);
+      }
+    }
+    return bad;
+  };
   const cfg = cfgRes.data.data ?? {};
-  for (const [key, value] of Object.entries(cfg)) {
-    const text = typeof value === 'string' ? value : typeof value === 'number' ? String(value) : null;
-    // Anything but a plain value (e.g. raw `lxc` entries, returned as a list) is refused.
-    const problem = text === null ? `"${key}"` : keyProblem(key, text, kind);
-    if (problem) throw new RestoredConfigError(problem);
-  }
-  if (kind === 'lxc' && String(cfg['unprivileged'] ?? '') !== '1') throw new RestoredConfigError('a privileged container');
-  const pending = (pendingRes.data.data ?? []).filter((e) => e.pending !== undefined || e.delete);
-  if (pending.length > 0) throw new RestoredConfigError(`pending changes to ${pending.map((e) => `"${e.key}"`).join(', ')}`);
+  const keys = check(cfg, new Set());
+  if (kind === 'lxc' && String(cfg['unprivileged'] ?? '') !== '1') problems.push('a privileged container');
+  const pendingKeys = (pendingRes.data.data ?? []).filter((e) => e.pending !== undefined || e.delete).map((e) => e.key);
+  if (pendingKeys.length > 0) problems.push(`pending changes to ${pendingKeys.map((k) => `"${k}"`).join(', ')}`);
   const snapshots = (snapRes.data.data ?? []).filter((x) => x.name !== 'current');
-  if (snapshots.length > 0) throw new RestoredConfigError('snapshots');
+  if (snapshots.length > 0 && !opts.allowSnapshots) problems.push('snapshots');
+  if (opts.allowSnapshots) {
+    for (const { name } of snapshots) {
+      const snap = await client.get<{ data: Record<string, unknown> }>(`${base}/snapshot/${encodeURIComponent(name)}/config`);
+      const before = problems.length;
+      check(snap.data.data ?? {}, SNAPSHOT_SECTION_KEYS);
+      for (let i = before; i < problems.length; i += 1) problems[i] = `${problems[i]} in snapshot "${name}"`;
+    }
+  }
+  if (problems.length > 0) throw new RestoredConfigError(problems.join(', '), keys, pendingKeys);
 }
 
 /**
- * Remove a guest a restore task of ours just created. Only called when the task
- * finished OK: a restore without `force` fails on an existing VMID, so the guest
- * at that VMID can only be the one this task created, and it was never started.
- * Returns whether the guest is gone.
+ * Make a restored guest that failed assertRestoredGuestConfig (or could not be
+ * checked) harmless. First the keys that would let Proxmox start it on its own or
+ * refuse its removal (`protection`, `onboot`, `startup`) go; then, with `destroy`,
+ * it is deleted. Only callers that know the guest is the product of their own
+ * restore pass `destroy`: a restore without `force` fails on an existing VMID, so
+ * a finished task's guest at that VMID can only be the one it created. A guest
+ * that is kept (or cannot be deleted) loses every refused key and pending change
+ * Proxmox lets the API remove, and every NIC is set to `link_down`. Best effort
+ * throughout; returns whether the guest is gone.
  */
-async function destroyRestoredGuest(
+export async function neutraliseRestoredGuest(
   node: string,
   vmid: number,
   kind: pve.GuestKind,
   client: Awaited<ReturnType<typeof pve.getClient>>,
+  opts: { keys?: string[]; pendingKeys?: string[]; destroy: boolean },
 ): Promise<boolean> {
-  try {
-    const upid = await pve.deleteVm(node, vmid, client, kind);
-    await pve.waitForTask(node, upid, client, 10 * 60 * 1000);
-    return true;
-  } catch {
-    return false;
+  const configUrl = `/nodes/${node}/${kind}/${vmid}/config`;
+  const put = (params: Record<string, string>) =>
+    client.put(configUrl, new URLSearchParams(params)).then(() => true, () => false);
+  for (const key of ['protection', 'onboot', 'startup']) await put({ delete: key });
+  if (opts.destroy) {
+    try {
+      const upid = await pve.deleteVm(node, vmid, client, kind);
+      await pve.waitForTask(node, upid, client, 10 * 60 * 1000);
+      return true;
+    } catch {
+      /* still there: take away what it must not have */
+    }
   }
+  if ((opts.pendingKeys ?? []).length > 0) await put({ revert: opts.pendingKeys!.join(',') });
+  // One at a time, so a key the API won't touch doesn't keep the others. Never
+  // `unprivileged`: removing it would make the container privileged.
+  for (const key of opts.keys ?? []) if (key !== 'unprivileged') await put({ delete: key });
+  try {
+    const cfg = (await client.get<{ data: Record<string, unknown> }>(configUrl)).data.data ?? {};
+    for (const [key, value] of Object.entries(cfg)) {
+      if (!/^net\d+$/.test(key) || typeof value !== 'string' || /(^|,)link_down=1(,|$)/.test(value)) continue;
+      await put({ [key]: `${value.replace(/(^|,)link_down=[^,]*/g, '')},link_down=1` });
+    }
+  } catch {
+    /* config unreadable: the row is held either way */
+  }
+  return false;
 }
 
 /**
@@ -406,6 +468,32 @@ export async function markUploaded(filename: string): Promise<void> {
 async function noteRestoreTarget(filename: string, vmid: number): Promise<void> {
   const marker = markerPath(filename);
   if (marker) await fsp.writeFile(marker, String(vmid)).catch(() => undefined);
+}
+
+/**
+ * The post-restore check for a guest our own restore task just created at our
+ * VMID: on any failure, including one to read the config, the guest is
+ * neutralised and removed (see neutraliseRestoredGuest). The error is rethrown
+ * with `guestRemoved` set when the guest is gone.
+ */
+async function checkRestoredOrRemove(
+  node: string,
+  vmid: number,
+  kind: pve.GuestKind,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<void> {
+  try {
+    await assertRestoredGuestConfig(node, vmid, kind, client);
+  } catch (err) {
+    const bad = err instanceof RestoredConfigError ? err : null;
+    const removed = await neutraliseRestoredGuest(node, vmid, kind, client, {
+      keys: bad?.keys,
+      pendingKeys: bad?.pendingKeys,
+      destroy: true,
+    });
+    if (err && typeof err === 'object') Object.assign(err, { guestRemoved: removed });
+    throw err;
+  }
 }
 
 /**
@@ -715,8 +803,10 @@ async function restoreFromUploadLocked(
         // as one that finished in time before it is ever tied to the row (the row
         // stays held either way).
         beforeTag: async () => {
-          // A late guest with settings ProxMate won't restore is never tagged; the row stays held.
-          await assertRestoredGuestConfig(node, vmid, kind, client);
+          // A late guest that fails the check (or can't be checked) is never tagged:
+          // it is neutralised and removed, like an on-time one.
+          await checkRestoredOrRemove(node, vmid, kind, client);
+          await pve.resetRestoredFirewall(node, vmid, client, kind);
           await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
           await stripRestoreFlags(node, vmid, client, kind);
           await assertOwnVolumes(vm, client, leftovers, { unusedAreForeign: !!pool });
@@ -731,14 +821,17 @@ async function restoreFromUploadLocked(
       // What Proxmox actually restored decides, not the archive pre-check: a guest
       // carrying settings ProxMate won't restore is removed before anything uses it.
       try {
-        await assertRestoredGuestConfig(node, vmid, kind, client);
+        await checkRestoredOrRemove(node, vmid, kind, client);
       } catch (err) {
-        if (err instanceof RestoredConfigError && (await destroyRestoredGuest(node, vmid, kind, client))) {
+        if ((err as { guestRemoved?: boolean }).guestRemoved) {
           created = false;
           restoreTask = undefined; // the task's guest is gone; settle on what is at the VMID (nothing)
         }
         throw err;
       }
+      // The archive's own guest firewall (rules, IP sets, aliases) is not kept:
+      // isolation below writes ProxMate's.
+      await pve.resetRestoredFirewall(node, vmid, client, kind);
       // The archive's config carries the OLD guest's tags; tie the guest to this row.
       await markClonedGuest(vm, client);
       // Drop the archive's protection/autostart first: a protected guest couldn't
