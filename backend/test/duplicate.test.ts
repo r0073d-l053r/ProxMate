@@ -76,6 +76,19 @@ describe('duplicateVm', () => {
     expect(c.post.mock.calls.some((x) => /\/qemu\/130\/status\/start$/.test(String(x[0])))).toBe(true);
   });
 
+  it('clones the copy into the configured Proxmox pool', async () => {
+    findConfig.mockImplementation((args: { where: { key: string } }) =>
+      (args.where.key === 'proxmox_pool' ? { key: 'proxmox_pool', value: 'proxmate', sensitive: false } : null) as never,
+    );
+    const c = fakePve('stopped');
+    getClient.mockResolvedValue(asClient(c));
+
+    await duplicateVm(source(), 'web-copy');
+
+    const clone = c.post.mock.calls.find((x) => /\/qemu\/120\/clone$/.test(String(x[0])));
+    expect(bodyOf(clone!)['pool']).toBe('proxmate');
+  });
+
   it('refuses to duplicate a running VM (no clone attempted)', async () => {
     const c = fakePve('running');
     getClient.mockResolvedValue(asClient(c));

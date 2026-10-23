@@ -609,7 +609,10 @@ async function buildCloudTemplateVm(opts: {
   let created = false;
   try {
     vmid = await pve.getNextVmId(client);
-    const createUpid = await pve.createCloudInitVm({ node, vmid, name: safeName, importFrom, diskStorage, bridge }, client);
+    const createUpid = await pve.createCloudInitVm(
+      { node, vmid, name: safeName, importFrom, diskStorage, bridge, pool: await pve.getGuestPool() },
+      client,
+    );
     created = true;
     await pve.waitForTask(node, createUpid, client, 600_000);
     const diskGb = pve.primaryDiskSizeGb(await pve.getVmConfig(node, vmid, client));

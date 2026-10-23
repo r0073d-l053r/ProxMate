@@ -387,7 +387,11 @@ async function restoreFromUploadLocked(
       // Volumes already listed for this VMID (left by an earlier guest that had it)
       // must not end up attached to the restored guest; see assertOwnVolumes.
       const leftovers = await pve.listGuestVolumes(node, vmid, client);
-      const upid = await pve.restoreNewGuest({ node, vmid, volid, storage: defaultStorage }, client, kind);
+      const upid = await pve.restoreNewGuest(
+        { node, vmid, volid, storage: defaultStorage, pool: await pve.getGuestPool() },
+        client,
+        kind,
+      );
       restoreTask = {
         node,
         upid,

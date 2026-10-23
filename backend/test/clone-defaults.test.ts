@@ -294,6 +294,16 @@ describe('deployFromTemplate honours the admin defaults (B-37 / B-38)', () => {
     expect(nic!['net0']).toBe('virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr9,firewall=1');
   });
 
+  it('clones into the configured Proxmox pool', async () => {
+    configuredAs({ default_storage: 'ceph-vm', proxmox_pool: 'proxmate' });
+    const c = fakeCluster('ceph-vm', ['ceph-vm']);
+    getClient.mockResolvedValue(asClient(c));
+
+    await deployFromTemplate(user, template(), input);
+
+    expect(cloneBody(c)['pool']).toBe('proxmate');
+  });
+
   it('passes the configured storage on a cloud-image (full) clone', async () => {
     configuredAs({ default_storage: 'ceph-vm' });
     const c = fakeCluster('tank', ['tank', 'ceph-vm']);
