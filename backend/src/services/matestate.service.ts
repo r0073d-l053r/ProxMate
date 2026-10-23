@@ -353,8 +353,24 @@ async function settleRestoredGuest(
   // the guest is tagged, isolated or started. Loaded lazily (restore-upload imports
   // this module).
   if (vm.type === 'lxc') {
-    const { assertRestoredGuestConfig } = await import('./restore-upload.service.js');
-    await assertRestoredGuestConfig(vm.proxmoxNode, vm.proxmoxVmId, 'lxc', client, { allowSnapshots: true });
+    const { assertRestoredGuestConfig, neutraliseRestoredGuest, RestoredConfigError } = await import(
+      './restore-upload.service.js'
+    );
+    try {
+      await assertRestoredGuestConfig(vm.proxmoxNode, vm.proxmoxVmId, 'lxc', client, { allowSnapshots: true });
+    } catch (err) {
+      // The tenant's own machine is kept (held), but nothing may start it as it is.
+      const bad = err instanceof RestoredConfigError ? err : null;
+      await neutraliseRestoredGuest(vm.proxmoxNode, vm.proxmoxVmId, 'lxc', client, {
+        keys: bad?.keys,
+        pendingKeys: bad?.pendingKeys,
+        destroy: false,
+      });
+      throw err;
+    }
+    // Its guest firewall came from the archive, which the rootfs can override:
+    // isolation below writes ProxMate's own again.
+    await pve.resetRestoredFirewall(vm.proxmoxNode, vm.proxmoxVmId, client, 'lxc');
   }
   try {
     // The config came back with its tags (a backup or snapshot from before

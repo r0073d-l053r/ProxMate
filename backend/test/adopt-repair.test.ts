@@ -126,3 +126,37 @@ describe('adopting a 1.0.x error row makes its guest safe before it can start', 
     expect(row['status']).toBe('error');
   });
 });
+
+describe('adopt refuses a guest carrying settings a tenant\'s machine may not have', () => {
+  it('names them, and never tags the guest or lifts the hold', async () => {
+    const { c, state } = fakePve({ ...LEGACY, hookscript: 'local:snippets/x.pl', args: '-device foo' });
+    await expect(adoptGuest(errored())).rejects.toThrow(/may not have \("hookscript", "args"\)/);
+    expect(state.cfg['tags']).toBeUndefined();
+    expect(c.put.mock.calls.some((x) => /\/config$/.test(String(x[0])))).toBe(false);
+    expect(row['status']).toBe('error');
+  });
+
+  it('checks the guest\'s snapshots too', async () => {
+    const { c } = fakePve(LEGACY);
+    const base = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) => {
+      if (url.endsWith('/qemu/100/snapshot')) return ok([{ name: 'before' }, { name: 'current' }]);
+      if (url.endsWith('/snapshot/before/config')) return ok({ ...LEGACY, hostpci0: '01:00.0', snaptime: 1 });
+      return base(url);
+    });
+    await expect(adoptGuest(errored())).rejects.toThrow(/"hostpci0" in snapshot "before"/);
+  });
+
+  it('accepts a PCI device approved for the machine', async () => {
+    fakePve({ ...LEGACY, hostpci0: 'mapping=gpu0,pcie=1' });
+    await expect(adoptGuest(errored({ hasPassthrough: true }))).resolves.toBeTruthy();
+  });
+
+  it('checks a held guest that is already the machine\'s own before lifting the hold', async () => {
+    const { state } = fakePve({ ...LEGACY, tags: 'proxmate-rowa', dev0: '/dev/sda' });
+    row = { ...(errored({ holdReason: 'held' }) as object) };
+    await expect(adoptGuest(errored({ holdReason: 'held' }))).rejects.toThrow(/"dev0"/);
+    expect(state.cfg['dev0']).toBe('/dev/sda');
+    expect(row['holdReason']).toBe('held');
+  });
+});
