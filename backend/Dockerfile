@@ -1,4 +1,6 @@
 # ─── Build stage ──────────────────────────────────────────────
+# node:22 tracks the newest 22.x; reading zstd-compressed backup uploads needs
+# 22.15 or later (package.json "engines").
 FROM node:22-alpine AS build
 WORKDIR /app
 

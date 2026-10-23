@@ -151,8 +151,10 @@ or storage); `--dry-run` shows them.
 Uploaded backups need a shared backup storage in this mode (or a single node): ProxMate checks the
 upload on the share and reads its guest config from the file itself, because Proxmox would only
 answer those questions about an archive whose guest does not exist yet with `Datastore.Allocate`
-on the whole backup storage. `.vma` and `.tar` backups, plain or `.zst`/`.gz`, are read; `.lzo`
-ones are refused.
+on the whole backup storage. `.vma` and container `.tar` backups, plain or `.zst`/`.gz`, are read;
+`.lzo` and old-format QEMU `.tar` ones are refused. In both modes the restored guest's config is
+read back from Proxmox before it is used, and a backup carrying settings ProxMate won't restore is
+removed again.
 
 `Sys.Modify` on `/` also opens cluster backup jobs, the cluster firewall's groups and IP sets and
 other cluster settings, so it is opt-in: while the token holds it the pool does not fully contain

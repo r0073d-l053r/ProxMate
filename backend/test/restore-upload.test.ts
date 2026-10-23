@@ -24,6 +24,7 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   readIsolationOptions: vi.fn(async () => ({ dnsServers: [] })),
   startVm: vi.fn(),
   deleteBackup: vi.fn(),
+  deleteVm: vi.fn(async () => 'UPID:del'),
 }));
 vi.mock('../src/services/config.service.js', () => ({ getConfig: vi.fn() }));
 vi.mock('../src/services/download.service.js', () => ({ backupDir: vi.fn() }));
@@ -62,6 +63,7 @@ import {
   parseBackupConfig,
   restoreFromUpload,
   renameArchiveForVmid,
+  promoteUpload,
   resolveUnderUploadDir,
   sweepStaleUploads,
   RestoreUploadError,
@@ -181,9 +183,27 @@ describe('restoreFromUpload', () => {
   const VOLID = `backups:backup/${FILENAME}`;
 
   let client: ReturnType<typeof fakeClient>;
+  /** What Proxmox reports for the restored guest (read back before it is used). */
+  let restored: { config: Record<string, unknown>; pending: unknown[]; snapshots: unknown[] };
   beforeEach(() => {
     vi.clearAllMocks();
     client = fakeClient();
+    restored = { config: {}, pending: [], snapshots: [{ name: 'current' }] };
+    client.get.mockImplementation((url: string) => {
+      const ok = (data: unknown) => Promise.resolve({ data: { data } });
+      if (url.endsWith('/config')) {
+        const lxc = url.includes('/lxc/');
+        return ok({
+          ...(lxc
+            ? { arch: 'amd64', hostname: 'ct-1', unprivileged: 1, rootfs: 'local-lvm:vm-200-disk-0,size=8G' }
+            : { name: 'web-01', cores: 4, scsi0: 'local-lvm:vm-200-disk-0,size=32G' }),
+          ...restored.config,
+        });
+      }
+      if (url.endsWith('/pending')) return ok(restored.pending);
+      if (url.endsWith('/snapshot')) return ok(restored.snapshots);
+      return ok(null);
+    });
     vi.mocked(backupDir).mockReturnValue('/nonexistent-test-mount');
     vi.mocked(getBackupStorage).mockResolvedValue('backups');
     vi.mocked(pve.getClient).mockResolvedValue(asClient(client));
@@ -329,6 +349,15 @@ describe('restoreFromUpload', () => {
       expect(releaseVmId).not.toHaveBeenCalled();
     });
 
+    it('removes a restored guest whose real config differs from what the archive header said', async () => {
+      restored.config = { hostpci0: '01:00.0' };
+      await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(/won't restore/);
+      expect(pve.deleteVm).toHaveBeenCalledWith('pve-0', 200, expect.anything(), 'qemu');
+      expect(pve.startVm).not.toHaveBeenCalled();
+      expect(releaseVmId).toHaveBeenCalledWith(200);
+      expect(await exists(RENAMED)).toBe(false);
+    });
+
     it('treats every unused disk on the restored guest as foreign', async () => {
       const { assertOwnVolumes } = await import('../src/services/vm.service.js');
       await restoreFromUpload(user, { filename: FILENAME, name: 'migrated-web' });
@@ -398,13 +427,33 @@ describe('restoreFromUpload', () => {
       ]);
     });
 
-    it('keeps an old upload whose machine is still being restored', async () => {
-      await put('vzdump-qemu-300-a.vma.zst', 8 * H);
-      await put('.proxmate-uploaded.vzdump-qemu-300-a.vma.zst', 8 * H);
+    it('keeps an old upload whose restore target is still being created (keyed by the noted VMID)', async () => {
+      const { writeFile, utimes } = await import('node:fs/promises');
+      await put('vzdump-qemu-104-a.vma.zst', 8 * H); // the tenant's original VMID in the name
+      const marker = path.join(dir, '.proxmate-uploaded.vzdump-qemu-104-a.vma.zst');
+      await writeFile(marker, '512');
+      const t = (Date.now() - 8 * H) / 1000;
+      await utimes(marker, t, t);
       vi.mocked(prisma.virtualMachine.count).mockResolvedValue(1 as never);
       expect(await sweepStaleUploads()).toBe(0);
-      expect(prisma.virtualMachine.count).toHaveBeenCalledWith({ where: { proxmoxVmId: 300, status: 'creating' } });
+      expect(prisma.virtualMachine.count).toHaveBeenCalledWith({ where: { proxmoxVmId: 512, status: 'creating' } });
       expect((await left()).length).toBe(2);
+    });
+
+    it('notes the restore target in the marker of a default-mode upload', async () => {
+      const { mkdtemp, writeFile, readFile } = await import('node:fs/promises');
+      const os = await import('node:os');
+      const up = await mkdtemp(path.join(os.tmpdir(), 'pm-note-'));
+      vi.mocked(backupDir).mockReturnValue(up);
+      await writeFile(path.join(up, FILENAME), 'x');
+      await writeFile(path.join(up, `.proxmate-uploaded.${FILENAME}`), '');
+      let noted = '';
+      vi.mocked(prisma.virtualMachine.create).mockImplementationOnce((async () => {
+        noted = await readFile(path.join(up, `.proxmate-uploaded.${FILENAME}`), 'utf8');
+        return { id: 'vm1' };
+      }) as never);
+      await restoreFromUpload(user, { filename: FILENAME, name: 'x' });
+      expect(noted).toBe('200');
     });
   });
 
@@ -485,6 +534,51 @@ describe('restoreFromUpload', () => {
     expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, err, true, { task: expect.objectContaining({ node: 'pve-0', upid: 'UPID:1' }) });
   });
 
+  describe('the restored guest is checked as Proxmox holds it, not as the archive claimed', () => {
+    it.each([
+      ['a container device the rootfs pct.conf added', 'lxc', { dev0: '/dev/sda' }],
+      ['raw lxc keys', 'lxc', { lxc: [['lxc.mount.entry', '/ host none bind']] }],
+      ['a privileged container', 'lxc', { unprivileged: 0 }],
+      ['a host PCI device', 'qemu', { hostpci0: '01:00.0' }],
+      ['raw QEMU arguments', 'qemu', { args: '-device foo' }],
+      ['a hook script', 'qemu', { hookscript: 'local:snippets/x.pl' }],
+    ])('removes a guest restored with %s, drops the row and never starts it', async (_label, kind, extra) => {
+      restored.config = extra;
+      const file = kind === 'lxc' ? 'vzdump-lxc-105-2026_07_03-03_00_00.tar.zst' : FILENAME;
+      if (kind === 'lxc') vi.mocked(pve.extractBackupConfig).mockResolvedValue(LXC_CFG);
+      await expect(restoreFromUpload(user, { filename: file, name: 'x' })).rejects.toThrow(/settings ProxMate won't restore/);
+      expect(pve.deleteVm).toHaveBeenCalledWith('pve-0', 200, expect.anything(), kind);
+      expect(markClonedGuest).not.toHaveBeenCalled();
+      expect(pve.startVm).not.toHaveBeenCalled();
+      // The guest is gone, so the row is settled as "no guest created".
+      expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, expect.anything(), false, { task: undefined });
+    });
+
+    it('refuses pending changes and snapshots too', async () => {
+      restored.pending = [{ key: 'hostpci0', pending: '01:00.0' }];
+      await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(/pending changes to "hostpci0"/);
+      restored.pending = [];
+      restored.snapshots = [{ name: 'evil' }, { name: 'current' }];
+      await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(/snapshots/);
+    });
+
+    it('holds the row (guest kept, never started) when the guest cannot be removed', async () => {
+      restored.config = { hostpci0: '01:00.0' };
+      vi.mocked(pve.deleteVm).mockRejectedValueOnce(new Error('locked'));
+      await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(/won't restore/);
+      expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, expect.anything(), true, { task: expect.anything() });
+      expect(pve.startVm).not.toHaveBeenCalled();
+    });
+
+    it('never tags a late-finishing guest that fails the check', async () => {
+      vi.mocked(pve.waitForTask).mockRejectedValueOnce(new Error('Proxmox task timed out'));
+      await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(/timed out/);
+      const task = vi.mocked(settleFailedCreate).mock.calls[0]![3]!.task as { beforeTag: () => Promise<void> };
+      restored.config = { dev0: '/dev/sda' };
+      await expect(task.beforeTag()).rejects.toThrow(/won't restore/);
+    });
+  });
+
   it('never restores an archive carrying a host device, and drops it (BUG-027)', async () => {
     vi.mocked(pve.extractBackupConfig).mockResolvedValue(`hostpci0: mapping=gpu0\n${QEMU_CFG}`);
     await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(RestoreUploadError);
@@ -536,6 +630,19 @@ describe('archive config keys an upload may not carry (BUG-027)', () => {
     for (const extra of ['mp1: /srv/host,mp=/host', 'lxc.apparmor.profile: unconfined', 'dev0: /dev/kvm']) {
       expect(() => assertRestorableConfig(`${LXC_CFG}${extra}\n`, 'lxc'), extra).toThrow(RestoreUploadError);
     }
+  });
+
+  it('checks every section of the archive config, not only the first', () => {
+    expect(() => assertRestorableConfig(`${LXC_CFG}[PENDING]\ndev0: /dev/sda\n`, 'lxc')).toThrow(/"dev0"/);
+    expect(() => assertRestorableConfig(`${LXC_CFG}[snap]\nlxc.mount.entry: / host none\n`, 'lxc')).toThrow(RestoreUploadError);
+    expect(() => assertRestorableConfig(`${LXC_CFG}[not a section]\n`, 'lxc')).toThrow(/section/);
+    expect(() => assertRestorableConfig(`${LXC_CFG}Dev0: /dev/sda\n`, 'lxc')).toThrow(/line/);
+    expect(() => assertRestorableConfig(`${LXC_CFG}garbage without a colon\n`, 'lxc')).toThrow(/line/);
+    // A snapshot section's own keys are fine.
+    expect(() =>
+      assertRestorableConfig(`${QEMU_CFG}snaptime: 1700000000\nvmstate: local-lvm:vm-104-state-snap1\n`, 'qemu'),
+    ).not.toThrow();
+    expect(() => assertRestorableConfig(`#a description line\n${LXC_CFG}`, 'lxc')).not.toThrow();
   });
 
   it('accepts every config shape ProxMate itself produces (audit round 2)', () => {
@@ -626,5 +733,30 @@ describe('renameArchiveForVmid', () => {
     vi.mocked(backupDir).mockReturnValue('/nonexistent-test-mount');
     await expect(renameArchiveForVmid('../vzdump-qemu-1-x.vma', 2)).rejects.toThrow(RestoreUploadError);
     await expect(renameArchiveForVmid('notabackup.zip', 2)).rejects.toThrow(RestoreUploadError);
+  });
+});
+
+describe('promoteUpload', () => {
+  it('never replaces an existing backup, and keeps the temp file for the caller to drop', async () => {
+    const { mkdtemp, writeFile, readFile, rm } = await import('node:fs/promises');
+    const { existsSync } = await import('node:fs');
+    const os = await import('node:os');
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'pm-promote-'));
+    try {
+      const temp = path.join(dir, '.proxmate-upload-0123456789abcdef.part');
+      const final = path.join(dir, 'vzdump-qemu-1-x.vma.zst');
+      await writeFile(temp, 'upload');
+      await writeFile(final, 'a real backup');
+      expect(await promoteUpload(temp, final)).toBe(false);
+      expect(await readFile(final, 'utf8')).toBe('a real backup');
+      expect(existsSync(temp)).toBe(true);
+
+      await rm(final);
+      expect(await promoteUpload(temp, final)).toBe(true);
+      expect(await readFile(final, 'utf8')).toBe('upload');
+      expect(existsSync(temp)).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

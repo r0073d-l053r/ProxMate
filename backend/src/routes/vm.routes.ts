@@ -3,7 +3,7 @@ import { z } from 'zod';
 import multer from 'multer';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { promises as fsp, existsSync } from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { shareLimiter, guestFileLimiter } from '../middleware/rate-limit.js';
@@ -103,6 +103,7 @@ import { downloadsEnabled, requestBackupDownload, DownloadError } from '../servi
 import {
   restoreUploadsEnabled,
   markUploaded,
+  promoteUpload,
   restoreFromUpload,
   resolveUnderUploadDir,
   uploadDir,
@@ -377,14 +378,20 @@ router.post('/restore-upload', async (req: Request, res: Response) => {
     return;
   }
   const filename = path.basename(finalPath);
-  if (existsSync(finalPath)) {
+  // A hard link takes the name, so an existing backup there is never replaced.
+  try {
+    if (!(await promoteUpload(tempPath, finalPath))) {
+      await dropTemp();
+      res.status(409).json({ error: 'A backup file with this exact name already exists on the server. Rename your file (keep the vzdump-… pattern) and retry.' });
+      return;
+    }
+  } catch (err) {
     await dropTemp();
-    res.status(409).json({ error: 'A backup file with this exact name already exists on the server. Rename your file (keep the vzdump-… pattern) and retry.' });
+    res.status(502).json({ error: err instanceof Error ? err.message : 'Upload failed' });
     return;
   }
 
   try {
-    await fsp.rename(tempPath, finalPath);
     // Marks it as an upload ProxMate wrote, so a sweep may remove it if it is left behind.
     await markUploaded(filename);
     const vm = await restoreFromUpload(user, { filename, name: parsed.data.name });
