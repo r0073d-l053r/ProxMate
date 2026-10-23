@@ -1836,8 +1836,8 @@ router.post('/:id/console', async (req: Request, res: Response) => {
     const { ticket, port } = await requestVncProxy(vm.proxmoxNode, vm.proxmoxVmId, kindOf(vm));
     recordConsoleGrant(ticket, { vmId: vm.id, userId: user.id, transport: 'vnc', port, mode });
     await recordAudit({
-      action: 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
-      detail: `graphical console of ${vm.name}${mode === 'view' ? ' (view only)' : ''}`, req,
+      action: mode === 'view' ? 'vm.console_view_open' : 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `graphical console of ${vm.name}`, req,
     });
     res.json({ ticket, port, viewOnly: mode === 'view' });
   } catch (err) {
@@ -1871,8 +1871,8 @@ router.post('/:id/serial', async (req: Request, res: Response) => {
     const ticket = await requestTermProxy(vm.proxmoxNode, vm.proxmoxVmId, undefined, kind);
     recordConsoleGrant(ticket.ticket, { vmId: vm.id, userId: user.id, transport: 'serial', port: ticket.port, mode });
     await recordAudit({
-      action: 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
-      detail: `text console of ${vm.name}${mode === 'view' ? ' (view only)' : ''}`, req,
+      action: mode === 'view' ? 'vm.console_view_open' : 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `text console of ${vm.name}`, req,
     });
     res.json({ ...ticket, viewOnly: mode === 'view' });
   } catch (err) {

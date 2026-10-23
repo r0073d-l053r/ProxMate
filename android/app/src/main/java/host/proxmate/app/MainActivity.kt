@@ -14,6 +14,7 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
@@ -33,16 +34,13 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
-import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import host.proxmate.app.core.Fingerprints
-import host.proxmate.app.core.NavigationTarget
+import host.proxmate.app.core.NavigationDecision
 import host.proxmate.app.core.ServerAddress
 import host.proxmate.app.core.WebNavigation
 import host.proxmate.app.databinding.ActivityMainBinding
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.security.cert.X509Certificate
 
@@ -73,6 +71,9 @@ class MainActivity : AppCompatActivity() {
     /** Windows opened by the page (window.open / target=_blank), stacked over the main view. */
     private val popups = mutableListOf<WebView>()
 
+    /** Popups opened by a user gesture (as reported by onCreateWindow). */
+    private val gesturePopups = mutableSetOf<WebView>()
+
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private val fileChooser = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val callback = fileCallback ?: return@registerForActivityResult
@@ -98,6 +99,8 @@ class MainActivity : AppCompatActivity() {
         }
         server = saved
 
+        // Keep consoles and account pages out of screenshots and the recent-apps preview.
+        window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         setSupportActionBar(binding.toolbar)
@@ -115,6 +118,8 @@ class MainActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                // Signing out or leaving: let that finish rather than closing mid-way.
+                if (leaving) return
                 val top = popups.lastOrNull()
                 when {
                     top != null && top.canGoBack() -> top.goBack()
@@ -200,22 +205,20 @@ class MainActivity : AppCompatActivity() {
     private inner class Client : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val url = request.url.toString()
-            if (!WebNavigation.cleartextAllowed(url, server)) {
-                if (request.isForMainFrame) showError(getString(R.string.cleartext_blocked))
-                return true
+            // A window the page just opened (still blank) inherits the gesture that opened it.
+            val freshPopup = view !== binding.webView && (view.url.isNullOrEmpty() || view.url == "about:blank")
+            val gesture = request.hasGesture() || (freshPopup && view in gesturePopups)
+            val decision = WebNavigation.route(url, server, webSignIn, request.isForMainFrame, gesture)
+            if (decision == NavigationDecision.LOAD) return false
+            when (decision) {
+                NavigationDecision.OPEN_EXTERNAL -> openExternal(url)
+                NavigationDecision.BLOCK_CLEARTEXT ->
+                    if (request.isForMainFrame && !freshPopup) showError(getString(R.string.cleartext_blocked))
+                else -> Unit
             }
-            return when (WebNavigation.decide(url, server, webSignIn)) {
-                NavigationTarget.IN_APP -> false
-                NavigationTarget.EXTERNAL -> {
-                    openExternal(url)
-                    // A new window whose only purpose was this external link: close it again.
-                    if (view !== binding.webView && (view.url.isNullOrEmpty() || view.url == "about:blank")) {
-                        closePopup(view)
-                    }
-                    true
-                }
-                NavigationTarget.BLOCKED -> true
-            }
+            // A new window whose only purpose was this outside link: close it again.
+            if (freshPopup) closePopup(view)
+            return true
         }
 
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
@@ -354,6 +357,7 @@ class MainActivity : AppCompatActivity() {
                 FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
             )
             popups.add(popup)
+            if (isUserGesture) gesturePopups.add(popup)
             invalidateOptionsMenu()
             transport.webView = popup
             resultMsg.sendToTarget()
@@ -374,11 +378,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun closePopup(popup: WebView) {
+    private fun closePopup(popup: WebView, immediate: Boolean = false) {
         if (!popups.remove(popup)) return
+        gesturePopups.remove(popup)
         binding.webContainer.removeView(popup)
         popup.stopLoading()
-        popup.destroy()
+        // Often called from one of the popup's own callbacks; destroy it once that has returned.
+        if (immediate) popup.destroy() else binding.webContainer.post { popup.destroy() }
         invalidateOptionsMenu()
     }
 
@@ -438,14 +444,16 @@ class MainActivity : AppCompatActivity() {
         if (leaving) return
         leaving = true
         binding.progress.visibility = View.VISIBLE
+        binding.webView.stopLoading()
+        // End the server session with the cookies as they are now. This runs outside
+        // the screen's lifecycle, so closing the screen can't cancel it, and it doesn't
+        // depend on the local cookies, which are cleared right away below.
         val cookies = CookieManager.getInstance().getCookie(server.origin)
-        lifecycleScope.launch {
-            // Whatever the server says, the local session is cleared below.
-            withContext(Dispatchers.IO) { settings.apiClient(server).logout(cookies) }
-            AppSettings.clearWebSession(this@MainActivity) {
-                then()
-                finish()
-            }
+        val client = settings.apiClient(server)
+        AppScope.io.launch { client.logout(cookies) }
+        AppSettings.clearWebSession(this) {
+            then()
+            finish()
         }
     }
 
@@ -478,7 +486,7 @@ class MainActivity : AppCompatActivity() {
         if (::binding.isInitialized) {
             fileCallback?.onReceiveValue(null)
             fileCallback = null
-            popups.toList().forEach { closePopup(it) }
+            popups.toList().forEach { closePopup(it, immediate = true) }
             if (!mainDestroyed) {
                 mainDestroyed = true
                 (binding.webView.parent as? ViewGroup)?.removeView(binding.webView)
