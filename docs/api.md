@@ -131,7 +131,7 @@ curl -H "$AUTH" -H 'content-type: application/json' -X POST \
   admin or a Manager share) and answers `{ path, size, sha256, verified }`. The path must
   be absolute and normalized and not under `/proc`, `/sys` or `/dev` (**400** otherwise);
   a file over the limit (`GUEST_FILE_PUSH_MAX_BYTES`, 1 MiB by default, at most 8 MiB)
-  answers **413**, a container or a guest whose agent doesn't answer **409**. Limited per
+  answers **413**, a container or a guest whose agent doesn't answer **409**. Into a folder other users can write to (or reached through a symlink) the file is written as `owner`; without one that push answers **400**. Limited per
   signed-in user (30 per 10 minutes; `GUEST_FILE_RATE_LIMIT_MAX`, `_WINDOW_MS`).
 - **Sizes.** Creates, template deploys and resizes asking for less than 64 MB of RAM
   answer **400**. A resize grows the root disk by the difference between the requested

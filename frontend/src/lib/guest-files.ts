@@ -61,5 +61,5 @@ export function cleanLogText(text: string): string {
     })
     .join("\n")
     .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "")
-    .replace(/[‪-‮⁦-⁩]/g, "");
+    .replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
 }
