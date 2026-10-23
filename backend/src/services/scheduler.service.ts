@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { runScheduledBackups, runDueBackups } from './matestate.service.js';
 import { runDuePowerActions, previousCronOccurrence, reportInvalidStoredCrons } from './power-schedule.service.js';
-import { sampleResourceUsage, pruneResourceSamples } from './resource-history.service.js';
+import { sampleResourceUsage, pruneResourceSamples, SAMPLE_INTERVAL_MINUTES } from './resource-history.service.js';
 import { evaluateAlerts } from './alert.service.js';
 import { refreshAllTemplates } from './template.service.js';
 import { runAutoBalance } from './cluster-balancer.service.js';
@@ -11,6 +11,7 @@ import { getConfig, setConfig } from './config.service.js';
 import { runGuestMarkerBackfill } from './vm.service.js';
 import { advanceDeployingVms } from './deploy-lock.service.js';
 import { reconcileStuckOperations } from './task-reconcile.service.js';
+import { runUsageDigest, DEFAULT_USAGE_DIGEST_CRON } from './usage-digest.service.js';
 
 /** SystemConfig key: ISO timestamp of the last successful weekly backup run. */
 const LAST_RUN_KEY = 'matestate_last_run';
@@ -31,6 +32,7 @@ let templateTask: ReturnType<typeof cron.schedule> | null = null;
 let appDbTask: ReturnType<typeof cron.schedule> | null = null;
 let accessTask: ReturnType<typeof cron.schedule> | null = null;
 let accessRunning = false;
+let digestRunning = false;
 let markerTask: ReturnType<typeof cron.schedule> | null = null;
 let markerRunning = false;
 let running = false;
@@ -216,7 +218,7 @@ export function startScheduler(): void {
 
   // Per-tenant resource history: sample every running VM's live usage every 5
   // minutes (for the admin "usage" view) and prune the rolling window each tick.
-  historyTask = cron.schedule('*/5 * * * *', async () => {
+  historyTask = cron.schedule(`*/${SAMPLE_INTERVAL_MINUTES} * * * *`, async () => {
     if (historyRunning) return;
     historyRunning = true;
     try {
@@ -315,6 +317,32 @@ export function startScheduler(): void {
   setTimeout(() => void accessTick(), 15_000);
 
   console.log(`[scheduler] access-expiry sweep scheduled (${accessExpr})`);
+
+  // Weekly usage digest to the tenants who opted in. A no-op while the admin has
+  // it off or SMTP isn't set up. No catch-up: a digest missed while the backend
+  // was down is simply skipped, rather than arriving at an odd hour.
+  const digestExpr =
+    process.env['USAGE_DIGEST_CRON'] && cron.validate(process.env['USAGE_DIGEST_CRON'])
+      ? process.env['USAGE_DIGEST_CRON']
+      : DEFAULT_USAGE_DIGEST_CRON;
+  cron.schedule(digestExpr, () => void usageDigestTick());
+
+  console.log(`[scheduler] usage digest scheduled (${digestExpr}, for users who opted in)`);
+}
+
+/** One weekly usage-digest run. Exported for tests. */
+export async function usageDigestTick(now: Date = new Date()): Promise<void> {
+  if (digestRunning) return;
+  digestRunning = true;
+  try {
+    const r = await runUsageDigest(now);
+    if (!r.ran) console.log(`[scheduler] usage digest skipped: ${r.reason}`);
+    else if (r.sent || r.failed) console.log(`[scheduler] usage digest: ${r.sent} sent, ${r.failed} failed`);
+  } catch (err) {
+    console.error('[scheduler] usage-digest tick failed:', err);
+  } finally {
+    digestRunning = false;
+  }
 }
 
 /** SystemConfig key: ISO timestamp of the minute the last per-VM backup tick covered. */

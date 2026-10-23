@@ -32,6 +32,7 @@ import * as pve from '../src/services/proxmox.service.js';
 import { guestMarker, QuotaError, syncRestoredGuest, resizeVm } from '../src/services/vm.service.js';
 import { restoreFromMateState } from '../src/services/matestate.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
+import { getConfig } from '../src/services/config.service.js';
 
 const ok = (data: unknown) => Promise.resolve({ data: { data } });
 const VOLID = 'backups:backup/vzdump-qemu-100-2026_10_01-03_00_00.vma.zst';
@@ -285,5 +286,20 @@ describe('syncRestoredGuest', () => {
       where: { id: 'rowa' },
       data: expect.objectContaining({ cpu: 1, ram: 1024, storage: 132 }),
     });
+  });
+});
+
+describe('restore into the configured Proxmox pool', () => {
+  it('restates the pool on the in-place restore, so the guest stays reachable by a pool-scoped token', async () => {
+    const base = vi.mocked(getConfig).getMockImplementation()!;
+    vi.mocked(getConfig).mockImplementation(async (key: string) => (key === 'proxmox_pool' ? 'proxmate' : base(key)));
+    try {
+      const { c } = fakePve(LIVE, { ...LIVE });
+      await restoreFromMateState(row(), ms);
+      const restore = c.post.mock.calls.find((x) => x[0] === '/nodes/pve1/qemu');
+      expect(bodyOf(restore!)).toMatchObject({ archive: VOLID, force: '1', pool: 'proxmate' });
+    } finally {
+      vi.mocked(getConfig).mockImplementation(base);
+    }
   });
 });

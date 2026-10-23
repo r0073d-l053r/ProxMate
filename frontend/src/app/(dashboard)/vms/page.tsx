@@ -3,16 +3,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Plus, MonitorPlay, Play, Square, RotateCw, X, Trash2, Loader2, Box, Cpu } from "lucide-react";
+import { Plus, MonitorPlay, Play, Square, RotateCw, X, Trash2, Loader2, Box, Cpu, FolderInput } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import type { VirtualMachine, UserGroup } from "@/lib/types";
 import { formatRam, formatDate } from "@/lib/format";
 import { visibleSelection } from "@/lib/selection";
+import { plainTags, projectNames } from "@/lib/projects";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { OwnerGroupHeader } from "@/components/dashboard/owner-group-header";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
 import { TemplateIcon } from "@/components/template-icon";
+import { ProjectPicker } from "@/components/vm/project-picker";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -37,8 +39,9 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
+/** The labels shown as chips and filters; the project tag has its own page. */
 export function parseTags(csv: string | null): string[] {
-  return (csv ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+  return plainTags(csv);
 }
 
 /**
@@ -219,6 +222,7 @@ function OwnVmList({ vms, reload }: { vms: VirtualMachine[]; reload: () => Promi
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [moving, setMoving] = useState(false);
 
   const allTags = useMemo(() => {
     const s = new Set<string>();
@@ -229,6 +233,9 @@ function OwnVmList({ vms, reload }: { vms: VirtualMachine[]; reload: () => Promi
   const shown = activeTag ? vms.filter((v) => parseTags(v.tags).includes(activeTag)) : vms;
   // Bulk actions only ever touch selected VMs that are on screen under the current filter.
   const picked = visibleSelection(selected, shown);
+  // Only the owner sets a VM's project, so the move acts on the picked VMs they own.
+  const movable = picked.filter((v) => v.access === undefined || v.access === "owner");
+  const suggestions = useMemo(() => projectNames(vms.filter((v) => v.access === undefined || v.access === "owner")), [vms]);
 
   const toggle = useCallback((id: string) => {
     setSelected((prev) => {
@@ -296,10 +303,33 @@ function OwnVmList({ vms, reload }: { vms: VirtualMachine[]; reload: () => Promi
           <Button size="sm" variant="outline" disabled={busy} onClick={() => runBulk("restart")}>
             <RotateCw /> Restart
           </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy || movable.length === 0}
+            title={movable.length === 0 ? "Only a VM's owner can set its project" : undefined}
+            onClick={() => setMoving((m) => !m)}
+          >
+            <FolderInput /> Move to project…
+          </Button>
           <BulkDeleteDialog names={picked.map((v) => v.name)} busy={busy} onConfirm={() => runBulk("delete")} />
           <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
             Clear
           </Button>
+          {moving && movable.length > 0 && (
+            <div className="basis-full">
+              <ProjectPicker
+                ids={movable.map((v) => v.id)}
+                suggestions={suggestions}
+                onCancel={() => setMoving(false)}
+                onDone={async () => {
+                  setMoving(false);
+                  setSelected(new Set());
+                  await reload();
+                }}
+              />
+            </div>
+          )}
         </div>
       )}
 

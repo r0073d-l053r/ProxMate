@@ -27,14 +27,16 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/api/admin/audit` | admin | Audit log page (`?limit` default 100, `?offset` default 0). |
-| GET | `/api/admin/settings` | admin | Aggregated settings: proxmox (`hasSecret`, no secret), defaults, rescueIso, templateRefreshEnabled, smtp (`hasPass`), notify, sso (`hasSecret`, `callbackUrl`), ide (`hasGatewayKey`), appdbBackup (plus `mountedDir`), kiosk `pinSet`. |
+| GET | `/api/admin/settings` | admin | Aggregated settings: proxmox (`pool`, `hasSecret`, no secret), defaults, rescueIso, templateRefreshEnabled, smtp (`hasPass`), notify, sso (`hasSecret`, `callbackUrl`), ide (`hasGatewayKey`), appdbBackup (plus `mountedDir`), kiosk `pinSet`. |
 | PUT | `/api/admin/settings/kiosk` | admin + requireSession | `{ pin }` 4-12 digits or `''` to clear. Audited `admin.kiosk_config`. |
 | PUT | `/api/admin/settings/appdb-backup` | admin | `{ dir, keep (1..365, default 7) }`; probes the dir is writable. Audited `admin.appdb_backup_config`. |
 | POST | `/api/admin/settings/appdb-backup/run` | admin | Run an app-DB backup now; `{ ok, file, pruned }`. Audited `admin.appdb_backup_run`. |
 | PUT | `/api/admin/settings/smtp` | admin | `{ host, port, secure, user?, pass?, from? }`; blank `pass` keeps existing. |
 | POST | `/api/admin/settings/smtp/test` | admin | Verify SMTP. |
-| PUT | `/api/admin/settings/notifications` | admin | `{ webhookUrl?, clearWebhookUrl?, emailEnabled, emailTo?, events }`; a blank `webhookUrl` keeps the stored one, `clearWebhookUrl: true` removes it. Audited `admin.notify_config` with detail `webhook replaced\|removed\|kept, email on\|off, N events` (never the URL). |
-| POST | `/api/admin/settings/notifications/test` | admin | Send a test notification. |
+| PUT | `/api/admin/settings/notifications` | admin | `{ webhookUrl?, clearWebhookUrl?, ntfyUrl?, ntfyToken?, clearNtfy?, clearNtfyToken?, telegramBotToken?, telegramChatId?, clearTelegram?, emailEnabled, emailTo?, events }`; a blank secret keeps the stored one, the `clear*` flags remove it. ntfy URLs pass the same host check as the webhook and must end in a topic; a bot token needs a chat id. Audited `admin.notify_config` with detail `webhook replaced\|removed\|kept[, ntfy … (token …)][, telegram … (chat <id>)], email on\|off, N events` (the ntfy and Telegram parts only when the request touched them; never a URL or token). |
+| POST | `/api/admin/settings/notifications/test` | admin | Send a test notification to every configured channel (webhook, ntfy, Telegram, email), reporting each. |
+| PUT | `/api/admin/settings/usage-digest` | admin | `{ enabled }` sets `usage_digest_enabled`. Audited `admin.usage_digest_config`. |
+| POST | `/api/admin/settings/usage-digest/preview` | admin | Emails the calling admin their own digest now (never a tenant). 400 with `{ ok: false, error }` when SMTP is off. |
 | PUT | `/api/admin/settings/ide` | admin | IDE policy `{ enabled: off/admin/tenants, allowByoKeys, localModels?, sharedModels?, gatewayUrl?, gatewayKey?, ingressCidr? }`. Audited `admin.ide_config`. |
 | GET | `/api/admin/ide/sources` | admin | Admin's own saved LLM keys (model sources). |
 | POST | `/api/admin/ide/test-source` | admin | `{ keyId }`; probe that key's endpoint models. |
@@ -43,8 +45,9 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 | POST | `/api/admin/settings/sso/test` | admin | OIDC discovery check. |
 | GET | `/api/admin/password-requests` | admin | Pending password reset requests (no-SMTP flow). |
 | POST | `/api/admin/users/:id/reset-password` | admin + requireSession | Set `{ password (min 8), removePasskeys? }` for a user; `removePasskeys: true` (default false) also deletes their passkeys. Audited `admin.reset_password`. |
-| PUT | `/api/admin/settings/proxmox` | admin | `{ host, tokenId, tokenSecret?, verifySsl }`; secret only replaced if non-blank and stored encrypted. |
-| POST | `/api/admin/settings/proxmox/test` | admin | Test Proxmox connection. |
+| PUT | `/api/admin/settings/proxmox` | admin | `{ host, tokenId, tokenSecret?, verifySsl, pool? }`; secret only replaced if non-blank and stored encrypted. `pool` sets `proxmox_pool` (`''` clears it, omitted keeps it; letters, digits, `-`, `_`). |
+| POST | `/api/admin/settings/proxmox/test` | admin | Test Proxmox connection. With a pool configured the result carries a `pool` report (see [Proxmox privileges](/proxmox/privileges.md)). |
+| POST | `/api/admin/settings/proxmox/pool/move-guests` | admin | Adds every guest carrying a ProxMate ownership marker that is outside the configured pool to it (`PUT /pools`, `allow-move=1`); returns `{ pool, moved: [{ vmid, name }] }`, 502 with the Proxmox message on failure. Audited `admin.proxmox_pool_move`. See [guest-pool service](/services/guest-pool.md). |
 | PUT | `/api/admin/settings/defaults` | admin | `{ storage, bridge, isoStorage, backupStorage? }`; `bridge` must match `NETWORK_NAME_RE`, `backupStorage: ''` clears the override. Audited `admin.settings_defaults` with a before/after diff. |
 | PUT | `/api/admin/settings/rescue` | admin | `{ iso }` sets `rescue_iso`. |
 | PUT | `/api/admin/settings/template-refresh` | admin | `{ enabled }` sets `template_refresh_enabled`. |
@@ -72,6 +75,8 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 | POST | `/api/admin/passthrough-requests/:id/deny` | admin | Deny. Audited `passthrough.deny`. |
 | GET | `/api/admin/vms/unmatched` | admin | Machines whose VMID has no guest carrying their ProxMate tag (`listUnmatchedVms`), with what is at the VMID; shown in Settings → Maintenance → Unconfirmed machines with Adopt / Remove row (Remove row is `DELETE /api/vms/:id?rowOnly=true`). 502 when Proxmox can't be read. |
 | POST | `/api/admin/vms/:id/adopt` | admin | Tag the guest at the row's VMID as this row's (`adoptGuest`); a held or `error` row is then made safe and its hold cleared (disks over quota keep it held). 409 when refused (another machine's tag, a template, a VMID shared with another row, no guest, or a volume that isn't its own). Audited `vm.adopt`. |
+| GET | `/api/admin/guests/importable` | admin | Proxmox guests (QEMU and LXC) no machine references, with no ProxMate tag, that are not templates (`listImportableGuests`): `{ vmid, node, name, type, status, cpu, ramMb, diskGb }[]`. Shown in Settings → Maintenance → Import existing guests. 502 when Proxmox can't be read. |
+| POST | `/api/admin/guests/import` | admin | `{ vmid, ownerId, quotaExempt?, adminManaged? }`: import the guest for that user (`importGuest`) — row written from its config, ownership tag added (other tags kept), default bridge and isolation applied; 201 `{ vm }`. 404 unknown owner or no guest; 409 when refused (already managed, a template, a ProxMate tag, a volume that isn't its own, host devices or settings, a privileged container); 403 with the owner's name when it would exceed their quota (unless `quotaExempt`). Audited `vm.import`. See [guest import](/services/guest-import.md). |
 | POST | `/api/admin/vms/:id/passthrough/detach` | admin | `{ index? (0..15, default 0) }` detach `hostpci<index>`. Audited `passthrough.detach`. |
 | POST | `/api/admin/broadcast` | admin | `{ subject (1..200), message (1..5000) }`; email every non-opted-out user with an unsubscribe link. Audited `admin.broadcast`. |
 | GET | `/api/admin/balancer` | admin | Balancer settings + computed plan. |
@@ -87,7 +92,7 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 - All bodies are zod-validated; failures are 400 with `details` (some return a short fixed message instead).[^routes]
 - SSRF guard: `webhookUrl` must pass `assertPublicHttpUrlShape`.[^routes]
 - Secrets are never returned by `GET /settings` (only `hasSecret` / `hasPass` / `hasGatewayKey`, and for the notification webhook `hasWebhookUrl` plus `webhookUrlMasked`, scheme and host only), and blank secret fields on PUT keep the stored value.[^routes]
-- Audited: `PUT /settings/proxmox` (`admin.proxmox_config`), `PUT /settings/smtp` (`admin.smtp_config`), `PUT /settings/rescue`, `PUT /settings/template-refresh`, `PUT /isolation` and isolation enforce/unenforce. Entries name what changed and whether a secret was replaced, never the secret value.[^routes]
+- Audited: `PUT /settings/proxmox` (`admin.proxmox_config`, including a pool change), `POST /settings/proxmox/pool/move-guests` (`admin.proxmox_pool_move`), `PUT /settings/smtp` (`admin.smtp_config`), `PUT /settings/rescue`, `PUT /settings/template-refresh`, `PUT /isolation` and isolation enforce/unenforce. Entries name what changed and whether a secret was replaced, never the secret value.[^routes]
 - Passthrough approve and balancer apply return 202 and run asynchronously (`void ... .catch(console.error)`); errors after 202 only reach the log.[^routes]
 - `GET /isolation` treats `isolation_enabled` as on unless it is exactly `'false'`.[^routes]
 - Broadcast unsubscribe base URL: `frontend_url` config, else `BACKEND_PUBLIC_URL`, else `FRONTEND_URL`; no link if all are empty. Requires SMTP (400 otherwise).[^routes]
@@ -95,7 +100,7 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 
 # Relationships
 
-- Config keys in [SystemConfig](/database/system-config.md): [Proxmox connection](/config/proxmox-connection.md), [provisioning defaults](/config/provisioning-defaults.md), [tenant isolation](/config/tenant-isolation.md), [SSO](/config/sso.md), [SMTP](/config/smtp.md), [notifications](/config/notifications.md), [IDE](/config/ide.md), [cluster balancer](/config/cluster-balancer.md), [app DB backup](/config/appdb-backup.md), [template refresh](/config/template-refresh.md).
+- Config keys in [SystemConfig](/database/system-config.md): [Proxmox connection](/config/proxmox-connection.md), [provisioning defaults](/config/provisioning-defaults.md), [tenant isolation](/config/tenant-isolation.md), [SSO](/config/sso.md), [SMTP](/config/smtp.md), [notifications](/config/notifications.md), [IDE](/config/ide.md), [cluster balancer](/config/cluster-balancer.md), [app DB backup](/config/appdb-backup.md), [template refresh](/config/template-refresh.md), [usage digest](/config/usage-digest.md).
 - Data: [AuditLog](/database/audit-log.md), [User](/database/user.md), [VirtualMachine](/database/virtual-machine.md), [QuotaRequest](/database/quota-request.md), [PassthroughRequest](/database/passthrough-request.md), [PasswordResetRequest](/database/password-reset-request.md), [ResourceSample](/database/resource-sample.md), [TenantLlmKey](/database/tenant-llm-key.md).
 - Services: [config](/services/config.md), [setup](/services/setup.md), [proxmox](/services/proxmox.md), [audit](/services/audit.md), [resource-history](/services/resource-history.md), [live-stats](/services/live-stats.md), [quota-request](/services/quota-request.md), [cluster-balancer](/services/cluster-balancer.md), [passthrough-request](/services/passthrough-request.md), [update](/services/update.md), [mail](/services/mail.md), [broadcast-optout](/services/broadcast-optout.md), [notify](/services/notify.md), [sso](/services/sso.md), [ide](/services/ide.md), [ide-provision](/services/ide-provision.md), [appdb-backup](/services/appdb-backup.md), [kiosk](/services/kiosk.md), [password-reset](/services/password-reset.md), [vm](/services/vm.md).
 - Proxmox: [networking](/proxmox/networking.md) (firewall/isolation), [privileges](/proxmox/privileges.md).

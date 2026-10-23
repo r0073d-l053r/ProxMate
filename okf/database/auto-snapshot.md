@@ -13,8 +13,8 @@ sources:
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/auto-snapshot.service.ts
     title: backend/src/services/auto-snapshot.service.ts
   - id: mig
-    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/migrations/20261023120000_reliability_reconcile_autosnapshot/migration.sql
-    title: backend/prisma/migrations/20261023120000_reliability_reconcile_autosnapshot/migration.sql
+    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/prisma/migrations/20261023130000_reliability_reconcile_autosnapshot/migration.sql
+    title: backend/prisma/migrations/20261023130000_reliability_reconcile_autosnapshot/migration.sql
 ---
 
 # Purpose
@@ -33,7 +33,7 @@ One row per automatic snapshot (`pm-auto-<op>-<timestamp>`) of a QEMU VM. Retent
 | createdAt | DateTime | `@default(now())` | |
 | | | `@@unique([vmId, name])` | |
 
-Added by migration `20261023120000_reliability_reconcile_autosnapshot`.[^schema] [^mig]
+Added by migration `20261023130000_reliability_reconcile_autosnapshot`.[^schema] [^mig]
 
 # Relationships
 
@@ -47,4 +47,4 @@ Added by migration `20261023120000_reliability_reconcile_autosnapshot`.[^schema]
 
 [^schema]: backend/prisma/schema.prisma
 [^svc]: backend/src/services/auto-snapshot.service.ts
-[^mig]: backend/prisma/migrations/20261023120000_reliability_reconcile_autosnapshot/migration.sql
+[^mig]: backend/prisma/migrations/20261023130000_reliability_reconcile_autosnapshot/migration.sql

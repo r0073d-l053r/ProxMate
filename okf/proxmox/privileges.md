@@ -24,6 +24,12 @@ sources:
   - id: roadmap
     resource: https://github.com/r0073d-l053r/ProxMate/blob/main/ROADMAP.md
     title: ROADMAP.md
+  - id: pool
+    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/backend/src/services/guest-pool.service.ts
+    title: backend/src/services/guest-pool.service.ts
+  - id: script
+    resource: https://github.com/r0073d-l053r/ProxMate/blob/main/deploy/proxmox-token.sh
+    title: deploy/proxmox-token.sh
 ---
 
 # Purpose
@@ -53,7 +59,10 @@ admin "test connection" action ([setup API](/api/setup.md), [admin API](/api/adm
    path holding nothing looks identical to no grant).[^setup]
 6. **Operational** privileges: missing ones become non-blocking `warnings` in the result
    (`{connected, version, nodeCount, vmCount, storageCount, warnings}`).[^setup]
-7. Blocking failures throw one error listing each item plus the hint to run
+7. With `proxmox_pool` set, the pool checks run next (see "Pool-scoped token" below); a pool
+   that does not exist is blocking, everything else a warning. With no pool set, a token whose
+   `VM.Allocate` exists only on some `/pool/<id>` gets a warning naming the pool to configure.[^pool]
+8. Blocking failures throw one error listing each item plus the hint to run
    `pveum user token permissions <userid> <tokenid>`.[^setup]
 
 # Schema
@@ -92,7 +101,7 @@ The warning rows come verbatim from `OPERATIONAL_PRIVILEGES` and `guestAgentPriv
 # Not checked by the connection test
 
 - `VM.Snapshot.Rollback` (rollback also accepts `VM.Snapshot`, which is checked).
-- `VM.GuestAgent.FileWrite` (PVE 9, the IDE's bootstrap file only — and on 9.2.3 `VM.GuestAgent.Unrestricted` already covers `file-write`; see the hardware section).
+- `VM.GuestAgent.FileWrite` (PVE 9: `agent/file-write`, used by the IDE bootstrap and by pushing a file into a VM — on 9.2.3 `VM.GuestAgent.Unrestricted` already covers `file-write`; see the hardware section). Pushing a file and reading the IDE install log also run `agent/exec`, which the checked `VM.GuestAgent.Unrestricted` (or `VM.Monitor` on 8) covers.
 - `Mapping.Audit` / `Mapping.Use` (GPU/PCI passthrough through resource mappings).
 
 A token that passes the test can still get 403 on those features; it surfaces as a `pveMessage`
@@ -107,7 +116,7 @@ retrying the call. Everything below is an observation from that cluster, not a r
 | --- | --- |
 | `VM.GuestAgent.Unrestricted` and `exec` / `exec-status` | Work. `exec` + `exec-status` ran shell commands in a deployed guest. |
 | `set-user-password` | Works with `VM.GuestAgent.Unrestricted`. |
-| Does `file-write` need `VM.GuestAgent.FileWrite`? | **No, on 9.2.3.** With `VM.GuestAgent.FileWrite` removed from the role, `agent/file-write` still wrote and read back a file. `Unrestricted` covers it, so `--with-ide` is redundant on this release — harmless, and kept for older 9.x where it may still be checked. |
+| Does `file-write` need `VM.GuestAgent.FileWrite`? | **No, on 9.2.3.** With `VM.GuestAgent.FileWrite` removed from the role, `agent/file-write` still wrote and read back a file. `Unrestricted` covers it, so `FileWrite` is redundant on this release — harmless, and kept in the role for older 9.x where it may still be checked. |
 | `/nodes/{node}/hardware/pci` (passthrough host readiness) | Satisfied by **either `Sys.Audit` or `Sys.Modify`**. Removing `Mapping.Audit`/`Mapping.Use`, then `Sys.Audit`, then `Sys.Modify` (one at a time) never broke it. |
 | `/cluster/mapping/pci` without `Mapping.Audit` | Returns `200 []`, **not** 403 — the mappings page looks empty rather than reporting a missing privilege. |
 | `GET /storage/<id>` (the storage *configuration* endpoint) | Needs **`Datastore.Allocate`**: without it, `Permission check failed (/storage/<id>, Datastore.Allocate)`. `/cluster/resources?type=storage` carries the same per-node availability under `Datastore.Audit`, so prefer it. |
@@ -115,6 +124,41 @@ retrying the call. Everything below is an observation from that cluster, not a r
 | `download-url` (cloud-image import) | Works with this role (`Sys.Modify` on `/`). A Debian 13 genericcloud image imported and became a template. |
 | Restore as a non-root token | A QEMU `vma.zst` archive is **neither refused nor silently changed**: cores, memory, disk size, `net0 … firewall=1` and the ownership tag all survived in place. No `SDN.Use` complaint for the archive's NIC (`vmbr0` is in the implicit `localnetwork` zone and the role holds `SDN.Use`). |
 | The token's own task calls | `GET /nodes/{n}/tasks`, `…/{upid}/status`, `…/{upid}/log` and `DELETE …/{upid}` all work with no extra privileges. |
+
+# Pool-scoped token (optional)
+
+`deploy/proxmox-token.sh --pool <name>` grants the guest privileges on a resource pool instead of
+on `/`, so Proxmox refuses the token every guest outside the pool, and ProxMate (with the same
+pool in `proxmox_pool`) creates every guest inside it.[^script][^pool] The split follows the path
+Proxmox checks each privilege on:
+
+| Path | Propagate | Role | Privileges | What needs it there |
+|---|---|---|---|---|
+| `/pool/<name>` | yes | `ProxMate-Guest` | every `VM.*` the role holds (incl. the release's guest-agent ones, `VM.GuestAgent.FileWrite` with `--with-ide`), `Pool.Audit`, `Pool.Allocate` | Guests are checked on `/vms/<vmid>`, which a pool member inherits from `/pool/<name>`. Creating with `pool=<name>` needs `VM.Allocate` on the pool instead of on `/vms/<new id>` (create, clone, restore). `Pool.Audit` lets the connection test see the pool; `Pool.Allocate` lets the move action add guests (Proxmox also checks `VM.Allocate` on each). |
+| `/nodes` | yes | `ProxMate-Infra` | `Sys.Audit` | Node status, RRD and capacity, `/cluster/resources` node rows, network and PCI listings, other users' tasks. Not `Sys.Modify`, which on a node allows changing its configuration. |
+| `/storage` | yes | `ProxMate-Infra` | `Datastore.Allocate`, `.AllocateSpace`, `.AllocateTemplate`, `.Audit` | Disk allocation, ISO/template/snippet/import/backup volume access, `GET`/`PUT /storage/<id>`, content deletes, `download-url`'s storage half. |
+| `/sdn/zones` | yes | `ProxMate-Infra` | `SDN.Audit`, `SDN.Use` | `SDN.Use` on `/sdn/zones/<zone>/<bridge>` for every NIC (plain bridges are in `localnetwork`); `SDN.Audit` for VNet and zone listings. |
+| `/mapping` | yes, only with `--with-passthrough` | `ProxMate-Infra` | `Mapping.Audit`, `Mapping.Use` | `/mapping/pci/<id>` for GPU/PCI passthrough. |
+| `/` | **no** (this path only) | `ProxMate-Cluster` | `Sys.Audit`, `Sys.Modify` | The cluster firewall (`/cluster/firewall/*`), `/cluster/status`, and `download-url`'s `Sys.Audit`+`Sys.Modify` on `/`. Not propagated, so it gives nothing on `/nodes`, `/vms` or `/access`. |
+
+`ProxMate-Infra` is one role on the infra paths; on each path only the privileges in the table
+gate anything. Calls that need no ACL: `/cluster/nextid`, `/access/permissions`, the token's own
+task status/log/stop, and `/cluster/resources` (filtered per object).[^script]
+
+What changes with a pool-scoped token:
+
+- Guests outside the pool disappear from `/cluster/resources`, so ProxMate stops seeing them; their
+  rows read as unconfirmed (every action on them fails closed). Admin-registered templates must be
+  in the pool to be cloned (`VM.Clone` is checked on the template).
+- An earlier `ProxMate` grant on `/` is kept until `--drop-root-grant`. While it exists the
+  connection test warns that the pool limits nothing, and the admin "Move managed guests into the
+  pool" action can still reach (and move) every guest carrying a ProxMate ownership marker. After
+  it is removed, anything left outside needs root: `pveum pool modify <name> --vms <ids> --allow-move 1`.
+- The connection test checks, with a pool set: the pool exists (blocking if not, when the token
+  holds `Pool.Audit`), each guest privilege on `/pool/<name>`, guest privileges still on `/` or
+  `/vms`, managed guests outside the pool, and rows whose guest is not visible.[^pool]
+- Not yet proven on hardware: the table is derived from the documented ACL paths and the API calls
+  ProxMate makes. ROADMAP.md lists it as needing live verification.[^roadmap]
 
 # Recommended setup (from the docs)
 
@@ -127,10 +171,10 @@ retrying the call. Everything below is an observation from that cluster, not a r
   role `ProxMate` (the privileges in the table, with the guest-agent ones chosen by PVE major) and a
   privsep token, and grants the role on `/` with propagate to **both** the user and the token (a
   privsep token's effective set is the intersection). `/` is required: the cluster firewall,
-  `/cluster/status` and `download-url` are checked there. `--with-ide` adds
-  `VM.GuestAgent.FileWrite` (PVE 9), `--with-passthrough` adds `Mapping.Audit`/`Mapping.Use`,
+  `/cluster/status` and `download-url` are checked there. on PVE 9 the role also
+  holds `VM.GuestAgent.FileWrite` (`--with-ide`, which used to add it, is still accepted and changes nothing), `--with-passthrough` adds `Mapping.Audit`/`Mapping.Use`,
   `--dry-run` prints the commands. Re-running updates the role and ACLs and never re-issues an
-  existing token.[^deploy][^security]
+  existing token. `--pool <name>` switches to the pool-scoped split above.[^deploy][^security]
 - Troubleshooting row: "Proxmox storage empty / VM create 403" → privilege separation on.[^deploy]
 
 # Gotchas
@@ -147,3 +191,5 @@ retrying the call. Everything below is an observation from that cluster, not a r
 [^security]: SECURITY.md "Recommended: scope the Proxmox API token"
 [^adminguide]: docs/admin-guide.md §1.1
 [^roadmap]: ROADMAP.md
+[^pool]: backend/src/services/guest-pool.service.ts (`checkGuestPool`, `moveManagedGuestsIntoPool`)
+[^script]: deploy/proxmox-token.sh (`--pool`)

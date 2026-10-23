@@ -12,8 +12,11 @@ import {
   getEffectivePermissions,
   getClusterVmCount,
   heldPrivileges,
+  getGuestPool,
+  POOL_ID_RE,
   type GuestNetwork,
 } from './proxmox.service.js';
+import { checkGuestPool, poolScopedWithoutSetting, type PoolReport } from './guest-pool.service.js';
 
 // Re-export config helpers so existing imports from setup.service keep working.
 export { isSetupComplete, getConfig, setConfig };
@@ -71,11 +74,23 @@ export async function saveProxmoxConfig(data: {
   tokenId: string;
   tokenSecret: string;
   verifySsl: boolean;
+  /** Optional resource pool for every guest ProxMate creates; empty clears it. */
+  pool?: string;
 }): Promise<void> {
   await setConfig('proxmox_host', data.host);
   await setConfig('proxmox_token_id', data.tokenId);
   await setConfig('proxmox_token_secret', data.tokenSecret, true);
   await setConfig('proxmox_verify_ssl', String(data.verifySsl));
+  if (data.pool !== undefined) await saveGuestPool(data.pool);
+}
+
+/** Set (or, with an empty string, clear) the `proxmox_pool` setting. */
+export async function saveGuestPool(pool: string): Promise<void> {
+  const value = pool.trim();
+  if (value && !POOL_ID_RE.test(value)) {
+    throw new Error("Pool names use only letters, digits, '-' and '_'.");
+  }
+  await setConfig('proxmox_pool', value);
 }
 
 export interface ProxmoxConnectionResult {
@@ -86,6 +101,8 @@ export interface ProxmoxConnectionResult {
   storageCount: number;
   /** Non-blocking: things that work now but will bite later, each naming the privilege. */
   warnings: string[];
+  /** Present only when a resource pool is configured. */
+  pool?: PoolReport;
 }
 
 /**
@@ -149,6 +166,20 @@ const SDN_USE_WARNING =
 const SDN_AUDIT_WARNING =
   'SDN.Audit is missing — SDN VNets cannot be listed, so the network picker may only show ' +
   'local bridges. This only matters if the cluster uses SDN; a VNet can still be typed in by name.';
+
+/**
+ * The privileges Proxmox checks on the guest itself (/vms/<vmid>, which a pool
+ * member inherits from /pool/<name>), plus Pool.Audit so the pool can be listed.
+ * VM.Audit is blocking elsewhere; here it is just one of the set.
+ */
+function guestPrivilegesFor(major: number | null): string[] {
+  return [
+    'VM.Audit',
+    ...OPERATIONAL_PRIVILEGES.map(([p]) => p).filter((p) => p.startsWith('VM.')),
+    ...guestAgentPrivileges(major).map(([p]) => p),
+    'Pool.Audit',
+  ];
+}
 
 /** Major version of a Proxmox VE version string ("8.2.4" → 8), or null if unparseable. */
 function pveMajor(version: string): number | null {
@@ -233,6 +264,30 @@ export async function testProxmoxConnection(): Promise<ProxmoxConnectionResult> 
     );
   }
 
+  const major = pveMajor(version);
+
+  // A configured pool is where every guest ProxMate creates lands, so the token's
+  // guest privileges have to hold there, and a pool that does not exist makes every
+  // create fail. Checked here so a missing pool is reported with the other blocking
+  // findings.
+  const poolName = await getGuestPool();
+  let pool: PoolReport | undefined;
+  if (poolName) {
+    const checked = await checkGuestPool(client, perms, poolName, guestPrivilegesFor(major));
+    pool = checked.report;
+    blocking.push(...checked.blocking);
+    warnings.push(...checked.warnings);
+  } else {
+    const scoped = poolScopedWithoutSetting(perms);
+    if (scoped.length > 0) {
+      warnings.push(
+        `The token's guest privileges are granted only on ${scoped.map((p) => `/pool/${p}`).join(', ')}, but no ` +
+          'Proxmox pool is set in ProxMate, so new guests would be created outside it and refused. Set the pool ' +
+          `under Proxmox connection (e.g. "${scoped[0]}").`,
+      );
+    }
+  }
+
   if (blocking.length > 0) {
     throw new Error(
       `The token connects to Proxmox VE ${version} but cannot be used:\n` +
@@ -242,7 +297,6 @@ export async function testProxmoxConnection(): Promise<ProxmoxConnectionResult> 
     );
   }
 
-  const major = pveMajor(version);
   for (const [priv, what] of [...OPERATIONAL_PRIVILEGES, ...guestAgentPrivileges(major)]) {
     if (!held.has(priv)) warnings.push(`${priv} is missing — ${what} will fail.`);
   }
@@ -259,6 +313,7 @@ export async function testProxmoxConnection(): Promise<ProxmoxConnectionResult> 
     vmCount: vms ?? 0,
     storageCount: storages?.length ?? 0,
     warnings,
+    ...(pool ? { pool } : {}),
   };
 }
 

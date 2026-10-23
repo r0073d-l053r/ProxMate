@@ -20,6 +20,7 @@ import { FormField } from "@/components/form-field";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -183,15 +184,12 @@ export default function BalancerPage() {
               htmlFor="b-threshold"
               hint="Act when node load spread exceeds this"
             >
-              <Input
+              <NumberInput
                 id="b-threshold"
-                type="number"
                 min={5}
                 max={50}
                 value={thresholdPct}
-                onChange={(e) =>
-                  setThresholdPct(Math.min(50, Math.max(5, Math.floor(Number(e.target.value) || 0))))
-                }
+                onValueChange={setThresholdPct}
               />
             </FormField>
             <FormField
@@ -199,15 +197,12 @@ export default function BalancerPage() {
               htmlFor="b-maxmoves"
               hint="Cap migrations per pass"
             >
-              <Input
+              <NumberInput
                 id="b-maxmoves"
-                type="number"
                 min={1}
                 max={20}
                 value={maxMoves}
-                onChange={(e) =>
-                  setMaxMoves(Math.min(20, Math.max(1, Math.floor(Number(e.target.value) || 0))))
-                }
+                onValueChange={setMaxMoves}
               />
             </FormField>
           </div>

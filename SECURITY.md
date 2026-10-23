@@ -35,8 +35,8 @@ This is enforced in code and is always on:
   returns it only if the caller holds the **capability** that route requires. A tenant
   cannot view, start, stop, delete, or open a console to a VM they have no access to.
 - **Share a VM** grants another ProxMate user access at one of three preset levels:
-  **Viewer** (see the VM and its status), **Operator** (+ power actions and console), and
-  **Manager** (+ config, resize, backups). The ProxMate IDE opens only for a VM's owner, never through a share (or for an admin on another user's VM). No share level of any kind can delete,
+  **Viewer** (see the VM and its status, and watch its console view-only), **Operator** (+ power
+  actions and an interactive console), and **Manager** (+ config, resize, backups). The ProxMate IDE opens only for a VM's owner, never through a share (or for an admin on another user's VM). No share level of any kind can delete,
   rebuild, migrate, re-share, or change passthrough — those stay with the owner and admins.
 - **Guest ownership tags.** Every guest ProxMate manages carries a Proxmox tag naming its
   machine (`proxmate-<id>`; Store templates `proxmate-template-<id>`). Start, stop, console,
@@ -162,7 +162,9 @@ the cluster balancer pins containers and node-drain lists them as blockers.
 | Transport | Run ProxMate behind HTTPS in production (reverse proxy). Set `verifySsl=true` once Proxmox has a valid cert — or keep verification **on** against a private CA via `PROXMOX_CA_CERT_FILE`/`PROXMOX_CA_CERT` (preferred over disabling it). |
 | Browser headers | The frontend sends `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`, HSTS, and a strict **nonce-based Content-Security-Policy** (`script-src 'self' 'nonce-…' 'strict-dynamic'`) so injected inline scripts can't execute. |
 | CORS | Restricted to `FRONTEND_URL`. |
-| Console tickets | One-time, short-lived Proxmox VNC tickets. The console WebSocket authenticates via the **httpOnly session cookie** (no token in the URL), checks `Origin` against `FRONTEND_URL`, and gates on the **`console` capability** — owner, admin, Operator and Manager shares pass; a Viewer share does not. |
+| Console tickets | One-time, short-lived Proxmox VNC tickets. The console WebSocket authenticates via the **httpOnly session cookie** (no token in the URL) and checks `Origin` against `FRONTEND_URL`. The ticket must be one ProxMate minted for the same VM, user, console type and port (single use, one minute), and the session's mode is the one recorded at the mint, never a browser flag: the **`console` capability** (owner, admin, Operator, Manager) gives an interactive session, **`console_view`** alone (Viewer) a view-only one. |
+| View-only consoles | Enforced in the relay, not just the browser. For the graphical console the relay parses the client's RFB stream across frame boundaries: the handshake passes (protocol 3.7/3.8; None, VNC auth, or VeNCrypt with a None, VNC-auth or Plain subtype) with ClientInit forced to **shared**, so a viewer never disconnects other sessions; after it only SetPixelFormat, SetEncodings, FramebufferUpdateRequest, EnableContinuousUpdates and ClientFence pass, while KeyEvent, PointerEvent, ClientCutText, xvp power requests, SetDesktopSize and QEMU key/audio messages are dropped. For the text console only the `user:ticket` line, resizes (`1:cols:rows:`) and keepalives (`2`) pass; input (`0:len:data`) is dropped. Anything the relay cannot frame closes the session. |
+| Guest-agent tools | Password reset, SSH-key add and **file push** (QEMU only) need the **`configure` capability** (owner, admin, Manager share); Viewer and Operator shares are refused. Each first confirms the guest carries the row's ownership tag. Request values reach the guest only as argv entries or `file-write` content, never as shell text. A pushed file's path must be absolute and normalized (no `..`, no control characters, not under `/proc`, `/sys` or `/dev`), it is capped at 1 MiB by default (`GUEST_FILE_PUSH_MAX_BYTES`, at most 8 MiB), staged in a private temp directory and renamed into place, and every push is audited with path, size and SHA-256 (never the contents) and rate-limited per user. The **IDE install log** is read with a fixed `tail` command, for the VM's owner or an admin only, with control characters and ANSI escapes stripped and shown as plain text. |
 | Rate limiting | Built-in `express-rate-limit` on `/auth/login`, `/auth/register`, and public token lookups (invite lookup, backup downloads); the setup wizard's mutating steps are throttled too (env-tunable). A separate **write limiter covers all of `/api`**, skipping safe `GET`/`HEAD`/`OPTIONS`, so every mutating request is throttled (default 60 per 60 s per IP, `API_WRITE_RATE_LIMIT_MAX` / `_WINDOW_MS`). Honors `trust proxy`. |
 | Outbound requests (SSRF) | Admin-configured **notification webhooks** and **cloud-image URLs** are validated against a private-address blocklist (loopback, link-local / cloud-metadata `169.254.169.254`, RFC1918, CGNAT, IPv6 ULA / link-local, IPv4-mapped IPv6): shape-checked on save, DNS-resolved and re-checked immediately before the request, and redirects refused. Homelab installs that point at a LAN service can opt in with `ALLOW_PRIVATE_OUTBOUND_URLS=true` (scheme + no-credentials checks always stay enforced). |
 | Metrics endpoint | `GET /metrics` is token-gated; in **production** it returns 404 unless `METRICS_TOKEN` is set — including for localhost, so there is no unauthenticated local scrape. Scrapers send `Authorization: Bearer <token>`. |
@@ -200,13 +202,28 @@ firewall, cluster status and cloud-image downloads are checked there). The role 
 - `Datastore.Allocate`, `Datastore.AllocateSpace`, `Datastore.AllocateTemplate`,
   `Datastore.Audit`
 - `SDN.Audit`, `SDN.Use`, `Sys.Audit`, `Sys.Modify` (cluster firewall isolation)
-- the guest agent: `VM.Monitor` on Proxmox VE 8; `VM.GuestAgent.Audit` and
-  `VM.GuestAgent.Unrestricted` on 9 (plus `VM.GuestAgent.FileWrite` for the IDE — on
-  PVE 9.2.3 `Unrestricted` already covers `file-write`, so that one is belt-and-braces)
+- the guest agent: `VM.Monitor` on Proxmox VE 8; `VM.GuestAgent.Audit`,
+  `VM.GuestAgent.Unrestricted` and `VM.GuestAgent.FileWrite` on 9 (`file-write` carries
+  the IDE bootstrap and files pushed into a VM; on PVE 9.2.3 `Unrestricted` already
+  covers it, so `FileWrite` is belt-and-braces)
 - for GPU/PCI passthrough only: `Mapping.Audit`, `Mapping.Use`
 
-It needs no user, pool or permission management, and never the node shell. The connection
+It needs no user or permission management, and never the node shell. The connection
 test warns about each missing privilege.
+
+With the role on `/`, the per-guest boundary is ProxMate's ownership-tag check: the token itself
+may act on every guest in the cluster. For a boundary Proxmox enforces, run the script with
+`--pool <name>` and set the same **Proxmox pool** in ProxMate. The guest privileges are then
+granted only on `/pool/<name>` (role `ProxMate-Guest`, which adds `Pool.Audit` and `Pool.Allocate`
+so ProxMate can see the pool and move its own guests into it), and ProxMate creates, clones,
+restores and imports every guest into that pool. What is still needed outside the pool is granted
+on the narrowest path Proxmox checks it on: `Sys.Audit` on `/nodes`, the `Datastore.*` privileges
+on `/storage`, `SDN.Audit`/`SDN.Use` on `/sdn/zones`, the mapping privileges on `/mapping` (only
+for passthrough), and `Sys.Audit` + `Sys.Modify` on `/` without propagation (cluster firewall,
+cluster status, cloud-image downloads). Proxmox then refuses the token any guest outside the pool.
+The connection test warns while the token still holds guest privileges on `/` (the pool limits
+nothing until that grant is removed with `--drop-root-grant`) and while guests ProxMate manages
+are outside the pool. See DEPLOYMENT.md §2.2 for the switch-over steps.
 
 > Note: Proxmox API tokens default to **Privilege Separation ON**, which gives the token an
 > empty permission set. Either disable privilege separation on the token or grant it a role

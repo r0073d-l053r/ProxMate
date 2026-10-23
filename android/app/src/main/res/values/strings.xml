@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ProxMate</string>
+
+    <!-- Server screen -->
+    <string name="server_heading">Connect to ProxMate</string>
+    <string name="server_subheading">Enter the address you use to open ProxMate in a browser.</string>
+    <string name="server_hint">Server address</string>
+    <string name="server_example">e.g. https://proxmate.example.com</string>
+    <string name="server_continue">Continue</string>
+    <string name="server_degraded">This is a ProxMate server, but it reports a problem (its database may be unavailable). Try again shortly.</string>
+    <string name="server_not_proxmate">That address answered, but it isn\'t a ProxMate server. Enter the address you use to open ProxMate in a browser.</string>
+    <string name="server_redirects">That address redirects to %1$s. Check it and tap Continue to use it.</string>
+    <string name="cleartext_title">Unencrypted connection</string>
+    <string name="cleartext_message">%1$s uses http://, so your password and session will be sent unencrypted. Anyone on the network between you and the server can read them.\n\nOnly continue on a network you fully trust. Using https:// is strongly recommended.</string>
+    <string name="cleartext_use_https">Use https</string>
+    <string name="cleartext_continue">Continue unencrypted</string>
+    <string name="cleartext_blocked">That page would load over an unencrypted connection and was blocked.</string>
+
+    <!-- Certificates -->
+    <string name="cert_untrusted_title">Untrusted certificate</string>
+    <string name="cert_changed_title">Certificate changed</string>
+    <string name="cert_untrusted_intro">This server\'s certificate isn\'t issued by an authority your device trusts (it may be self-signed). The app will trust exactly this certificate for this server, and nothing else, only if you confirm it.</string>
+    <string name="cert_changed_intro">WARNING: this server now presents a different certificate from the one you trusted before. This is expected only if the certificate was replaced on purpose. Otherwise someone may be intercepting the connection: cancel.</string>
+    <string name="cert_details">Server: %1$s\nSubject: %2$s\nIssuer: %3$s\nValid: %4$s to %5$s\n\nSHA-256 fingerprint:\n%6$s</string>
+    <string name="cert_verify_hint">Compare the fingerprint with the one on the server (for example: openssl x509 -noout -fingerprint -sha256 -in cert.pem). The safer option is a certificate from a trusted authority, such as Let\'s Encrypt.</string>
+    <string name="cert_trust">Trust this certificate</string>
+    <string name="cert_rejected">The certificate was not trusted. Use a certificate from a trusted authority, or check the fingerprint and try again.</string>
+    <string name="cert_untrusted_no_chain">The server\'s certificate isn\'t trusted and couldn\'t be read. Use a certificate from a trusted authority.</string>
+    <string name="cert_no_longer_trusted">The server\'s certificate is no longer the one you trusted. Check it before connecting again.</string>
+    <string name="cert_rejected_web">The server presented a certificate that isn\'t trusted and isn\'t the one you accepted. The connection was stopped. Use Change server to check the certificate again.</string>
+    <string name="forget_certs_button">Forget trusted certificates</string>
+    <string name="forget_certs_title">Forget trusted certificates?</string>
+    <string name="forget_certs_message">The app will no longer accept the self-signed certificates you trusted. You will be asked again the next time you connect.</string>
+    <string name="forget_certs_confirm">Forget</string>
+
+    <!-- Sign-in screen -->
+    <string name="login_heading">Sign in</string>
+    <string name="login_cleartext_warning">Unencrypted connection (http://): your password is sent in plain text.</string>
+    <string name="email_hint">Email</string>
+    <string name="password_hint">Password</string>
+    <string name="sign_in">Sign in</string>
+    <string name="login_web_default">Sign in with SSO or a passkey</string>
+    <string name="login_web_sso">Sign in with %1$s or a passkey</string>
+    <string name="change_server">Change server</string>
+    <string name="code_heading">Two-factor authentication</string>
+    <string name="code_explain">Enter the 6-digit code from your authenticator app, or one of your recovery codes.</string>
+    <string name="code_hint">Authentication code</string>
+    <string name="verify">Verify</string>
+    <string name="back">Back</string>
+    <string name="login_missing_fields">Enter your email and password.</string>
+    <string name="login_code_missing">Enter your authentication code.</string>
+    <string name="login_code_expired">Your login session expired. Please sign in again.</string>
+    <string name="login_no_cookies">The server accepted the sign-in but sent no session. Try again, or use the web sign-in.</string>
+    <string name="login_cookie_rejected">Signed in, but the session couldn\'t be kept. If the server uses http://, its session cookies must not be marked Secure (COOKIE_SECURE=false).</string>
+    <string name="login_web_title">Continue in the web sign-in</string>
+    <string name="login_web_continue">Continue</string>
+    <string name="login_passkey_web">Passkeys work in the web sign-in only where the device\'s WebView supports them. If yours doesn\'t, sign in with ProxMate in a browser.</string>
+
+    <!-- Main screen -->
+    <string name="session_ended">You\'re signed out. Sign in again to continue.</string>
+    <string name="page_load_failed">The page couldn\'t be loaded: %1$s</string>
+    <string name="retry">Retry</string>
+    <string name="no_app_for_link">No app can open this link.</string>
+    <string name="no_file_picker">No app is available to choose a file.</string>
+    <string name="menu_reload">Reload</string>
+    <string name="menu_close_window">Close window</string>
+    <string name="menu_change_server">Change server</string>
+    <string name="menu_sign_out">Sign out</string>
+    <string name="change_server_confirm">Sign out and connect to a different server?</string>
+    <string name="sign_out_confirm">Sign out of ProxMate?</string>
+</resources>

@@ -15,6 +15,7 @@ import { guestConfigSizes, pciLines, foreignVolumeKeys } from '../lib/guest-conf
 import { recordAudit } from './audit.service.js';
 import { beginInFlight } from '../lib/in-flight.js';
 import { autoSnapshotBefore, type AutoSnapshotResult } from './auto-snapshot.service.js';
+import { tagsForAccess } from './project.service.js';
 import { ALL_CAPS, CAPS_BY_ROLE, normalizeShareRole, type ShareRole, type VmCap } from './vm-share.service.js';
 
 /** The Proxmox guest kind for a VM row (defaults to QEMU for legacy/unset rows). */
@@ -46,7 +47,8 @@ export type VmOpKind =
   | 'duplicate'
   | 'restore-upload'
   | 'rebuild-iso'
-  | 'rebuild-template';
+  | 'rebuild-template'
+  | 'import';
 
 /**
  * Record the Proxmox task now driving a `creating` row, so a restart that loses
@@ -88,6 +90,11 @@ export function templateMarker(templateId: string): string {
   return `${MARKER_PREFIX}template-${templateId.toLowerCase()}`;
 }
 
+/** Whether a Proxmox tag list carries this template's marker. */
+export function tagsMarkTemplate(raw: string | undefined, templateId: string): boolean {
+  return parsePveTags(raw).includes(templateMarker(templateId));
+}
+
 /** Tag a registered template's Proxmox guest with its template marker (replacing any other ProxMate tag). */
 export async function markTemplateGuest(
   template: { id: string; proxmoxNode: string; proxmoxVmId: number },
@@ -125,6 +132,11 @@ export async function templateGuestIdentity(
   return parsePveTags(cfg['tags']).includes(templateMarker(template.id)) ? 'ours' : 'other';
 }
 
+/** Whether a Proxmox tag list carries any ProxMate marker (a machine row's or a template's). */
+export function hasProxmateTag(raw: string | undefined): boolean {
+  return parsePveTags(raw).some((t) => t.startsWith(MARKER_PREFIX));
+}
+
 /** Whether a Proxmox tag list (config `tags` or a /cluster/resources entry's) carries this row's marker. */
 export function tagsMarkRow(raw: string | undefined, vmId: string): boolean {
   return parsePveTags(raw).includes(guestMarker(vmId));
@@ -137,7 +149,7 @@ export function tagsWithMarker(raw: string | undefined, vmId: string): string {
 }
 
 /** Write this row's marker onto its guest, keeping the guest's other tags. */
-async function writeGuestMarker(
+export async function writeGuestMarker(
   vm: Pick<VirtualMachine, 'id' | 'proxmoxNode' | 'proxmoxVmId' | 'type'>,
   client: Awaited<ReturnType<typeof pve.getClient>>,
   currentTags?: string,
@@ -555,7 +567,7 @@ async function clearAdoptedHold(current: VirtualMachine): Promise<VirtualMachine
 }
 
 /** Delete a row together with the IDE credential rows keyed by its id (no relation, so no cascade). */
-async function deleteVmRow(vmId: string): Promise<void> {
+export async function deleteVmRow(vmId: string): Promise<void> {
   await prisma.$transaction([
     prisma.virtualMachine.delete({ where: { id: vmId } }),
     prisma.ideGuestSecret.deleteMany({ where: { vmId } }),
@@ -764,6 +776,67 @@ export async function withQuotaLock<T>(ownerId: string, fn: () => Promise<T>): P
   }
 }
 
+// ─── VMID reservation ─────────────────────────────────────────
+//
+// /cluster/nextid answers with the lowest VMID no guest uses yet. A create asks for
+// one just before its create or clone task makes the guest, so that is enough for a
+// single create. A bulk deploy, though, writes all its rows (and their VMIDs) up
+// front and clones them a few at a time, so for minutes Proxmox doesn't know those
+// VMIDs are spoken for. They are held here until their guest exists, and every
+// create path skips them.
+
+const pendingVmids = new Set<number>();
+
+/** The next VMID free on Proxmox and not held by a reservation. */
+export async function nextVmId(client: Awaited<ReturnType<typeof pve.getClient>>): Promise<number> {
+  const first = await pve.getNextVmId(client);
+  if (!pendingVmids.has(first)) return first;
+  return (await freeVmIdsFrom(first + 1, 1, client, new Set()))[0]!;
+}
+
+/** `count` free VMIDs from `start` up, skipping held ones and `skip`, each confirmed with Proxmox. */
+async function freeVmIdsFrom(
+  start: number,
+  count: number,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+  skip: Set<number>,
+): Promise<number[]> {
+  const out: number[] = [];
+  // Bounded so a cluster that refuses every candidate fails instead of looping.
+  for (let id = start, tries = 0; out.length < count; id += 1, tries += 1) {
+    if (tries > count + 500) throw new Error('Could not find enough free VMIDs on the cluster.');
+    if (pendingVmids.has(id) || skip.has(id)) continue;
+    if (await pve.isVmIdFree(id, client)) out.push(id);
+  }
+  return out;
+}
+
+/**
+ * Reserve `count` VMIDs for rows written before their guests exist. Skips VMIDs
+ * any machine row or Template Store entry references (a row whose guest is gone
+ * still names its VMID). Release each with releaseVmId once its guest exists or
+ * its create has been settled.
+ */
+export async function reserveVmIds(
+  count: number,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<number[]> {
+  const [rows, templates] = await Promise.all([
+    prisma.virtualMachine.findMany({ select: { proxmoxVmId: true } }),
+    prisma.template.findMany({ select: { proxmoxVmId: true } }),
+  ]);
+  const skip = new Set([...rows, ...templates].map((r) => r.proxmoxVmId));
+  const first = await pve.getNextVmId(client);
+  const ids = await freeVmIdsFrom(first, count, client, skip);
+  for (const id of ids) pendingVmids.add(id);
+  return ids;
+}
+
+/** Give back a VMID reserved by reserveVmIds. */
+export function releaseVmId(vmid: number): void {
+  pendingVmids.delete(vmid);
+}
+
 /** Check the requested resources against the user's remaining quota. */
 export async function assertWithinQuota(user: User, input: CreateVmInput): Promise<void> {
   // Admins (cluster owners) are not quota-limited; neither is an admin-granted
@@ -883,7 +956,7 @@ async function createVmLocked(user: User, input: CreateVmInput, release: () => v
       'amd64',
     );
   }
-  const vmid = await pve.getNextVmId(client);
+  const vmid = await nextVmId(client);
 
   const vm = await prisma.virtualMachine.create({
     data: {
@@ -922,6 +995,7 @@ async function createVmLocked(user: User, input: CreateVmInput, release: () => v
         isoStorage,
         iso: input.os,
         tags: guestMarker(vm.id),
+        pool: await pve.getGuestPool(),
       },
       client,
     );
@@ -1042,7 +1116,7 @@ async function createContainerLocked(
       archFromTemplate(input.template),
     );
   }
-  const vmid = await pve.getNextVmId(client);
+  const vmid = await nextVmId(client);
 
   const vm = await prisma.virtualMachine.create({
     data: {
@@ -1081,6 +1155,7 @@ async function createContainerLocked(
         password: input.password,
         sshPublicKeys: input.sshKey,
         tags: guestMarker(vm.id),
+        pool: await pve.getGuestPool(),
       },
       client,
     );
@@ -1393,6 +1468,7 @@ async function pickTemplateDeployNode(
   want: { cpu: number; ramMb: number; storageGb: number },
   cloud: CloudInitInput,
   client: Awaited<ReturnType<typeof pve.getClient>>,
+  pending?: Map<string, { cpu: number; ramMb: number; storageGb: number }>,
 ): Promise<string> {
   const home = template.proxmoxNode;
   if (!plan.full) return home;
@@ -1408,7 +1484,7 @@ async function pickTemplateDeployNode(
       return home;
     }
     const arch = template.arch === 'amd64' || template.arch === 'arm64' ? template.arch : undefined;
-    return await pve.pickBestNode(want, dest, client, await snippetCapableNodes(template, cloud, client), arch);
+    return await pve.pickBestNode(want, dest, client, await snippetCapableNodes(template, cloud, client), arch, pending);
   } catch (err) {
     console.warn(
       `[vm] could not place a deploy of template ${template.proxmoxVmId} across the cluster ` +
@@ -1445,7 +1521,7 @@ async function deployFromTemplateLocked(
   release: () => void,
 ): Promise<VirtualMachine> {
   // Can't deploy a disk smaller than the template's base image.
-  const diskGb = Math.max(input.storage, template.diskGb || input.storage);
+  const diskGb = templateDiskGb(template, input);
   await assertWithinQuota(user, {
     name: input.name,
     cpu: input.cpu,
@@ -1457,8 +1533,6 @@ async function deployFromTemplateLocked(
   });
 
   const client = await pve.getClient();
-  const isolate = (await getConfig('isolation_enabled')) !== 'false';
-
   const home = template.proxmoxNode; // where the template lives and the clone task runs
   // Full-vs-linked and the target pool are decided together — see planTemplateClone —
   // and the plan decides whether the guest may land on another node.
@@ -1470,28 +1544,69 @@ async function deployFromTemplateLocked(
     input,
     client,
   );
-  const vmid = await pve.getNextVmId(client);
+  const vmid = await nextVmId(client);
 
   const vm = await prisma.virtualMachine.create({
-    data: {
-      userId: user.id,
-      proxmoxVmId: vmid,
-      proxmoxNode: node,
-      name: input.name,
-      description: `From template: ${template.name}`,
-      cpu: input.cpu,
-      ram: input.ram,
-      storage: diskGb,
-      os: template.os ?? template.name,
-      status: 'creating',
-      opKind: 'clone' satisfies VmOpKind,
-      opStartedAt: new Date(),
-      quotaExempt: input.quotaExempt ?? false,
-      adminManaged: input.adminManaged ?? false,
-    },
+    data: templateDeployRow(user, template, input, { vmid, node, diskGb }),
   });
   release(); // usage now includes this row
   const done = beginInFlight(vm.id);
+  try {
+    return await provisionTemplateDeploy(vm, template, input, plan, client);
+  } finally {
+    done();
+  }
+}
+
+/** A template deploy's disk size: what was asked for, never below the template's base image. */
+function templateDiskGb(template: Template, input: { storage: number }): number {
+  return Math.max(input.storage, template.diskGb || input.storage);
+}
+
+/** The `creating` row a template deploy writes before its clone starts. */
+function templateDeployRow(
+  owner: User,
+  template: Template,
+  input: DeployTemplateInput,
+  at: { vmid: number; node: string; diskGb: number },
+) {
+  return {
+    userId: owner.id,
+    proxmoxVmId: at.vmid,
+    proxmoxNode: at.node,
+    name: input.name,
+    description: `From template: ${template.name}`,
+    cpu: input.cpu,
+    ram: input.ram,
+    storage: at.diskGb,
+    os: template.os ?? template.name,
+    status: 'creating',
+    opKind: 'clone' satisfies VmOpKind,
+    opStartedAt: new Date(),
+    quotaExempt: input.quotaExempt ?? false,
+    adminManaged: input.adminManaged ?? false,
+  };
+}
+
+/**
+ * The Proxmox half of a template deploy, for a row that already exists (written
+ * under the owner's quota lock): clone onto the row's node and VMID → tag →
+ * autoscale + cloud-init + isolation → start. A failure is settled like any
+ * failed create (settleFailedCreate) and rethrown. The caller keeps the row
+ * registered in flight (lib/in-flight) for the whole run.
+ */
+async function provisionTemplateDeploy(
+  vm: VirtualMachine,
+  template: Template,
+  input: DeployTemplateInput,
+  plan: { full: boolean; storage?: string },
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<VirtualMachine> {
+  const isolate = (await getConfig('isolation_enabled')) !== 'false';
+  const home = template.proxmoxNode;
+  const node = vm.proxmoxNode;
+  const vmid = vm.proxmoxVmId;
+  const diskGb = vm.storage;
 
   let created = false;
   let cloneTask: { node: string; upid: string } | undefined;
@@ -1505,6 +1620,7 @@ async function deployFromTemplateLocked(
         full: plan.full,
         storage: plan.storage,
         target: node,
+        pool: await pve.getGuestPool(),
       },
       client,
     );
@@ -1540,8 +1656,157 @@ async function deployFromTemplateLocked(
   } catch (err) {
     await settleFailedCreate(vm, err, created, { task: cloneTask });
     throw err;
+  }
+}
+
+// ─── Bulk template deploys ────────────────────────────────────
+//
+// Several copies of one template, for one owner or one per owner. The whole batch
+// is judged against quota up front and its rows written together, so a batch
+// either fits entirely or is refused before anything is cloned; the clones then
+// run a few at a time (see bulk-deploy.service.ts), each exactly as a single
+// deploy would.
+
+/** Thrown when a bulk deploy doesn't fit one or more owners' quota; keyed by owner email. */
+export class BatchQuotaError extends Error {
+  constructor(public readonly owners: Record<string, QuotaError['details']>) {
+    super('Quota exceeded');
+    this.name = 'BatchQuotaError';
+  }
+}
+
+export interface TemplateBatchItem {
+  owner: User;
+  input: DeployTemplateInput;
+}
+
+export interface TemplateBatchReservation {
+  template: Template;
+  plan: { full: boolean; storage?: string };
+  /**
+   * `done` ends the copy's in-flight registration: every reserved row counts as an
+   * operation running here from reservation until its provision settles, so the
+   * restart reconciler never touches a copy still waiting for its turn.
+   */
+  items: Array<{ vm: VirtualMachine; input: DeployTemplateInput; done?: () => void }>;
+}
+
+/**
+ * Reserve a whole bulk deploy: under every owner's quota lock (taken in id order,
+ * so two batches can't wait on each other), check that each owner's share of the
+ * batch fits their quota, place every copy, reserve a VMID for each and write all
+ * the rows in one transaction. All or nothing: any owner over quota refuses the
+ * whole batch with a BatchQuotaError, and nothing is written.
+ */
+export async function reserveTemplateBatch(
+  template: Template,
+  items: TemplateBatchItem[],
+): Promise<TemplateBatchReservation> {
+  const owners = [...new Map(items.map((i) => [i.owner.id, i.owner])).values()].sort((a, b) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+  );
+  const releases: Array<() => void> = [];
+  try {
+    for (const o of owners) releases.push(await acquireQuotaLock(o.id));
+
+    const over: Record<string, QuotaError['details']> = {};
+    for (const o of owners) {
+      const mine = items.filter((i) => i.owner.id === o.id && !i.input.quotaExempt);
+      if (mine.length === 0) continue;
+      try {
+        await assertWithinQuota(o, {
+          name: mine[0]!.input.name,
+          cpu: mine.reduce((s, i) => s + i.input.cpu, 0),
+          ram: mine.reduce((s, i) => s + i.input.ram, 0),
+          storage: mine.reduce((s, i) => s + templateDiskGb(template, i.input), 0),
+          os: template.name,
+        });
+      } catch (err) {
+        if (!(err instanceof QuotaError)) throw err;
+        over[o.email] = err.details;
+      }
+    }
+    if (Object.keys(over).length > 0) throw new BatchQuotaError(over);
+
+    const client = await pve.getClient();
+    const plan = await planTemplateClone(template.proxmoxNode, template, client);
+    // Each copy is placed as a single deploy would be, counting the copies placed
+    // before it so they spread across the cluster instead of all landing on the
+    // node that was emptiest when the batch started.
+    const pending = new Map<string, { cpu: number; ramMb: number; storageGb: number }>();
+    const nodes: string[] = [];
+    for (const item of items) {
+      const want = { cpu: item.input.cpu, ramMb: item.input.ram, storageGb: templateDiskGb(template, item.input) };
+      const node = await pickTemplateDeployNode(template, plan, want, item.input, client, pending);
+      const p = pending.get(node) ?? { cpu: 0, ramMb: 0, storageGb: 0 };
+      pending.set(node, { cpu: p.cpu + want.cpu, ramMb: p.ramMb + want.ramMb, storageGb: p.storageGb + want.storageGb });
+      nodes.push(node);
+    }
+
+    const vmids = await reserveVmIds(items.length, client);
+    let rows: VirtualMachine[];
+    try {
+      rows = await prisma.$transaction(
+        items.map((item, i) =>
+          prisma.virtualMachine.create({
+            data: templateDeployRow(item.owner, template, item.input, {
+              vmid: vmids[i]!,
+              node: nodes[i]!,
+              diskGb: templateDiskGb(template, item.input),
+            }),
+          }),
+        ),
+      );
+    } catch (err) {
+      for (const id of vmids) releaseVmId(id);
+      throw err;
+    }
+    return {
+      template,
+      plan,
+      items: rows.map((vm, i) => ({ vm, input: items[i]!.input, done: beginInFlight(vm.id) })),
+    };
   } finally {
-    done();
+    for (const r of releases) r();
+  }
+}
+
+/**
+ * Clone one reserved copy of a bulk deploy. The copy may have waited minutes for
+ * its turn, so its VMID is confirmed free first (and swapped for a fresh one if
+ * something outside ProxMate took it meanwhile). Releases the VMID reservation
+ * once the copy is settled either way.
+ */
+export async function provisionReservedDeploy(
+  reservation: TemplateBatchReservation,
+  item: { vm: VirtualMachine; input: DeployTemplateInput; done?: () => void },
+): Promise<VirtualMachine> {
+  let vm = item.vm;
+  const held = [vm.proxmoxVmId];
+  let handedOver = false;
+  try {
+    // Deleted while it waited for its turn: nothing to deploy, and nothing to settle.
+    const current = await prisma.virtualMachine.findUnique({ where: { id: vm.id } });
+    if (!current || current.status !== 'creating') {
+      handedOver = true;
+      throw new Error('This machine was removed before its turn to deploy.');
+    }
+    const client = await pve.getClient();
+    if (!(await pve.isVmIdFree(vm.proxmoxVmId, client))) {
+      const [fresh] = await reserveVmIds(1, client);
+      held.push(fresh!);
+      vm = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { proxmoxVmId: fresh! } });
+    }
+    handedOver = true; // provisionTemplateDeploy settles its own failures
+    return await provisionTemplateDeploy(vm, reservation.template, item.input, reservation.plan, client);
+  } catch (err) {
+    // A failure before the clone was asked for (no client, no free VMID) leaves a
+    // row with no guest of ours behind it: drop it, so it doesn't hold quota.
+    if (!handedOver) await deleteVmRow(vm.id).catch(() => undefined);
+    throw err;
+  } finally {
+    for (const id of held) releaseVmId(id);
+    item.done?.();
   }
 }
 
@@ -1600,7 +1865,7 @@ async function duplicateVmLocked(
   });
 
   const node = current.proxmoxNode;
-  const vmid = await pve.getNextVmId(client);
+  const vmid = await nextVmId(client);
   const isolate = (await getConfig('isolation_enabled')) !== 'false';
 
   const vm = await prisma.virtualMachine.create({
@@ -1635,7 +1900,7 @@ async function duplicateVmLocked(
       ? configured
       : undefined;
     const upid = await pve.cloneVm(
-      { node, templateVmid: current.proxmoxVmId, newVmid: vmid, name: newName, full: true, storage },
+      { node, templateVmid: current.proxmoxVmId, newVmid: vmid, name: newName, full: true, storage, pool: await pve.getGuestPool() },
       client,
     );
     cloneTask = { node, upid };
@@ -1753,7 +2018,8 @@ export async function annotateAccess<T extends { id: string; userId: string }>(
         : user.role === 'admin' ? 'admin'
           : normalizeShareRole(sharedRoles.get(v.id) ?? '');
     const caps = access === 'owner' || access === 'admin' ? ALL_CAPS : CAPS_BY_ROLE[access];
-    return { ...v, access, caps: [...caps] };
+    const tags = 'tags' in v ? { tags: tagsForAccess((v as { tags: string | null }).tags, access) } : {};
+    return { ...v, ...tags, access, caps: [...caps] };
   });
 }
 
@@ -2703,6 +2969,7 @@ async function rebuildVmLocked(
           isoStorage: isoStorage!,
           iso: source.os,
           tags: guestMarker(current.id),
+          pool: await pve.getGuestPool(),
         },
         client,
       );
@@ -2723,6 +2990,7 @@ async function rebuildVmLocked(
           name: current.name,
           full: plan.full,
           storage: plan.storage,
+          pool: await pve.getGuestPool(),
         },
         client,
       );

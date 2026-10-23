@@ -202,6 +202,47 @@ export async function getClient(): Promise<AxiosInstance> {
   return buildClient(c.host, c.tokenId, c.tokenSecret, c.verifySsl, c.ca);
 }
 
+// ─── Resource pool ────────────────────────────────────────────
+//
+// Optional. With `proxmox_pool` set, every guest ProxMate creates, clones, restores
+// or imports joins that Proxmox resource pool, so the token can be granted its guest
+// privileges on /pool/<name> instead of on / and Proxmox itself refuses it every
+// guest outside the pool. Empty = no pool parameter anywhere (the default).
+
+/** Proxmox pool ids: letters, digits, '-' and '_' (nested pools are not supported here). */
+export const POOL_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** The configured guest pool, or undefined when guests are not placed in one. */
+export async function getGuestPool(): Promise<string | undefined> {
+  const pool = (await getConfig('proxmox_pool'))?.trim();
+  return pool ? pool : undefined;
+}
+
+/** The pools the token can see (Proxmox lists a pool only with Pool.Audit on /pool/<id>). */
+export async function listPools(client?: AxiosInstance): Promise<string[]> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Array<{ poolid?: string }> }>('/pools');
+  return (res.data.data ?? []).map((p) => p.poolid).filter((p): p is string => !!p);
+}
+
+/**
+ * Add guests to a pool, moving them out of any other pool they are in. Needs
+ * Pool.Allocate on /pool/<pool> and VM.Allocate on each guest. Proxmox VE 8.1 moved
+ * this to `PUT /pools` (poolid in the body); 8.0 only has `PUT /pools/{poolid}`.
+ */
+export async function addGuestsToPool(pool: string, vmids: number[], client?: AxiosInstance): Promise<void> {
+  if (vmids.length === 0) return;
+  const c = client ?? (await getClient());
+  const body = { vms: vmids.join(','), 'allow-move': '1' };
+  try {
+    await c.put('/pools', new URLSearchParams({ poolid: pool, ...body }));
+  } catch (err) {
+    const status = err instanceof AxiosError ? err.response?.status : undefined;
+    if (status !== 501 && status !== 404) throw err;
+    await c.put(`/pools/${encodeURIComponent(pool)}`, new URLSearchParams(body));
+  }
+}
+
 /** Extract a human-readable message from a Proxmox/axios error. */
 export function pveMessage(err: unknown): string {
   if (err instanceof AxiosError) {
@@ -414,6 +455,11 @@ export async function pickBestNode(
   client?: AxiosInstance,
   candidateNodes?: string[],
   arch?: Arch,
+  /**
+   * Guests already placed on a node but not yet there (a bulk deploy placing its
+   * copies one after another): counted as used, so the copies spread out.
+   */
+  pending?: Map<string, { cpu: number; ramMb: number; storageGb: number }>,
 ): Promise<string> {
   const c = client ?? (await getClient());
   const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources');
@@ -463,15 +509,16 @@ export async function pickBestNode(
 
   const scored: NodePlacement[] = nodes.map((n) => {
     const maxcpu = n.maxcpu ?? 0;
-    const freeCpu = Math.max(0, maxcpu - (n.cpu ?? 0) * maxcpu);
-    const freeMem = Math.max(0, (n.maxmem ?? 0) - (n.mem ?? 0));
+    const queued = n.node ? pending?.get(n.node) : undefined;
+    const freeCpu = Math.max(0, maxcpu - (n.cpu ?? 0) * maxcpu - (queued?.cpu ?? 0));
+    const freeMem = Math.max(0, (n.maxmem ?? 0) - (n.mem ?? 0) - (queued?.ramMb ?? 0) * 1024 * 1024);
     const pool = n.node ? poolByNode.get(n.node) : undefined;
     const hasDisk = !!pool && pool.total > 0;
-    const freeDisk = pool ? pool.free : null;
+    const freeDisk = pool ? Math.max(0, pool.free - (queued?.storageGb ?? 0) * 1024 * 1024 * 1024) : null;
 
     const memFrac = n.maxmem ? freeMem / n.maxmem : 0;
     const cpuFrac = maxcpu ? freeCpu / maxcpu : 0;
-    const diskFrac = hasDisk ? pool!.free / pool!.total : 0;
+    const diskFrac = hasDisk ? freeDisk! / pool!.total : 0;
 
     let score = hasDisk
       ? memFrac * 0.5 + cpuFrac * 0.35 + diskFrac * 0.15
@@ -851,6 +898,21 @@ export async function getNextVmId(client?: AxiosInstance): Promise<number> {
   return parseInt(res.data.data, 10);
 }
 
+/**
+ * Whether no guest uses `vmid`: Proxmox answers `/cluster/nextid?vmid=N` with N
+ * when it is free and refuses it (400) when it is taken.
+ */
+export async function isVmIdFree(vmid: number, client?: AxiosInstance): Promise<boolean> {
+  const c = client ?? (await getClient());
+  try {
+    const res = await c.get<{ data: string }>('/cluster/nextid', { params: { vmid } });
+    return parseInt(String(res.data.data), 10) === vmid;
+  } catch (err) {
+    if (err instanceof AxiosError && err.response?.status === 400) return false;
+    throw err;
+  }
+}
+
 export interface CreateVmConfig {
   node: string;
   vmid: number;
@@ -864,6 +926,8 @@ export interface CreateVmConfig {
   iso: string; // ISO filename
   /** Proxmox tags (`;`-separated) — carries ProxMate's ownership marker. */
   tags?: string;
+  /** Resource pool the new guest joins (the `proxmox_pool` setting); see getGuestPool. */
+  pool?: string;
 }
 
 /** Create a QEMU VM. Returns the Proxmox task UPID. */
@@ -885,6 +949,7 @@ export async function createVm(config: CreateVmConfig, client?: AxiosInstance): 
     agent: '1',
   });
   if (config.tags) params.set('tags', config.tags);
+  if (config.pool) params.set('pool', config.pool);
   const res = await c.post<{ data: string }>(`/nodes/${config.node}/qemu`, params);
   return res.data.data;
 }
@@ -907,6 +972,8 @@ export interface CreateLxcConfig {
   unprivileged?: boolean; // default true
   /** Proxmox tags (`;`-separated) — carries ProxMate's ownership marker. */
   tags?: string;
+  /** Resource pool the new container joins; see getGuestPool. */
+  pool?: string;
 }
 
 /**
@@ -933,6 +1000,7 @@ export async function createLxc(config: CreateLxcConfig, client?: AxiosInstance)
   if (config.password) params.set('password', config.password);
   if (config.sshPublicKeys) params.set('ssh-public-keys', config.sshPublicKeys);
   if (config.tags) params.set('tags', config.tags);
+  if (config.pool) params.set('pool', config.pool);
   const res = await c.post<{ data: string }>(`/nodes/${config.node}/lxc`, params);
   return res.data.data;
 }
@@ -1068,6 +1136,8 @@ export interface CloudInitVmConfig {
   bridge: string;
   cores?: number;
   memory?: number; // MB
+  /** Resource pool the new VM joins; see getGuestPool. */
+  pool?: string;
 }
 
 /**
@@ -1097,6 +1167,7 @@ export async function createCloudInitVm(config: CloudInitVmConfig, client?: Axio
     ostype: 'l26',
     agent: '1',
   });
+  if (config.pool) params.set('pool', config.pool);
   const res = await c.post<{ data: string }>(`/nodes/${config.node}/qemu`, params);
   return res.data.data;
 }
@@ -1441,6 +1512,8 @@ export async function cloneVm(
     storage?: string;
     /** Node the clone lands on, when not the source's. Proxmox allows it only for shared storage. */
     target?: string;
+    /** Resource pool the clone joins; see getGuestPool. */
+    pool?: string;
   },
   client?: AxiosInstance,
 ): Promise<string> {
@@ -1452,6 +1525,7 @@ export async function cloneVm(
   });
   if (opts.full && opts.storage) params.set('storage', opts.storage);
   if (opts.target && opts.target !== opts.node) params.set('target', opts.target);
+  if (opts.pool) params.set('pool', opts.pool);
   const res = await c.post<{ data: string }>(
     `/nodes/${opts.node}/qemu/${opts.templateVmid}/clone`,
     params,
@@ -2721,10 +2795,11 @@ export async function deleteBackup(
  * Restore a backup into an EXISTING VMID (overwrites the guest in place). The
  * guest must be stopped first. Returns the Proxmox task UPID. QEMU and LXC use
  * different restore shapes: QEMU takes `archive=<volid>` on POST /qemu; LXC takes
- * `ostemplate=<volid>` + `restore=1` on POST /lxc.
+ * `ostemplate=<volid>` + `restore=1` on POST /lxc. `pool` restates the guest's pool
+ * membership (a no-op for a guest already in it).
  */
 export async function restoreBackup(
-  opts: { node: string; vmid: number; volid: string; storage?: string },
+  opts: { node: string; vmid: number; volid: string; storage?: string; pool?: string },
   client?: AxiosInstance,
   kind: GuestKind = 'qemu',
 ): Promise<string> {
@@ -2737,6 +2812,7 @@ export async function restoreBackup(
       force: '1', // overwrite the existing container
     });
     if (opts.storage) params.set('storage', opts.storage);
+    if (opts.pool) params.set('pool', opts.pool);
     const res = await c.post<{ data: string }>(`/nodes/${opts.node}/lxc`, params);
     return res.data.data;
   }
@@ -2746,6 +2822,7 @@ export async function restoreBackup(
     force: '1', // overwrite the existing VM
   });
   if (opts.storage) params.set('storage', opts.storage);
+  if (opts.pool) params.set('pool', opts.pool);
   const res = await c.post<{ data: string }>(`/nodes/${opts.node}/qemu`, params);
   return res.data.data;
 }
@@ -2758,7 +2835,7 @@ export async function restoreBackup(
  * storage names inside the archive's config may not exist here.
  */
 export async function restoreNewGuest(
-  opts: { node: string; vmid: number; volid: string; storage?: string },
+  opts: { node: string; vmid: number; volid: string; storage?: string; pool?: string },
   client?: AxiosInstance,
   kind: GuestKind = 'qemu',
 ): Promise<string> {
@@ -2768,6 +2845,7 @@ export async function restoreNewGuest(
     unique: '1',
   });
   if (opts.storage) params.set('storage', opts.storage);
+  if (opts.pool) params.set('pool', opts.pool);
   if (kind === 'lxc') {
     params.set('ostemplate', opts.volid);
     params.set('restore', '1');
@@ -3775,6 +3853,7 @@ export interface GuestExecResult {
  * (`agent/exec` then poll `exec-status`). For quick, near-instant probes only —
  * e.g. reading `cloud-init status`. Times out (default 10s) rather than hanging
  * the caller; a timeout throws so callers can treat it as "couldn't determine".
+ * Output is trimmed unless `trim` is false (callers that measure it, e.g. a log tail).
  */
 export async function guestExecOutput(
   node: string,
@@ -3782,6 +3861,7 @@ export async function guestExecOutput(
   argv: string[],
   client?: AxiosInstance,
   timeoutMs = 10_000,
+  trim = true,
 ): Promise<GuestExecResult> {
   const c = client ?? (await getClient());
   const params = new URLSearchParams();
@@ -3794,9 +3874,10 @@ export async function guestExecOutput(
     const st = await c.get<{ data: AgentExecStatus }>(`/nodes/${node}/qemu/${vmid}/agent/exec-status?pid=${pid}`);
     const s = st.data.data;
     if (s.exited) {
+      const out = s['out-data'] ?? '';
       return {
         exitcode: s.exitcode ?? 0,
-        stdout: (s['out-data'] ?? '').trim(),
+        stdout: trim ? out.trim() : out,
         stderr: (s['err-data'] ?? '').trim(),
       };
     }

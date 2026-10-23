@@ -9,6 +9,7 @@ import { formatRelative } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { FormField } from "@/components/form-field";
 import {
   Select,
@@ -146,25 +147,23 @@ export function AlertsPanel({ vmId, canWrite }: { vmId: string; canWrite: boolea
 
             {needsThreshold && (
               <FormField label="At or above (%)" htmlFor="al-threshold" className="w-32">
-                <Input
+                <NumberInput
                   id="al-threshold"
-                  type="number"
                   min={1}
                   max={100}
                   value={threshold}
-                  onChange={(e) => setThreshold(Math.min(100, Math.max(1, Math.floor(Number(e.target.value) || 0))))}
+                  onValueChange={setThreshold}
                 />
               </FormField>
             )}
 
             <FormField label="For (min)" htmlFor="al-sustained" className="w-28">
-              <Input
+              <NumberInput
                 id="al-sustained"
-                type="number"
                 min={1}
                 max={1440}
                 value={sustainedMin}
-                onChange={(e) => setSustainedMin(Math.min(1440, Math.max(1, Math.floor(Number(e.target.value) || 0))))}
+                onValueChange={setSustainedMin}
               />
             </FormField>
 

@@ -26,8 +26,9 @@ the admin settings page, which reuses the connection test, the resource discover
 |----------|-------------------|--------------|
 | `createAdmin` | `({ email, password, displayName })` | Creates the only first-run admin: email lowercased, bcrypt cost 12, `role: 'admin'`, `emailBound: true`. Throws if an admin exists. Generates `jwt_secret` (64 random bytes, hex, stored encrypted) if absent, then opens a session. |
 | `hasAdmin` | `()` | Whether any `role: 'admin'` user exists. |
-| `saveProxmoxConfig` | `({ host, tokenId, tokenSecret, verifySsl })` | Writes the [Proxmox connection](/config/proxmox-connection.md) keys; `proxmox_token_secret` is stored encrypted. |
-| `testProxmoxConnection` | `()` → `{ connected, version, nodeCount, vmCount, storageCount, warnings }` | Checks that the token can actually *do* things, not just authenticate (see below). |
+| `saveProxmoxConfig` | `({ host, tokenId, tokenSecret, verifySsl, pool? })` | Writes the [Proxmox connection](/config/proxmox-connection.md) keys; `proxmox_token_secret` is stored encrypted; `pool` goes through `saveGuestPool`. |
+| `saveGuestPool` | `(pool: string)` | Sets `proxmox_pool` (trimmed; `''` clears it); throws on a name `POOL_ID_RE` rejects. |
+| `testProxmoxConnection` | `()` → `{ connected, version, nodeCount, vmCount, storageCount, warnings, pool? }` | Checks that the token can actually *do* things, not just authenticate (see below). With `proxmox_pool` set it adds the [guest-pool](/services/guest-pool.md) checks and their `pool` report. |
 | `getProxmoxResources` | `()` → `{ storages, bridges, nodeCount, isoStorages, backupStorages }` | Storages filtered by content (`images` / `iso` / `backup`), plus guest networks from `getGuestNetworks` (see [networking](/proxmox/networking.md)). |
 | `saveDefaults` | `({ storage, bridge, isoStorage, backupStorage? })` | Writes the [provisioning defaults](/config/provisioning-defaults.md). `backup_storage` is written only when provided. |
 | `completeSetup` | `()` | Requires the admin, ensures `jwt_secret`, sets `setup_complete=true`; opens no session (the route is reached only by the admin's own session). |

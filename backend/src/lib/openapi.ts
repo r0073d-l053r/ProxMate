@@ -88,6 +88,8 @@ export const openApiSpec = {
     '/vms/{id}/stop': { post: { summary: 'Stop (graceful; ?force=true to kill)', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'OK' } } } },
     '/vms/{id}/restart': { post: { summary: 'Restart', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'OK' } } } },
     '/vms/{id}/rebuild': { post: { summary: 'Re-image from an ISO or template', security: bearer, parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'OK' } } } },
+    '/projects': { get: { summary: "The caller's VMs grouped by project tag, with allocation and usage rollups (?days=1..90)", security: bearer, responses: { 200: { description: 'OK' } } } },
+    '/projects/assign': { post: { summary: 'Move owned VMs into a project ({ ids, project }) or out of one (project: null)', security: bearer, responses: { 200: { description: 'Per-VM results' }, 400: { description: 'Invalid project name' } } } },
     '/templates': { get: { summary: 'List published templates', security: bearer, responses: { 200: { description: 'OK' } } } },
     '/templates/deploy': { post: { summary: 'Deploy a VM from a template', security: bearer, responses: { 201: { description: 'Created' } } } },
     '/proxmox/isos': { get: { summary: 'List installable ISOs', security: bearer, responses: { 200: { description: 'OK' } } } },

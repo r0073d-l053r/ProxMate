@@ -36,7 +36,7 @@ ProxMate's name for a VM backup (always "MateState", never "droplet"). Each row 
 | volid | String | `@unique` | e.g. `local:backup/vzdump-qemu-100-...`. Placeholder `pending:<vmid>:<ms>` while creating. |
 | size | BigInt | `@default(0)` | Bytes. |
 | status | String | `@default("creating")` | `creating`, `ready`, `restoring`, `error`. |
-| upid | String? | | The Proxmox task of the backup or restore in flight, so the [restart reconciler](/services/task-reconcile.md) can settle a row a restart cut short. Null otherwise (migration `20261023120000_reliability_reconcile_autosnapshot`). |
+| upid | String? | | The Proxmox task of the backup or restore in flight, so the [restart reconciler](/services/task-reconcile.md) can settle a row a restart cut short. Null otherwise (migration `20261023130000_reliability_reconcile_autosnapshot`). |
 | kind | String | `@default("scheduled")` | `scheduled` or `manual`. |
 | notes | String? | | |
 | createdAt | DateTime | `@default(now())` | |

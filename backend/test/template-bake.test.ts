@@ -10,6 +10,7 @@ vi.mock('../src/services/config.service.js', () => ({
   setConfig: vi.fn(),
 }));
 vi.mock('../src/services/proxmox.service.js', () => ({
+  getGuestPool: vi.fn(async () => undefined),
   getClient: vi.fn(async () => ({ put: vi.fn(async () => ({ data: { data: '' } })) })),
   pickBestNode: vi.fn(async () => 'pve-0'),
   getImportStorages: vi.fn(async () => ['local']),

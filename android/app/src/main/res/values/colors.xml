@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The web app's dark palette (frontend/src/app/globals.css, .dark), converted from OKLCH. -->
+    <color name="pm_background">#FF0D1013</color>
+    <color name="pm_foreground">#FFF3F5F8</color>
+    <color name="pm_card">#FF15191C</color>
+    <color name="pm_sidebar">#FF111418</color>
+    <color name="pm_primary">#FFE2E5E7</color>
+    <color name="pm_primary_foreground">#FF15191C</color>
+    <color name="pm_muted">#FF23272B</color>
+    <color name="pm_muted_foreground">#FF95A0AB</color>
+    <color name="pm_border">#FF2A2E32</color>
+    <color name="pm_ring">#FF69737D</color>
+    <color name="pm_destructive">#FFFF6467</color>
+    <color name="pm_warning">#FFE58212</color>
+    <color name="pm_accent_blue">#FF3186E9</color>
+    <!-- Launcher icon: the brand badge (frontend/src/app/icon.svg). -->
+    <color name="ic_launcher_background">#FFE2E5E7</color>
+</resources>
