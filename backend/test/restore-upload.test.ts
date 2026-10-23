@@ -25,6 +25,7 @@ vi.mock('../src/services/proxmox.service.js', () => ({
   startVm: vi.fn(),
   deleteBackup: vi.fn(),
   deleteVm: vi.fn(async () => 'UPID:del'),
+  resetRestoredFirewall: vi.fn(async () => undefined),
 }));
 vi.mock('../src/services/config.service.js', () => ({ getConfig: vi.fn() }));
 vi.mock('../src/services/download.service.js', () => ({ backupDir: vi.fn() }));
@@ -62,6 +63,7 @@ import {
   ownCicustom,
   parseBackupConfig,
   restoreFromUpload,
+  neutraliseRestoredGuest,
   renameArchiveForVmid,
   promoteUpload,
   resolveUnderUploadDir,
@@ -554,6 +556,33 @@ describe('restoreFromUpload', () => {
       expect(settleFailedCreate).toHaveBeenCalledWith({ id: 'vm1' }, expect.anything(), false, { task: undefined });
     });
 
+    it('drops protection and autostart before removing the guest, so the delete is not refused', async () => {
+      restored.config = { protection: 1, onboot: 1, dev0: '/dev/sda' };
+      await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(/won't restore/);
+      const protIdx = client.put.mock.calls.findIndex((x) => bodyOf(x)['delete'] === 'protection');
+      expect(protIdx).toBeGreaterThanOrEqual(0);
+      expect(client.put.mock.calls.some((x) => bodyOf(x)['delete'] === 'onboot')).toBe(true);
+      expect(client.put.mock.invocationCallOrder[protIdx]!).toBeLessThan(vi.mocked(pve.deleteVm).mock.invocationCallOrder[0]!);
+    });
+
+    it('removes a guest whose config could not be read back (fail closed)', async () => {
+      const base = client.get.getMockImplementation()!;
+      client.get.mockImplementation((url: string) =>
+        url.endsWith('/pending') ? Promise.reject(new Error('Proxmox responded 500')) : base(url),
+      );
+      await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(/500/);
+      expect(pve.deleteVm).toHaveBeenCalledWith('pve-0', 200, expect.anything(), 'qemu');
+      expect(pve.startVm).not.toHaveBeenCalled();
+    });
+
+    it('clears the archive\'s guest firewall before isolation is applied', async () => {
+      await restoreFromUpload(user, { filename: FILENAME, name: 'x' });
+      expect(pve.resetRestoredFirewall).toHaveBeenCalledWith('pve-0', 200, expect.anything(), 'qemu');
+      expect(vi.mocked(pve.resetRestoredFirewall).mock.invocationCallOrder[0]!).toBeLessThan(
+        vi.mocked(pve.configureVmIsolation).mock.invocationCallOrder[0]!,
+      );
+    });
+
     it('refuses pending changes and snapshots too', async () => {
       restored.pending = [{ key: 'hostpci0', pending: '01:00.0' }];
       await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(/pending changes to "hostpci0"/);
@@ -570,12 +599,15 @@ describe('restoreFromUpload', () => {
       expect(pve.startVm).not.toHaveBeenCalled();
     });
 
-    it('never tags a late-finishing guest that fails the check', async () => {
+    it('never tags a late-finishing guest that fails the check, and removes it', async () => {
       vi.mocked(pve.waitForTask).mockRejectedValueOnce(new Error('Proxmox task timed out'));
       await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(/timed out/);
       const task = vi.mocked(settleFailedCreate).mock.calls[0]![3]!.task as { beforeTag: () => Promise<void> };
-      restored.config = { dev0: '/dev/sda' };
+      restored.config = { dev0: '/dev/sda', onboot: 1 };
       await expect(task.beforeTag()).rejects.toThrow(/won't restore/);
+      expect(client.put.mock.calls.some((x) => bodyOf(x)['delete'] === 'onboot')).toBe(true);
+      expect(pve.deleteVm).toHaveBeenCalledWith('pve-0', 200, expect.anything(), 'qemu');
+      expect(markClonedGuest).not.toHaveBeenCalled();
     });
   });
 
@@ -633,7 +665,7 @@ describe('archive config keys an upload may not carry (BUG-027)', () => {
   });
 
   it('checks every section of the archive config, not only the first', () => {
-    expect(() => assertRestorableConfig(`${LXC_CFG}[PENDING]\ndev0: /dev/sda\n`, 'lxc')).toThrow(/"dev0"/);
+    expect(() => assertRestorableConfig(`${LXC_CFG}[PENDING]\nmemory: 2048\n`, 'lxc')).toThrow(/pending changes/);
     expect(() => assertRestorableConfig(`${LXC_CFG}[snap]\nlxc.mount.entry: / host none\n`, 'lxc')).toThrow(RestoreUploadError);
     expect(() => assertRestorableConfig(`${LXC_CFG}[not a section]\n`, 'lxc')).toThrow(/section/);
     expect(() => assertRestorableConfig(`${LXC_CFG}Dev0: /dev/sda\n`, 'lxc')).toThrow(/line/);
@@ -643,6 +675,13 @@ describe('archive config keys an upload may not carry (BUG-027)', () => {
       assertRestorableConfig(`${QEMU_CFG}snaptime: 1700000000\nvmstate: local-lvm:vm-104-state-snap1\n`, 'qemu'),
     ).not.toThrow();
     expect(() => assertRestorableConfig(`#a description line\n${LXC_CFG}`, 'lxc')).not.toThrow();
+    // A disk line naming its volume with file=/volume= is checked like a bare one.
+    expect(() => assertRestorableConfig(`${QEMU_CFG.split('[')[0]}scsi3: file=/dev/sdb,size=1G\n`, 'qemu')).toThrow(/not a storage volume/);
+    expect(() => assertRestorableConfig(`${LXC_CFG}mp1: volume=/srv/host,mp=/x\n`, 'lxc')).toThrow(/not a storage volume/);
+    expect(() =>
+      assertRestorableConfig(`${QEMU_CFG.split('[')[0]}scsi3: local-lvm:vm-104-disk-9,file=/dev/sdb,size=1G\n`, 'qemu'),
+    ).toThrow(/not a storage volume/);
+    expect(() => assertRestorableConfig(`${LXC_CFG}mp1: volume=local-lvm:vm-105-disk-2,mp=/x,size=1G\n`, 'lxc')).not.toThrow();
   });
 
   it('accepts every config shape ProxMate itself produces (audit round 2)', () => {
@@ -758,5 +797,68 @@ describe('promoteUpload', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('neutraliseRestoredGuest', () => {
+  const ok = (data: unknown) => Promise.resolve({ data: { data } });
+  const guest = (cfg: Record<string, unknown>) => {
+    const c = fakeClient();
+    c.get.mockImplementation(() => ok(cfg));
+    return c;
+  };
+  const deletes = (c: ReturnType<typeof fakeClient>) =>
+    c.put.mock.calls.map((x) => bodyOf(x)['delete']).filter((d): d is string => d !== undefined);
+
+  beforeEach(() => {
+    vi.mocked(pve.deleteVm).mockReset().mockResolvedValue('UPID:del');
+    vi.mocked(pve.waitForTask).mockReset().mockResolvedValue(undefined as never);
+  });
+
+  it('drops protection and autostart, then deletes the guest', async () => {
+    const c = guest({});
+    expect(await neutraliseRestoredGuest('pve1', 200, 'lxc', asClient(c), { keys: ['dev0'], destroy: true })).toBe(true);
+    expect(deletes(c)).toEqual(['protection', 'onboot', 'startup']);
+    expect(pve.deleteVm).toHaveBeenCalledWith('pve1', 200, expect.anything(), 'lxc');
+  });
+
+  it('when the delete fails: removes each refused key, reverts pending changes and takes every NIC down', async () => {
+    vi.mocked(pve.deleteVm).mockRejectedValueOnce(new Error('VM is locked'));
+    const c = guest({
+      net0: 'name=eth0,bridge=vmbr9,ip=dhcp',
+      net1: 'name=eth1,bridge=vmbr9,link_down=0',
+      net2: 'name=eth2,bridge=vmbr0,link_down=1',
+    });
+    const gone = await neutraliseRestoredGuest('pve1', 200, 'lxc', asClient(c), {
+      keys: ['dev0', 'unprivileged', 'features'],
+      pendingKeys: ['hookscript'],
+      destroy: true,
+    });
+    expect(gone).toBe(false);
+    expect(deletes(c)).toEqual(['protection', 'onboot', 'startup', 'dev0', 'features']); // never unprivileged
+    expect(c.put.mock.calls.map(bodyOf)).toContainEqual({ revert: 'hookscript' });
+    const nics = c.put.mock.calls.map(bodyOf).filter((b) => Object.keys(b).some((k) => /^net\d+$/.test(k)));
+    expect(nics).toEqual([
+      { net0: 'name=eth0,bridge=vmbr9,ip=dhcp,link_down=1' },
+      { net1: 'name=eth1,bridge=vmbr9,link_down=1' },
+    ]);
+  });
+
+  it('keeps the guest when asked (the tenant\'s own machine), neutralised the same way', async () => {
+    const c = guest({ net0: 'virtio=AA:BB,bridge=vmbr0' });
+    expect(await neutraliseRestoredGuest('pve1', 100, 'qemu', asClient(c), { keys: ['args'], destroy: false })).toBe(false);
+    expect(pve.deleteVm).not.toHaveBeenCalled();
+    expect(deletes(c)).toEqual(['protection', 'onboot', 'startup', 'args']);
+    expect(c.put.mock.calls.map(bodyOf)).toContainEqual({ net0: 'virtio=AA:BB,bridge=vmbr0,link_down=1' });
+  });
+
+  it('keeps going when Proxmox refuses one change', async () => {
+    vi.mocked(pve.deleteVm).mockRejectedValueOnce(new Error('locked'));
+    const c = guest({});
+    c.put.mockImplementation((_u: string, b: URLSearchParams) =>
+      b.get('delete') === 'protection' ? Promise.reject(new Error('no')) : ok(''),
+    );
+    await neutraliseRestoredGuest('pve1', 200, 'qemu', asClient(c), { keys: ['hostpci0'], destroy: true });
+    expect(deletes(c)).toContain('hostpci0');
   });
 });
