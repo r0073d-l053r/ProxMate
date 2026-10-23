@@ -20,9 +20,6 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 ### Placement & reliability
 
-- **Background reconciler for Proxmox tasks.** Async UPIDs are reconciled opportunistically on read;
-  a backend restart mid-operation can leave rows stuck in `creating`/`restoring`. A worker that polls
-  tasks to completion and sweeps stuck rows at startup would make state authoritative.
 - **First-class Postgres support.** The Prisma schema is portable but the shipped migration history
   is SQLite-locked (`migration_lock.toml`), and the built-in app-DB backup uses SQLite's
   `VACUUM INTO`. Postgres today means `db push` + `pg_dump`; proper support wants a migration
@@ -30,10 +27,6 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 ### Production hardening & ops
 
-- **`ENCRYPTION_KEY` loss-safety.** Losing the key means losing the Proxmox token, SMTP creds,
-  tenant AI keys, and TOTP secrets in one stroke. The docs runbook pairs key backup with DB backups
-  explicitly; still open: an admin Settings warning that persists until the key is confirmed backed
-  up.
 - **Pool-scoped Proxmox token (optional).** The `ProxMate` role is granted on `/`, because placement,
   migration and the balancer work across every node, so the per-guest boundary today is ProxMate's
   ownership-tag check rather than a Proxmox permission. Offer a mode where the role is granted on a
@@ -95,9 +88,7 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 2. **Bulk deploy from a template (class provisioning).** Deploy *N* VMs from one template in a single
    action — for a tenant, or one-per-tenant across a selected group — each auto-placed and
    isolation-firewalled. The concrete primitive behind EDU "assignment templates." _CE primitive, EDU UX._
-3. **Auto-snapshot before risky ops.** Optionally take a snapshot right before a rebuild/resize/rescue
-   (QEMU) so a bad change is one rollback away. Snapshots already exist; this just wires a safety net
-   into the destructive paths, with a retention cap. _CE._
+3. ~~**Auto-snapshot before risky ops.**~~ Built — see Unreleased below.
 4. **Projects (tag rollups).** Tags exist per-VM; add a **project view** that groups a tenant's VMs by
    a `project:<name>` tag with a per-project resource + cost rollup and bulk actions scoped to the
    group. Low-risk, high polish. _CE._
@@ -117,6 +108,25 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 ## ✅ Shipped — condensed index
 
 Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
+
+### Unreleased
+
+- **Interrupted operations are settled.** At startup and every 5 minutes, rows a backend restart left
+  `creating` (a create, clone, upload restore or rebuild) or with a MateState `creating`/`restoring`
+  are resolved from Proxmox: never one whose operation is still running in this process, is younger
+  than `RECONCILE_STUCK_MINUTES` (15), or whose Proxmox task or guest lock is still active. A finished
+  ISO/LXC create or ISO rebuild is completed (left stopped); anything part-way is held with the
+  existing provisioning/restore hold and admins are notified; a create that produced no guest is
+  dropped as a failed create is; interrupted backups are recorded or marked failed. Nothing deletes a
+  guest or a backup.
+- **Automatic snapshots before risky changes (VMs).** Before a resize, a data-disk grow or a rescue
+  boot, a `pm-auto-<op>-<timestamp>` snapshot is taken; a failed snapshot refuses the change. The
+  newest N (default 3) per VM are kept, and retention only deletes snapshots ProxMate recorded
+  itself. On by default; Admin → Settings → Maintenance. A rebuild is not covered: deleting the guest
+  deletes its snapshots, so the rebuild dialog says to take a backup.
+- **`ENCRYPTION_KEY` backup confirmation.** Admins see a warning on every page until one confirms
+  the key is backed up off the host; who and when is stored and audited, and a changed key brings the
+  warning back. The key is never shown.
 
 - **v1.2.0 — sharing, placement and least privilege.** Share a VM with someone before they sign
   up (pending shares, claimed only by a confirmed address); template deploys on shared storage

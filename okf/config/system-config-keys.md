@@ -21,7 +21,7 @@ sources:
 
 ProxMate keeps its runtime settings in the [SystemConfig](/database/system-config.md) table (`key String @id`, `value String`, `sensitive Boolean @default(false)`, `updatedAt`).[^schema] All access goes through `getConfig(key)` and `setConfig(key, value, sensitive = false)` in config.service.ts. The one exception is `isSetupComplete()`, which reads `setup_complete` with Prisma directly. No other code touches `prisma.systemConfig`.[^config-svc]
 
-The key list was built by grepping every `getConfig('…')` / `setConfig('…')` call under `backend/src`, plus the three keys held in constants (`KIOSK_PIN_KEY = 'kiosk_exit_pin'`, `LAST_RUN_KEY = 'matestate_last_run'`, `VM_BACKUP_TICK_KEY = 'matestate_vm_tick_last'`). There are 55 keys.
+The key list was built by grepping every `getConfig('…')` / `setConfig('…')` call under `backend/src`, plus the four keys held in constants (`KIOSK_PIN_KEY = 'kiosk_exit_pin'`, `LAST_RUN_KEY = 'matestate_last_run'`, `VM_BACKUP_TICK_KEY = 'matestate_vm_tick_last'`, `CONFIRM_KEY = 'encryption_key_backup_confirmed'`). There are 58 keys.
 
 # Encryption
 
@@ -33,6 +33,8 @@ When `sensitive=true`, `setConfig` stores `encrypt(value)`: AES-256-GCM with a r
 |---|---|---|
 | `appdb_backup_dir` | no | [appdb-backup](/config/appdb-backup.md) |
 | `appdb_backup_keep` | no | [appdb-backup](/config/appdb-backup.md) |
+| `auto_snapshot_enabled` | no | [auto-snapshot](/config/auto-snapshot.md) |
+| `auto_snapshot_keep` | no | [auto-snapshot](/config/auto-snapshot.md) |
 | `backup_storage` | no | [provisioning-defaults](/config/provisioning-defaults.md) |
 | `balancer_exclude` | no | [cluster-balancer](/config/cluster-balancer.md) |
 | `balancer_max_moves` | no | [cluster-balancer](/config/cluster-balancer.md) |
@@ -42,6 +44,7 @@ When `sensitive=true`, `setConfig` stores `encrypt(value)`: AES-256-GCM with a r
 | `cloudinit_offered` | no | [cloud-init](/config/cloud-init.md) |
 | `default_bridge` | no | [provisioning-defaults](/config/provisioning-defaults.md) |
 | `default_storage` | no | [provisioning-defaults](/config/provisioning-defaults.md) |
+| `encryption_key_backup_confirmed` | no (holds a key fingerprint, never the key) | [platform-secrets](/config/platform-secrets.md) |
 | `frontend_url` | no | [platform-secrets](/config/platform-secrets.md) |
 | `ide_allow_byo_keys` | no | [ide](/config/ide.md) |
 | `ide_enabled` | no | [ide](/config/ide.md) |

@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-10-23
+* **Creation**: Documented the [restart reconciler](/services/task-reconcile.md), [automatic snapshots](/services/auto-snapshot.md) with their [settings](/config/auto-snapshot.md) and [AutoSnapshot](/database/auto-snapshot.md) table, and the [ENCRYPTION_KEY backup confirmation](/services/key-backup.md).
+* **Update**: Added the operation fields on [VirtualMachine](/database/virtual-machine.md) and [MateState](/database/mate-state.md), `RECONCILE_STUCK_MINUTES` in [backend environment](/env/backend-environment.md), and the new admin and VM endpoints.
+
 ## 2026-10-20
 * **Update**: Documented [pending shares](/database/pending-vm-share.md), template deploy placement, start/restart waiting for the Proxmox task, and the least-privilege token in [privileges](/proxmox/privileges.md), with what a live Proxmox VE 9.2 cluster proved.
 

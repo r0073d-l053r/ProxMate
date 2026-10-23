@@ -48,6 +48,9 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 | PUT | `/api/admin/settings/defaults` | admin | `{ storage, bridge, isoStorage, backupStorage? }`; `bridge` must match `NETWORK_NAME_RE`, `backupStorage: ''` clears the override. Audited `admin.settings_defaults` with a before/after diff. |
 | PUT | `/api/admin/settings/rescue` | admin | `{ iso }` sets `rescue_iso`. |
 | PUT | `/api/admin/settings/template-refresh` | admin | `{ enabled }` sets `template_refresh_enabled`. |
+| PUT | `/api/admin/settings/auto-snapshot` | admin | `{ enabled, keep (1..10) }` sets `auto_snapshot_enabled` / `auto_snapshot_keep` ([automatic snapshots](/config/auto-snapshot.md)). Audited `admin.auto_snapshot_config`. |
+| GET | `/api/admin/encryption-key-backup` | admin | `{ confirmed, confirmedAt, confirmedBy, keyChanged }` ([key-backup](/services/key-backup.md)); never the key. |
+| POST | `/api/admin/encryption-key-backup/confirm` | admin + requireSession | Record that the caller backed up `ENCRYPTION_KEY`. Audited `admin.encryption_key_backup_confirmed`. |
 | GET | `/api/admin/cluster-stats` | admin | Cluster totals (disk pool = `default_storage`). |
 | GET | `/api/admin/nodes` | admin | Node health. |
 | GET | `/api/admin/storage-pinning` | admin | Storage pinning report. |
