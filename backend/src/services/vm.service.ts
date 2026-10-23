@@ -472,6 +472,7 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
   const identity = await guestIdentity(current, client);
   if (identity === 'ours') {
     if (current.holdReason !== QUOTA_HOLD_MESSAGE && isHeld(current)) {
+      await assertAdoptableConfig(current, client);
       // Never lift a hold while the guest still references a volume that isn't its
       // own: that is what a foreign-volume hold is about, and a guest whose
       // provisioning didn't finish was never checked.
@@ -497,11 +498,41 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
   if (foreign.length > 0) {
     throw new AdoptError(`The guest references disks that aren't its own (${foreign.join(', ')}). Detach them in Proxmox first.`);
   }
+  await assertAdoptableConfig(current, client);
   await markClonedGuest(current, client);
   // The guest has just been checked (own volumes only) and tagged, so a row held or
   // left in `error` (a 1.0.x create that failed, a guest that only lacked its tag)
   // is settled here too — adopting it once is enough to make it startable.
   return clearAdoptedHold(current);
+}
+
+/**
+ * Before an adopt tags a guest or lifts a hold: the guest's config, pending changes
+ * and snapshots carry nothing a tenant's guest may not have (the restore allowlist —
+ * a held restore, or an untagged guest left by one, may carry a container device,
+ * a hook script or raw host options). PCI devices approved for this machine are
+ * the one exception. Refused with the keys named.
+ */
+async function assertAdoptableConfig(
+  current: VirtualMachine,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<void> {
+  // Loaded lazily: restore-upload.service imports this module.
+  const { assertRestoredGuestConfig, RestoredConfigError } = await import('./restore-upload.service.js');
+  const approved = new Set(await approvedPciLines(current, client));
+  try {
+    await assertRestoredGuestConfig(current.proxmoxNode, current.proxmoxVmId, kindOf(current), client, {
+      allowSnapshots: true,
+      allowKey: (key, value) => /^hostpci\d+$/.test(key) && approved.has(value),
+    });
+  } catch (err) {
+    if (err instanceof RestoredConfigError) {
+      throw new AdoptError(
+        `The guest carries settings a tenant's machine may not have (${err.problem}). Remove them in Proxmox first, then adopt again.`,
+      );
+    }
+    throw err;
+  }
 }
 
 /**
