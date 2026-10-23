@@ -67,6 +67,8 @@ describe('duplicateVm', () => {
     expect(body['newid']).toBe('130');
     expect(body['name']).toBe('web-copy');
     expect(body['full']).toBe('1');
+    // The copy's row nonce: the only proof after a restart that this guest is the copy's.
+    expect(body['description']).toMatch(/^proxmate-row:\S+$/);
 
     // Isolation firewall configured on the clone (PUT to .../130/firewall/...).
     expect(c.put.mock.calls.some((x) => /\/qemu\/130\/firewall\//.test(String(x[0])))).toBe(true);

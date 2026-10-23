@@ -17,6 +17,7 @@ import {
   guestMarker,
   templateMarker,
   notifyOwnerOfFailedRebuild,
+  cloneNonce,
   OP_SETTLED,
   PROVISION_FAILED_MESSAGE,
   RESTORE_FAILED_MESSAGE,
@@ -177,18 +178,31 @@ async function vmidShared(row: VirtualMachine): Promise<boolean> {
   return (await prisma.virtualMachine.count({ where: { proxmoxVmId: row.proxmoxVmId, id: { not: row.id } } })) > 0;
 }
 
+/** Whether a Template Store entry references this VMID. */
+async function vmidIsTemplate(row: VirtualMachine): Promise<boolean> {
+  return (await prisma.template.count({ where: { proxmoxVmId: row.proxmoxVmId } })) > 0;
+}
+
+/** Whether a guest's description carries exactly this row's clone nonce on a line of its own. */
+function carriesNonce(cfg: Record<string, string>, row: VirtualMachine): boolean {
+  const want = cloneNonce(row.id);
+  return (cfg['description'] ?? '').split(/\r?\n/).some((l) => l.trim() === want);
+}
+
 /**
- * Whether an untagged guest at the VMID can only be what this row's clone (or
- * rebuild clone) produced: the task finished OK, no other row has the VMID, the
- * guest carries no ProxMate tag but its source's, it isn't a template, and its
- * name is the row's.
+ * Positive proof that an untagged guest at the VMID is what this row's clone (or
+ * rebuild clone) produced: the clone was created with this row's nonce as its
+ * description (clones of one template otherwise look alike), the task finished OK,
+ * no other row and no Template Store entry has the VMID, the guest carries no
+ * ProxMate tag but its source's, it isn't a template, and its name is the row's.
  */
 async function claimableClone(row: VirtualMachine, cfg: Record<string, string>, task: TaskVerdict): Promise<boolean> {
   if (task !== 'ok' || cfg['template'] === '1') return false;
+  if (!carriesNonce(cfg, row)) return false;
   if (otherMarkers(cfg, row).length > 0) return false;
   const name = kindOf(row) === 'lxc' ? cfg['hostname'] : cfg['name'];
   if (name !== row.name) return false;
-  return !(await vmidShared(row));
+  return !(await vmidShared(row)) && !(await vmidIsTemplate(row));
 }
 
 /** Settle one `creating` VirtualMachine row. Exported for tests. */
@@ -264,12 +278,19 @@ async function settleCreatingVm(
     return outcome;
   };
   const failedNotice = `${rebuild ? 'Rebuild' : 'Provisioning'} of "${vm.name}" failed: ${INTERRUPTED}`;
-  const hold = async (what: string) => {
+  const hold = async (what: string, notice?: string) => {
     await settleRow(row, holdData);
     if (archive) await cleanupUploadedArchive(archive, node).catch(() => undefined);
     if (rebuild) await notifyOwnerOfFailedRebuild(vm, true, new Error(INTERRUPTED)).catch(() => undefined);
-    return done('held', what, failedNotice);
+    return done('held', what, notice ?? failedNotice);
   };
+  // In doubt: hold the row, write nothing to the guest, and tell an admin which
+  // guest to look at.
+  const holdForAdmin = (what: string, advice: string) =>
+    hold(
+      what,
+      `${failedNotice}. The machine is held and guest ${vm.proxmoxVmId} on ${vm.proxmoxNode} was left untouched: ${advice}`,
+    );
   const drop = async (what: string) => {
     await dropRow(row);
     if (archive) await cleanupUploadedArchive(archive, node).catch(() => undefined);
@@ -311,9 +332,13 @@ async function settleCreatingVm(
     return drop('no guest was created, record removed');
   }
 
-  // ── A guest carrying this row's tag, but part-way through.
+  // ── A guest carrying this row's tag, but part-way through. The tag is the
+  // proof: only this row's own operation writes it.
   if (ours) {
-    if (kind === 'restore-upload') await quarantineRestoredGuest(vm, client);
+    if (kind === 'restore-upload') {
+      if (isInFlight(row.id)) throw new RowChanged();
+      await quarantineRestoredGuest(vm, client);
+    }
     return hold('machine held');
   }
 
@@ -329,26 +354,42 @@ async function settleCreatingVm(
     );
     return hold('its clone had finished, so the guest was tagged as its own and the machine held');
   }
-  if (kind === 'restore-upload' && task === 'ok' && cfg['template'] !== '1' && !(await vmidShared(vm))) {
-    // The restore landed (the task says so and no other row has the VMID), but the
-    // checks a restored guest needs before it is tied to its row never ran: it
-    // stays untagged (an admin's adopt runs them), and can't boot on its own.
-    await quarantineRestoredGuest(vm, client);
-    return hold('its restore had landed; the guest was left untagged and kept from booting, machine held');
+  if (kind === 'restore-upload') {
+    // Nothing ties an untagged guest to this restore: after an outage the VMID may
+    // hold anything (another guest, a template, a cloud-image build). So nothing is
+    // written to it; an admin decides.
+    const archiveName = archive ? archive.slice(archive.indexOf(':') + 1) : 'the uploaded archive';
+    return holdForAdmin(
+      'the guest at its VMID is untagged, so it was left untouched; machine held',
+      `check guest ${vm.proxmoxVmId}: if it is the interrupted restore of ${archiveName}, adopt it or delete it ` +
+        '(it may still have onboot set from the archive); otherwise delete this machine.',
+    );
   }
-  // Someone else's guest at the VMID (it may have been reused since), or one this
-  // pass can't tie to the row: nothing is written to it. The row is dropped unless
-  // it has backups hanging off it.
-  if (otherMarkers(cfg, vm).length > 0 || (await vmidShared(vm))) {
+  // Another machine's (or build's, or template's) guest at the VMID — it may have
+  // been reused since: nothing is written to it, and the row is dropped unless it
+  // has backups hanging off it.
+  if (otherMarkers(cfg, vm).length > 0) {
     if ((rebuild || kind === null) && (await hasBackups())) return hold('its VMID holds another guest; machine held');
     return drop("its VMID holds another machine's guest, record removed");
+  }
+  // Another row (or a Template Store entry) names the same VMID but the guest
+  // carries no tag: it may be that row's real guest, so this row is held rather
+  // than dropped, and the guest is left alone.
+  if ((await vmidShared(vm)) || (await vmidIsTemplate(vm))) {
+    return holdForAdmin(
+      'another record names its VMID; machine held, guest untouched',
+      `another ProxMate record also names VMID ${vm.proxmoxVmId}. Check which machine that guest belongs to, then delete the wrong record.`,
+    );
   }
   if (kind === 'create' || kind === 'create-lxc' || kind === 'rebuild-iso') {
     // These creates tag the guest as they make it: an untagged guest isn't theirs.
     if ((rebuild || kind === null) && (await hasBackups())) return hold('its VMID holds an untagged guest; machine held');
     return drop('its VMID holds an untagged guest that is not its own, record removed');
   }
-  return hold('the guest at its VMID could not be confirmed as its own; it was left untouched, machine held');
+  return holdForAdmin(
+    'the guest at its VMID could not be confirmed as its own; it was left untouched, machine held',
+    `check guest ${vm.proxmoxVmId}: if it is this machine's interrupted ${kind ?? 'create'}, adopt it; otherwise delete this machine.`,
+  );
 }
 
 /**

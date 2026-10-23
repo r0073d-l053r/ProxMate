@@ -37,7 +37,7 @@ The in-flight check is repeated right before every write, and every write is con
 
 # Claiming a guest
 
-A guest is the row's only when it carries the row's tag. A task that finished OK proves nothing about what is at the VMID now: it may have been deleted and the VMID given to someone else's guest. So the reconciler tags an untagged guest only for a clone, duplicate or template rebuild whose task finished OK, and only when no other row references the VMID, the guest carries no ProxMate tag except its source's (`opSourceId`: the template's, or a duplicate's source machine's), it isn't a template, and its name is the row's. ISO VM, LXC and ISO-rebuild creates tag the guest as they make it, so an untagged guest is never theirs.
+The rule: the reconciler never writes to a Proxmox guest without positive proof that the guest came from this row's own operation. When in doubt it holds the row, writes nothing to the guest, and notifies admins with the VMID and node. A guest is the row's when it carries the row's tag. A task that finished OK proves nothing about what is at the VMID now: it may have been deleted and the VMID given to another guest. Clones of one template look alike (they all inherit its tag), so every clone ProxMate makes (template deploy, bulk copy, duplicate, template rebuild) is created with the description `proxmate-row:<row id>` (`cloneNonce`). An untagged clone is tagged (then held) only when its description carries exactly that nonce, its task finished OK, no other row and no Template Store entry names the VMID, it carries no ProxMate tag but its source's (`opSourceId`), it isn't a template, and its name is the row's. ISO VM, LXC and ISO-rebuild creates tag the guest as they make it, so an untagged guest is never theirs. `nextVmId` skips VMIDs that rows still `creating` or held in `error` name, so a new create never lands behind such a row.
 
 # Resolution
 
@@ -47,11 +47,12 @@ A guest is the row's only when it carries the row's tag. A task that finished OK
 | `import` | guest carries this row's tag | Completed: the tag is written last, after isolation, so only the final status write was missing. |
 | `import` | guest not tagged | Row dropped; the guest stays importable and is never touched. |
 | any | no guest at the VMID | Row dropped (quota freed, admins notified), unless it is a rebuild or an older row with backups, which is held. A bulk-deploy copy that never got its turn ends here. |
-| any but import | guest carries this row's tag, part-way | Held with `PROVISION_FAILED_MESSAGE`; an upload restore is also kept from booting (below). |
-| `clone`/`duplicate`/`rebuild-template` | untagged guest passing the claim checks | Tagged as the row's and held, so a full clone is never orphaned. |
-| `restore-upload` | task OK, no other row has the VMID | Held untagged (admin adoption runs the checks), `onboot`/`startup`/`protection` removed and NICs set `link_down=1`. |
-| any | another machine's tag, or another row has the VMID | Nothing written to the guest; row dropped (held instead for a rebuild or older row with backups). |
-| any other | | Held, guest untouched. |
+| any but import | guest carries this row's tag, part-way | Held with `PROVISION_FAILED_MESSAGE`; an upload restore (its tag is proof) also loses `onboot`/`startup`/`protection` and gets its NICs set `link_down=1`. |
+| `clone`/`duplicate`/`rebuild-template` | untagged guest carrying the row nonce and passing the claim checks | Tagged as the row's and held, so a full clone is never orphaned. |
+| `restore-upload` | guest at the VMID not tagged as the row's | Held; nothing is written to the guest (it may be anything after an outage); admins are told to check guest <vmid> on <node>, adopt it if it is the restore (it may still have `onboot` set) or delete it. |
+| any | another machine's, build's or template's ProxMate tag | Nothing written to the guest; row dropped (held instead for a rebuild or older row with backups). |
+| any | another row or a Template Store entry names the VMID, guest untagged | Held (never dropped, so a sibling's real guest is never orphaned); guest untouched; admins notified with the VMID. |
+| any other | | Held, guest untouched, admins told which guest to check. |
 | MateState `restoring` | not running | MateState back to `ready`; the VM's own guest stopped if running; row held with `RESTORE_FAILED_MESSAGE` unless it already has a hold. |
 | MateState `creating` | task OK and its log names an archive listed for the VMID | Recorded `ready` with volid and size. |
 | MateState `creating` | task failed, or none recorded and no backup lock | `error`; nothing deleted; `backup.failed` notified. |

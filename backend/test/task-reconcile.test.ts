@@ -10,6 +10,7 @@ type Row = Record<string, unknown>;
 const rows: Row[] = [];
 const states: Row[] = [];
 let backupsOf: Record<string, number> = {};
+let templateVmids: number[] = [];
 
 const matches = (r: Row, where: Record<string, unknown>) =>
   Object.entries(where).every(([k, v]) => {
@@ -50,6 +51,7 @@ vi.mock('../src/lib/prisma.js', () => ({
       }),
     },
     user: { findUnique: vi.fn(async () => null) },
+    template: { count: vi.fn(async ({ where }: { where: { proxmoxVmId: number } }) => templateVmids.filter((v) => v === where.proxmoxVmId).length) },
     ideGuestSecret: { deleteMany: vi.fn(async () => ({})) },
     ideGatewayToken: { deleteMany: vi.fn(async () => ({})) },
   },
@@ -85,7 +87,7 @@ import {
   STUCK_AFTER_MS,
   LOCK_NOTICE_AFTER_MS,
 } from '../src/services/task-reconcile.service.js';
-import { guestMarker, templateMarker, PROVISION_FAILED_MESSAGE, RESTORE_FAILED_MESSAGE } from '../src/services/vm.service.js';
+import { guestMarker, templateMarker, cloneNonce, PROVISION_FAILED_MESSAGE, RESTORE_FAILED_MESSAGE } from '../src/services/vm.service.js';
 import { fakeClient, asClient, bodyOf, type FakeClient } from './helpers.js';
 
 const ok = (data: unknown) => Promise.resolve({ data: { data } });
@@ -166,6 +168,7 @@ beforeEach(() => {
   rows.length = 0;
   states.length = 0;
   backupsOf = {};
+  templateVmids = [];
 });
 
 describe('upidNode', () => {
@@ -283,8 +286,8 @@ describe('settling an interrupted create', () => {
     expect(c.delete).not.toHaveBeenCalled();
   });
 
-  it('tags and holds a template clone that finished before it was tagged, when nothing else could claim it', async () => {
-    const c = pveWith({ guest: { tags: templateMarker('t1'), name: 'web' }, task: TASK_OK });
+  it('tags and holds a template clone that finished before it was tagged, when its nonce proves it', async () => {
+    const c = pveWith({ guest: { tags: templateMarker('t1'), name: 'web', description: cloneNonce('rowa') }, task: TASK_OK });
     const r = row({ opKind: 'clone', opSourceId: 't1' });
     expect(await reconcileCreatingVm(r as never, asClient(c), NOW)).toBe('held');
     held(r);
@@ -317,6 +320,32 @@ describe('settling an interrupted create', () => {
     held(r2);
   });
 
+  it('never claims a look-alike clone of the same template without the row nonce', async () => {
+    // An admin's manual re-clone of the same template, same name, at the reused VMID.
+    const c = pveWith({ guest: { tags: templateMarker('t1'), name: 'web', description: 'cloned by hand' }, task: TASK_OK });
+    const r = row({ opKind: 'clone', opSourceId: 't1' });
+    expect(await reconcileCreatingVm(r as never, asClient(c), NOW)).toBe('held');
+    held(r);
+    untouched(c);
+    // Another row's nonce is not this row's either.
+    const c2 = pveWith({ guest: { tags: templateMarker('t1'), name: 'web', description: cloneNonce('rowz') }, task: TASK_OK });
+    const r2 = row({ id: 'rowc', opKind: 'clone', opSourceId: 't1', proxmoxVmId: 100 });
+    rows.splice(0, 1);
+    expect(await reconcileCreatingVm(r2 as never, asClient(c2), NOW)).toBe('held');
+    untouched(c2);
+  });
+
+  it('holds (never drops) a row whose VMID another row also names when the guest carries no tag', async () => {
+    const c = pveWith({ guest: { tags: '', name: 'web', description: cloneNonce('rowa') }, task: TASK_OK });
+    const r = row({ opKind: 'clone', opSourceId: 't1' });
+    const sibling = row({ id: 'rowb', status: 'creating', opKind: 'clone', opStartedAt: new Date(NOW.getTime() - 1000) });
+    expect(await reconcileCreatingVm(r as never, asClient(c), NOW)).toBe('held');
+    held(r);
+    expect(sibling['status']).toBe('creating');
+    untouched(c);
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/guest 100 on pve1 was left untouched/) }));
+  });
+
   it('never tags on a failed or unrecorded task', async () => {
     const c = pveWith({ guest: { tags: templateMarker('t1'), name: 'web' } });
     const r = row({ opKind: 'clone', opSourceId: 't1', opUpid: null });
@@ -325,7 +354,7 @@ describe('settling an interrupted create', () => {
   });
 
   it('keeps a duplicate whose copy still carries its source\'s tag (not someone else\'s guest)', async () => {
-    const c = pveWith({ guest: { tags: guestMarker('source'), name: 'web' }, task: TASK_OK });
+    const c = pveWith({ guest: { tags: guestMarker('source'), name: 'web', description: cloneNonce('rowa') }, task: TASK_OK });
     const r = row({ opKind: 'duplicate', opSourceId: 'source' });
     row({ id: 'source', status: 'stopped', proxmoxVmId: 90, opKind: null, opStartedAt: null });
     expect(await reconcileCreatingVm(r as never, asClient(c), NOW)).toBe('held');
@@ -333,7 +362,7 @@ describe('settling an interrupted create', () => {
   });
 
   it('tags and holds a template rebuild whose clone finished, rather than orphaning it', async () => {
-    const c = pveWith({ guest: { tags: templateMarker('t1'), name: 'web' }, task: TASK_OK });
+    const c = pveWith({ guest: { tags: templateMarker('t1'), name: 'web', description: cloneNonce('rowa') }, task: TASK_OK });
     const r = row({ opKind: 'rebuild-template', opSourceId: 't1' });
     expect(await reconcileCreatingVm(r as never, asClient(c), NOW)).toBe('held');
     expect(bodyOf(tagPut(c)!)['tags']).toBe(guestMarker('rowa'));
@@ -359,7 +388,7 @@ describe('settling an interrupted create', () => {
 describe('settling an interrupted upload restore', () => {
   const archive = 'backups:backup/vzdump-qemu-555-2026_10_01-00_00_00.vma.zst';
 
-  it('holds a landed restore untagged, keeps it from booting, and removes the archive', async () => {
+  it('writes nothing to an untagged guest at its VMID: holds the row, removes the archive, tells an admin which guest', async () => {
     const c = pveWith({
       guest: { tags: guestMarker('some-old-row'), name: 'old', onboot: '1', protection: '1', net0: 'virtio=AA:BB,bridge=vmbr9' },
       task: TASK_OK,
@@ -367,11 +396,37 @@ describe('settling an interrupted upload restore', () => {
     const r = row({ opKind: 'restore-upload', opArchive: archive });
     expect(await reconcileCreatingVm(r as never, asClient(c), NOW)).toBe('held');
     held(r);
-    expect(tagPut(c)).toBeUndefined();
+    untouched(c);
+    expect(pve.deleteBackup).toHaveBeenCalledWith('pve1', 'backups', archive);
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringMatching(/check guest 100: if it is the interrupted restore of backup\/vzdump-qemu-555.*onboot/),
+      }),
+    );
+  });
+
+  it.each([
+    ['a non-ProxMate VM', { name: 'someones-vm', onboot: '1', net0: 'virtio=AA,bridge=vmbr0' }, false],
+    ['a cloud-image build', { name: 'build', tags: 'proxmate-build-abc', net0: 'virtio=AA,bridge=vmbr0' }, false],
+    ['a Template Store template', { name: 'debian', template: '1', net0: 'virtio=AA,bridge=vmbr0' }, true],
+  ])('writes nothing to %s sitting at the reused VMID', async (_what, guest, isTemplateRow) => {
+    if (isTemplateRow) templateVmids = [100];
+    const c = pveWith({ guest: guest as Record<string, string>, task: TASK_OK });
+    row({ opKind: 'restore-upload', opArchive: archive });
+    await reconcileCreatingVm(rows[0] as never, asClient(c), NOW);
+    untouched(c);
+  });
+
+  it('keeps its own tagged restored guest from booting before holding it', async () => {
+    const c = pveWith({
+      guest: { tags: guestMarker('rowa'), name: 'web', onboot: '1', protection: '1', net0: 'virtio=AA:BB,bridge=vmbr9' },
+      task: TASK_OK,
+    });
+    const r = row({ opKind: 'restore-upload', opArchive: archive });
+    expect(await reconcileCreatingVm(r as never, asClient(c), NOW)).toBe('held');
     const puts = c.put.mock.calls.map((x) => bodyOf(x));
     expect(puts.some((b) => (b['delete'] ?? '').includes('onboot') && b['delete']!.includes('protection'))).toBe(true);
     expect(puts.some((b) => b['net0'] === 'virtio=AA:BB,bridge=vmbr9,link_down=1')).toBe(true);
-    expect(pve.deleteBackup).toHaveBeenCalledWith('pve1', 'backups', archive);
     expect(c.delete).not.toHaveBeenCalled();
   });
 
@@ -386,8 +441,9 @@ describe('settling an interrupted upload restore', () => {
     const c = pveWith({ guest: { tags: guestMarker('rowb'), onboot: '1' }, task: TASK_OK });
     row({ opKind: 'restore-upload', opArchive: archive });
     row({ id: 'rowb', status: 'running', opKind: null, opStartedAt: null });
-    expect(await reconcileCreatingVm(rows[0] as never, asClient(c), NOW)).toBe('dropped');
-    expect(c.put).not.toHaveBeenCalled();
+    expect(await reconcileCreatingVm(rows[0] as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+    expect(rows.find((r) => r['id'] === 'rowb')).toMatchObject({ status: 'running' });
   });
 });
 

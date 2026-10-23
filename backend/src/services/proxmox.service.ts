@@ -1517,6 +1517,8 @@ export async function cloneVm(
     target?: string;
     /** Resource pool the clone joins; see getGuestPool. */
     pool?: string;
+    /** The clone's description (ProxMate writes its row nonce here; see cloneNonce). */
+    description?: string;
   },
   client?: AxiosInstance,
 ): Promise<string> {
@@ -1529,6 +1531,7 @@ export async function cloneVm(
   if (opts.full && opts.storage) params.set('storage', opts.storage);
   if (opts.target && opts.target !== opts.node) params.set('target', opts.target);
   if (opts.pool) params.set('pool', opts.pool);
+  if (opts.description) params.set('description', opts.description);
   const res = await c.post<{ data: string }>(
     `/nodes/${opts.node}/qemu/${opts.templateVmid}/clone`,
     params,

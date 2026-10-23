@@ -51,6 +51,15 @@ export type VmOpKind =
   | 'import';
 
 /**
+ * The description a clone made for a row is created with. A clone copies its
+ * source's tags, so after a restart only this proves that the guest at the VMID is
+ * the one this row's clone produced (see task-reconcile.service.ts).
+ */
+export function cloneNonce(vmId: string): string {
+  return `proxmate-row:${vmId}`;
+}
+
+/**
  * Record the Proxmox task now driving a `creating` row, so a restart that loses
  * the wait can still read the task's outcome. Best-effort: without it the
  * reconciler falls back to what is at the VMID.
@@ -801,9 +810,16 @@ const pendingVmids = new Set<number>();
 
 /** The next VMID free on Proxmox and not held by a reservation. */
 export async function nextVmId(client: Awaited<ReturnType<typeof pve.getClient>>): Promise<number> {
+  // A row still creating, or held in error, still names its VMID even when no guest
+  // is there now; handing it out again would put a second guest behind that row.
+  const named = await (async () =>
+    prisma.virtualMachine.findMany({ where: { status: { in: ['creating', 'error'] } }, select: { proxmoxVmId: true } }))().catch(
+    () => [] as Array<{ proxmoxVmId: number }>,
+  );
+  const skip = new Set((named ?? []).map((r) => r.proxmoxVmId));
   const first = await pve.getNextVmId(client);
-  if (!pendingVmids.has(first)) return first;
-  return (await freeVmIdsFrom(first + 1, 1, client, new Set(), false))[0]!;
+  if (!pendingVmids.has(first) && !skip.has(first)) return first;
+  return (await freeVmIdsFrom(first + 1, 1, client, skip, false))[0]!;
 }
 
 /**
@@ -1654,6 +1670,7 @@ async function provisionTemplateDeploy(
         storage: plan.storage,
         target: node,
         pool: await pve.getGuestPool(),
+        description: cloneNonce(vm.id),
       },
       client,
     );
@@ -1962,7 +1979,16 @@ async function duplicateVmLocked(
       ? configured
       : undefined;
     const upid = await pve.cloneVm(
-      { node, templateVmid: current.proxmoxVmId, newVmid: vmid, name: newName, full: true, storage, pool: await pve.getGuestPool() },
+      {
+        node,
+        templateVmid: current.proxmoxVmId,
+        newVmid: vmid,
+        name: newName,
+        full: true,
+        storage,
+        pool: await pve.getGuestPool(),
+        description: cloneNonce(vm.id),
+      },
       client,
     );
     cloneTask = { node, upid };
@@ -3054,6 +3080,7 @@ async function rebuildVmLocked(
           full: plan.full,
           storage: plan.storage,
           pool: await pve.getGuestPool(),
+          description: cloneNonce(current.id),
         },
         client,
       );

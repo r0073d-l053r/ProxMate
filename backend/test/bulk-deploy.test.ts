@@ -212,6 +212,9 @@ describe('deploying a batch', () => {
     expect(seen.items[1]!.error).toMatch(/storage full/);
     expect(seen.finishedAt).not.toBeNull();
     const clones = c.post.mock.calls.filter((x) => /\/clone$/.test(String(x[0]))).map((x) => bodyOf(x)['newid']);
+    // Each copy is cloned with its own row nonce.
+    const nonces = c.post.mock.calls.filter((x) => /\/clone$/.test(String(x[0]))).map((x) => bodyOf(x)['description']);
+    expect(nonces.sort()).toEqual(batch.items.map((i) => `proxmate-row:${i.vmId}`).sort());
     expect(clones.sort()).toEqual(['100', '101', '102']);
     // The failed copy left no guest, so its row is gone; the others are running.
     expect(rows.map((r) => [r['name'], r['status']])).toEqual([['web-1', 'running'], ['web-3', 'running']]);
@@ -322,6 +325,12 @@ describe('VMID reservations', () => {
     expect(await nextVmId(asClient(c))).toBe(102);
     for (const id of ids) releaseVmId(id);
     expect(await nextVmId(asClient(c))).toBe(100);
+  });
+
+  it('skips a VMID a row still creating or held in error names, even with no guest there', async () => {
+    const c = cluster();
+    rows.push({ id: 'held1', proxmoxVmId: 100, status: 'error' });
+    expect(await nextVmId(asClient(c))).toBe(101);
   });
 
   it('never hands the same VMID to two reservations running side by side', async () => {

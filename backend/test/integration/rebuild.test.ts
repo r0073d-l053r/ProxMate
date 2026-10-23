@@ -219,6 +219,7 @@ describe('rebuildVm — template / cloud-init redeploy', () => {
     const cloneCall = client.post.mock.calls.find((c) => /\/qemu\/100\/clone$/.test(c[0] as string));
     expect(cloneCall).toBeDefined();
     expect(bodyOf(cloneCall!).newid).toBe('110');
+    expect(bodyOf(cloneCall!).description).toBe('proxmate-row:vm-1');
 
     // Cloud-init was applied with the supplied user + DHCP.
     const ciCall = client.put.mock.calls.find((c) => bodyOf(c).ciuser === 'matey');
