@@ -145,6 +145,13 @@ describe('ntfy and Telegram settings', () => {
     expect(saveNotifyConfig).not.toHaveBeenCalled();
   });
 
+  it('refuses clearing the chat id while a bot token is stored, unless Telegram is removed', async () => {
+    expect((await put({ telegramChatId: '', emailEnabled: false, events: [] })).status).toBe(400);
+    expect((await put({ telegramChatId: '  ', emailEnabled: false, events: [] })).status).toBe(400);
+    expect(saveNotifyConfig).not.toHaveBeenCalled();
+    expect((await put({ telegramChatId: '', clearTelegram: true, emailEnabled: false, events: [] })).status).toBe(200);
+  });
+
   it('saves a valid ntfy topic and Telegram bot', async () => {
     const tg = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw';
     const res = await put({ ntfyUrl: 'https://ntfy.sh/ops-x', ntfyToken: 'tk_abc', telegramBotToken: tg, telegramChatId: '@proxmate_ops', emailEnabled: false, events: [] });

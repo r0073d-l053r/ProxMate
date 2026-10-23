@@ -9,6 +9,15 @@ type Where = { userId?: string; usageDigestOptIn?: boolean; createdAt?: { gte: D
 const USERS = [
   { id: 'alice', email: 'alice@example.com', displayName: 'Alice', maxCpu: 8, maxRam: 8192, maxStorage: 100, usageDigestOptIn: true },
   { id: 'bob', email: 'bob@example.com', displayName: 'Bob', maxCpu: 4, maxRam: 4096, maxStorage: 50, usageDigestOptIn: false },
+  // Opted in, but their access window has ended / they are suspended.
+  {
+    id: 'carol', email: 'carol@example.com', displayName: 'Carol', maxCpu: 1, maxRam: 1024, maxStorage: 10,
+    usageDigestOptIn: true, role: 'user', accessExpiresAt: new Date('2026-10-01T00:00:00Z'),
+  },
+  {
+    id: 'dan', email: 'dan@example.com', displayName: 'Dan', maxCpu: 1, maxRam: 1024, maxStorage: 10,
+    usageDigestOptIn: true, role: 'user', accessSuspendedAt: new Date('2026-10-01T00:00:00Z'),
+  },
 ];
 const VMS = [
   { id: 'a1', userId: 'alice', name: 'alice-web', cpu: 2, ram: 2048, storage: 20, quotaExempt: false },
@@ -116,7 +125,7 @@ describe('digestRows', () => {
 });
 
 describe('runUsageDigest', () => {
-  it('emails only users who opted in, each their own digest', async () => {
+  it('emails only users who opted in and whose access has not ended, each their own digest', async () => {
     const r = await runUsageDigest(NOW);
     expect(r).toEqual({ ran: true, sent: 1, failed: 0 });
     expect(sendMail).toHaveBeenCalledTimes(1);
