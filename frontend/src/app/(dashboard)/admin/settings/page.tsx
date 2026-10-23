@@ -30,6 +30,7 @@ import { UnmatchedVmsCard } from "@/components/admin/unmatched-vms-card";
 import { TemplateRefreshCard } from "@/components/admin/template-refresh-card";
 import { IdeSettingsCard } from "@/components/admin/ide-settings-card";
 import { AppDbBackupCard } from "@/components/admin/appdb-backup-card";
+import { AutoSnapshotCard } from "@/components/admin/auto-snapshot-card";
 import { KioskSettingsCard } from "@/components/admin/kiosk-settings-card";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -1090,12 +1091,13 @@ export default function SettingsPage() {
           <KioskSettingsCard />
         </TabsContent>
 
-        {/* ── Maintenance: updates, app-DB backups, recovery ISO, image refresh ── */}
+        {/* ── Maintenance: updates, app-DB backups, automatic snapshots, recovery ISO, image refresh ── */}
         <TabsContent value="maintenance" className="pt-6">
           <div className="mb-6">
             <UpdatesCard />
           </div>
           <AppDbBackupCard />
+          <AutoSnapshotCard />
           <RescueIsoCard />
           <TemplateRefreshCard />
           <UnmatchedVmsCard />
