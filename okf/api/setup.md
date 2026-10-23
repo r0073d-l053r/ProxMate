@@ -36,7 +36,7 @@ The first-run wizard. Mounted at `/api/setup`.[^app]
 |---|---|---|---|
 | GET | `/api/setup/status` | public | `{ setupComplete, adminExists }`. Always reachable. |
 | POST | `/api/setup/admin` | public, pre-completion | Step 1: create the admin `{ email, password (min 8), displayName (1..100) }`; sets session + CSRF cookies. |
-| POST | `/api/setup/proxmox` | admin session, pre-completion | Step 2: save `{ host (URL), tokenId, tokenSecret, verifySsl (default true) }`. |
+| POST | `/api/setup/proxmox` | admin session, pre-completion | Step 2: save `{ host (URL), tokenId, tokenSecret, verifySsl (default true), pool? }`; the optional `pool` sets `proxmox_pool` (`''` clears it). |
 | POST | `/api/setup/proxmox/test` | admin session, pre-completion | Step 2b: test the saved connection; 502 `{ connected: false, error }` on failure. |
 | GET | `/api/setup/proxmox/resources` | admin session, pre-completion | Step 3: `{ storages, bridges, nodeCount, isoStorages, backupStorages }` for choosing defaults; `bridges` is `getGuestNetworks()` output (Linux/OVS bridges and SDN VNets, each with the nodes it exists on); 502 on failure.[^setupsvc] |
 | POST | `/api/setup/defaults` | admin session, pre-completion | Step 3b: save `{ storage, bridge, isoStorage }`; `storage`/`isoStorage` non-empty, `bridge` trimmed and matching `NETWORK_NAME_RE` (letter first, then letters/digits/`.`/`_`/`-`, max 32). |

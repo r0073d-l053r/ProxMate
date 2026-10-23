@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-10-23
+* **Creation**: Documented the optional pool-scoped Proxmox token: the `proxmox_pool` setting in [Proxmox connection](/config/proxmox-connection.md), the [guest-pool service](/services/guest-pool.md), and the per-path ACL split of `deploy/proxmox-token.sh --pool` in [privileges](/proxmox/privileges.md).
+
 ## 2026-10-20
 * **Update**: Documented [pending shares](/database/pending-vm-share.md), template deploy placement, start/restart waiting for the Proxmox task, and the least-privilege token in [privileges](/proxmox/privileges.md), with what a live Proxmox VE 9.2 cluster proved.
 

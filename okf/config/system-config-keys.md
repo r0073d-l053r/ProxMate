@@ -65,6 +65,7 @@ When `sensitive=true`, `setConfig` stores `encrypt(value)`: AES-256-GCM with a r
 | `notify_events_version` | no | [notifications](/config/notifications.md) |
 | `notify_webhook_url` | **yes when non-empty** | [notifications](/config/notifications.md) |
 | `proxmox_host` | no | [proxmox-connection](/config/proxmox-connection.md) |
+| `proxmox_pool` | no | [proxmox-connection](/config/proxmox-connection.md) |
 | `proxmox_token_id` | no | [proxmox-connection](/config/proxmox-connection.md) |
 | `proxmox_token_secret` | **yes** | [proxmox-connection](/config/proxmox-connection.md) |
 | `proxmox_verify_ssl` | no | [proxmox-connection](/config/proxmox-connection.md) |

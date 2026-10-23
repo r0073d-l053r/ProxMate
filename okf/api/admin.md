@@ -27,7 +27,7 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/api/admin/audit` | admin | Audit log page (`?limit` default 100, `?offset` default 0). |
-| GET | `/api/admin/settings` | admin | Aggregated settings: proxmox (`hasSecret`, no secret), defaults, rescueIso, templateRefreshEnabled, smtp (`hasPass`), notify, sso (`hasSecret`, `callbackUrl`), ide (`hasGatewayKey`), appdbBackup (plus `mountedDir`), kiosk `pinSet`. |
+| GET | `/api/admin/settings` | admin | Aggregated settings: proxmox (`pool`, `hasSecret`, no secret), defaults, rescueIso, templateRefreshEnabled, smtp (`hasPass`), notify, sso (`hasSecret`, `callbackUrl`), ide (`hasGatewayKey`), appdbBackup (plus `mountedDir`), kiosk `pinSet`. |
 | PUT | `/api/admin/settings/kiosk` | admin + requireSession | `{ pin }` 4-12 digits or `''` to clear. Audited `admin.kiosk_config`. |
 | PUT | `/api/admin/settings/appdb-backup` | admin | `{ dir, keep (1..365, default 7) }`; probes the dir is writable. Audited `admin.appdb_backup_config`. |
 | POST | `/api/admin/settings/appdb-backup/run` | admin | Run an app-DB backup now; `{ ok, file, pruned }`. Audited `admin.appdb_backup_run`. |
@@ -43,8 +43,9 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 | POST | `/api/admin/settings/sso/test` | admin | OIDC discovery check. |
 | GET | `/api/admin/password-requests` | admin | Pending password reset requests (no-SMTP flow). |
 | POST | `/api/admin/users/:id/reset-password` | admin + requireSession | Set `{ password (min 8), removePasskeys? }` for a user; `removePasskeys: true` (default false) also deletes their passkeys. Audited `admin.reset_password`. |
-| PUT | `/api/admin/settings/proxmox` | admin | `{ host, tokenId, tokenSecret?, verifySsl }`; secret only replaced if non-blank and stored encrypted. |
-| POST | `/api/admin/settings/proxmox/test` | admin | Test Proxmox connection. |
+| PUT | `/api/admin/settings/proxmox` | admin | `{ host, tokenId, tokenSecret?, verifySsl, pool? }`; secret only replaced if non-blank and stored encrypted. `pool` sets `proxmox_pool` (`''` clears it, omitted keeps it; letters, digits, `-`, `_`). |
+| POST | `/api/admin/settings/proxmox/test` | admin | Test Proxmox connection. With a pool configured the result carries a `pool` report (see [Proxmox privileges](/proxmox/privileges.md)). |
+| POST | `/api/admin/settings/proxmox/pool/move-guests` | admin | Adds every guest carrying a ProxMate ownership marker that is outside the configured pool to it (`PUT /pools`, `allow-move=1`); returns `{ pool, moved: [{ vmid, name }] }`, 502 with the Proxmox message on failure. Audited `admin.proxmox_pool_move`. See [guest-pool service](/services/guest-pool.md). |
 | PUT | `/api/admin/settings/defaults` | admin | `{ storage, bridge, isoStorage, backupStorage? }`; `bridge` must match `NETWORK_NAME_RE`, `backupStorage: ''` clears the override. Audited `admin.settings_defaults` with a before/after diff. |
 | PUT | `/api/admin/settings/rescue` | admin | `{ iso }` sets `rescue_iso`. |
 | PUT | `/api/admin/settings/template-refresh` | admin | `{ enabled }` sets `template_refresh_enabled`. |
@@ -84,7 +85,7 @@ Everything an operator does after setup. Mounted at `/api/admin`.[^app]
 - All bodies are zod-validated; failures are 400 with `details` (some return a short fixed message instead).[^routes]
 - SSRF guard: `webhookUrl` must pass `assertPublicHttpUrlShape`.[^routes]
 - Secrets are never returned by `GET /settings` (only `hasSecret` / `hasPass` / `hasGatewayKey`, and for the notification webhook `hasWebhookUrl` plus `webhookUrlMasked`, scheme and host only), and blank secret fields on PUT keep the stored value.[^routes]
-- Audited: `PUT /settings/proxmox` (`admin.proxmox_config`), `PUT /settings/smtp` (`admin.smtp_config`), `PUT /settings/rescue`, `PUT /settings/template-refresh`, `PUT /isolation` and isolation enforce/unenforce. Entries name what changed and whether a secret was replaced, never the secret value.[^routes]
+- Audited: `PUT /settings/proxmox` (`admin.proxmox_config`, including a pool change), `POST /settings/proxmox/pool/move-guests` (`admin.proxmox_pool_move`), `PUT /settings/smtp` (`admin.smtp_config`), `PUT /settings/rescue`, `PUT /settings/template-refresh`, `PUT /isolation` and isolation enforce/unenforce. Entries name what changed and whether a secret was replaced, never the secret value.[^routes]
 - Passthrough approve and balancer apply return 202 and run asynchronously (`void ... .catch(console.error)`); errors after 202 only reach the log.[^routes]
 - `GET /isolation` treats `isolation_enabled` as on unless it is exactly `'false'`.[^routes]
 - Broadcast unsubscribe base URL: `frontend_url` config, else `BACKEND_PUBLIC_URL`, else `FRONTEND_URL`; no link if all are empty. Requires SMTP (400 otherwise).[^routes]

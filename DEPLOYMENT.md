@@ -110,11 +110,47 @@ It picks the guest-agent privileges for your release (`VM.Monitor` on Proxmox VE
 `VM.GuestAgent.Audit` + `VM.GuestAgent.Unrestricted` on 9). Re-running it updates the
 role and ACLs and never re-issues an existing token. The connection test names any
 privilege that is still missing; a correctly created token passes it with no warnings
-(`VM.Audit` and `Datastore.Audit` are the two that block outright). The grant has to be
-on `/`: the cluster firewall, cluster status and cloud-image downloads are checked there.
+(`VM.Audit` and `Datastore.Audit` are the two that block outright). By default the grant
+is on `/`: the cluster firewall, cluster status and cloud-image downloads are checked there
+(the pool-scoped mode below keeps only `Sys.Audit` and `Sys.Modify` on `/`).
 The role has been run end to end on a Proxmox VE 9.2 cluster: every ProxMate feature
 worked through it. On 9.2, `VM.GuestAgent.Unrestricted` already covers the IDE's file
 writes, so `--with-ide` is only belt and braces there.
+
+**Pool-scoped token (optional).** With the grant on `/`, the boundary between guests is
+ProxMate's ownership-tag check, not a Proxmox permission. `--pool <name>` instead grants the
+guest privileges on a Proxmox resource pool, so Proxmox itself refuses the token every guest
+outside it:
+
+```bash
+bash proxmox-token.sh --dry-run --pool proxmate   # prints the ACL plan and the commands
+bash proxmox-token.sh --pool proxmate             # creates the pool if missing
+```
+
+| Path | Role | Privileges |
+| --- | --- | --- |
+| `/pool/<name>` | `ProxMate-Guest` | every `VM.*` privilege above, `Pool.Audit`, `Pool.Allocate` |
+| `/nodes` | `ProxMate-Infra` | `Sys.Audit` |
+| `/storage` | `ProxMate-Infra` | `Datastore.Allocate`, `.AllocateSpace`, `.AllocateTemplate`, `.Audit` |
+| `/sdn/zones` | `ProxMate-Infra` | `SDN.Audit`, `SDN.Use` |
+| `/mapping` (with `--with-passthrough`) | `ProxMate-Infra` | `Mapping.Audit`, `Mapping.Use` |
+| `/`, not propagated | `ProxMate-Cluster` | `Sys.Audit`, `Sys.Modify` (cluster firewall, cluster status, cloud-image downloads) |
+
+Then set **Proxmox pool** to the same name (setup wizard, or Admin → Settings → Proxmox
+connection): every guest ProxMate creates, clones, restores or imports is placed in it. Setting it
+does not move existing guests. When switching an existing install over:
+
+1. Run the script with `--pool <name>`. It keeps the token's earlier `ProxMate` grant on `/`.
+2. Set the pool in ProxMate and run the connection test. It warns that the token still holds guest
+   privileges on `/`, and lists the guests ProxMate manages that are outside the pool.
+3. Click **Move managed guests into the pool**. Only guests carrying a ProxMate ownership tag
+   (machines and Template Store templates) are moved; re-test until nothing is listed.
+4. Run `bash proxmox-token.sh --pool <name> --drop-root-grant` and test again: the `/` warning is
+   gone. A guest left outside the pool is now invisible to ProxMate (its row reads as unconfirmed);
+   as root, `pveum pool modify <name> --vms <vmid> --allow-move 1` puts it in.
+
+Templates you register by hand must be in the pool too, since cloning checks `VM.Clone` on the
+template. This mode has not yet been run end to end on a live cluster.
 
 ---
 
