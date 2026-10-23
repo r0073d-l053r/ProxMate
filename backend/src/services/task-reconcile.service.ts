@@ -183,7 +183,9 @@ async function untouchedSince(vmid: number, since: number | undefined, ownUpid: 
     if (nodes.length === 0 || !nodes.some((n) => n.node === ownNode)) return false;
     for (const { node } of nodes) {
       const perms = await pve.getPathPermissions(`/nodes/${node}`, client);
-      if (!perms['Sys.Audit']) return false;
+      // Proxmox answers privilege => propagate flag; a key present with 0 (a
+      // non-propagating grant on the node itself) is still held there.
+      if (perms['Sys.Audit'] === undefined) return false;
     }
     for (const { node } of nodes) {
       if (node !== ownNode && !(await pve.taskLogReaches(node, from, client))) return false;

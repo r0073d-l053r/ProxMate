@@ -793,6 +793,14 @@ describe('a late upload-restore follower lost to a restart', () => {
     untouched(c);
   });
 
+  it('Sys.Audit granted on the node itself without propagation still counts', async () => {
+    const { c } = restoreGuest(REFUSED, DONE, CLEAN, undefined, {
+      perms: { '/nodes/pve1': { 'Sys.Audit': 1 }, '/nodes/pve2': { 'Sys.Audit': 0 } },
+    });
+    followed();
+    expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('dropped');
+  });
+
   it('another node whose task log doesn\'t reach back to the restore (rebuilt or idle): held', async () => {
     const { c } = restoreGuest(REFUSED, DONE, CLEAN, undefined, { oldest: { pve2: DONE.starttime + 600 } });
     const r = followed();
