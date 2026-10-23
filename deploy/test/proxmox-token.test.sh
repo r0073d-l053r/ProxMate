@@ -20,7 +20,8 @@ SCRIPT="$REPO_ROOT/deploy/proxmox-token.sh"
 #   poolroles: the pool-mode roles exist; pool: the pool "proxmate" exists;
 #   otherpool: only a pool "proxmate-old" exists; rootacl: the ProxMate role is
 #   granted on / to the user and the token; guestacl: the token holds ProxMate-Guest
-#   on /pool/proxmate; poolmembers: the pool holds a guest (pvesh)
+#   on /pool/proxmate; poolmembers: the pool holds a guest (pvesh); staleacl: the
+#   token holds ProxMate-Guest on /pool/oldpool and ProxMate-Storage on /storage/old
 new_case() {
   T="$(mktemp -d "$WORK/case.XXXXXX")"
   mkdir -p "$T/bin"
@@ -57,6 +58,7 @@ case "\$1 \${2:-} \${3:-}" in
     entries=""
     case "$existing" in *" rootacl "*) entries='{"path":"/","propagate":1,"roleid":"ProxMate","type":"user","ugid":"proxmate@pve"},{"path":"/","propagate":1,"roleid":"ProxMate","type":"token","ugid":"proxmate@pve!proxmate"}' ;; esac
     case "$existing" in *" guestacl "*) entries="\${entries:+\$entries,}"'{"path":"/pool/proxmate","propagate":1,"roleid":"ProxMate-Guest","type":"token","ugid":"proxmate@pve!proxmate"}' ;; esac
+    case "$existing" in *" staleacl "*) entries="\${entries:+\$entries,}"'{"path":"/pool/proxmate","propagate":1,"roleid":"ProxMate-Guest","type":"token","ugid":"proxmate@pve!proxmate"},{"path":"/pool/oldpool","propagate":1,"roleid":"ProxMate-Guest","type":"token","ugid":"proxmate@pve!proxmate"},{"path":"/storage/old","propagate":1,"roleid":"ProxMate-Storage","type":"token","ugid":"proxmate@pve!proxmate"},{"path":"/storage/old","propagate":1,"roleid":"ProxMate-Storage","type":"user","ugid":"proxmate@pve"}' ;; esac
     echo "[\$entries]" ;;
   "user list"*) case "$existing" in *" user "*) echo '[{"userid":"proxmate@pve"}]' ;; *) echo '[]' ;; esac ;;
   "user token list") case "$existing" in *" token "*) echo '[{"tokenid":"proxmate"}]' ;; *) echo '[]' ;; esac ;;
@@ -67,6 +69,10 @@ EOF
   cat > "$T/bin/pvesh" <<EOF
 #!/usr/bin/env bash
 printf 'pvesh %s\n' "\$*" >> "\$STUB_LOG"
+case "\$2" in
+  /storage/local) echo '{"storage":"local","content":"iso,vztmpl,backup,snippets,import"}'; exit 0 ;;
+  /storage/*) echo '{"storage":"x","content":"snippets"}'; exit 0 ;;
+esac
 case "$existing" in
   *" poolmembers "*) echo '[{"poolid":"proxmate","members":[{"type":"qemu","vmid":100}]}]' ;;
   *) echo '[{"poolid":"proxmate","members":[]}]' ;;
@@ -175,7 +181,7 @@ t_pool_fresh_splits_the_role_by_path() {
   assert_match "$infra" "Sys.AccessNetwork" "infra role: downloads without Sys.Modify (9.x)" || return 1
   assert_no_match "$infra" "VM." "no guest privileges outside the pool" || return 1
   assert_no_match "$infra" "Sys.Modify" "no Sys.Modify on /nodes" || return 1
-  assert_eq "$storage" "role add ProxMate-Storage --privs Datastore.Allocate,Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit" "storage role" || return 1
+  assert_eq "$storage" "" "no Datastore.Allocate anywhere unless asked for" || return 1
   assert_eq "$cluster" "role add ProxMate-Cluster --privs Sys.Audit" "cluster role: no Sys.Modify by default" || return 1
   assert_no_match "$log" "role add ProxMate --privs" "no full role in pool mode" || return 1
   assert_match "$log" "pool add proxmate" "creates the pool" || return 1
@@ -184,11 +190,10 @@ t_pool_fresh_splits_the_role_by_path() {
     assert_match "$log" "acl modify /pool/proxmate $who --roles ProxMate-Guest --propagate 1" "pool ACL ($who)" || return 1
     assert_match "$log" "acl modify /nodes $who --roles ProxMate-Infra --propagate 1" "nodes ACL ($who)" || return 1
     assert_match "$log" "acl modify /storage $who --roles ProxMate-Infra --propagate 1" "storage ACL ($who)" || return 1
-    assert_match "$log" "acl modify /storage/local $who --roles ProxMate-Storage --propagate 1" "snippet/import storage ACL ($who)" || return 1
     assert_match "$log" "acl modify /sdn/zones $who --roles ProxMate-Infra --propagate 1" "SDN ACL ($who)" || return 1
     assert_match "$log" "acl modify / $who --roles ProxMate-Cluster --propagate 0" "root ACL, this path only ($who)" || return 1
   done
-  [ "$(grep -c "acl modify /storage/local --tokens" "$STUB_LOG")" = 1 ] || fail_msg "one ACL when snippet and import storage are the same" || return 1
+  assert_no_match "$log" "acl modify /storage/" "no per-storage ACL by default" || return 1
   assert_no_match "$log" "--roles ProxMate --propagate" "nothing grants the full role" || return 1
   assert_no_match "$log" "/mapping" "no mapping ACL without passthrough" || return 1
   assert_grep "Sys.Modify on / is not granted: enable the cluster firewall once by hand" "$T/out" || return 1
@@ -198,13 +203,41 @@ t_pool_fresh_splits_the_role_by_path() {
 
 t_pool_named_storages_get_datastore_allocate() {
   new_case 9.0.6
-  run_script --pool proxmate --snippet-storage cephfs --import-storage nfs-iso --backup-storage pbs-dir
+  run_script --pool proxmate --snippet-storage cephfs --import-storage nfs-iso
   assert_eq "$RC" 0 "exit code" || return 1
   local log s; log="$(cat "$STUB_LOG")"
-  for s in cephfs nfs-iso pbs-dir; do
+  assert_eq "$(role_line ProxMate-Storage)" "role add ProxMate-Storage --privs Datastore.Allocate,Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit" "storage role" || return 1
+  for s in cephfs nfs-iso; do
     assert_match "$log" "acl modify /storage/$s --tokens proxmate@pve!proxmate --roles ProxMate-Storage --propagate 1" "$s" || return 1
   done
-  assert_no_match "$log" "/storage/local " "the default is replaced"
+  assert_no_grep "also holds" "$T/out"
+}
+
+t_pool_warns_when_a_named_storage_holds_volumes() {
+  new_case 9.0.6
+  run_script --pool proxmate --snippet-storage local --import-storage local
+  assert_eq "$RC" 0 "exit code" || return 1
+  [ "$(grep -c "acl modify /storage/local --tokens" "$STUB_LOG")" = 1 ] || fail_msg "one ACL for one storage named twice" || return 1
+  assert_grep "Warning: storage local also holds iso,vztmpl,backup,snippets,import" "$T/out"
+}
+
+t_pool_removes_stale_acls_from_an_earlier_run() {
+  new_case 9.0.6 poolroles user token pool staleacl
+  run_script --pool proxmate
+  assert_eq "$RC" 0 "exit code" || return 1
+  local log; log="$(cat "$STUB_LOG")"
+  assert_match "$log" "acl delete /pool/oldpool --tokens proxmate@pve!proxmate --roles ProxMate-Guest" "old pool grant" || return 1
+  assert_match "$log" "acl delete /storage/old --tokens proxmate@pve!proxmate --roles ProxMate-Storage" "old storage grant (token)" || return 1
+  assert_match "$log" "acl delete /storage/old --users proxmate@pve --roles ProxMate-Storage" "old storage grant (user)" || return 1
+  assert_no_match "$log" "acl delete /pool/proxmate" "the current pool grant stays"
+}
+
+t_pool_dry_run_shows_stale_acl_removal() {
+  new_case 9.0.6 poolroles user token pool staleacl
+  run_script --dry-run --pool proxmate
+  assert_eq "$RC" 0 "exit code" || return 1
+  assert_no_match "$(cat "$STUB_LOG")" "acl delete" "nothing removed" || return 1
+  assert_grep "pveum acl delete /pool/oldpool --tokens proxmate@pve!proxmate --roles ProxMate-Guest" "$T/out"
 }
 
 t_pool_cluster_firewall_is_opt_in() {
@@ -250,7 +283,6 @@ t_pool_existing_setup_is_updated_not_recreated() {
   assert_eq "$RC" 0 "exit code" || return 1
   local log; log="$(cat "$STUB_LOG")"
   assert_match "$log" "role modify ProxMate-Guest --privs" "updates the guest role" || return 1
-  assert_match "$log" "role modify ProxMate-Storage --privs" "updates the storage role" || return 1
   assert_match "$log" "role modify ProxMate-Cluster --privs" "updates the cluster role" || return 1
   assert_no_match "$log" "pool add" "keeps the pool" || return 1
   assert_no_match "$log" "token add" "never re-issues an existing token" || return 1
@@ -291,12 +323,20 @@ t_pool_drop_root_grant_after_the_new_acls() {
   assert_no_grep "holds no guests yet" "$T/out"
 }
 
-t_pool_drop_root_grant_warns_on_an_empty_pool() {
+t_pool_drop_root_grant_refuses_on_an_empty_pool() {
   new_case 9.0.6 role poolroles user token pool rootacl
   run_script --pool proxmate --drop-root-grant
   assert_eq "$RC" 0 "exit code" || return 1
-  assert_grep "the pool proxmate holds no guests yet" "$T/out" || return 1
-  assert_grep "pveum pool modify proxmate --vms" "$T/out"
+  assert_no_match "$(cat "$STUB_LOG")" "acl delete /" "the / grant is kept" || return 1
+  assert_grep "The pool proxmate holds no guests yet" "$T/out" || return 1
+  assert_grep "re-run with --force" "$T/out"
+}
+
+t_pool_drop_root_grant_force_on_an_empty_pool() {
+  new_case 9.0.6 role poolroles user token pool rootacl
+  run_script --pool proxmate --drop-root-grant --force
+  assert_eq "$RC" 0 "exit code" || return 1
+  assert_match "$(cat "$STUB_LOG")" "acl delete / --tokens proxmate@pve!proxmate --roles ProxMate" "dropped anyway"
 }
 
 t_pool_drop_root_grant_is_a_noop_without_one() {
@@ -315,8 +355,8 @@ t_default_mode_warns_about_an_existing_pool_setup() {
 }
 
 t_pool_dry_run_shows_the_plan_and_changes_nothing() {
-  new_case 9.0.6 rootacl
-  run_script --dry-run --pool proxmate --drop-root-grant
+  new_case 9.0.6 rootacl poolmembers
+  run_script --dry-run --pool proxmate --drop-root-grant --snippet-storage local
   assert_eq "$RC" 0 "exit code" || return 1
   local log; log="$(cat "$STUB_LOG")"
   assert_no_match "$log" "role add" "no role created" || return 1
@@ -346,8 +386,12 @@ t_pool_refuses_bad_input() {
   assert_ne "$RC" 0 "over-long pool name refused" || return 1
   run_script --pool proxmate --snippet-storage 'a b'
   assert_ne "$RC" 0 "storage id with a space refused" || return 1
+  run_script --pool proxmate --import-storage 'a..b'
+  assert_ne "$RC" 0 "storage id with .. refused" || return 1
+  run_script --pool proxmate --import-storage '-x'
+  assert_ne "$RC" 0 "storage id starting with - refused" || return 1
   local opt
-  for opt in --drop-root-grant --with-cluster-firewall "--snippet-storage x" "--import-storage x" "--backup-storage x"; do
+  for opt in --drop-root-grant --with-cluster-firewall --force "--snippet-storage x" "--import-storage x"; do
     # shellcheck disable=SC2086
     run_script $opt
     assert_ne "$RC" 0 "$opt without --pool refused" || return 1

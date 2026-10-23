@@ -1214,6 +1214,7 @@ const ImportGuestSchema = z.object({
   ownerId: z.string().min(1).max(64),
   quotaExempt: z.boolean().optional(),
   adminManaged: z.boolean().optional(),
+  movePool: z.boolean().optional(),
 });
 
 router.post('/guests/import', async (req: Request, res: Response) => {
@@ -1222,10 +1223,13 @@ router.post('/guests/import', async (req: Request, res: Response) => {
   const owner = await prisma.user.findUnique({ where: { id: parsed.data.ownerId } });
   if (!owner) { res.status(404).json({ error: 'No such user to import for.' }); return; }
   try {
-    const vm = await importGuest((req as AuthRequest).user, { ...parsed.data, owner });
-    res.status(201).json({ vm });
+    const { vm, poolNote } = await importGuest((req as AuthRequest).user, { ...parsed.data, owner });
+    res.status(201).json({ vm, poolNote });
   } catch (err) {
-    if (err instanceof ImportError) { res.status(err.status).json({ error: err.message }); return; }
+    if (err instanceof ImportError) {
+      res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+      return;
+    }
     if (err instanceof QuotaError) {
       res.status(403).json({
         error: `Importing this guest would exceed ${owner.email}'s quota (${Object.keys(err.details).join(', ')}). ` +
