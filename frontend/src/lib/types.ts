@@ -544,6 +544,17 @@ export interface AdminSettings {
   };
   /** Kiosk-mode exit lock — whether a PIN is set (the value is never returned). */
   kiosk: { pinSet: boolean };
+  /** Automatic snapshots before a resize, data-disk grow or rescue boot (VMs only). */
+  autoSnapshot?: { enabled: boolean; keep: number };
+}
+
+/** Whether an admin has confirmed ENCRYPTION_KEY is backed up (the key itself is never sent). */
+export interface KeyBackupStatus {
+  confirmed: boolean;
+  confirmedAt: string | null;
+  confirmedBy: string | null;
+  /** A confirmation exists, but for a different key than the server runs with now. */
+  keyChanged: boolean;
 }
 
 /** Admin policy for ProxMate IDE (in-guest code-server + OpenCode). */

@@ -126,7 +126,9 @@ export function RebuildDialog({
           <AlertDialogDescription>
             Re-image this VM from a fresh ISO or template. It keeps its name and{" "}
             {vm.cpu} vCPU / {formatRam(vm.ram)} / {vm.storage} GB, but{" "}
-            <span className="font-medium text-foreground">its current disk and all data are erased.</span>
+            <span className="font-medium text-foreground">its current disk and all data are erased.</span>{" "}
+            Its snapshots go too — automatic ones included — because Proxmox deletes a guest&apos;s
+            snapshots with it, so no snapshot can undo a rebuild. Take a backup first to keep a way back.
           </AlertDialogDescription>
         </AlertDialogHeader>
 

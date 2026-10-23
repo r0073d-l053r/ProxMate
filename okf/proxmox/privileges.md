@@ -88,7 +88,7 @@ admin "test connection" action ([setup API](/api/setup.md), [admin API](/api/adm
 | `Datastore.AllocateSpace` | Warning | creating disks on a storage |
 | `Datastore.Allocate` | Warning | enabling snippets and cleaning up imported cloud images |
 | `Datastore.AllocateTemplate` | Warning | importing cloud images for the Template Store |
-| `Sys.Audit` | Warning | node health and capacity readings; also warned when `/nodes` returns no nodes |
+| `Sys.Audit` | Warning | node health and capacity readings; also warned when `/nodes` returns no nodes. Also needed on every `/nodes/<node>` for the restart reconciler to ever act on a finished late upload restore: without it the reconciler always holds such a row and writes nothing to its guest |
 | `Sys.Modify` | Warning | enforcing isolation on the cluster firewall |
 | `VM.Monitor` | Warning, only when the PVE major version is 8 or lower | the guest agent (guest IPs, login passwords, cloud-init progress) |
 | `VM.GuestAgent.Audit` / `VM.GuestAgent.Unrestricted` | Warning, only on PVE 9 or later | reading guest IPs; applying a deploy's login password and checking cloud-init progress |
@@ -188,8 +188,16 @@ What changes with a pool-scoped token:
   the tenant is told the backup contains settings ProxMate won't restore. `onboot`, `startup` and
   `protection` are removed right after the restore task, before the check, on every restore path.
   The late-task follower runs the same check (and removal) once the task finishes OK, whether or
-  not the row is still there, and drops the row when the guest is removed; a restart ends the
-  follower and the row stays held. When a later step fails after the check passed, the guest is
+  not the row is still there, and drops the row when the guest is removed. While it follows, the
+  held row keeps its op fields; if the follower is lost (a restart, its 6 h limit, a poll error),
+  the restart reconciler resumes following a task still running, or runs the same strip, check and
+  removal once the task has finished OK, but only when every node's task list shows nothing else
+  used the VMID since. That proof needs `Sys.Audit` on every `/nodes/<node>` (checked first, per
+  node, from `/access/permissions?path=/nodes/<node>`, so a NoAccess or non-propagating grant
+  doesn't count), since without it Proxmox lists only the token's own tasks, and every node's task
+  log must reach back to the restore's start (a rebuilt or idle node with nothing that old holds);
+  when any of that is missing or can't be read, the reconciler writes nothing to the guest and
+  holds the row. When a later step fails after the check passed, the guest is
   neutralised without the delete (an over-quota failure excepted). An in-place MateState restore of
   a container gets the check with snapshots allowed (each snapshot's config is checked) and, on
   failure, the same neutralising without the delete, then a hold. The archive's guest firewall

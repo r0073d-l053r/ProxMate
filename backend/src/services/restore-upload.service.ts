@@ -12,10 +12,14 @@ import {
   settleFailedCreate,
   syncRestoredGuest,
   assertOwnVolumes,
+  recordOpTask,
+  OP_SETTLED,
+  type VmOpKind,
   nextVmId,
   reserveVmIds,
   releaseVmId,
 } from './vm.service.js';
+import { beginInFlight } from '../lib/in-flight.js';
 import { parseGuestConfigText, guestConfigSizes } from '../lib/guest-config.js';
 import { readArchiveConfig, ArchiveConfigError } from '../lib/vzdump-archive.js';
 import * as pve from './proxmox.service.js';
@@ -427,6 +431,36 @@ async function rebuildRestoredGuestConfig(
 }
 
 /**
+ * Best-effort removal of an uploaded archive known only by its volid (as a
+ * `restore-upload` row records it in `opArchive`), for the restart reconciler.
+ */
+export async function cleanupUploadedArchive(volid: string, node: string | null, rowId?: string): Promise<void> {
+  const storage = volid.split(':')[0] ?? '';
+  const filename = path.basename(volid.slice(volid.indexOf(':') + 1));
+  if (!storage || !VZDUMP_UPLOAD_RE.test(filename)) return;
+  if (rowId && (await archiveClaimedByOther(volid, rowId))) return;
+  await cleanupArchive(filename, node, storage, volid);
+}
+
+/** Rows whose restore may still need an archive: still creating, or still carrying a task. */
+const ARCHIVE_USERS = [{ status: 'creating' }, { opUpid: { not: null } }];
+
+/**
+ * Whether a row other than `rowId` still needs this archive (it is creating, or
+ * still carries a task, with the same `opArchive`). Such an archive is left alone.
+ * A failed lookup counts as claimed.
+ */
+export async function archiveClaimedByOther(volid: string, rowId: string): Promise<boolean> {
+  try {
+    return (
+      (await prisma.virtualMachine.count({ where: { opArchive: volid, id: { not: rowId }, OR: ARCHIVE_USERS } })) > 0
+    );
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Marks an archive ProxMate itself wrote to the share (`.proxmate-uploaded.<name>`,
  * a dot-file Proxmox's backup scan ignores). The share is also where real vzdump
  * backups live, under the same naming, so only marked archives are ever swept.
@@ -480,7 +514,7 @@ export async function neutraliseAfterFailure(
  * neutralised and removed (see neutraliseRestoredGuest). The error is rethrown
  * with `guestRemoved` set when the guest is gone.
  */
-async function checkRestoredOrRemove(
+export async function checkRestoredOrRemove(
   node: string,
   vmid: number,
   kind: pve.GuestKind,
@@ -582,9 +616,10 @@ async function cleanupArchive(filename: string, node: string | null, storage: st
 /**
  * Remove uploads ProxMate wrote and no restore is using: marked archives (and
  * their markers) and unfinished `.proxmate-upload-*.part` files untouched for
- * `olderThanMs`. A marked archive whose restore target (the VMID noted in its
- * marker) still has a `creating` machine row is kept. Run at startup; returns how
- * many files were removed.
+ * `olderThanMs`. A marked archive is kept while a machine row still `creating`
+ * records it as its archive (`opArchive`) or has the VMID noted in its marker; the
+ * restart reconciler removes it when it settles that row. Run at startup; returns
+ * how many files were removed.
  */
 export async function sweepStaleUploads(olderThanMs = 6 * 60 * 60 * 1000): Promise<number> {
   const dir = uploadDir();
@@ -597,6 +632,11 @@ export async function sweepStaleUploads(olderThanMs = 6 * 60 * 60 * 1000): Promi
   }
   const cutoff = Date.now() - olderThanMs;
   const old = async (full: string) => (await fsp.stat(full).catch(() => null))?.mtimeMs ?? Infinity;
+  const pending = await prisma.virtualMachine.findMany({
+    where: { opArchive: { not: null }, OR: ARCHIVE_USERS },
+    select: { opArchive: true },
+  });
+  const inUse = new Set(pending.map((r) => path.basename(String(r.opArchive).slice(String(r.opArchive).indexOf(':') + 1))));
   let removed = 0;
   for (const name of names) {
     if (TEMP_UPLOAD_RE.test(name)) {
@@ -608,9 +648,10 @@ export async function sweepStaleUploads(olderThanMs = 6 * 60 * 60 * 1000): Promi
     const marker = resolveUnderUploadDir(name, UPLOAD_MARKER_RE);
     if (!marker || (await old(marker)) >= cutoff) continue;
     const archive = name.slice(MARKER_PREFIX.length);
+    if (inUse.has(archive)) continue;
     const noted = (await fsp.readFile(marker, 'utf8').catch(() => '')).trim();
     if (/^\d+$/.test(noted)) {
-      const inFlight = await prisma.virtualMachine.count({ where: { proxmoxVmId: Number(noted), status: 'creating' } });
+      const inFlight = await prisma.virtualMachine.count({ where: { proxmoxVmId: Number(noted), OR: ARCHIVE_USERS } });
       if (inFlight > 0) continue;
     }
     const file = resolveUnderUploadDir(archive, VZDUMP_UPLOAD_RE);
@@ -692,6 +733,7 @@ async function restoreFromUploadLocked(
   let storage = '';
   let volid = '';
   let cleanupNode: string | null = null;
+  let ownRowId = '';
   let presetVmid: number | undefined;
   try {
     const client = await pve.getClient();
@@ -769,9 +811,15 @@ async function restoreFromUploadLocked(
         storage: cfg.diskGb,
         os: 'Restored backup', // vm.service UPLOAD_RESTORE_OS
         status: 'creating',
+        opKind: 'restore-upload' satisfies VmOpKind,
+        opStartedAt: new Date(),
+        // So an interrupted restore's archive can still be removed after a restart.
+        opArchive: volid,
       },
     });
     release(); // usage now includes this row
+    ownRowId = vm.id;
+    const done = beginInFlight(vm.id);
 
     let created = false;
     let restoreTask:
@@ -788,6 +836,7 @@ async function restoreFromUploadLocked(
         client,
         kind,
       );
+      await recordOpTask(vm.id, upid);
       restoreTask = {
         node,
         upid,
@@ -813,7 +862,9 @@ async function restoreFromUploadLocked(
             throw err;
           }
         },
-        afterTask: () => cleanupArchive(filename, node, storage, volid),
+        afterTask: async () => {
+          if (!(await archiveClaimedByOther(volid, vm.id))) await cleanupArchive(filename, node, storage, volid);
+        },
       };
       await pve.waitForTask(node, upid, client, 30 * 60 * 1000);
       created = true;
@@ -857,25 +908,32 @@ async function restoreFromUploadLocked(
       // guest, and the row's sizes come from the guest itself.
       await syncRestoredGuest(vm, { approvedPci: [], client });
 
-      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
+      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped', ...OP_SETTLED } });
       const startUpid = await pve.startVm(node, vmid, client, kind);
       await pve.waitForTask(node, startUpid, client);
-      const done = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
-      await cleanupArchive(filename, node, storage, volid);
-      return done;
+      const running = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
+      // Another row restoring from the same archive (or following its task) still needs it.
+      if (!(await archiveClaimedByOther(volid, vm.id))) await cleanupArchive(filename, node, storage, volid);
+      return running;
     } catch (err) {
       // Any failure once the restore has landed leaves the row in `error`, which
       // nothing may start. A restore task still running when the wait gave up keeps
-      // reading the archive; its follower removes the archive once it ends.
+      // reading the archive; its follower removes the archive once it ends (or, if
+      // that follower is lost, the restart reconciler does: task-reconcile.service.ts).
       if (created) await neutraliseAfterFailure(node, vmid, kind, client, err);
       const { following } = await settleFailedCreate(vm, err, created, { task: restoreTask });
       if (following) archiveHandedOff = true;
       throw err;
+    } finally {
+      done();
     }
   } catch (err) {
     // Any pre-restore failure (reservation, rename, quota, placement, reading the
-    // archive) drops the archive, so a rejected upload never lingers on the share.
-    if (!archiveHandedOff) await cleanupArchive(filename, cleanupNode, storage, volid);
+    // archive) drops the archive, so a rejected upload never lingers on the share,
+    // unless another row's restore from the same archive still needs it.
+    if (!archiveHandedOff && !(volid && (await archiveClaimedByOther(volid, ownRowId)))) {
+      await cleanupArchive(filename, cleanupNode, storage, volid);
+    }
     throw err;
   } finally {
     if (presetVmid !== undefined) releaseVmId(presetVmid);

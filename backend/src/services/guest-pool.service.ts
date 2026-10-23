@@ -102,7 +102,7 @@ export async function managedGuests(client: AxiosInstance): Promise<{
  * in propagation, but lists a path only when an ACL names it (plus a fixed set of
  * top-level paths), so an unlisted path falls back to its parent's answer.
  */
-function heldOn(perms: pve.PvePermissions, path: string, wanted: readonly string[]): string[] {
+export function heldOn(perms: pve.PvePermissions, path: string, wanted: readonly string[]): string[] {
   let at = path;
   while (perms[at] === undefined && at !== '/') at = at.slice(0, at.lastIndexOf('/')) || '/';
   const on = perms[at] ?? {};

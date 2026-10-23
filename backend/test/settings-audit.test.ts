@@ -69,6 +69,7 @@ import sshKeyRouter from '../src/routes/ssh-key.routes.js';
 import userRouter from '../src/routes/user.routes.js';
 import { recordAudit } from '../src/services/audit.service.js';
 import { prisma } from '../src/lib/prisma.js';
+import { setConfig } from '../src/services/config.service.js';
 
 let server: http.Server;
 let base: string;
@@ -136,6 +137,33 @@ describe('admin settings', () => {
     expect(auditEntry('admin.rescue_config').detail).toContain('local:iso/rescue.iso');
     expect((await call('PUT', '/admin/settings/template-refresh', { enabled: true })).status).toBe(200);
     expect(auditEntry('admin.template_refresh_config').detail).toContain('enabled');
+  });
+
+  it('audits the automatic-snapshot setting and validates the keep count', async () => {
+    expect((await call('PUT', '/admin/settings/auto-snapshot', { enabled: true, keep: 4 })).status).toBe(200);
+    expect(auditEntry('admin.auto_snapshot_config').detail).toBe('automatic snapshots on, keep 4');
+    expect((await call('PUT', '/admin/settings/auto-snapshot', { enabled: true, keep: 0 })).status).toBe(400);
+    expect((await call('PUT', '/admin/settings/auto-snapshot', { enabled: true, keep: 11 })).status).toBe(400);
+  });
+
+  it('records who confirmed the ENCRYPTION_KEY backup, without ever returning the key', async () => {
+    const before = process.env['ENCRYPTION_KEY'];
+    const key = 'c'.repeat(64);
+    process.env['ENCRYPTION_KEY'] = key;
+    const res = await call('POST', '/admin/encryption-key-backup/confirm').finally(() => {
+      if (before === undefined) delete process.env['ENCRYPTION_KEY'];
+      else process.env['ENCRYPTION_KEY'] = before;
+    });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).not.toContain(key);
+    const stored = vi.mocked(setConfig).mock.calls.find((c) => c[0] === 'encryption_key_backup_confirmed');
+    expect(JSON.parse(stored![1])).toMatchObject({ by: 'admin@example.com', userId: 'admin', at: expect.any(String) });
+    expect(stored![1]).not.toContain(key);
+    const e = auditEntry('admin.encryption_key_backup_confirmed');
+    expect(e.actor).toMatchObject({ id: 'admin', email: 'admin@example.com' });
+    const status = await (await call('GET', '/admin/encryption-key-backup')).json();
+    expect(Object.keys(status).sort()).toEqual(['confirmed', 'confirmedAt', 'confirmedBy', 'keyChanged']);
   });
 });
 

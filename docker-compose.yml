@@ -77,6 +77,9 @@ services:
       PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS: ${PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS:-900000}
       # Minutes before a firing alert rule can fire again (default 60, minimum 5).
       ALERT_COOLDOWN_MIN: ${ALERT_COOLDOWN_MIN:-60}
+      # Minutes a create/restore/rebuild/backup row must be untouched before the
+      # restart reconciler settles it (default 15, minimum 1).
+      RECONCILE_STUCK_MINUTES: ${RECONCILE_STUCK_MINUTES:-15}
       # Per-account brute-force lockout (defaults: 10 failed logins → 15 min
       # auto-unlock). Admins are emailed on lockout when SMTP is configured.
       AUTH_LOCKOUT_MAX: ${AUTH_LOCKOUT_MAX:-10}

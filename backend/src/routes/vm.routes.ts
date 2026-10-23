@@ -42,6 +42,12 @@ import { listShares, addShareWithNotice, removeShare, SHARE_ROLES, normalizeShar
 import { sendDeployedForTenantEmail, sendShareEmail, sendLater } from '../services/activity-mail.service.js';
 import { listDisks, addDataDisk, resizeDataDisk, removeDataDisk } from '../services/disk.service.js';
 import {
+  AutoSnapshotError,
+  MAX_SNAPSHOTS_PER_VM,
+  AUTO_SNAPSHOT_PREFIX,
+  isReservedSnapshotName,
+} from '../services/auto-snapshot.service.js';
+import {
   QuotaError,
   ResizeError,
   CreateOptionError,
@@ -752,6 +758,10 @@ router.patch('/:id', async (req: Request, res: Response) => {
       res.status(400).json({ error: err.message });
       return;
     }
+    if (err instanceof AutoSnapshotError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
     res.status(502).json({ error: pveMessage(err) });
   }
 });
@@ -892,11 +902,12 @@ router.patch('/:id/disks/:slot', async (req: Request, res: Response) => {
   const parsed = DiskSizeSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Enter a new size in GB.' }); return; }
   try {
-    await resizeDataDisk(vm, slot, parsed.data.sizeGb);
+    const autoSnapshot = await resizeDataDisk(vm, slot, parsed.data.sizeGb);
     await recordAudit({ action: 'vm.disk_resize', actor: user, targetType: 'vm', targetId: vm.id, detail: `${slot} → ${parsed.data.sizeGb}GB`, req });
-    res.json({ success: true });
+    res.json({ success: true, autoSnapshot });
   } catch (err) {
     if (err instanceof QuotaError) { res.status(403).json({ error: 'Quota exceeded', details: err.details }); return; }
+    if (err instanceof AutoSnapshotError) { res.status(409).json({ error: err.message }); return; }
     const msg = err instanceof Error ? err.message : pveMessage(err);
     res.status(/grow|root|not found/i.test(msg) ? 400 : 502).json({ error: msg });
   }
@@ -1407,12 +1418,12 @@ router.post('/:id/rescue', async (req: Request, res: Response) => {
   }
 
   try {
-    await enterRescue(vm);
+    const { autoSnapshot } = await enterRescue(vm);
     await recordAudit({ action: 'vm.rescue_enter', actor: user, targetType: 'vm', targetId: vm.id, detail: vm.name, req });
-    res.json({ success: true, rescue: true });
+    res.json({ success: true, rescue: true, autoSnapshot });
   } catch (err) {
     const msg = pveMessage(err);
-    res.status(/configured|Already in rescue/.test(msg) ? 409 : 502).json({ error: msg });
+    res.status(err instanceof AutoSnapshotError || /configured|Already in rescue/.test(msg) ? 409 : 502).json({ error: msg });
   }
 });
 
@@ -1743,16 +1754,19 @@ router.delete('/:id/matestates/:msid', async (req: Request, res: Response) => {
 // "before I change something" rollbacks, not durable off-host backups.
 
 const SNAP_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
-// Cap snapshots per VM: they consume host storage and aren't quota-counted, so an
-// unbounded count is a storage-exhaustion vector on a shared cluster.
-const MAX_SNAPSHOTS_PER_VM = 12;
+// Snapshots per VM are capped (MAX_SNAPSHOTS_PER_VM, automatic ones included):
+// they consume host storage and aren't quota-counted, so an unbounded count is a
+// storage-exhaustion vector on a shared cluster.
 
 const CreateSnapshotSchema = z.object({
   name: z
     .string()
     .min(1)
     .max(40)
-    .regex(SNAP_NAME_RE, 'Start with a letter; use letters, numbers, _ and - only'),
+    .regex(SNAP_NAME_RE, 'Start with a letter; use letters, numbers, _ and - only')
+    // Retention of automatic snapshots goes by its own records, but a user name in
+    // the same range would read as one of them to a person, so it's kept apart.
+    .refine((n) => !isReservedSnapshotName(n), `Names starting with "${AUTO_SNAPSHOT_PREFIX}" are reserved for automatic snapshots`),
   description: z.string().max(200).optional(),
   includeRam: z.boolean().optional(),
 });

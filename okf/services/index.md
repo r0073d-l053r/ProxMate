@@ -15,6 +15,7 @@ The service layer under backend/src/services.
 * [Alert service (per-VM resource alerts)](alert.md) - Evaluates tenant-defined per-VM alert rules (cpu, memory, disk, down) against a live cluster sample every 5 minutes and emails the owner plus the admin webhook when a sustained breach fires.
 * [API-token service (personal access tokens)](api-token.md) - Mints, lists, revokes and verifies `pm_`-prefixed personal API tokens stored only as an HMAC-SHA256 hash peppered with ENCRYPTION_KEY.
 * [App-DB backup service](appdb-backup.md) - Nightly `VACUUM INTO` snapshot of ProxMate's own SQLite database into an admin-configured directory with filename-scoped rolling retention.
+* [Auto-snapshot service (snapshot before risky changes)](auto-snapshot.md) - Takes a `pm-auto-<op>-<timestamp>` Proxmox snapshot of a VM before a resize, data-disk grow or rescue boot, refuses the change when it can't, and keeps only the newest N automatic snapshots per VM without ever deleting a user's.
 * [Audit service](audit.md) - Never-throwing append-only audit log writer plus paginated and per-target readers, with real-client-IP extraction behind a proxy.
 * [Auth service (passwords, JWT sessions, challenge tokens)](auth.md) - Bcrypt password hashing, HS256 JWT session minting backed by a Session row with a CSRF token, session verification, and short-lived 2FA challenge and enrollment tokens.
 * [Broadcast opt-out service](broadcast-optout.md) - Stateless HMAC unsubscribe tokens for admin broadcast emails and the per-user `broadcastOptOut` flag they toggle.
@@ -33,6 +34,7 @@ The service layer under backend/src/services.
 * [IDE-proxy service (code-server reverse proxy)](ide-proxy.md) - HTTP and WebSocket reverse proxy that serves a guest's code-server at `/api/ide/:id/proxy/`, authenticated by session cookie, VM `ide` capability and the admin IDE policy.
 * [IDE service (ProxMate IDE admin policy)](ide.md) - Config-only admin policy for the in-guest ProxMate IDE - availability tier, BYO-key switch, admin-sourced local models with visibility, legacy shared models and the ingress CIDR - and per-user capability resolution.
 * [Invite service (token and expiry helpers)](invite.md) - Two pure helpers used by the invite router to generate a random invite token and parse a `7d`/`24h`/`60m` style expiry.
+* [Key-backup service (ENCRYPTION_KEY backup confirmation)](key-backup.md) - Records which admin confirmed, and when, that ENCRYPTION_KEY is backed up off the host, tied to a non-reversible fingerprint of the key so a changed key brings the admin warning back.
 * [Kiosk service (exit PIN)](kiosk.md) - Stores and verifies the bcrypt-hashed 4-12 digit PIN required to leave the unattended full-screen kiosk admin panel.
 * [Live-stats service](live-stats.md) - Cached, request-coalesced live CPU/memory/disk/network stats for every guest from `/cluster/resources`, plus a single server-side SSE fan-out loop for admin monitors.
 * [Mail service (SMTP)](mail.md) - Reads and saves SMTP settings from SystemConfig (password encrypted) and sends mail through a fresh nodemailer transport per message.
@@ -52,6 +54,7 @@ The service layer under backend/src/services.
 * [Setup service](setup.md) - First-run wizard logic, covering the admin account, Proxmox connection and privilege test, resource discovery, defaults and completion.
 * [SSH-key service](ssh-key.md) - Validates single-line OpenSSH public keys and manages a user's saved keys (max 25, de-duplicated) for injection into guest cloud-init.
 * [SSO service (OpenID Connect)](sso.md) - OIDC authorization-code + PKCE login via openid-client, cached discovery, and mapping of ID-token claims to a local user with optional JIT provisioning and admin-group promotion.
+* [Task-reconcile service (interrupted operations)](task-reconcile.md) - Startup and 5-minute pass that settles rows a backend restart left `creating` or `restoring` from what Proxmox shows, never touching an operation that is still running and never deleting a guest or a backup.
 * [Template service (Template Store and cloud-image builder)](template.md) - Manages the Template Store (register, discover, convert, unregister), builds cloud-init templates from cloud-image URLs with a guest-agent bake, refreshes them monthly, and holds the admin cloud-init feature/snippet configuration.
 * [Tenant LLM-key service (bring-your-own AI keys)](tenant-llm-key.md) - Stores tenant and admin LLM provider keys AES-256-GCM encrypted, enforces provider/base-URL allow-lists and SSRF checks, and resolves keys for the IDE gateway.
 * [Two-factor service (TOTP and recovery codes)](twofactor.md) - TOTP enrollment with an encrypted secret and QR code, login verification with one step of clock skew, and ten single-use SHA-256-hashed recovery codes.

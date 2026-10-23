@@ -48,14 +48,14 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | GET | `/api/vms/:id/metrics` | viewable | RRD history `?timeframe=hour/day/week/month/year` (default hour). |
 | GET | `/api/vms/:id/passthrough` | viewable | Attached `hostpciN` devices (empty for LXC). |
 | GET | `/api/vms/:id/activity` | viewable | Last 20 audit entries for the VM (no IPs/actor ids; non-admins do not see admin actions except by the owner). |
-| PATCH | `/api/vms/:id` | `configure` | Notes, rename (pushed to Proxmox), tags, resize cpu/ram/storage. `tags` are the plain labels: the VM's `project:` tag is kept (set it via the [project router](/api/project.md)). Audited `vm.update` / `vm.resize`. |
+| PATCH | `/api/vms/:id` | `configure` | Notes, rename (pushed to Proxmox), tags, resize cpu/ram/storage. `tags` are the plain labels: the VM's `project:` tag is kept (set it via the [project router](/api/project.md)). A resize first takes an [automatic snapshot](/services/auto-snapshot.md) (QEMU; reported as `autoSnapshot` in the response; 409 when it can't be taken). Audited `vm.update` / `vm.resize`. |
 | GET | `/api/vms/:id/schedule` | viewable | `{ startCron, stopCron }`. |
 | PUT | `/api/vms/:id/schedule` | `configure` | Set power schedule (nullable crons). Audited `vm.schedule`. |
 | GET | `/api/vms/:id/backup-policy` | viewable | `{ backupCron, backupKeep }`. |
 | PUT | `/api/vms/:id/backup-policy` | `backups` | Set backup cron; `backupKeep` 1..14 admin-only. Audited `vm.backup_policy`. |
 | GET | `/api/vms/:id/disks` | viewable | Data disks (empty for LXC). |
 | POST | `/api/vms/:id/disks` | `configure` + size lock | Add data disk `{ sizeGb 1..4096 }`; 201. Audited `vm.disk_add`. |
-| PATCH | `/api/vms/:id/disks/:slot` | `configure` + size lock | Grow data disk. Audited `vm.disk_resize`. |
+| PATCH | `/api/vms/:id/disks/:slot` | `configure` + size lock | Grow data disk, after an automatic snapshot (`autoSnapshot` in the response; 409 when it can't be taken). Audited `vm.disk_resize`. |
 | DELETE | `/api/vms/:id/disks/:slot` | `configure` + size lock | Remove data disk. Audited `vm.disk_remove`. |
 | GET | `/api/vms/:id/migrate-targets` | admin | `{ current, targets, blockers, localDisks }` from Proxmox preflight intersected with online nodes; offline nodes are added as blockers, and a node Proxmox lists in both `allowed_nodes` and `not_allowed_nodes` without a cause is a target, not a blocker. LXC and passthrough guests get an empty `targets` list with a `*` blocker. |
 | POST | `/api/vms/:id/migrate` | admin + not locked | `{ targetNode }`; migrates and notifies owner. Audited `vm.migrate`. |
@@ -72,7 +72,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | POST | `/api/vms/:id/reset-password` | `configure` | Reset guest user password via guest agent (QEMU only); returns `{ password }`. Audited `vm.reset_password`. |
 | POST | `/api/vms/:id/ssh-keys` | `configure` | Add `{ username, publicKey }` to the guest via guest agent (QEMU only). Audited `vm.ssh_key_add`. |
 | POST | `/api/vms/:id/files` | `configure` + `guestFileLimiter` | multipart `file` (max `GUEST_FILE_PUSH_MAX_BYTES`, default 1 MiB, at most 8 MiB; 413 above) plus `path` (absolute, normalized, not under `/proc`, `/sys`, `/dev`), optional `mode` (default `0644`, no setuid/setgid/sticky), `owner` (guest username) and `createParents` (`true`). Writes the file into the running guest through the guest agent (QEMU only, 409 for LXC or when the agent does not answer). In a folder only root can change it is written as root (then given the owner); in any other folder it is written as the owner, and without an owner that is refused with 400. Returns `{ path, size, sha256, verified }`. Audited `vm.file_push` (path, size, SHA-256, mode, owner; never the contents), or `vm.file_push_failed` with the reason. See [guest-file service](/services/guest-file.md). |
-| POST | `/api/vms/:id/rescue` | `configure` | Boot the admin-designated rescue ISO (QEMU only). Audited `vm.rescue_enter`. |
+| POST | `/api/vms/:id/rescue` | `configure` | Boot the admin-designated rescue ISO (QEMU only), after an automatic snapshot (`autoSnapshot` in the response; 409 when it can't be taken). Audited `vm.rescue_enter`. |
 | POST | `/api/vms/:id/rescue/exit` | `configure` | Leave rescue mode. Audited `vm.rescue_exit`. |
 | GET | `/api/vms/:id/alerts` | viewable | Alert rules. |
 | POST | `/api/vms/:id/alerts` | `configure` | `{ metric, threshold?, sustainedMin (default 5) }`; 201. 409 beyond 20 rules per VM (`MAX_ALERT_RULES_PER_VM`) or for a duplicate metric/threshold. Audited `vm.alert_add`. |
@@ -86,7 +86,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | POST | `/api/vms/:id/matestates/:msid/restore` | `backups` | Restore VM from a MateState of this VM. Audited `matestate.restore`. 403 `Quota exceeded` (with `details`) when the backup would grow the guest past the owner's quota. |
 | DELETE | `/api/vms/:id/matestates/:msid` | `backups` | Delete a MateState. Audited `matestate.delete`. |
 | GET | `/api/vms/:id/snapshots` | viewable | Proxmox snapshots (empty for LXC). |
-| POST | `/api/vms/:id/snapshots` | `backups` | `{ name, description?, includeRam? }`; waits for the task; 201. Audited `snapshot.create`. |
+| POST | `/api/vms/:id/snapshots` | `backups` | `{ name, description?, includeRam? }`; names starting `pm-auto-` are reserved (400); waits for the task; 201. Audited `snapshot.create`. |
 | POST | `/api/vms/:id/snapshots/:name/rollback` | `backups` | Roll back (waits up to 300 s) via matestate `rollbackToSnapshot`: 403 `Quota exceeded` when the snapshot's config would grow the guest past the owner's quota; afterwards the guest is re-tagged, a snapshot holding a `hostpciN` not attached now is refused, and the row's cpu/ram/storage/hasPassthrough are re-synced. Audited `snapshot.rollback`. |
 | DELETE | `/api/vms/:id/snapshots/:name` | `backups` | Delete snapshot. Audited `snapshot.delete`. |
 | POST | `/api/vms/:id/console` | `console` or `console_view` + not locked | Mint a vncproxy `{ ticket, port, viewOnly }` for the WebSocket relay (refused unless the guest is the row's own, `requireOurGuest`). The mode (`interactive` with `console`, else `view`) is recorded with the ticket via `recordConsoleGrant`; `viewOnly` only tells the browser how to draw. Audited `vm.console_open`, or `vm.console_view_open` for a view-only session. |
@@ -98,7 +98,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 - **Lock (409)** via `rejectIfLocked`: stop, restart, pause, delete, migrate and console are refused while the IDE is installing or cloud-init is still deploying; bulk stop/restart/delete report such VMs as per-item failures. Start, resume and serial do not call it.[^routes]
 - **Size lock (403)** via `rejectIfSizeLocked`: on `adminManaged` or `quotaExempt` VMs only admins may resize, add/resize/remove disks, or rebuild (closes a quota bypass). Rename/tags stay open to the owner.[^routes]
 - Validation (zod): names `^[a-zA-Z0-9-]+$` max 63; `cpu` 1..64; `ram` (create, container, resize) int >= 64 MB; ISO `os` must be a bare `*.iso`/`*.img` filename (prevents Proxmox drive-option injection); node names `^[a-zA-Z0-9][a-zA-Z0-9._-]*$`; LXC `template` must match `<storage>:vztmpl/<file>`; containers need `password` (min 5) or `sshKey`; tags max 20 each `^[a-zA-Z0-9][a-zA-Z0-9 _-]{0,30}$`; crons max 120 chars then `isValidCron`; disk slot `^(scsi|virtio|sata|ide)\d+$`; snapshot names `^[a-zA-Z][a-zA-Z0-9_-]*$` max 40; share role accepts `SHARE_ROLES` plus legacy `co-owner`/`read-only` normalized.[^routes]
-- Max 12 snapshots per VM (409). Snapshots, disks, rebuild, convert, duplicate, pause, password reset, SSH key injection, file push and rescue are QEMU-only.[^routes]
+- Max 12 snapshots per VM (409), automatic ones included. Snapshots, disks, rebuild, convert, duplicate, pause, password reset, SSH key injection, file push and rescue are QEMU-only.[^routes]
 - Alerts: metric `down` forces `threshold = 0`; other metrics require `threshold` 1..100.[^routes]
 - PATCH rename hits Proxmox first so a PVE failure does not desync the DB; disk is grow-only (enforced in the service).[^routes]
 - File push: multer keeps the upload in memory (one file, cap + 1 byte so an exact-size file passes); the path is checked with `validateGuestPath` here and again in the service.[^routes]

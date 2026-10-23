@@ -16,6 +16,7 @@ import { prisma } from '../../src/lib/prisma.js';
 import { getConfig } from '../../src/services/config.service.js';
 import * as pve from '../../src/services/proxmox.service.js';
 import { createVm, QuotaError } from '../../src/services/vm.service.js';
+import { isInFlight } from '../../src/lib/in-flight.js';
 import { GB } from '../helpers.js';
 
 const create = vi.mocked(prisma.virtualMachine.create);
@@ -93,9 +94,32 @@ describe('createVm orchestration (vs mocked Proxmox API)', () => {
     );
     expect(client.post).toHaveBeenCalledWith('/nodes/pve-int/qemu/120/status/start');
 
-    // DB status transitions: creating → stopped → running
-    const statuses = update.mock.calls.map((c) => (c[0] as { data: { status: string } }).data.status);
+    // DB status transitions: creating → stopped → running (the other write records
+    // the create task's UPID for the restart reconciler)
+    const statuses = update.mock.calls
+      .map((c) => (c[0] as { data: { status?: string } }).data.status)
+      .filter((s) => s !== undefined);
     expect(statuses).toEqual(['stopped', 'running']);
+    expect(update).toHaveBeenCalledWith({ where: { id: expect.any(String) }, data: { opUpid: expect.any(String) } });
+  });
+
+  it('marks the row in flight for the whole create (so the restart reconciler leaves it), and records what it is', async () => {
+    const client = fakePve();
+    const seen: boolean[] = [];
+    const get = client.get.getMockImplementation()!;
+    client.get.mockImplementation((url: string) => {
+      if (/\/tasks\/.+\/status/.test(url)) seen.push(isInFlight('db-1'));
+      return get(url);
+    });
+    getClientMock.mockResolvedValue(client as never);
+    create.mockResolvedValue({ id: 'db-1', status: 'creating', proxmoxVmId: 120, proxmoxNode: 'pve-int' } as never);
+    update.mockImplementation(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => ({ id: where.id, ...data }) as never);
+
+    await createVm({ id: 'a1', role: 'admin' } as never, { name: 'web', cpu: 2, ram: 2048, storage: 20, os: 'debian.iso' });
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every(Boolean)).toBe(true);
+    expect(isInFlight('db-1')).toBe(false);
+    expect(create.mock.calls[0]![0].data).toMatchObject({ opKind: 'create', opStartedAt: expect.any(Date) });
   });
 
   it('rejects an over-quota tenant before touching Proxmox at all', async () => {

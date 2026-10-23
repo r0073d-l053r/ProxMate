@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { DatabaseBackup, Loader2, Save, HardDriveDownload } from "lucide-react";
 import { api, apiError } from "@/lib/api";
-import type { AdminSettings } from "@/lib/types";
+import type { AdminSettings, KeyBackupStatus } from "@/lib/types";
+import { formatDate } from "@/lib/format";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { NumberInput } from "@/components/ui/number-input";
@@ -27,6 +28,16 @@ export function AppDbBackupCard() {
   // isn't left guessing which paths are actually writable.
   const [mountedDir, setMountedDir] = useState("");
   const [keep, setKeep] = useState(7);
+  const [keyBackup, setKeyBackup] = useState<KeyBackupStatus | null>(null);
+
+  useEffect(() => {
+    api
+      .get<KeyBackupStatus>("/admin/encryption-key-backup")
+      .then((r) => setKeyBackup(r.data))
+      .catch(() => {
+        /* the banner covers the unconfirmed case; nothing to add here */
+      });
+  }, []);
 
   useEffect(() => {
     api
@@ -86,6 +97,12 @@ export function AppDbBackupCard() {
           mount (NFS/CIFS) so a dead host doesn&apos;t take the backups with it. Restoring also
           needs your <code className="font-mono text-xs">ENCRYPTION_KEY</code> — back that up
           separately.
+          {keyBackup?.confirmed && keyBackup.confirmedAt ? (
+            <span className="mt-1 block text-xs">
+              Its backup was confirmed{keyBackup.confirmedBy ? ` by ${keyBackup.confirmedBy}` : ""} on{" "}
+              {formatDate(keyBackup.confirmedAt)}.
+            </span>
+          ) : null}
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">

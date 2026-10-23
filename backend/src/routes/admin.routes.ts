@@ -88,6 +88,12 @@ import { listLlmKeys, getLlmKeyEndpoint } from '../services/tenant-llm-key.servi
 import { probeModels } from '../services/ide-gateway.service.js';
 import { listResetRequests, adminResetPassword } from '../services/password-reset.service.js';
 import { refreshVmIps, getStoragePinningReport } from '../services/vm.service.js';
+import {
+  getAutoSnapshotSettings,
+  saveAutoSnapshotSettings,
+  AUTO_SNAPSHOT_MAX_KEEP,
+} from '../services/auto-snapshot.service.js';
+import { getKeyBackupStatus, confirmKeyBackup } from '../services/key-backup.service.js';
 import type { AuthRequest } from '../types/index.js';
 import { prisma } from '../lib/prisma.js';
 
@@ -140,6 +146,7 @@ router.get('/settings', async (_req: Request, res: Response) => {
     defaults: { storage, bridge, isoStorage, backupStorage },
     rescueIso,
     templateRefreshEnabled: templateRefresh === 'true',
+    autoSnapshot: await getAutoSnapshotSettings(),
     smtp: mail
       ? { configured: true, host: mail.host, port: mail.port, secure: mail.secure, user: mail.user ?? '', from: mail.from, hasPass: !!mail.pass }
       : { configured: false },
@@ -798,6 +805,48 @@ router.put('/settings/template-refresh', async (req: Request, res: Response) => 
     req,
   });
   res.json({ success: true });
+});
+
+// ─── PUT /api/admin/settings/auto-snapshot ────────────────────
+// Automatic snapshots before a resize, data-disk grow or rescue boot (QEMU only):
+// on/off, and how many to keep per VM (older automatic ones are deleted).
+
+const AutoSnapshotSchema = z.object({
+  enabled: z.boolean(),
+  keep: z.number().int().min(1).max(AUTO_SNAPSHOT_MAX_KEEP),
+});
+
+router.put('/settings/auto-snapshot', async (req: Request, res: Response) => {
+  const parsed = AutoSnapshotSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  await saveAutoSnapshotSettings(parsed.data);
+  await recordAudit({
+    action: 'admin.auto_snapshot_config',
+    actor: (req as AuthRequest).user,
+    detail: parsed.data.enabled ? `automatic snapshots on, keep ${parsed.data.keep}` : 'automatic snapshots off',
+    req,
+  });
+  res.json({ success: true });
+});
+
+// ─── ENCRYPTION_KEY backup confirmation ───────────────────────
+// Admins are warned until one confirms the key is backed up off this host. Only
+// the confirmation (who/when) is ever returned — never the key.
+
+router.get('/encryption-key-backup', async (_req: Request, res: Response) => {
+  res.json(await getKeyBackupStatus());
+});
+
+router.post('/encryption-key-backup/confirm', requireSession, async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  try {
+    res.json(await confirmKeyBackup({ id: user.id, email: user.email }, req));
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Could not record the confirmation' });
+  }
 });
 
 // ─── GET /api/admin/cluster-stats ─────────────────────────────

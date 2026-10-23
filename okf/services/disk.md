@@ -24,7 +24,7 @@ sources:
 | `nextFreeSlot` | `(config, bus) => string \| null` | First free index up to the bus max (`scsi 30, virtio 15, sata 5, ide 3`). |
 | `listDisks` | `(vm)` | Live from Proxmox VM config. |
 | `addDataDisk` | `(vm, sizeGb) => VmDisk` | Quota check, next slot on root's bus, root's storage pool, `pve.attachDisk`, `storage += sizeGb`. |
-| `resizeDataDisk` | `(vm, slot, sizeGb)` | Grow-only; refuses root disk; quota-checks the delta; `pve.resizeDisk`. |
+| `resizeDataDisk` | `(vm, slot, sizeGb)` | Grow-only; refuses root disk; quota-checks the delta; takes an [automatic snapshot](/services/auto-snapshot.md) (refused when it can't); `pve.resizeDisk`. Returns the snapshot result. |
 | `removeDataDisk` | `(vm, slot)` | Refuses root disk; `pve.removeDisk`; frees its GB (floor 0). Allowed on a held row, and lifts an over-quota hold once the machine fits the owner's quota again (`liftQuotaHoldIfFits`). |
 
 # Data

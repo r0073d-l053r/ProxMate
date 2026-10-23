@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { HardDrive, Loader2, Plus, Trash2, MoveUp } from "lucide-react";
 import { api, apiError } from "@/lib/api";
+import { autoSnapshotNote, type AutoSnapshotResult } from "@/lib/auto-snapshot";
 import type { VmDisk } from "@/lib/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -30,8 +31,12 @@ function GrowDiskDialog({ vmId, disk, onDone }: { vmId: string; disk: VmDisk; on
   async function save() {
     setBusy(true);
     try {
-      await api.patch(`/vms/${vmId}/disks/${disk.slot}`, { sizeGb: size });
-      toast.success(`${disk.slot} grown to ${size} GB.`);
+      const r = await api.patch<{ autoSnapshot?: AutoSnapshotResult }>(`/vms/${vmId}/disks/${disk.slot}`, {
+        sizeGb: size,
+      });
+      toast.success(`${disk.slot} grown to ${size} GB.`, {
+        description: autoSnapshotNote(r.data?.autoSnapshot) ?? undefined,
+      });
       setOpen(false);
       onDone();
     } catch (err) {

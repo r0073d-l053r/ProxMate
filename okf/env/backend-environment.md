@@ -114,6 +114,7 @@ All schedules are read in `scheduler.service.ts`.[^scheduler]
 | `BACKUP_DOWNLOAD_DIR` | unset (feature off) | `download.service.backupDir` | Mounted vzdump dump directory for tenant backup downloads. SMTP must also be configured. |
 | `RESTORE_UPLOAD_MAX_GB` | `50` | `vm.routes` | Cap on restore-from-upload size. |
 | `ALERT_COOLDOWN_MIN` | `60` (min 5) | `alert.service` | Minimum minutes between repeat alerts. Forwarded by `docker-compose.yml`. |
+| `RECONCILE_STUCK_MINUTES` | `15` (min 1) | `task-reconcile.service` | How long a `creating`/`restoring` row must be untouched before the [restart reconciler](/services/task-reconcile.md) settles it. Operations running in this process are never touched, whatever their age. Forwarded by `docker-compose.yml`. |
 | `RESOURCE_HISTORY_DAYS` | `14` (min 1) | `resource-history.service` | Retention of resource-usage samples. |
 | `LIVE_FEED_INTERVAL_MS` | `1000` (min 250) | `live-stats.service` | Admin live-feed push interval. |
 | `PROXMATE_MODULES` | unset (no modules) | `modules/registry.ts`, `scripts/migrate-modules.ts` | CSV of compiled-in modules to mount at `/api/ext/<name>`. A named module that fails to load stops the boot. |

@@ -54,6 +54,11 @@ Maps a ProxMate VM id to a Proxmox guest (`proxmoxVmId` on `proxmoxNode`) and ow
 | os | String | | OS label. |
 | status | String | `@default("creating")` | `creating`, `running`, `stopped`, `error`. A held (`holdReason`) or `error` row can only be deleted or repaired (restore, rebuild, admin adoption); nothing may start it or open its console/IDE. |
 | holdReason | String? | | Set while the guest may not run — provisioning, rebuild or a restore didn't finish, or a restore left it over quota — with how to recover; null otherwise. Live-status syncs, stop and PCI detach never change a held row's status; only `liftQuotaHoldIfFits`, a successful MateState restore / snapshot rollback / rebuild, and admin adoption clear it. |
+| opKind | String? | | The operation behind a `creating` row: `create`, `create-lxc`, `clone` (single and bulk template deploys), `duplicate`, `restore-upload`, `rebuild-iso`, `rebuild-template`, `import`. Cleared (with the other `op*` fields) when the row settles, including when it is held. Read only by the [restart reconciler](/services/task-reconcile.md). |
+| opStartedAt | DateTime? | | When that operation began; the reconciler leaves a row younger than `RECONCILE_STUCK_MINUTES`. |
+| opUpid | String? | | The Proxmox task (UPID) driving the operation once there is one; its node is the UPID's second field. |
+| opSourceId | String? | | What the operation copies from: a duplicate's source machine, or a template deploy's or template rebuild's template. A guest still carrying that source's tag is not taken for someone else's. |
+| opArchive | String? | | An upload restore's archive volid, removed when the row is settled after a restart. |
 | ipAddress | String? | | Guest LAN IP. |
 | tailscaleIp | String? | | Guest Tailscale address (100.64.0.0/10), kept separate from `ipAddress`. |
 | rescueBoot | String? | | JSON snapshot of pre-rescue `{ boot, ide3 }`; non-null while in rescue mode. |
@@ -77,7 +82,7 @@ Maps a ProxMate VM id to a Proxmox guest (`proxmoxVmId` on `proxmoxNode`) and ow
 # Relationships
 
 - Belongs to [User](/database/user.md), `onDelete: Cascade`.
-- Has many [MateState](/database/mate-state.md), [VmShare](/database/vm-share.md), [PassthroughRequest](/database/passthrough-request.md), [AlertRule](/database/alert-rule.md), all cascade-deleted with the VM.[^schema]
+- Has many [MateState](/database/mate-state.md), [VmShare](/database/vm-share.md), [PendingVmShare](/database/pending-vm-share.md), [PassthroughRequest](/database/passthrough-request.md), [AlertRule](/database/alert-rule.md), [AutoSnapshot](/database/auto-snapshot.md), all cascade-deleted with the VM.[^schema]
 - Referenced without FK by [IdeGatewayToken](/database/ide-gateway-token.md).`vmId`, [IdeGuestSecret](/database/ide-guest-secret.md).`vmId` and [ResourceSample](/database/resource-sample.md).`vmId`; no link to the [Template](/database/template.md) it was cloned from.[^schema]
 
 # Invariants
@@ -88,6 +93,7 @@ Maps a ProxMate VM id to a Proxmox guest (`proxmoxVmId` on `proxmoxNode`) and ow
 - `pendingCiPassword` is set only for cloud-init template deploys (and template rebuilds) with a password, and is cleared once applied in-guest or when the deploy window closes without an agent (that path also notifies admins with `deploy.agent_missing`).[^vm-svc] [^deploy-lock]
 - `hasPassthrough` is set true only after a successful passthrough attach, and recomputed on detach.[^passthrough]
 - Tenants can't set `backupKeep`; for non-admins the route forces it to null.[^vm-routes]
+- Every path that puts a row in `creating` records `opKind`/`opStartedAt` (and `opUpid` once Proxmox returns a task) and registers the row as in flight in-process for as long as it runs; the write that moves the row to `stopped` (or a hold) clears them. Fields added by migration `20261023130000_reliability_reconcile_autosnapshot`.[^vm-svc]
 
 # Gotchas
 

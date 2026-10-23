@@ -5,6 +5,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // kept), the isolation firewall a new guest gets, and a row counted toward quota.
 
 const rows: Array<Record<string, unknown>> = [];
+/** A row matching a where clause of plain values (Dates compared by time). */
+const sameRow = (r: Record<string, unknown>, where: Record<string, unknown>) =>
+  Object.entries(where).every(([k, v]) =>
+    v instanceof Date ? r[k] instanceof Date && (r[k] as Date).getTime() === v.getTime() : r[k] === v,
+  );
 const templates: Array<{ proxmoxVmId: number }> = [];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -34,7 +39,23 @@ vi.mock('../src/lib/prisma.js', () => ({
       delete: vi.fn(async ({ where }: { where: { id: string } }) => {
         rows.splice(rows.findIndex((r) => r['id'] === where.id), 1);
       }),
+      // The restart reconciler's conditional writes (by id + status + opStartedAt).
+      updateMany: vi.fn(async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        const hit = rows.filter((r) => sameRow(r, where));
+        for (const r of hit) Object.assign(r, data);
+        return { count: hit.length };
+      }),
+      deleteMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
+        const i = rows.findIndex((r) => sameRow(r, where));
+        if (i < 0) return { count: 0 };
+        rows.splice(i, 1);
+        return { count: 1 };
+      }),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => rows.find((r) => r['id'] === where.id) ?? null),
     },
+    ideGuestSecret: { deleteMany: vi.fn(async () => ({})) },
+    ideGatewayToken: { deleteMany: vi.fn(async () => ({})) },
+    $transaction: vi.fn(async (ops: Array<Promise<unknown>>) => Promise.all(ops)),
     template: {
       count: vi.fn(async ({ where }: { where: { proxmoxVmId: number } }) =>
         templates.filter((t) => t.proxmoxVmId === where.proxmoxVmId).length,
@@ -59,6 +80,9 @@ import { importGuest, listImportableGuests, ImportError } from '../src/services/
 import { hostLevelKeys } from '../src/lib/guest-config.js';
 import { QuotaError, guestMarker } from '../src/services/vm.service.js';
 import { recordAudit } from '../src/services/audit.service.js';
+import { prisma } from '../src/lib/prisma.js';
+import { isInFlight } from '../src/lib/in-flight.js';
+import { reconcileCreatingVm, STUCK_AFTER_MS } from '../src/services/task-reconcile.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
 
 const ok = (data: unknown) => Promise.resolve({ data: { data } });
@@ -332,5 +356,51 @@ describe('importing a guest', () => {
       'ivshmem',
       'parallel0',
     ]);
+  });
+});
+
+describe('imports and the restart reconciler', () => {
+  it('keeps the import in flight while it runs, records it as an import, and clears that once settled', async () => {
+    const c = cluster(BASE_CFG);
+    const seen: boolean[] = [];
+    const put = c.put.getMockImplementation()!;
+    c.put.mockImplementation((url: string, body: URLSearchParams) => {
+      const id = rows[0]?.['id'] as string | undefined;
+      if (id) seen.push(isInFlight(id));
+      return put(url, body);
+    });
+    const { vm } = await importGuest(ADMIN, { vmid: 200, owner: owner() });
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every(Boolean)).toBe(true);
+    expect(isInFlight(vm.id)).toBe(false);
+    expect(vm).toMatchObject({ opKind: null, opStartedAt: null, opUpid: null });
+    expect(vi.mocked(prisma.virtualMachine.create).mock.calls[0]![0].data).toMatchObject({ opKind: 'import' });
+  });
+
+  const stuck = () => {
+    const old = new Date(Date.now() - STUCK_AFTER_MS - 60_000);
+    const row = {
+      id: 'imp1', userId: 'u1', name: 'legacy-web', type: 'qemu', proxmoxVmId: 200, proxmoxNode: 'pve1',
+      status: 'creating', holdReason: null, opKind: 'import', opStartedAt: old, opUpid: null, updatedAt: old,
+    };
+    rows.push(row);
+    return row as never;
+  };
+
+  it('completes an interrupted import whose tag (written after isolation, as the last step) is on the guest', async () => {
+    const c = cluster({ ...BASE_CFG, tags: `prod;web;${guestMarker('imp1')}` });
+    expect(await reconcileCreatingVm(stuck(), asClient(c), new Date())).toBe('completed');
+    expect(rows[0]).toMatchObject({ status: 'running', holdReason: null, opKind: null });
+    expect(c.put).not.toHaveBeenCalled();
+    expect(c.post).not.toHaveBeenCalled();
+    expect(c.delete).not.toHaveBeenCalled();
+  });
+
+  it('drops the row of an interrupted import whose guest was never tagged, leaving the guest importable', async () => {
+    const c = cluster(BASE_CFG);
+    expect(await reconcileCreatingVm(stuck(), asClient(c), new Date())).toBe('dropped');
+    expect(rows).toHaveLength(0);
+    expect(c.put).not.toHaveBeenCalled();
+    expect(c.delete).not.toHaveBeenCalled();
   });
 });

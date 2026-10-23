@@ -240,6 +240,7 @@ Fill in the **PRODUCTION** block (replace the domain). The key values:
 | `GUEST_FILE_PUSH_MAX_BYTES` | *(optional)* default `1048576` | Largest file a push accepts; capped at 8 MiB (`8388608`). |
 | `PUBLIC_TOKEN_RATE_LIMIT_MAX` / `_WINDOW_MS` | *(optional)* default `60` / `900000` | Public token lookups (invite links, downloads), per IP. |
 | `ALERT_COOLDOWN_MIN` | *(optional)* default `60`, minimum `5` | Minutes before a firing alert rule can fire again. |
+| `RECONCILE_STUCK_MINUTES` | *(optional)* default `15`, minimum `1` | Minutes a machine left creating, restoring or rebuilding (or a backup left running) by a restart must sit untouched before ProxMate settles it. Operations still running are never touched. |
 | `PROXMOX_CA_CERT_FILE` | *(optional)* e.g. `/certs/pve-ca.pem` | Keep Proxmox TLS verification on against a private CA. A container path: mount the PEM in `docker-compose.override.yml`. |
 | `IDE_GUEST_PORT` | *(optional)* default `8080` | Port `code-server` listens on inside tenant VMs for the ProxMate IDE (§16). The proxy, the guest install and the firewall pinhole all use it. |
 | `SELF_UPDATE_ENABLED` / `UPDATE_REPO` | *(optional)* | The one-click update button (§14.3) and the GitHub repo the release check reads. `GITHUB_TOKEN` raises the GitHub API rate limit for that check. |
@@ -539,6 +540,8 @@ of snapshot is reversible.
 > password manager or secret store closes the risk permanently. Snapshots stored on a
 > second disk in the same machine do **not** protect you: lose the chassis and every
 > secret inside those backups is undecryptable. Do this now rather than at restore time.
+> Admins see a banner on every page until one of them confirms the key is backed up;
+> the confirmation (who and when) is audited, and a changed key brings the banner back.
 
 ---
 

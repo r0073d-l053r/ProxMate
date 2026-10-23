@@ -58,6 +58,7 @@ sources:
 | `GUEST_FILE_PUSH_MAX_BYTES` | `1048576` | no | Largest pushable file; capped at 8 MiB. |
 | `PUBLIC_TOKEN_RATE_LIMIT_MAX` / `PUBLIC_TOKEN_RATE_LIMIT_WINDOW_MS` | `60` / `900000` | no | Public token lookups (invite links, downloads), per IP. |
 | `ALERT_COOLDOWN_MIN` | `60` | no | Minutes before a firing alert rule can fire again (minimum 5). |
+| `RECONCILE_STUCK_MINUTES` | `15` | no | Minutes a create/restore/rebuild/backup row must be untouched before the restart reconciler settles it (minimum 1). |
 | `AUTH_LOCKOUT_MAX` / `AUTH_LOCKOUT_MINUTES` | `10` / `15` | no | Account lockout. |
 | `PROXMOX_CA_CERT_FILE` | `${…:-}` | no | e.g. `/certs/pve-ca.pem` with the matching volume in `docker-compose.override.yml`. |
 | `UPDATE_REPO` | `r0073d-l053r/ProxMate` | no | Release source. |

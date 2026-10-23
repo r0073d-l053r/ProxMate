@@ -283,6 +283,18 @@ export async function getEffectivePermissions(client?: AxiosInstance): Promise<P
 }
 
 /**
+ * The caller's effective privileges on exactly one path (`/access/permissions?path=`),
+ * as Proxmox computes them there: unlike the full listing, a path where an ACL takes
+ * privileges away (NoAccess, or a grant above that doesn't propagate) answers for
+ * itself instead of being left out. Throws when it can't be read.
+ */
+export async function getPathPermissions(path: string, client?: AxiosInstance): Promise<Record<string, number>> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: PvePermissions }>('/access/permissions', { params: { path } });
+  return res.data.data?.[path] ?? {};
+}
+
+/**
  * How many guests the token can actually SEE. Distinct from "how many exist": that gap
  * IS the diagnosis when a token holds a grant scoped to a path containing nothing.
  */
@@ -1517,6 +1529,8 @@ export async function cloneVm(
     target?: string;
     /** Resource pool the clone joins; see getGuestPool. */
     pool?: string;
+    /** The clone's description (ProxMate writes its row nonce here; see cloneNonce). */
+    description?: string;
   },
   client?: AxiosInstance,
 ): Promise<string> {
@@ -1529,6 +1543,7 @@ export async function cloneVm(
   if (opts.full && opts.storage) params.set('storage', opts.storage);
   if (opts.target && opts.target !== opts.node) params.set('target', opts.target);
   if (opts.pool) params.set('pool', opts.pool);
+  if (opts.description) params.set('description', opts.description);
   const res = await c.post<{ data: string }>(
     `/nodes/${opts.node}/qemu/${opts.templateVmid}/clone`,
     params,
@@ -1541,12 +1556,71 @@ export async function getTaskStatus(
   node: string,
   upid: string,
   client?: AxiosInstance,
-): Promise<{ status: string; exitstatus?: string }> {
+): Promise<{ status: string; exitstatus?: string; starttime?: number }> {
   const c = client ?? (await getClient());
-  const res = await c.get<{ data: { status: string; exitstatus?: string } }>(
+  const res = await c.get<{ data: { status: string; exitstatus?: string; starttime?: number } }>(
     `/nodes/${node}/tasks/${encodeURIComponent(upid)}/status`,
   );
   return res.data.data;
+}
+
+/** Thrown by waitForTask when Proxmox reports the task itself as failed. */
+export class TaskFailedError extends Error {
+  constructor(public readonly exitstatus: string) {
+    super(`Proxmox task failed: ${exitstatus}`);
+    this.name = 'TaskFailedError';
+  }
+}
+
+/** One page of the task lists `listVmidTasks` reads. */
+export const VMID_TASK_PAGE = 500;
+/** Pages read before a VMID's task list counts as too long to be complete. */
+const VMID_TASK_MAX_PAGES = 20;
+
+/**
+ * Every task a node lists for one VMID since `since` (epoch seconds), finished and
+ * running alike, read page by page until a short page. Null when the list is
+ * longer than VMID_TASK_MAX_PAGES pages (it can't be shown complete). Throws when
+ * the node's task list can't be read. Without Sys.Audit on the node Proxmox lists
+ * only the caller's own tasks, so callers check that privilege first.
+ */
+export async function listVmidTasks(
+  node: string,
+  vmid: number,
+  since: number,
+  client?: AxiosInstance,
+): Promise<Array<{ upid: string; type: string; starttime?: number }> | null> {
+  const c = client ?? (await getClient());
+  const out: Array<{ upid: string; type: string; starttime?: number }> = [];
+  let total: number | undefined;
+  for (let page = 0; page < VMID_TASK_MAX_PAGES; page += 1) {
+    const res = await c.get<{ data: Array<{ upid: string; type: string; starttime?: number }>; total?: number }>(
+      `/nodes/${node}/tasks`,
+      { params: { vmid, since, source: 'all', start: page * VMID_TASK_PAGE, limit: VMID_TASK_PAGE } },
+    );
+    // The list changing length between pages means entries may have shifted past a page edge.
+    if (typeof res.data.total === 'number') {
+      if (total !== undefined && res.data.total !== total) return null;
+      total = res.data.total;
+    }
+    const rows = res.data.data ?? [];
+    out.push(...rows);
+    if (rows.length < VMID_TASK_PAGE) return out;
+  }
+  return null;
+}
+
+/**
+ * Whether a node's task log still holds a task (any VMID, any user) that started at
+ * or before `until` (epoch seconds), i.e. the log reaches back at least that far.
+ * Throws when the node's task list can't be read.
+ */
+export async function taskLogReaches(node: string, until: number, client?: AxiosInstance): Promise<boolean> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Array<{ starttime?: number }> }>(`/nodes/${node}/tasks`, {
+    params: { source: 'all', until, limit: 1 },
+  });
+  return (res.data.data ?? []).some((t) => typeof t.starttime === 'number' && t.starttime <= until);
 }
 
 /** Poll a Proxmox task (UPID) until it finishes; throws if it failed. */
@@ -1568,7 +1642,7 @@ export async function waitForTask(
       // non-fatal warnings "WARNINGS: N" — the latter is a success (common for LXC
       // creates and vzdump backups). Anything else is a genuine failure.
       if (exitstatus && exitstatus !== 'OK' && !exitstatus.startsWith('WARNINGS')) {
-        throw new Error(`Proxmox task failed: ${exitstatus}`);
+        throw new TaskFailedError(exitstatus);
       }
       return;
     }
@@ -2950,6 +3024,18 @@ export async function listSnapshots(
   return (res.data.data ?? [])
     .filter((s) => s.name !== 'current')
     .sort((a, b) => (b.snaptime ?? 0) - (a.snaptime ?? 0));
+}
+
+/**
+ * Whether Proxmox can snapshot this VM as it is configured now — false when one
+ * of its disks sits on storage without snapshot support (plain LVM, raw files).
+ */
+export async function canSnapshot(node: string, vmid: number, client?: AxiosInstance): Promise<boolean> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: { hasFeature?: number | boolean } }>(
+    `/nodes/${node}/qemu/${vmid}/feature?feature=snapshot`,
+  );
+  return !!res.data.data?.hasFeature;
 }
 
 /** Create a snapshot (optionally capturing RAM state). Returns the task UPID. */

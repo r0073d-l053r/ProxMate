@@ -9,6 +9,7 @@ vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
     virtualMachine: {
       update: vi.fn(async () => ({})),
+      updateMany: vi.fn(async () => ({ count: 1 })),
       delete: vi.fn(async () => ({})),
       findUnique: vi.fn(async () => ({ id: 'rowa', userId: 'u1', name: 'web', type: 'qemu', proxmoxVmId: 100, proxmoxNode: 'pve1' })),
     },
@@ -28,6 +29,7 @@ import { prisma } from '../src/lib/prisma.js';
 import * as pve from '../src/services/proxmox.service.js';
 import { settleFailedCreate, guestMarker, templateMarker } from '../src/services/vm.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
+import { isInFlight } from '../src/lib/in-flight.js';
 
 const ok = (data: unknown) => Promise.resolve({ data: { data } });
 const row = { id: 'rowa', userId: 'u1', name: 'web', type: 'qemu', proxmoxVmId: 100, proxmoxNode: 'pve1' } as never;
@@ -96,6 +98,11 @@ describe('settleFailedCreate for a clone whose task outlived the wait (C1)', () 
     const c = pveWith(templateMarker('tpl1'), { status: 'running' });
     await settleFailedCreate(row, err, false, { task: { node: 'pve1', upid: 'UPID:clone' } });
     kept();
+    // Held, but its op fields stay while the task is followed (the restart
+    // reconciler needs them if this follower is lost), and it counts as in flight.
+    const hold = vi.mocked(prisma.virtualMachine.update).mock.calls.find((x) => (x[0] as { data: Record<string, unknown> }).data['status'] === 'error');
+    expect((hold![0] as { data: Record<string, unknown> }).data).not.toHaveProperty('opUpid');
+    expect(isInFlight('rowa')).toBe(true);
     // The task now finishes.
     const get = c.get.getMockImplementation()!;
     c.get.mockImplementation((url: string) => (/\/tasks\/.*\/status$/.test(url) ? ok({ status: 'stopped', exitstatus: 'OK' }) : get(url)));
@@ -106,6 +113,44 @@ describe('settleFailedCreate for a clone whose task outlived the wait (C1)', () 
       },
       { timeout: 5000 },
     );
+    // Settled: its op fields are cleared (only while they still name this task).
+    await vi.waitFor(() =>
+      expect(prisma.virtualMachine.updateMany).toHaveBeenCalledWith({
+        where: { id: 'rowa', opUpid: 'UPID:clone' },
+        data: expect.objectContaining({ opUpid: null, opKind: null }),
+      }),
+    );
+    expect(isInFlight('rowa')).toBe(false);
+  });
+
+  it('a follower that loses the task (poll error) leaves the op fields for the restart reconciler', async () => {
+    const c = pveWith(templateMarker('tpl1'), { status: 'running' });
+    const afterTask = vi.fn(async () => undefined);
+    await settleFailedCreate(row, err, false, { task: { node: 'pve1', upid: 'UPID:clone', afterTask } });
+    expect(isInFlight('rowa')).toBe(true);
+    const get = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) => (/\/tasks\/.*\/status$/.test(url) ? Promise.reject(new Error('connect ETIMEDOUT')) : get(url)));
+    await vi.waitFor(() => expect(isInFlight('rowa')).toBe(false), { timeout: 5000 });
+    expect(prisma.virtualMachine.updateMany).not.toHaveBeenCalled();
+    expect(afterTask).not.toHaveBeenCalled(); // the archive stays for whoever settles the row
+    expect(c.put.mock.calls.some((x) => String(x[0]) === '/nodes/pve1/qemu/100/config')).toBe(false);
+  });
+
+  it('a follower whose task fails settles the row: cleanup runs and the op fields are cleared, nothing tagged', async () => {
+    const c = pveWith(templateMarker('tpl1'), { status: 'running' });
+    const afterTask = vi.fn(async () => undefined);
+    await settleFailedCreate(row, err, false, { task: { node: 'pve1', upid: 'UPID:clone', afterTask } });
+    const get = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) =>
+      /\/tasks\/.*\/status$/.test(url) ? ok({ status: 'stopped', exitstatus: 'clone failed' }) : get(url),
+    );
+    await vi.waitFor(() => expect(isInFlight('rowa')).toBe(false), { timeout: 5000 });
+    expect(afterTask).toHaveBeenCalled();
+    expect(prisma.virtualMachine.updateMany).toHaveBeenCalledWith({
+      where: { id: 'rowa', opUpid: 'UPID:clone' },
+      data: expect.objectContaining({ opUpid: null }),
+    });
+    expect(c.put.mock.calls.some((x) => String(x[0]) === '/nodes/pve1/qemu/100/config')).toBe(false);
   });
 
   it('keeps a hold the row already has instead of overwriting it (audit round 3)', async () => {
