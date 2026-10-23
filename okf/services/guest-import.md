@@ -30,6 +30,7 @@ ProxMate otherwise only manages guests it created (each carries its row's `proxm
 - A quota-exempt import is always `adminManaged` (a tenant who could resize a free grant would bypass quota); otherwise `adminManaged` defaults to true for another user's account.[^imp]
 - If the tag can't be written the row is removed and nothing changed on the guest. If isolation can't be applied the row is held in `error` (`IMPORT_FAILED_MESSAGE`); an admin's adopt re-applies isolation and clears it.[^imp]
 - The guest's NICs move to the configured default bridge, so its network changes on import.[^imp]
+- The import records `opKind: import` and counts as in flight while it runs. If a restart cuts it short, the [restart reconciler](/services/task-reconcile.md) holds the row when the guest already carries its tag, and otherwise drops the row (the guest stays importable); it never removes the guest.
 
 # Relationships
 

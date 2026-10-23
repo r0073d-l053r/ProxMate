@@ -1,5 +1,5 @@
 import type { MateState, VirtualMachine } from '@prisma/client';
-import type { AxiosInstance } from 'axios';
+import { AxiosError, type AxiosInstance } from 'axios';
 import { prisma } from '../lib/prisma.js';
 import { isInFlight } from '../lib/in-flight.js';
 import { envNumber } from '../lib/env-number.js';
@@ -18,8 +18,10 @@ import {
   holdErroredRow,
   OP_SETTLED,
   RESTORE_FAILED_MESSAGE,
+  deleteVmRow,
   type VmOpKind,
 } from './vm.service.js';
+import { IMPORT_FAILED_MESSAGE } from './guest-import.service.js';
 
 // ─── Interrupted background operations ────────────────────────
 //
@@ -96,6 +98,12 @@ async function guestConfig(vm: VirtualMachine, client: AxiosInstance): Promise<R
     return await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, kindOf(vm));
   } catch (err) {
     if (/does not exist|not found/i.test(pve.pveMessage(err))) return null;
+    // A pool-scoped token is refused (403) on any VMID outside its pool, an empty
+    // one included. Only a VMID Proxmox would hand out next is provably empty;
+    // anything else may be a guest the token can't see, and is left alone.
+    if (err instanceof AxiosError && err.response?.status === 403) {
+      if (await pve.isVmIdFree(vm.proxmoxVmId, client)) return null;
+    }
     throw err;
   }
 }
@@ -147,8 +155,33 @@ export async function reconcileCreatingVm(
     }
   }
 
-  if (kind === 'rebuild-iso' || kind === 'rebuild-template') {
+  if (kind === 'import') {
+    // An import adopts a guest someone else made: that guest is never ProxMate's to
+    // remove. Tagged already → held as an import whose isolation wasn't applied
+    // (an admin's adopt re-applies it); not yet tagged → nothing on the guest
+    // changed, so the row is dropped and the guest stays importable.
+    if (cfg && tagsMarkRow(cfg['tags'], vm.id)) {
+      await holdErroredRow(vm, IMPORT_FAILED_MESSAGE);
+      await notify({
+        event: 'vm.error',
+        title: vm.name,
+        message: `The import of "${vm.name}" was interrupted by a ProxMate restart, so the machine is held. Adopt it again from Settings → Maintenance, or delete it.`,
+      }).catch(() => undefined);
+    } else {
+      await deleteVmRow(vm.id);
+    }
+  } else if (kind === 'rebuild-iso' || kind === 'rebuild-template') {
     await settleFailedRebuild(vm, err, false);
+  } else if (cfg === null && task !== 'ok' && (kind !== null || (await prisma.mateState.count({ where: { vmId: vm.id } })) === 0)) {
+    // A create that never produced a guest (a bulk-deploy copy that never got its
+    // turn, a create cut off before its task): dropped exactly as a failed create
+    // with an empty VMID is, which also gives its quota back.
+    await deleteVmRow(vm.id);
+    await notify({
+      event: 'vm.error',
+      title: vm.name,
+      message: `Provisioning of "${vm.name}" failed: ${INTERRUPTED}`,
+    }).catch(() => undefined);
   } else if (kind === 'restore-upload' && task === 'ok') {
     // The restore landed, but none of the checks a restored guest needs before it
     // is tied to its row (its own volumes only, rebuilt NICs, isolation) ran. So
@@ -176,7 +209,11 @@ export async function reconcileCreatingVm(
     targetId: vm.id,
     detail:
       `${kind ?? 'operation'} of "${vm.name}" was interrupted by a restart; ` +
-      (outcome === 'held' ? 'machine held' : 'no guest was created, record removed'),
+      (outcome === 'held'
+        ? 'machine held'
+        : kind === 'import'
+          ? 'guest was not yet tagged, record removed'
+          : 'no guest was created, record removed'),
   });
   return outcome;
 }

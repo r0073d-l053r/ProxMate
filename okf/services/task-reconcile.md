@@ -28,7 +28,7 @@ Creates, clones, duplicates, upload restores, rebuilds, MateState backups and in
 
 A row is left for a later pass when any of these hold:[^svc] [^inflight]
 
-- its operation is registered in flight in this process (`lib/in-flight.ts`: every create path registers the row id right after inserting it; rebuild, MateState restore and backup register for their whole run);
+- its operation is registered in flight in this process (`lib/in-flight.ts`: every create path registers the row id right after inserting it; a [bulk deploy](/services/bulk-deploy.md) registers every reserved copy at reservation, so a copy still queued for its turn is never touched; rebuild, [guest import](/services/guest-import.md), MateState restore and backup register for their whole run);
 - it is younger than `RECONCILE_STUCK_MINUTES` (default 15), measured from `opStartedAt` (VM rows), `updatedAt` (restores) or `createdAt` (backups);
 - its recorded Proxmox task (`opUpid` / `MateState.upid`) is still `running`, or the guest config at its VMID has a `lock`;
 - the cluster-wide lookup (`syncVmNodeChecked`) or the guest config can't be read.
@@ -38,9 +38,12 @@ A row is left for a later pass when any of these hold:[^svc] [^inflight]
 | Row | Proxmox shows | Result |
 |---|---|---|
 | `creating`, `opKind` `create`/`create-lxc`/`rebuild-iso` | task OK, guest carries this row's tag | Completed: isolation firewall applied (via `requireOurGuest`), row `stopped`; an ISO rebuild also clears its hold and old-disk state. Never started. |
+| `creating`, `import` | guest carries this row's tag | Held with the import-failed hold (an admin's adopt re-applies isolation). |
+| `creating`, `import` | guest not tagged yet | Row dropped; nothing on the guest changed, so it stays importable. The guest is never removed. |
 | `creating`, rebuild | anything else | `settleFailedRebuild` (held when a guest of ours or backups exist; else the row is dropped; owner emailed). |
 | `creating`, `restore-upload` | task OK | Held with `PROVISION_FAILED_MESSAGE`, guest left untagged: the volume/NIC/isolation checks never ran, so only admin adoption (which runs them) can clear it. |
 | `creating`, no `opKind` (older row) with backups | anything | Held. |
+| `creating`, a create (or an older row without backups) | no guest at the VMID, task not OK | Row dropped and admins notified, as a failed create with an empty VMID is; this is also what happens to a bulk-deploy copy that never got its turn before a restart. Its quota is free again. |
 | `creating`, any other | anything | `settleFailedCreate` with the recorded task: a finished clone is tagged and held; no guest → row dropped and admins notified, as a failed create is. |
 | MateState `restoring` | not running | MateState back to `ready`; the VM's own guest stopped if running; row held with `RESTORE_FAILED_MESSAGE` unless it already has a hold. |
 | MateState `creating` | task OK and its log names an archive listed for the VMID | Recorded `ready` with volid and size. |
@@ -61,6 +64,7 @@ Holds notify admins with `vm.error` (through `markVmError` / the settle paths) a
 - Template clones can't be completed: the cloud-init credentials are never stored, so the reconciler holds them. Upload restores likewise, and their uploaded archive stays on the backup storage (nothing is deleted here).
 - A held, untagged restore keeps whatever `onboot`/`protection` its archive had until an admin adopts or removes it: changing an untagged guest would break the rule that only `requireOurGuest`-checked guests are changed.
 - A completed create is left `stopped` rather than started; the owner starts it.
+- Privileges: the reconciler needs nothing beyond the role's existing privileges (task status and logs, guest config/status, stop, firewall, snapshots, backup listing), all covered by the `--pool` ACL split of `deploy/proxmox-token.sh`. Under a pool-scoped token Proxmox answers 403 for any VMID outside the pool, an empty one included; the reconciler then asks `/cluster/nextid?vmid=` (open to every user) and treats the VMID as empty only when Proxmox would hand it out next. A VMID held by a guest the token can't see is left alone.
 
 # Relationships
 

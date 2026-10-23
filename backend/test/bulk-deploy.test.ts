@@ -68,6 +68,8 @@ import {
 } from '../src/services/bulk-deploy.service.js';
 import { BatchQuotaError, CreateOptionError, reserveVmIds, releaseVmId, nextVmId } from '../src/services/vm.service.js';
 import { recordAudit } from '../src/services/audit.service.js';
+import { isInFlight, resetInFlight } from '../src/lib/in-flight.js';
+import { reconcileCreatingVm, STUCK_AFTER_MS } from '../src/services/task-reconcile.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
 
 const ok = (data: unknown) => Promise.resolve({ data: { data } });
@@ -269,5 +271,76 @@ describe('VMID reservations', () => {
     expect(await nextVmId(asClient(c))).toBe(102);
     for (const id of ids) releaseVmId(id);
     expect(await nextVmId(asClient(c))).toBe(100);
+  });
+});
+
+describe('bulk deploys and the restart reconciler', () => {
+  it('keeps every reserved copy in flight from reservation until its provision settles', async () => {
+    const c = cluster();
+    // Clone tasks don't finish until released, so later copies sit queued.
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const get = c.get.getMockImplementation()!;
+    c.get.mockImplementation(async (url: string, opts?: { params?: { vmid?: number } }) => {
+      if (/\/tasks\/.*\/status$/.test(url)) await gate;
+      return get(url, opts);
+    });
+    const copies = await planBatch(admin, { namePattern: 'web-{n}', count: 5 });
+    const batch = await startTemplateBatch(admin, template, copies, input);
+    // Queued (never started) and deploying copies alike are in flight, and a pass
+    // long after their opStartedAt leaves every one of them alone.
+    expect(batch.items.every((i) => isInFlight(i.vmId))).toBe(true);
+    expect(rows.every((r) => r['opKind'] === 'clone' && r['opStartedAt'] instanceof Date)).toBe(true);
+    const later = new Date(Date.now() + STUCK_AFTER_MS * 10);
+    for (const r of rows) expect(await reconcileCreatingVm(r as never, asClient(c), later)).toBe('in-flight');
+    open();
+    await waitForBatch(batch.id);
+    expect(batch.items.some((i) => isInFlight(i.vmId))).toBe(false);
+  });
+
+  it('after a restart, a queued copy that never started (no guest, no task) is dropped, freeing its quota', async () => {
+    const c = cluster();
+    resetInFlight(); // what a restart leaves: nothing in flight
+    const old = new Date(Date.now() - STUCK_AFTER_MS - 60_000);
+    rows.push({
+      id: 'queued1', userId: 'u1', name: 'web-9', type: 'qemu', proxmoxVmId: 150, proxmoxNode: 'pve1',
+      status: 'creating', holdReason: null, opKind: 'clone', opStartedAt: old, opUpid: null, updatedAt: old,
+      cpu: 2, ram: 2048, storage: 10,
+    });
+    c.get.mockImplementation((url: string) => {
+      if (url === '/cluster/resources') return ok([]);
+      if (/\/qemu\/150\/config$/.test(url)) return Promise.reject(new Error('Configuration file does not exist'));
+      return ok(null);
+    });
+    expect(await reconcileCreatingVm(rows[0] as never, asClient(c), new Date())).toBe('dropped');
+    expect(rows.find((r) => r['id'] === 'queued1')).toBeUndefined();
+    expect(c.delete).not.toHaveBeenCalled();
+  });
+
+  it('under a pool-scoped token (403 on an empty VMID) drops the row only when the VMID is provably free', async () => {
+    const c = cluster();
+    resetInFlight();
+    const old = new Date(Date.now() - STUCK_AFTER_MS - 60_000);
+    const queued = {
+      id: 'queued2', userId: 'u1', name: 'web-8', type: 'qemu', proxmoxVmId: 160, proxmoxNode: 'pve1',
+      status: 'creating', holdReason: null, opKind: 'clone', opStartedAt: old, opUpid: null, updatedAt: old,
+    };
+    rows.push({ ...queued });
+    const forbidden = () =>
+      Promise.reject(new AxiosError('Permission check failed', '403', undefined, undefined, { status: 403, data: {} } as never));
+    const get = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string, opts?: { params?: { vmid?: number } }) => {
+      if (url === '/cluster/resources') return ok([]);
+      if (/\/qemu\/160\/config$/.test(url)) return forbidden();
+      return get(url, opts);
+    });
+    // Taken by a guest the token can't see: left alone.
+    used.add(160);
+    expect(await reconcileCreatingVm(rows[0] as never, asClient(c), new Date())).toBe('unreachable');
+    expect(rows).toHaveLength(1);
+    // Free: the create never happened, so the row goes.
+    used.delete(160);
+    expect(await reconcileCreatingVm(rows[0] as never, asClient(c), new Date())).toBe('dropped');
+    expect(rows).toHaveLength(0);
   });
 });

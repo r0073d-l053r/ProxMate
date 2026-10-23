@@ -38,6 +38,7 @@ Creates [VirtualMachine](/database/virtual-machine.md) rows in `creating`, one p
 - Placement counts the copies already placed in the batch (`pickBestNode`'s `pending` load), so a batch spreads across nodes instead of all landing on the node that was emptiest at the start. Linked clones stay on the template's node, as for a single deploy.[^vm]
 - A failed copy is settled like a failed single deploy (`settleFailedCreate`): its row is dropped when no guest of ours was left, otherwise kept in `error`. The other copies carry on.[^vm]
 - Batches are in memory: a restart loses the progress view, not the machines.[^bulk]
+- Every reserved copy counts as in flight from reservation until its provision settles, so the [restart reconciler](/services/task-reconcile.md) never touches a queued copy; after a restart, copies that never started (no guest, no task) are dropped like any create that produced no guest, which frees their quota.
 
 # Relationships
 

@@ -6,7 +6,7 @@ import { Camera, Loader2, Save } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import type { AdminSettings } from "@/lib/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/form-field";
 
@@ -80,14 +80,13 @@ export function AutoSnapshotCard() {
           htmlFor="auto-snap-keep"
           error={keepValid ? undefined : `Between 1 and ${MAX_KEEP}.`}
         >
-          <Input
+          <NumberInput
             id="auto-snap-keep"
-            type="number"
             min={1}
             max={MAX_KEEP}
             value={keep}
             disabled={loading || saving || !enabled}
-            onChange={(e) => setKeep(Math.floor(Number(e.target.value) || 0))}
+            onValueChange={setKeep}
             className="w-28"
           />
         </FormField>

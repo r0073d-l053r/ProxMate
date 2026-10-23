@@ -9,7 +9,10 @@ import {
   withQuotaLock,
   assertWithinQuota,
   holdErroredRow,
+  OP_SETTLED,
+  type VmOpKind,
 } from './vm.service.js';
+import { beginInFlight } from '../lib/in-flight.js';
 
 /**
  * Admin import of a Proxmox guest ProxMate didn't create. ProxMate otherwise only
@@ -237,12 +240,39 @@ async function importGuestLocked(actor: AuditActor, input: ImportGuestInput): Pr
         storage: sizes.storage,
         os: cfg['ostype'] || kind,
         status: 'creating',
+        opKind: 'import' satisfies VmOpKind,
+        opStartedAt: new Date(),
         quotaExempt,
         adminManaged,
       },
     });
   });
+  // Until it settles, the restart reconciler leaves this row alone.
+  const done = beginInFlight(vm.id);
+  try {
+    return await finishImport(actor, vm, { cfg, client, kind, node, vmid, name, owner, cpu, sizes, quotaExempt });
+  } finally {
+    done();
+  }
+}
 
+async function finishImport(
+  actor: AuditActor,
+  vm: VirtualMachine,
+  a: {
+    cfg: Record<string, string>;
+    client: Awaited<ReturnType<typeof pve.getClient>>;
+    kind: pve.GuestKind;
+    node: string;
+    vmid: number;
+    name: string;
+    owner: User;
+    cpu: number;
+    sizes: { ram: number; storage: number };
+    quotaExempt: boolean;
+  },
+): Promise<VirtualMachine> {
+  const { cfg, client, kind, node, vmid, name, owner, cpu, sizes, quotaExempt } = a;
   try {
     await writeGuestMarker(vm, client, cfg['tags']);
   } catch (err) {
@@ -272,7 +302,7 @@ async function importGuestLocked(actor: AuditActor, input: ImportGuestInput): Pr
 
   const live = await pve.getVmStatus(node, vmid, client, kind).catch(() => null);
   const status = live?.status === 'running' || live?.status === 'paused' ? live.status : 'stopped';
-  const updated = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status } });
+  const updated = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status, ...OP_SETTLED } });
   await recordAudit({
     action: 'vm.import',
     actor,

@@ -54,7 +54,7 @@ Maps a ProxMate VM id to a Proxmox guest (`proxmoxVmId` on `proxmoxNode`) and ow
 | os | String | | OS label. |
 | status | String | `@default("creating")` | `creating`, `running`, `stopped`, `error`. A held (`holdReason`) or `error` row can only be deleted or repaired (restore, rebuild, admin adoption); nothing may start it or open its console/IDE. |
 | holdReason | String? | | Set while the guest may not run — provisioning, rebuild or a restore didn't finish, or a restore left it over quota — with how to recover; null otherwise. Live-status syncs, stop and PCI detach never change a held row's status; only `liftQuotaHoldIfFits`, a successful MateState restore / snapshot rollback / rebuild, and admin adoption clear it. |
-| opKind | String? | | The operation behind a `creating` row: `create`, `create-lxc`, `clone`, `duplicate`, `restore-upload`, `rebuild-iso`, `rebuild-template`. Cleared (with `opStartedAt`, `opUpid`) when the row settles. Read only by the [restart reconciler](/services/task-reconcile.md). |
+| opKind | String? | | The operation behind a `creating` row: `create`, `create-lxc`, `clone` (single and bulk template deploys), `duplicate`, `restore-upload`, `rebuild-iso`, `rebuild-template`, `import`. Cleared (with `opStartedAt`, `opUpid`) when the row settles. Read only by the [restart reconciler](/services/task-reconcile.md). |
 | opStartedAt | DateTime? | | When that operation began; the reconciler leaves a row younger than `RECONCILE_STUCK_MINUTES`. |
 | opUpid | String? | | The Proxmox task (UPID) driving the operation once there is one; its node is the UPID's second field. |
 | ipAddress | String? | | Guest LAN IP. |
@@ -67,7 +67,7 @@ Maps a ProxMate VM id to a Proxmox guest (`proxmoxVmId` on `proxmoxNode`) and ow
 | pendingCiPassword | String? | | AES-256-GCM encrypted tenant login password, held only until the guest agent applies it, then nulled. |
 | quotaExempt | Boolean | `@default(false)` | Admin grant excluded from quota usage. |
 | adminManaged | Boolean | `@default(false)` | Admin deployed it for the tenant; tenant may operate but not resize. |
-| tags | String? | | Lowercase, trimmed, deduped CSV.[^vm-svc] |
+| tags | String? | | Lowercase, trimmed, deduped CSV. At most one `project:<name>` entry is the VM's project (see the [project service](/services/project.md)).[^vm-svc] |
 | startCron | String? | | 5-field cron (server TZ) for auto-start. |
 | stopCron | String? | | 5-field cron for graceful auto-shutdown. |
 | backupCron | String? | | Per-VM backup cron; null = cluster-wide weekly default. |
@@ -91,7 +91,7 @@ Maps a ProxMate VM id to a Proxmox guest (`proxmoxVmId` on `proxmoxNode`) and ow
 - `pendingCiPassword` is set only for cloud-init template deploys (and template rebuilds) with a password, and is cleared once applied in-guest or when the deploy window closes without an agent (that path also notifies admins with `deploy.agent_missing`).[^vm-svc] [^deploy-lock]
 - `hasPassthrough` is set true only after a successful passthrough attach, and recomputed on detach.[^passthrough]
 - Tenants can't set `backupKeep`; for non-admins the route forces it to null.[^vm-routes]
-- Every path that puts a row in `creating` records `opKind`/`opStartedAt` (and `opUpid` once Proxmox returns a task) and registers the row as in flight in-process for as long as it runs; the write that moves the row to `stopped` (or a hold) clears them. Fields added by migration `20261023120000_reliability_reconcile_autosnapshot`.[^vm-svc]
+- Every path that puts a row in `creating` records `opKind`/`opStartedAt` (and `opUpid` once Proxmox returns a task) and registers the row as in flight in-process for as long as it runs; the write that moves the row to `stopped` (or a hold) clears them. Fields added by migration `20261023130000_reliability_reconcile_autosnapshot`.[^vm-svc]
 
 # Gotchas
 
