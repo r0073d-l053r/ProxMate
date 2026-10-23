@@ -2319,6 +2319,22 @@ export async function storageNodes(storage: string, client?: AxiosInstance): Pro
 }
 
 /**
+ * The nodes a storage is available on (from `/cluster/resources`, which needs only
+ * Datastore.Audit), and whether it is shared storage every node sees the same.
+ */
+export async function storagePlacement(
+  storage: string,
+  client?: AxiosInstance,
+): Promise<{ nodes: string[]; shared: boolean }> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources', { params: { type: 'storage' } });
+  const entries = (res.data.data ?? []).filter(
+    (s) => s.storage === storage && s.node && (!s.status || s.status === 'available'),
+  );
+  return { nodes: [...new Set(entries.map((s) => s.node!))], shared: entries.some((s) => s.shared === 1) };
+}
+
+/**
  * Whether a VM config exposes a serial port (e.g. `serial0`), which is required
  * for the xterm.js text console (Proxmox `termproxy`). ProxMate's cloud-init VMs
  * are built with `serial0: 'socket'`; ISO VMs typically have none.
