@@ -78,6 +78,13 @@ curl -H "$AUTH" -H 'content-type: application/json' -X POST \
   -d '{"username":"ubuntu","publicKey":"ssh-ed25519 AAAA… you@laptop"}' \
   "$BASE/vms/<id>/ssh-keys"
 
+# Push a small file into a running VM (QEMU guest agent; 1 MiB by default)
+curl -H "$AUTH" -X POST -F file=@app.conf -F path=/etc/app/app.conf \
+  -F mode=0640 -F owner=ubuntu -F createParents=true "$BASE/vms/<id>/files"
+
+# Tail of the ProxMate IDE install log (VM owner or admin)
+curl -H "$AUTH" "$BASE/ide/<id>/install-log"
+
 # Nodes this VM may migrate to (admin only) — Proxmox allowed_nodes ∩ online
 curl -H "$AUTH" "$BASE/vms/<id>/migrate-targets"
 
@@ -120,6 +127,12 @@ curl -H "$AUTH" -H 'content-type: application/json' -X POST \
   `vmCount`, `running`, allocated `cpu`/`ram`/`storage` and `usage { samples, avgCpuPct,
   avgMemBytes }` (averages from the usage samples taken while each VM ran), and VMs shared
   with you as one `shared` group without their owner's tags. Admins get every owner.
+- **File push.** `POST /vms/:id/files` (multipart) needs the `configure` capability (owner,
+  admin or a Manager share) and answers `{ path, size, sha256, verified }`. The path must
+  be absolute and normalized and not under `/proc`, `/sys` or `/dev` (**400** otherwise);
+  a file over the limit (`GUEST_FILE_PUSH_MAX_BYTES`, 1 MiB by default, at most 8 MiB)
+  answers **413**, a container or a guest whose agent doesn't answer **409**. Into a folder other users can write to (or reached through a symlink) the file is written as `owner`; without one that push answers **400**. Limited per
+  signed-in user (30 per 10 minutes; `GUEST_FILE_RATE_LIMIT_MAX`, `_WINDOW_MS`).
 - **Sizes.** Creates, template deploys and resizes asking for less than 64 MB of RAM
   answer **400**. A resize grows the root disk by the difference between the requested
   total and the current total.

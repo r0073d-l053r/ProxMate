@@ -92,7 +92,7 @@ The warning rows come verbatim from `OPERATIONAL_PRIVILEGES` and `guestAgentPriv
 # Not checked by the connection test
 
 - `VM.Snapshot.Rollback` (rollback also accepts `VM.Snapshot`, which is checked).
-- `VM.GuestAgent.FileWrite` (PVE 9, the IDE's bootstrap file only — and on 9.2.3 `VM.GuestAgent.Unrestricted` already covers `file-write`; see the hardware section).
+- `VM.GuestAgent.FileWrite` (PVE 9: `agent/file-write`, used by the IDE bootstrap and by pushing a file into a VM — on 9.2.3 `VM.GuestAgent.Unrestricted` already covers `file-write`; see the hardware section). Pushing a file and reading the IDE install log also run `agent/exec`, which the checked `VM.GuestAgent.Unrestricted` (or `VM.Monitor` on 8) covers.
 - `Mapping.Audit` / `Mapping.Use` (GPU/PCI passthrough through resource mappings).
 
 A token that passes the test can still get 403 on those features; it surfaces as a `pveMessage`
@@ -107,7 +107,7 @@ retrying the call. Everything below is an observation from that cluster, not a r
 | --- | --- |
 | `VM.GuestAgent.Unrestricted` and `exec` / `exec-status` | Work. `exec` + `exec-status` ran shell commands in a deployed guest. |
 | `set-user-password` | Works with `VM.GuestAgent.Unrestricted`. |
-| Does `file-write` need `VM.GuestAgent.FileWrite`? | **No, on 9.2.3.** With `VM.GuestAgent.FileWrite` removed from the role, `agent/file-write` still wrote and read back a file. `Unrestricted` covers it, so `--with-ide` is redundant on this release — harmless, and kept for older 9.x where it may still be checked. |
+| Does `file-write` need `VM.GuestAgent.FileWrite`? | **No, on 9.2.3.** With `VM.GuestAgent.FileWrite` removed from the role, `agent/file-write` still wrote and read back a file. `Unrestricted` covers it, so `FileWrite` is redundant on this release — harmless, and kept in the role for older 9.x where it may still be checked. |
 | `/nodes/{node}/hardware/pci` (passthrough host readiness) | Satisfied by **either `Sys.Audit` or `Sys.Modify`**. Removing `Mapping.Audit`/`Mapping.Use`, then `Sys.Audit`, then `Sys.Modify` (one at a time) never broke it. |
 | `/cluster/mapping/pci` without `Mapping.Audit` | Returns `200 []`, **not** 403 — the mappings page looks empty rather than reporting a missing privilege. |
 | `GET /storage/<id>` (the storage *configuration* endpoint) | Needs **`Datastore.Allocate`**: without it, `Permission check failed (/storage/<id>, Datastore.Allocate)`. `/cluster/resources?type=storage` carries the same per-node availability under `Datastore.Audit`, so prefer it. |
@@ -127,8 +127,8 @@ retrying the call. Everything below is an observation from that cluster, not a r
   role `ProxMate` (the privileges in the table, with the guest-agent ones chosen by PVE major) and a
   privsep token, and grants the role on `/` with propagate to **both** the user and the token (a
   privsep token's effective set is the intersection). `/` is required: the cluster firewall,
-  `/cluster/status` and `download-url` are checked there. `--with-ide` adds
-  `VM.GuestAgent.FileWrite` (PVE 9), `--with-passthrough` adds `Mapping.Audit`/`Mapping.Use`,
+  `/cluster/status` and `download-url` are checked there. on PVE 9 the role also
+  holds `VM.GuestAgent.FileWrite` (`--with-ide`, which used to add it, is still accepted and changes nothing), `--with-passthrough` adds `Mapping.Audit`/`Mapping.Use`,
   `--dry-run` prints the commands. Re-running updates the role and ACLs and never re-issues an
   existing token.[^deploy][^security]
 - Troubleshooting row: "Proxmox storage empty / VM create 403" → privilege separation on.[^deploy]

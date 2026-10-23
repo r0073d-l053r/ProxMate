@@ -123,3 +123,34 @@ export const gatewayAuthLimiter = rateLimit({
     error: { message: 'ProxMate IDE gateway: rate limit exceeded, slow down', type: 'rate_limit_error' },
   },
 });
+
+const userKey = (req: unknown) => `user:${(req as { user?: { id?: string } }).user?.id ?? 'anon'}`;
+
+/**
+ * Per-user throttle for pushing files into a guest. Each push is a run of
+ * guest-agent calls (a staging directory, one write per 48 KiB part, then the
+ * assemble step), so this bounds how hard one account can drive the agent.
+ * Mounted after requireAuth.
+ */
+export const guestFileLimiter = rateLimit({
+  windowMs: envNumber('GUEST_FILE_RATE_LIMIT_WINDOW_MS', 10 * 60 * 1000, 1),
+  limit: envNumber('GUEST_FILE_RATE_LIMIT_MAX', 30, 1),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: userKey,
+  message: { error: 'Too many file pushes — try again in a few minutes.' },
+});
+
+/**
+ * Per-user throttle for reading guest logs through the agent (the IDE install
+ * log). A GET, so apiWriteLimiter skips it, but every read runs a command in
+ * the guest. Generous enough for a refresh every few seconds.
+ */
+export const guestLogLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: envNumber('GUEST_LOG_RATE_LIMIT_MAX', 30, 1),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: userKey,
+  message: { error: 'Too many log reads — wait a moment and refresh again.' },
+});

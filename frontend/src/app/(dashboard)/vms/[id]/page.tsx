@@ -27,6 +27,7 @@ import {
   RotateCcw,
   RotateCw,
   Scaling,
+  ScrollText,
   Server,
   Square,
   SquareTerminal,
@@ -59,6 +60,7 @@ import { SharePanel } from "@/components/vm/share-panel";
 import { DisksPanel } from "@/components/vm/disks-panel";
 import { PassthroughPanel } from "@/components/vm/passthrough-panel";
 import { RecoveryPanel } from "@/components/vm/recovery-panel";
+import { IdeLogDialog } from "@/components/vm/ide-log-dialog";
 import { AlertsPanel } from "@/components/vm/alerts-panel";
 import { useAuthStore } from "@/lib/auth-store";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
@@ -158,6 +160,7 @@ export default function VmDetailPage() {
   // Typed-name confirmation for the destructive delete — must match vm.name exactly.
   const [deleteText, setDeleteText] = useState("");
   const [dialog, setDialog] = useState<ActiveDialog>(null);
+  const [ideLogOpen, setIdeLogOpen] = useState(false);
 
   // The ProxMate IDE is a desktop-only feature (a pop-out editor) — hidden in
   // mobile mode (below the `md` breakpoint), tracked live so a resize updates it.
@@ -238,7 +241,10 @@ export default function VmDetailPage() {
       if (r.status === "done" && r.value === "ready") {
         popupOrOffer("ProxMate IDE is ready.");
       } else if (r.status === "done") {
-        toast.error("The IDE install didn't finish. Check the VM and try again.");
+        toast.error("The IDE install didn't finish. Check the VM and try again.", {
+          action: { label: "View install log", onClick: () => setIdeLogOpen(true) },
+          duration: 12000,
+        });
       } else if (r.status === "timeout") {
         toast.error("The IDE install is taking unusually long — check the VM and try again.");
       }
@@ -539,6 +545,9 @@ export default function VmDetailPage() {
   // Containers (LXC) don't support the QEMU-only features: rebuild, convert to
   // template, live migration, extra data disks, and snapshots.
   const isLxc = vm.type === "lxc";
+  // The IDE install log: the VM's owner, or an admin helping them (the server
+  // enforces the same rule). QEMU only, like the IDE.
+  const canReadIdeLog = !isLxc && canIde && (vm.access === "owner" || isAdmin);
 
   // Shares without the matching capability don't get the Backups / Settings tabs —
   // if a deep link asks for one anyway, land on Overview instead of an empty panel.
@@ -863,6 +872,26 @@ export default function VmDetailPage() {
         </Card>
       )}
 
+      {canReadIdeLog && (vm.ideState === "failed" || vm.ideState === "installing") && (
+        <Card className={"mb-6 " + (vm.ideState === "failed" ? "border-destructive/40 bg-destructive/5" : "")}>
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm text-muted-foreground">
+            <span>
+              <span className="font-medium text-foreground">ProxMate IDE</span> —{" "}
+              {vm.ideState === "failed"
+                ? "the last install didn't finish. The install log usually says why."
+                : "installing. You can follow the install log while it runs."}
+            </span>
+            <Button variant="outline" size="sm" onClick={() => setIdeLogOpen(true)}>
+              <ScrollText />
+              View install log
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+      {canReadIdeLog && (
+        <IdeLogDialog vmId={vm.id} vmName={vm.name} open={ideLogOpen} onOpenChange={setIdeLogOpen} />
+      )}
+
       <Tabs value={activeTab} onValueChange={(v) => setTab(v as TabValue)}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -1135,6 +1164,12 @@ export default function VmDetailPage() {
             <AlertsPanel vmId={vm.id} canWrite={canConfigure} />
 
             {!isLxc && <RecoveryPanel vm={vm} busy={busy} onChanged={load} />}
+            {isLxc && (
+              <p className="mt-4 text-xs text-muted-foreground">
+                Password reset, SSH-key add and file push go through the QEMU guest agent, so containers
+                don&apos;t offer them.
+              </p>
+            )}
 
             {isManager && <SharePanel vmId={vm.id} />}
 

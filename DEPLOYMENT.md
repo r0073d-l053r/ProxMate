@@ -102,19 +102,19 @@ uses, and a privilege-separated token `proxmate@pve!proxmate` with the role gran
 ```bash
 bash proxmox-token.sh --dry-run     # show the pveum commands without running them
 bash proxmox-token.sh               # as root; prints the token secret once
-#   --with-ide          Proxmox VE 9: also allow the IDE's guest-agent file writes
 #   --with-passthrough  also allow GPU/PCI passthrough through resource mappings
 ```
 
 It picks the guest-agent privileges for your release (`VM.Monitor` on Proxmox VE 8,
-`VM.GuestAgent.Audit` + `VM.GuestAgent.Unrestricted` on 9). Re-running it updates the
+`VM.GuestAgent.Audit` + `VM.GuestAgent.Unrestricted` + `VM.GuestAgent.FileWrite` on 9). Re-running it updates the
 role and ACLs and never re-issues an existing token. The connection test names any
 privilege that is still missing; a correctly created token passes it with no warnings
 (`VM.Audit` and `Datastore.Audit` are the two that block outright). The grant has to be
 on `/`: the cluster firewall, cluster status and cloud-image downloads are checked there.
 The role has been run end to end on a Proxmox VE 9.2 cluster: every ProxMate feature
-worked through it. On 9.2, `VM.GuestAgent.Unrestricted` already covers the IDE's file
-writes, so `--with-ide` is only belt and braces there.
+worked through it. On 9.2, `VM.GuestAgent.Unrestricted` already covers guest file writes
+(the IDE bootstrap and pushing a file into a VM), so `VM.GuestAgent.FileWrite` is only belt
+and braces there. The old `--with-ide` option is still accepted and changes nothing.
 
 ---
 
@@ -162,6 +162,9 @@ Fill in the **PRODUCTION** block (replace the domain). The key values:
 | `AUTH_RATE_LIMIT_MAX` / `_WINDOW_MS` | *(optional)* default `20` / `900000` | Login / register / invite throttle per IP. |
 | `AUTH_LOCKOUT_MAX` / `AUTH_LOCKOUT_MINUTES` | *(optional)* default `10` / `15` | Per-account lockout after consecutive failed passwords (auto-unlocks). |
 | `SHARE_RATE_LIMIT_MAX` / `_WINDOW_MS` | *(optional)* default `30` / `3600000` | Sharing a VM by email, per signed-in user. |
+| `GUEST_FILE_RATE_LIMIT_MAX` / `_WINDOW_MS` | *(optional)* default `30` / `600000` | Pushing files into a VM, per signed-in user. |
+| `GUEST_LOG_RATE_LIMIT_MAX` | *(optional)* default `30` | Reading the IDE install log, per signed-in user per minute. |
+| `GUEST_FILE_PUSH_MAX_BYTES` | *(optional)* default `1048576` | Largest file a push accepts; capped at 8 MiB (`8388608`). |
 | `PUBLIC_TOKEN_RATE_LIMIT_MAX` / `_WINDOW_MS` | *(optional)* default `60` / `900000` | Public token lookups (invite links, downloads), per IP. |
 | `ALERT_COOLDOWN_MIN` | *(optional)* default `60`, minimum `5` | Minutes before a firing alert rule can fire again. |
 | `PROXMOX_CA_CERT_FILE` | *(optional)* e.g. `/certs/pve-ca.pem` | Keep Proxmox TLS verification on against a private CA. A container path: mount the PEM in `docker-compose.override.yml`. |

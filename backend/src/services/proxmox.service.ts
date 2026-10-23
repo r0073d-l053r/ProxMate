@@ -3763,6 +3763,7 @@ export interface GuestExecResult {
  * (`agent/exec` then poll `exec-status`). For quick, near-instant probes only —
  * e.g. reading `cloud-init status`. Times out (default 10s) rather than hanging
  * the caller; a timeout throws so callers can treat it as "couldn't determine".
+ * Output is trimmed unless `trim` is false (callers that measure it, e.g. a log tail).
  */
 export async function guestExecOutput(
   node: string,
@@ -3770,6 +3771,7 @@ export async function guestExecOutput(
   argv: string[],
   client?: AxiosInstance,
   timeoutMs = 10_000,
+  trim = true,
 ): Promise<GuestExecResult> {
   const c = client ?? (await getClient());
   const params = new URLSearchParams();
@@ -3782,9 +3784,10 @@ export async function guestExecOutput(
     const st = await c.get<{ data: AgentExecStatus }>(`/nodes/${node}/qemu/${vmid}/agent/exec-status?pid=${pid}`);
     const s = st.data.data;
     if (s.exited) {
+      const out = s['out-data'] ?? '';
       return {
         exitcode: s.exitcode ?? 0,
-        stdout: (s['out-data'] ?? '').trim(),
+        stdout: trim ? out.trim() : out,
         stderr: (s['err-data'] ?? '').trim(),
       };
     }

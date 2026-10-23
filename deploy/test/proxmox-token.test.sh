@@ -58,6 +58,7 @@ t_fresh_pve9() {
   local log; log="$(cat "$STUB_LOG")"
   assert_match "$log" "role add ProxMate --privs" "creates the role" || return 1
   assert_match "$log" "VM.GuestAgent.Unrestricted" "PVE 9 guest-agent privilege" || return 1
+  assert_match "$log" "VM.GuestAgent.FileWrite" "guest file writes by default" || return 1
   assert_no_match "$log" "VM.Monitor" "no VM.Monitor on PVE 9" || return 1
   assert_no_match "$log" "Mapping.Use" "no passthrough privileges by default" || return 1
   assert_match "$log" "user add proxmate@pve" "creates the user" || return 1
@@ -80,7 +81,7 @@ t_options_add_privileges() {
   new_case 9.0.6
   run_script --with-ide --with-passthrough
   local log; log="$(cat "$STUB_LOG")"
-  assert_match "$log" "VM.GuestAgent.FileWrite" "IDE file writes" || return 1
+  assert_match "$log" "VM.GuestAgent.FileWrite" "--with-ide still accepted" || return 1
   assert_match "$log" "Mapping.Audit,Mapping.Use" "passthrough mappings"
 }
 
