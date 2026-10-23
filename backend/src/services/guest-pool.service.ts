@@ -1,8 +1,6 @@
 import type { AxiosInstance } from 'axios';
 import { prisma } from '../lib/prisma.js';
 import * as pve from './proxmox.service.js';
-import { getConfig } from './config.service.js';
-import { restoreUploadsEnabled } from './restore-upload.service.js';
 import { tagsMarkRow, tagsMarkTemplate } from './vm.service.js';
 
 // ─── Pool-scoped token support ────────────────────────────────
@@ -124,7 +122,7 @@ function pveRelease(version: string): [number | null, number | null] {
  * cloud-image downloads, Datastore.Allocate on the storages that need it).
  * Warnings only: each names what is affected.
  */
-async function infraWarnings(perms: pve.PvePermissions, version: string): Promise<string[]> {
+async function infraWarnings(client: AxiosInstance, perms: pve.PvePermissions, version: string): Promise<string[]> {
   const out: string[] = [];
   const sysModify = heldOn(perms, '/', ['Sys.Modify']).length > 0;
   if (sysModify) {
@@ -133,7 +131,8 @@ async function infraWarnings(perms: pve.PvePermissions, version: string): Promis
         "cluster backup jobs, the cluster firewall's groups, IP sets and options, and other cluster settings. " +
         'ProxMate needs it only to enable the cluster firewall; without it, do that step once by hand as root.',
     );
-  } else {
+  } else if (!(await pve.isClusterFirewallEnabled(client).catch(() => false))) {
+    // Once the cluster firewall is on, ProxMate has nothing left to do there.
     out.push(
       'Sys.Modify on / is not granted, so ProxMate cannot enable the cluster firewall or write its management ' +
         'rules for tenant isolation. Do it once as root (Datacenter → Firewall: add an accept rule for your ' +
@@ -161,26 +160,22 @@ async function infraWarnings(perms: pve.PvePermissions, version: string): Promis
     out.push(
       'The token holds Datastore.Allocate on /storage, which lets it delete any volume and change any storage ' +
         'definition, inside the pool or not. Grant it only on the storages that need it ' +
-        '(deploy/proxmox-token.sh --pool with --snippet-storage / --import-storage).',
+        '(deploy/proxmox-token.sh --pool, with --snippet-storage / --import-storage if wanted).',
     );
   }
-  const needAllocate: Array<[string | null | undefined, string, string]> = [
-    [pve.snippetWriteConfig()?.storage, 'enabling cloud-init snippets on it', '--snippet-storage'],
-    [await getConfig('iso_storage'), 'removing a downloaded cloud image from it after import', '--import-storage'],
-  ];
-  if (await restoreUploadsEnabled()) {
-    needAllocate.push([
-      await getConfig('backup_storage'),
-      'restoring an uploaded backup from it (Proxmox reads an archive of a guest that does not exist yet only with it)',
-      '--backup-storage',
-    ]);
-  }
-  for (const [storage, what, option] of needAllocate) {
-    if (!storage || heldOn(perms, `/storage/${storage}`, ['Datastore.Allocate']).length > 0) continue;
-    out.push(
-      `Datastore.Allocate is missing on /storage/${storage} — ${what} will fail. ` +
-        `deploy/proxmox-token.sh --pool ${option} ${storage} grants it there only.`,
-    );
+  // Datastore.Allocate is only needed on the snippet storage to turn its snippets
+  // content type on; once it is on (or root turned it on), nothing is missing.
+  const snippetStorage = pve.snippetWriteConfig()?.storage;
+  if (snippetStorage && heldOn(perms, `/storage/${snippetStorage}`, ['Datastore.Allocate']).length === 0) {
+    const storages = await pve.getStorages(client).catch(() => []);
+    const content = storages.find((st) => st.storage === snippetStorage)?.content ?? '';
+    if (!content.split(',').includes('snippets')) {
+      out.push(
+        `The snippet storage "${snippetStorage}" does not have the snippets content type, and the token lacks ` +
+          `Datastore.Allocate there to turn it on. Do it once as root (Datacenter → Storage → ${snippetStorage} → ` +
+          `Content: Snippets), or grant it there only with deploy/proxmox-token.sh --pool --snippet-storage ${snippetStorage}.`,
+      );
+    }
   }
   return out;
 }
@@ -274,7 +269,7 @@ export async function checkGuestPool(
         'or delete them, so restore one as root, or rebuild the machine first.',
     );
   }
-  warnings.push(...(await infraWarnings(perms, opts.version)));
+  warnings.push(...(await infraWarnings(client, perms, opts.version)));
 
   return {
     report: { name: pool, exists, missingOnPool, guestPrivilegesOnRoot, outside, notVisible },

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The connection test with a resource pool configured, and the admin action that
 // moves the guests ProxMate manages into it. A pool-scoped token is only a boundary
@@ -200,10 +200,45 @@ describe('connection test: what a pool-scoped token still reaches outside the po
     expect(r.warnings.join('\n')).toMatch(/Datastore\.Allocate on \/storage, which lets it delete any volume/);
   });
 
-  it('names the import storage that lacks Datastore.Allocate', async () => {
-    config['iso_storage'] = 'nfs-iso';
+  describe('the snippet storage', () => {
+    beforeEach(() => {
+      process.env['SNIPPET_DIR'] = '/snippets';
+      process.env['SNIPPET_STORAGE'] = 'cephfs';
+    });
+    afterEach(() => {
+      delete process.env['SNIPPET_DIR'];
+      delete process.env['SNIPPET_STORAGE'];
+      vi.mocked(pve.getStorages).mockResolvedValue([{ storage: 'local', type: 'dir' }] as never);
+    });
+
+    it('warns when its snippets content type is off and the token cannot turn it on', async () => {
+      vi.mocked(pve.getStorages).mockResolvedValue([{ storage: 'cephfs', type: 'cephfs', content: 'iso,backup' }] as never);
+      const r = await testProxmoxConnection();
+      expect(r.warnings.join('\n')).toMatch(/snippet storage "cephfs" does not have the snippets content type/);
+    });
+
+    it('stays quiet once snippets are enabled there, without Datastore.Allocate', async () => {
+      vi.mocked(pve.getStorages).mockResolvedValue([{ storage: 'cephfs', type: 'cephfs', content: 'snippets' }] as never);
+      const r = await testProxmoxConnection();
+      expect(r.warnings.join('\n')).not.toMatch(/snippet/);
+    });
+  });
+
+  it('does not ask for the cluster firewall step once the firewall is on', async () => {
+    const c = cluster([{ vmid: 100, name: 'web', tags: guestMarker('rowa'), pool: 'proxmate' }]);
+    const base = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) =>
+      url === '/cluster/firewall/options' ? Promise.resolve({ data: { data: { enable: 1 } } }) : base(url),
+    );
     const r = await testProxmoxConnection();
-    expect(r.warnings.join('\n')).toMatch(/Datastore\.Allocate is missing on \/storage\/nfs-iso .*--import-storage nfs-iso/);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it('never asks for Datastore.Allocate on the ISO or backup storage', async () => {
+    config['iso_storage'] = 'nfs-iso';
+    config['backup_storage'] = 'backups';
+    const r = await testProxmoxConnection();
+    expect(r.warnings.join('\n')).not.toMatch(/nfs-iso|backups/);
   });
 
   it('warns when cloud-image downloads have neither Sys.AccessNetwork nor Sys.Modify', async () => {

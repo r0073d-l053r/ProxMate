@@ -219,8 +219,8 @@ so ProxMate can see the pool, create containers in it and move its own guests in
 ProxMate creates, clones, restores and imports every guest into that pool. What is still needed
 outside the pool is granted on the narrowest path Proxmox checks it on: `Sys.Audit` (and, on 8.2+,
 `Sys.AccessNetwork` for cloud-image downloads) on `/nodes`; `Datastore.Audit`, `.AllocateSpace`
-and `.AllocateTemplate` on `/storage`; `Datastore.Allocate` only on the snippet, import and
-(optionally) backup storages; `SDN.Audit`/`SDN.Use` on `/sdn/zones`; the mapping privileges on
+and `.AllocateTemplate` on `/storage`; `Datastore.Allocate` nowhere unless asked for (only on a
+named snippet or import storage); `SDN.Audit`/`SDN.Use` on `/sdn/zones`; the mapping privileges on
 `/mapping` (only for passthrough); and `Sys.Audit` on `/` without propagation.
 
 Two grants reach past the pool, so they are left out or narrowed: `Sys.Modify` on `/` (cluster

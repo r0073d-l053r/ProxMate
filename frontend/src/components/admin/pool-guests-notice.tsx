@@ -23,16 +23,16 @@ interface MoveResult {
 }
 
 /**
- * The confirmation shown before moving templates that sit in another pool, or
- * null when there are none. Moving one takes it out of that pool, which may be
- * how other users or tools reach it.
+ * The confirmation shown before moving guests (machines or templates) that sit in
+ * another Proxmox pool, or null when there are none. Moving one takes it out of
+ * that pool, which may be how other users or tools reach it.
  */
-export function templateMovePrompt(report: PoolReport): string | null {
-  const templates = report.outside.filter((g) => g.template && g.pool && g.pool !== report.name);
-  if (templates.length === 0) return null;
+export function poolMovePrompt(report: PoolReport): string | null {
+  const elsewhere = report.outside.filter((g) => g.pool && g.pool !== report.name);
+  if (elsewhere.length === 0) return null;
   return (
-    `These templates are in another Proxmox pool and will be moved out of it into ${report.name}:\n\n` +
-    templates.map((g) => `${g.vmid} ${g.name} (pool ${g.pool})`).join("\n") +
+    `These guests are in another Proxmox pool and will be moved out of it into ${report.name}:\n\n` +
+    elsewhere.map((g) => `${g.vmid} ${g.name}${g.template ? " (template)" : ""} (pool ${g.pool})`).join("\n") +
     "\n\nAnything that reaches them through their current pool will lose them. Move them?"
   );
 }
@@ -47,7 +47,7 @@ export function PoolGuestsNotice({ report, onMoved }: { report: PoolReport; onMo
   if (report.outside.length === 0) return null;
 
   async function move() {
-    const prompt = templateMovePrompt(report);
+    const prompt = poolMovePrompt(report);
     if (prompt && !window.confirm(prompt)) return;
     setMoving(true);
     try {

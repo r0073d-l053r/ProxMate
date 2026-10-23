@@ -22,7 +22,7 @@
 #                                         Sys.AccessNetwork on 8.2+ (cloud-image downloads)
 #   /storage            ProxMate-Infra    Datastore.Audit, .AllocateSpace, .AllocateTemplate
 #   /storage/<id>       ProxMate-Storage  the above plus Datastore.Allocate, only on the
-#                                         snippet and import storages (and --backup-storage)
+#                                         storages named by --snippet-storage/--import-storage
 #   /sdn/zones          ProxMate-Infra    SDN.Audit, SDN.Use (guest NICs, VNet listing)
 #   /mapping            ProxMate-Infra    Mapping.* (only with --with-passthrough)
 #   / (this path only)  ProxMate-Cluster  Sys.Audit (cluster status, firewall reads), and
@@ -36,8 +36,11 @@
 #     instead). Before Proxmox VE 8.2 cloud-image downloads need it too, so it is
 #     granted there and the script says so.
 #   - Datastore.Allocate deletes any volume and edits the storage definition, so it
-#     is granted only on the storages named by --snippet-storage, --import-storage
-#     and --backup-storage.
+#     is not granted at all unless asked for: --snippet-storage lets ProxMate turn on
+#     the snippets content type (or do that once as root), --import-storage lets it
+#     delete a downloaded cloud image after building a template (otherwise the file
+#     stays under import/ for you to remove). The script warns when a named storage
+#     also holds disk images, container volumes or backups.
 #
 # ProxMate-Infra is one role for the infra paths; on each path only its own
 # privileges gate anything. Set the same pool in ProxMate (Admin -> Settings ->
@@ -56,8 +59,7 @@
 #   bash proxmox-token.sh [--dry-run] [--with-ide] [--with-passthrough]
 #                         [--user proxmate@pve] [--token proxmate]
 #                         [--pool <name> [--drop-root-grant] [--with-cluster-firewall]
-#                          [--snippet-storage local] [--import-storage local]
-#                          [--backup-storage <id>]]
+#                          [--snippet-storage <id>] [--import-storage <id>] [--force]]
 #
 #   --with-ide               accepted for older instructions; the guest-agent file
 #                            write it used to add is now always part of the role
@@ -67,13 +69,12 @@
 #   --with-cluster-firewall  with --pool: also grant Sys.Modify on / so ProxMate can
 #                            enable the cluster firewall (the pool then does not fully
 #                            contain the token)
-#   --snippet-storage <id>   with --pool: the storage ProxMate writes cloud-init snippets
-#                            to (SNIPPET_STORAGE); default local
-#   --import-storage <id>    with --pool: the storage cloud images are downloaded to
-#                            (the ISO storage if it takes imports); default local
-#   --backup-storage <id>    with --pool: the backup storage, for restoring uploaded
-#                            backups (Proxmox reads a not-yet-restored archive only
-#                            with Datastore.Allocate); default none
+#   --snippet-storage <id>   with --pool: also grant Datastore.Allocate on this storage,
+#                            so ProxMate can enable its snippets content type
+#   --import-storage <id>    with --pool: also grant Datastore.Allocate on the storage
+#                            cloud images are downloaded to, so ProxMate can delete them
+#   --force                  with --drop-root-grant: drop it even though the pool holds
+#                            no guests yet
 #
 set -euo pipefail
 
@@ -85,9 +86,9 @@ WITH_PASSTHROUGH=0
 POOL=""
 DROP_ROOT_GRANT=0
 WITH_CLUSTER_FIREWALL=0
-SNIPPET_STORAGE="local"
-IMPORT_STORAGE="local"
-BACKUP_STORAGE=""
+SNIPPET_STORAGE=""
+IMPORT_STORAGE=""
+FORCE=0
 POOL_ONLY_OPTION=""
 
 while [ $# -gt 0 ]; do
@@ -102,7 +103,7 @@ while [ $# -gt 0 ]; do
     --with-cluster-firewall) WITH_CLUSTER_FIREWALL=1; POOL_ONLY_OPTION="$1" ;;
     --snippet-storage) SNIPPET_STORAGE="${2:?--snippet-storage needs a value}"; POOL_ONLY_OPTION="$1"; shift ;;
     --import-storage) IMPORT_STORAGE="${2:?--import-storage needs a value}"; POOL_ONLY_OPTION="$1"; shift ;;
-    --backup-storage) BACKUP_STORAGE="${2:?--backup-storage needs a value}"; POOL_ONLY_OPTION="$1"; shift ;;
+    --force) FORCE=1; POOL_ONLY_OPTION="$1" ;;
     -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
@@ -114,8 +115,11 @@ case "$TOKEN_NAME" in *[!A-Za-z0-9_-]*|'') echo "--token may only contain letter
 if [ -n "$POOL" ]; then
   case "$POOL" in *[!A-Za-z0-9_-]*) echo "--pool may only contain letters, digits, - and _" >&2; exit 2 ;; esac
   [ "${#POOL}" -le 64 ] || { echo "--pool is at most 64 characters" >&2; exit 2; }
-  for s in "$SNIPPET_STORAGE" "$IMPORT_STORAGE" "$BACKUP_STORAGE"; do
-    case "$s" in *[!A-Za-z0-9._-]*) echo "storage ids may only contain letters, digits, ., - and _" >&2; exit 2 ;; esac
+  for s in "$SNIPPET_STORAGE" "$IMPORT_STORAGE"; do
+    [ -n "$s" ] || continue
+    case "$s" in
+      [!A-Za-z]*|*[!A-Za-z0-9._-]*|*..*) echo "a storage id starts with a letter and uses only letters, digits, ., - and _: $s" >&2; exit 2 ;;
+    esac
   done
 fi
 if [ -n "$POOL_ONLY_OPTION" ] && [ -z "$POOL" ]; then
@@ -204,7 +208,7 @@ if [ -n "$POOL" ]; then
   # A more specific ACL replaces what /storage passes down, so this role carries
   # the whole Datastore set, not just Datastore.Allocate.
   STORAGES=""
-  for s in "$SNIPPET_STORAGE" "$IMPORT_STORAGE" "$BACKUP_STORAGE"; do
+  for s in "$SNIPPET_STORAGE" "$IMPORT_STORAGE"; do
     [ -n "$s" ] || continue
     case " $STORAGES " in *" $s "*) continue ;; esac
     STORAGES="$STORAGES $s"
@@ -259,6 +263,29 @@ pool_has_guests() { # pool_has_guests <pool>: the pool lists at least one guest
   printf '%s' "$out" | tr -d '[:space:]' | grep -q '"vmid":'
 }
 
+storage_content() { # storage_content <id>: its content types, comma-separated (empty if unknown)
+  pvesh get "/storage/$1" --output-format json 2>/dev/null | tr -d '[:space:]' \
+    | sed -n 's/.*"content":"\([^"]*\)".*/\1/p'
+}
+
+stale_acls() { # stale_acls <user-or-token id>: "<path> <role>" of ProxMate-* grants not in the plan
+  local entry path role
+  acl_entries | grep -F "\"ugid\":\"$1\"" | grep -F "\"roleid\":\"$ROLE-" | while read -r entry; do
+    path="$(printf '%s' "$entry" | sed -n 's/.*"path":"\([^"]*\)".*/\1/p')"
+    role="$(printf '%s' "$entry" | sed -n 's/.*"roleid":"\([^"]*\)".*/\1/p')"
+    [ -n "$path" ] && [ -n "$role" ] || continue
+    printf '%s\n' "$ACL_PLAN" | grep -qxF -e "$path $role 1" -e "$path $role 0" || printf '%s %s\n' "$path" "$role"
+  done
+}
+
+remove_stale_acls() { # remove_stale_acls --users|--tokens <id>
+  local path role
+  while read -r path role; do
+    [ -n "$path" ] || continue
+    run pveum acl delete "$path" "$1" "$2" --roles "$role"
+  done <<< "$(stale_acls "$2")"
+}
+
 ensure_role() { # ensure_role <role> <space-separated privileges>
   local csv
   csv="$(printf '%s' "$2" | tr ' ' ',')"
@@ -310,6 +337,14 @@ if [ -n "$POOL" ]; then
     echo "Sys.Modify on / is not granted: enable the cluster firewall once by hand as root"
     echo "(Datacenter → Firewall), or re-run with --with-cluster-firewall to let ProxMate do it."
   fi
+  for s in $STORAGES; do
+    content="$(storage_content "$s")"
+    case ",$content," in
+      *,images,*|*,rootdir,*|*,backup,*)
+        echo "Warning: storage $s also holds $content. Datastore.Allocate there lets the token delete"
+        echo "those volumes too, guests outside the pool included." ;;
+    esac
+  done
 else
   echo "Proxmox VE $PVE_MAJOR — setting up $TOKEN_ID with role $ROLE"
 fi
@@ -318,7 +353,7 @@ fi
 if [ -n "$POOL" ]; then
   ensure_role "$GUEST_ROLE" "$GUEST_PRIVS"
   ensure_role "$INFRA_ROLE" "$INFRA_PRIVS"
-  ensure_role "$STORAGE_ROLE" "$STORAGE_PRIVS"
+  [ -n "$STORAGES" ] && ensure_role "$STORAGE_ROLE" "$STORAGE_PRIVS"
   ensure_role "$CLUSTER_ROLE" "$CLUSTER_PRIVS"
   if ! pool_exists "$POOL"; then
     run pveum pool add "$POOL" --comment "ProxMate guests"
@@ -336,29 +371,35 @@ if ! exists user "$USER_ID"; then
 fi
 
 grant_all --users "$USER_ID"
+# Pool mode: ProxMate-* grants left by an earlier run (another pool, another storage).
+[ -n "$POOL" ] && remove_stale_acls --users "$USER_ID"
 
 # Pool mode: an earlier grant of the full role on / still reaches every guest. It
 # is removed (with --drop-root-grant) only after the token's new ACLs are in place.
 ROOT_GRANT_KEPT=0
 drop_root_grant() {
   [ -n "$POOL" ] || return 0
-  local kind id found=0
+  local kind id ids=""
   for kind in users tokens; do
     id="$USER_ID"
     [ "$kind" = tokens ] && id="$TOKEN_ID"
-    has_acl / "$ROLE" "$id" || continue
-    found=1
-    if [ "$DROP_ROOT_GRANT" -eq 1 ]; then
-      run pveum acl delete / "--$kind" "$id" --roles "$ROLE"
-    else
-      ROOT_GRANT_KEPT=1
-    fi
+    has_acl / "$ROLE" "$id" && ids="$ids $kind:$id"
   done
-  if [ "$DROP_ROOT_GRANT" -eq 1 ] && [ "$found" -eq 1 ] && ! pool_has_guests "$POOL"; then
-    echo "Warning: the pool $POOL holds no guests yet. Every guest ProxMate manages outside it"
-    echo "is now out of the token's reach; move them in as root:"
-    echo "  pveum pool modify $POOL --vms <vmid,...> --allow-move 1"
+  [ -n "$ids" ] || return 0
+  if [ "$DROP_ROOT_GRANT" -eq 0 ]; then
+    ROOT_GRANT_KEPT=1
+    return 0
   fi
+  if ! pool_has_guests "$POOL" && [ "$FORCE" -eq 0 ]; then
+    echo "The pool $POOL holds no guests yet, so dropping the grant on / would put every guest"
+    echo "ProxMate manages out of the token's reach. Move them in first (\"Move managed guests into"
+    echo "the pool\" in ProxMate), or re-run with --force. The grant on / was kept."
+    ROOT_GRANT_KEPT=1
+    return 0
+  fi
+  for id in $ids; do
+    run pveum acl delete / "--${id%%:*}" "${id#*:}" --roles "$ROLE"
+  done
 }
 
 pool_notes() {
@@ -379,6 +420,7 @@ fi
 
 if [ "$TOKEN_EXISTS" -eq 1 ]; then
   grant_all --tokens "$TOKEN_ID"
+  [ -n "$POOL" ] && remove_stale_acls --tokens "$TOKEN_ID"
   drop_root_grant
   echo
   echo "The token $TOKEN_ID already exists; its role and ACLs are now up to date."
@@ -391,6 +433,7 @@ fi
 if [ "$DRY_RUN" -eq 1 ]; then
   run pveum user token add "$USER_ID" "$TOKEN_NAME" --privsep 1 --comment "ProxMate"
   grant_all --tokens "$TOKEN_ID"
+  [ -n "$POOL" ] && remove_stale_acls --tokens "$TOKEN_ID"
   drop_root_grant
   pool_notes
   exit 0
@@ -399,6 +442,7 @@ fi
 OUT="$(pveum user token add "$USER_ID" "$TOKEN_NAME" --privsep 1 --comment "ProxMate" --output-format json)"
 SECRET="$(printf '%s' "$OUT" | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 grant_all --tokens "$TOKEN_ID"
+[ -n "$POOL" ] && remove_stale_acls --tokens "$TOKEN_ID"
 drop_root_grant
 
 echo

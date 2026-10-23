@@ -106,10 +106,10 @@ Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
   (setup wizard and Admin → Settings) places every guest ProxMate creates, clones, restores or
   imports in that resource pool. `deploy/proxmox-token.sh --pool <name>` creates the pool and
   grants the guest privileges on `/pool/<name>` only, with `Sys.Audit`/`Sys.AccessNetwork` on
-  `/nodes`, `Datastore.*` without `Datastore.Allocate` on `/storage` (that one only on the snippet,
-  import and backup storages), `SDN.*` on `/sdn/zones`, and `Sys.Audit` on `/` alone (`Sys.Modify`
-  opt-in with `--with-cluster-firewall`). Uploaded backups are renamed to their new VMID before
-  Proxmox reads them. The connection test checks the pool exists, the guest privileges on it,
+  `/nodes`, `Datastore.*` without `Datastore.Allocate` on `/storage` (that one only on a storage
+  named for it), `SDN.*` on `/sdn/zones`, and `Sys.Audit` on `/` alone (`Sys.Modify` opt-in with
+  `--with-cluster-firewall`). Uploaded backups are renamed to their reserved VMID and read on the
+  share, so Proxmox never has to expose the backup storage. The connection test checks the pool exists, the guest privileges on it,
   guest privileges still on `/`, what still reaches past the pool, and managed guests outside the
   pool (with a one-click, per-guest move for guests carrying a ProxMate ownership tag). Still to
   do: run it end to end on a PVE 9 cluster and confirm Proxmox refuses the token on a guest outside

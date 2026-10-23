@@ -13,8 +13,11 @@ import {
   syncRestoredGuest,
   assertOwnVolumes,
   nextVmId,
+  reserveVmIds,
+  releaseVmId,
 } from './vm.service.js';
 import { parseGuestConfigText, guestConfigSizes } from '../lib/guest-config.js';
+import { readArchiveConfig, ArchiveConfigError } from '../lib/vzdump-archive.js';
 import * as pve from './proxmox.service.js';
 
 /**
@@ -265,12 +268,31 @@ async function rebuildRestoredGuestConfig(
 }
 
 /**
+ * Marks an archive ProxMate itself wrote to the share (`.proxmate-uploaded.<name>`,
+ * a dot-file Proxmox's backup scan ignores). The share is also where real vzdump
+ * backups live, under the same naming, so only marked archives are ever swept.
+ */
+const MARKER_PREFIX = '.proxmate-uploaded.';
+export const UPLOAD_MARKER_RE = /^\.proxmate-uploaded\.vzdump-(qemu|lxc)-\d+-[\w.-]+\.(vma|tar)(\.(zst|gz|lzo))?$/;
+
+function markerPath(filename: string): string | null {
+  return resolveUnderUploadDir(MARKER_PREFIX + filename, UPLOAD_MARKER_RE);
+}
+
+/** Record that `filename` (already validated, in the upload directory) is an upload ProxMate wrote. */
+export async function markUploaded(filename: string): Promise<void> {
+  const marker = markerPath(filename);
+  if (marker) await fsp.writeFile(marker, '');
+}
+
+/**
  * Give an uploaded archive the VMID it is about to be restored to, in place on the
  * share: `vzdump-qemu-<old>-<rest>` becomes `vzdump-qemu-<vmid>-<rest>`. Proxmox
  * treats a backup as belonging to the VMID in its name, and lets a restore read
  * an archive of the guest being restored, while one named for another VMID needs
  * VM.Backup on that guest — which a pool-scoped token does not have. Both names go
- * through the same validation and containment checks as the upload itself.
+ * through the same validation and containment checks as the upload itself. A hard
+ * link takes the new name, so an existing file there is never replaced.
  */
 export async function renameArchiveForVmid(filename: string, vmid: number): Promise<string> {
   if (path.basename(filename) !== filename || !VZDUMP_UPLOAD_RE.test(filename)) {
@@ -281,16 +303,28 @@ export async function renameArchiveForVmid(filename: string, vmid: number): Prom
   const to = resolveUnderUploadDir(renamed, VZDUMP_UPLOAD_RE);
   if (!from || !to) throw new RestoreUploadError('That file is not a vzdump backup archive.');
   if (from === to) return filename;
-  if (existsSync(to)) {
-    throw new RestoreUploadError('Another upload for the same machine number is waiting to be restored. Try again.');
+  try {
+    await fsp.link(from, to);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new RestoreUploadError(
+        'Another uploaded backup for the same machine number is already on the server, so this upload was ' +
+          'discarded. Upload it again in a moment.',
+      );
+    }
+    throw err;
   }
-  await fsp.rename(from, to);
+  await fsp.unlink(from);
+  const [oldMarker, newMarker] = [markerPath(filename), markerPath(renamed)];
+  if (oldMarker && newMarker) await fsp.rename(oldMarker, newMarker).catch(() => undefined);
   return renamed;
 }
 
-/** Best-effort removal of the uploaded archive (Proxmox API first, then the mount). */
+/** Best-effort removal of the uploaded archive (Proxmox API first, then the mount) and its marker. */
 async function cleanupArchive(filename: string, node: string | null, storage: string, volid: string): Promise<void> {
-  if (node) {
+  const marker = markerPath(filename);
+  if (marker) await fsp.unlink(marker).catch(() => undefined);
+  if (node && volid) {
     try {
       await pve.deleteBackup(node, storage, volid);
       return;
@@ -298,8 +332,80 @@ async function cleanupArchive(filename: string, node: string | null, storage: st
       /* fall through to direct unlink */
     }
   }
+  const file = resolveUnderUploadDir(filename, VZDUMP_UPLOAD_RE);
+  if (file) await fsp.unlink(file).catch(() => undefined);
+}
+
+/**
+ * Remove uploads ProxMate wrote and no restore is using: marked archives (and
+ * their markers) and unfinished `.proxmate-upload-*.part` files untouched for
+ * `olderThanMs`. A marked archive named for a VMID whose machine row is still
+ * `creating` is kept. Run at startup; returns how many files were removed.
+ */
+export async function sweepStaleUploads(olderThanMs = 6 * 60 * 60 * 1000): Promise<number> {
   const dir = uploadDir();
-  if (dir) await fsp.unlink(path.join(dir, path.basename(filename))).catch(() => undefined);
+  if (!dir) return 0;
+  let names: string[];
+  try {
+    names = await fsp.readdir(dir);
+  } catch {
+    return 0;
+  }
+  const cutoff = Date.now() - olderThanMs;
+  const old = async (full: string) => (await fsp.stat(full).catch(() => null))?.mtimeMs ?? Infinity;
+  let removed = 0;
+  for (const name of names) {
+    if (TEMP_UPLOAD_RE.test(name)) {
+      const full = resolveUnderUploadDir(name, TEMP_UPLOAD_RE);
+      if (full && (await old(full)) < cutoff && (await fsp.unlink(full).then(() => true, () => false))) removed += 1;
+      continue;
+    }
+    if (!UPLOAD_MARKER_RE.test(name)) continue;
+    const marker = resolveUnderUploadDir(name, UPLOAD_MARKER_RE);
+    if (!marker || (await old(marker)) >= cutoff) continue;
+    const archive = name.slice(MARKER_PREFIX.length);
+    const vmid = Number(/^vzdump-(?:qemu|lxc)-(\d+)-/.exec(archive)?.[1]);
+    const inFlight = await prisma.virtualMachine.count({ where: { proxmoxVmId: vmid, status: 'creating' } });
+    if (inFlight > 0) continue;
+    const file = resolveUnderUploadDir(archive, VZDUMP_UPLOAD_RE);
+    if (file && (await fsp.unlink(file).then(() => true, () => false))) removed += 1;
+    await fsp.unlink(marker).catch(() => undefined);
+  }
+  return removed;
+}
+
+/**
+ * With a pool-scoped token, what Proxmox would otherwise be asked about the
+ * archive before its guest exists: that it is there, which nodes can restore it,
+ * and its embedded config. Proxmox checks those reads by the VMID in the name with
+ * no guest to compare it to, which would need Datastore.Allocate on the whole
+ * backup storage. So the file is checked on the share, the nodes come from where
+ * the backup storage is available, and the config is read from the archive itself.
+ */
+async function inspectArchiveLocally(
+  filename: string,
+  storage: string,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<{ nodes: string[]; rawCfg: string }> {
+  const file = resolveUnderUploadDir(filename, VZDUMP_UPLOAD_RE);
+  const stat = file ? await fsp.stat(file).catch(() => null) : null;
+  if (!file || !stat?.isFile()) throw new RestoreUploadError('The uploaded file is no longer on the server.');
+  const placement = await pve.storagePlacement(storage, client);
+  if (placement.nodes.length === 0) {
+    throw new RestoreUploadError(`The "${storage}" backup storage isn't available on any node.`);
+  }
+  if (!placement.shared && placement.nodes.length > 1) {
+    throw new RestoreUploadError(
+      `With a Proxmox pool configured, uploaded backups need a shared backup storage: "${storage}" is local to ` +
+        'each node, so ProxMate cannot tell which node holds the upload without asking Proxmox to list every backup on it.',
+    );
+  }
+  try {
+    return { nodes: placement.nodes, rawCfg: await readArchiveConfig(file) };
+  } catch (err) {
+    if (err instanceof ArchiveConfigError) throw new RestoreUploadError(err.message);
+    throw err;
+  }
 }
 
 /**
@@ -334,40 +440,44 @@ async function restoreFromUploadLocked(
   }
   const kind: pve.GuestKind = filename.startsWith('vzdump-lxc-') ? 'lxc' : 'qemu';
 
-  const client = await pve.getClient();
-  // With a pool-scoped token the archive must name the VMID it is restored to (see
-  // renameArchiveForVmid), so that VMID is taken first.
-  const pool = await pve.getGuestPool();
-  let presetVmid: number | undefined;
-  if (pool) {
-    presetVmid = await nextVmId(client);
-    try {
-      filename = await renameArchiveForVmid(filename, presetVmid);
-    } catch (err) {
-      await cleanupArchive(filename, null, '', '');
-      throw err;
-    }
-  }
-  const storage = await getBackupStorage();
-  const volid = `${storage}:backup/${filename}`;
-
-  // Proxmox must see the uploaded file through the same storage the share is a
-  // mount of — if it doesn't, the mount and `backup_storage` point at
-  // different places and restoring is impossible.
-  const nodes = await pve.getBackupNodes(storage, volid, client);
-  if (nodes.length === 0) {
-    await cleanupArchive(filename, null, storage, volid);
-    throw new RestoreUploadError(
-      `The uploaded file isn't visible on the "${storage}" backup storage. ` +
-        'Check that BACKUP_DOWNLOAD_DIR is mounted from that storage\'s directory.',
-    );
-  }
-
-  // Set when a restore task outlived our wait and its follower owns the archive.
+  // From here on the archive is removed on any failure, unless a restore task that
+  // outlived our wait has taken it over.
   let archiveHandedOff = false;
+  let storage = '';
+  let volid = '';
+  let cleanupNode: string | null = null;
+  let presetVmid: number | undefined;
   try {
+    const client = await pve.getClient();
+    const pool = await pve.getGuestPool();
+    storage = await getBackupStorage();
+
+    let nodes: string[];
+    let rawCfg: string;
+    if (pool) {
+      // The archive must name the VMID it is restored to (see renameArchiveForVmid),
+      // so that VMID is reserved first and held until the restore has finished.
+      [presetVmid] = await reserveVmIds(1, client);
+      filename = await renameArchiveForVmid(filename, presetVmid!);
+      volid = `${storage}:backup/${filename}`;
+      ({ nodes, rawCfg } = await inspectArchiveLocally(filename, storage, client));
+    } else {
+      volid = `${storage}:backup/${filename}`;
+      // Proxmox must see the uploaded file through the same storage the share is a
+      // mount of — if it doesn't, the mount and `backup_storage` point at
+      // different places and restoring is impossible.
+      nodes = await pve.getBackupNodes(storage, volid, client);
+      if (nodes.length === 0) {
+        throw new RestoreUploadError(
+          `The uploaded file isn't visible on the "${storage}" backup storage. ` +
+            'Check that BACKUP_DOWNLOAD_DIR is mounted from that storage\'s directory.',
+        );
+      }
+      cleanupNode = nodes[0]!;
+      rawCfg = await pve.extractBackupConfig(nodes[0]!, volid, client);
+    }
+
     // Quota-check from the archive's embedded config BEFORE restoring anything.
-    const rawCfg = await pve.extractBackupConfig(nodes[0]!, volid, client);
     assertRestorableConfig(rawCfg, kind);
     const cfg = parseBackupConfig(rawCfg, kind);
     if (cfg.unsizedDisk) {
@@ -489,9 +599,11 @@ async function restoreFromUploadLocked(
       throw err;
     }
   } catch (err) {
-    // Any pre-restore failure (quota, placement, extract) — drop the archive so
-    // a rejected upload never lingers on the backup storage.
-    if (!archiveHandedOff) await cleanupArchive(filename, nodes[0] ?? null, storage, volid);
+    // Any pre-restore failure (reservation, rename, quota, placement, reading the
+    // archive) drops the archive, so a rejected upload never lingers on the share.
+    if (!archiveHandedOff) await cleanupArchive(filename, cleanupNode, storage, volid);
     throw err;
+  } finally {
+    if (presetVmid !== undefined) releaseVmId(presetVmid);
   }
 }

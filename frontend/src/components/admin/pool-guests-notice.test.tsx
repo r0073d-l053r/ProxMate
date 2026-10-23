@@ -9,7 +9,7 @@ vi.mock("@/lib/api", () => ({
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock("sonner", () => ({ toast }));
 
-import { PoolGuestsNotice, templateMovePrompt } from "./pool-guests-notice";
+import { PoolGuestsNotice, poolMovePrompt } from "./pool-guests-notice";
 import type { PoolReport } from "@/lib/types";
 
 const report = (over: Partial<PoolReport> = {}): PoolReport => ({
@@ -69,16 +69,21 @@ describe("PoolGuestsNotice", () => {
     expect(screen.getByText(/web — in no pool/)).toBeTruthy();
   });
 
-  it("asks before moving a template out of another pool, and does nothing on cancel", async () => {
+  it("asks before moving a guest out of another pool, and does nothing on cancel", async () => {
     vi.mocked(window.confirm).mockReturnValue(false);
     render(<PoolGuestsNotice report={report()} />);
     fireEvent.click(screen.getByRole("button", { name: /Move managed guests into the pool/ }));
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringMatching(/9000 debian \(pool other\)/));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringMatching(/9000 debian \(template\) \(pool other\)/));
     expect(post).not.toHaveBeenCalled();
   });
 
-  it("does not ask when no template is in another pool", () => {
-    expect(templateMovePrompt(report({ outside: [report().outside[0]!] }))).toBeNull();
+  it("does not ask when no guest is in another pool", () => {
+    expect(poolMovePrompt(report({ outside: [report().outside[0]!] }))).toBeNull();
+  });
+
+  it("asks about a machine in another pool too", () => {
+    const machine = { vmid: 101, node: "pve1", name: "db", kind: "qemu" as const, template: false, pool: "lab" };
+    expect(poolMovePrompt(report({ outside: [machine] }))).toMatch(/101 db \(pool lab\)/);
   });
 
   it("reports each guest Proxmox refused", async () => {
