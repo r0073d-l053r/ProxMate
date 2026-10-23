@@ -124,10 +124,10 @@ guest privileges on a Proxmox resource pool, so Proxmox itself refuses the token
 ```bash
 bash proxmox-token.sh --dry-run --pool proxmate   # prints the ACL plan and the commands
 bash proxmox-token.sh --pool proxmate             # creates the pool if missing
-#   --snippet-storage <id>   the SNIPPET_STORAGE ProxMate writes cloud-init snippets to (default local)
-#   --import-storage <id>    where cloud images are downloaded (the ISO storage; default local)
-#   --backup-storage <id>    the backup storage, if tenants restore uploaded backups
+#   --snippet-storage <id>   optional: Datastore.Allocate there, so ProxMate can enable snippets
+#   --import-storage <id>    optional: Datastore.Allocate there, so ProxMate can delete imported images
 #   --with-cluster-firewall  let ProxMate enable the cluster firewall (see below)
+#   --drop-root-grant        remove the earlier grant on / (refused while the pool is empty; --force)
 ```
 
 | Path | Role | Privileges |
@@ -135,10 +135,24 @@ bash proxmox-token.sh --pool proxmate             # creates the pool if missing
 | `/pool/<name>` | `ProxMate-Guest` | every `VM.*` privilege above, `Pool.Audit`, `Pool.Allocate` |
 | `/nodes` | `ProxMate-Infra` | `Sys.Audit`, `Sys.AccessNetwork` (8.2+, cloud-image downloads) |
 | `/storage` | `ProxMate-Infra` | `Datastore.Audit`, `.AllocateSpace`, `.AllocateTemplate` |
-| `/storage/<snippet, import, backup storage>` | `ProxMate-Storage` | the same plus `Datastore.Allocate` |
+| `/storage/<id>`, only for `--snippet-storage` / `--import-storage` | `ProxMate-Storage` | the same plus `Datastore.Allocate` |
 | `/sdn/zones` | `ProxMate-Infra` | `SDN.Audit`, `SDN.Use` |
 | `/mapping` (with `--with-passthrough`) | `ProxMate-Infra` | `Mapping.Audit`, `Mapping.Use` |
 | `/`, not propagated | `ProxMate-Cluster` | `Sys.Audit`; `Sys.Modify` only with `--with-cluster-firewall` |
+
+By default no storage gets `Datastore.Allocate`, which deletes any volume on it. ProxMate writes
+cloud-init snippets through its mount and needs it only to switch a storage's snippets content
+type on (do that once as root instead), and to delete a downloaded cloud image after building a
+template (without it the image stays under the import storage's `import/` folder for you to
+remove). The script warns when a storage you name also holds disk images, container volumes or
+backups. Re-running it removes `ProxMate-*` grants an earlier run left on other paths (an old pool
+or storage); `--dry-run` shows them.
+
+Uploaded backups need a shared backup storage in this mode (or a single node): ProxMate checks the
+upload on the share and reads its guest config from the file itself, because Proxmox would only
+answer those questions about an archive whose guest does not exist yet with `Datastore.Allocate`
+on the whole backup storage. `.vma` and `.tar` backups, plain or `.zst`/`.gz`, are read; `.lzo`
+ones are refused.
 
 `Sys.Modify` on `/` also opens cluster backup jobs, the cluster firewall's groups and IP sets and
 other cluster settings, so it is opt-in: while the token holds it the pool does not fully contain
@@ -164,8 +178,10 @@ existing install over:
 
 With a pool-scoped token ProxMate only sees guests in the pool: the Cluster Balancer, alerts and
 "Import existing guests" work on those alone. Templates you register by hand must be in the pool,
-since cloning checks `VM.Clone` on the template. Backups of a guest that was deleted, or destroyed
-by a rebuild that then failed, are outside the pool with it: restore those as root. This mode has
+since cloning checks `VM.Clone` on the template. Backups of a guest that is gone (deleted, or
+destroyed by a rebuild that then failed) are not reachable through the pool: the token cannot list
+them, read their config or delete them. Restore one as root, or rebuild the machine first (its VMID
+back in the pool makes its backups reachable again). This mode has
 not yet been run end to end on a live cluster.
 
 ---
