@@ -38,7 +38,8 @@ import {
   deleteMateState,
   setBackupPolicy,
 } from '../services/matestate.service.js';
-import { listShares, addShare, removeShare, SHARE_ROLES, normalizeShareRole, ShareError } from '../services/vm-share.service.js';
+import { listShares, addShareWithNotice, removeShare, SHARE_ROLES, normalizeShareRole, ShareError } from '../services/vm-share.service.js';
+import { sendDeployedForTenantEmail, sendShareEmail, sendLater } from '../services/activity-mail.service.js';
 import { listDisks, addDataDisk, resizeDataDisk, removeDataDisk } from '../services/disk.service.js';
 import {
   QuotaError,
@@ -225,6 +226,8 @@ router.post('/', async (req: Request, res: Response) => {
       req,
     });
     res.status(201).json({ vm, status: vm.status });
+    // An admin deploying into a tenant's account: tell the tenant (no-op otherwise).
+    sendLater('deploy-for-tenant', () => sendDeployedForTenantEmail(vm, actor));
   } catch (err) {
     if (err instanceof CreateOptionError) {
       res.status(err.status).json({ error: err.message });
@@ -427,6 +430,8 @@ router.post('/containers', async (req: Request, res: Response) => {
       req,
     });
     res.status(201).json({ vm, status: vm.status });
+    // An admin deploying into a tenant's account: tell the tenant (no-op otherwise).
+    sendLater('deploy-for-tenant', () => sendDeployedForTenantEmail(vm, actor));
   } catch (err) {
     if (err instanceof CreateOptionError) {
       res.status(err.status).json({ error: err.message });
@@ -977,7 +982,7 @@ router.post('/:id/shares', shareLimiter, async (req: Request, res: Response) => 
     // Same response and same audit detail whether or not the address has an
     // account (the VM activity feed is visible to the tenant), so the POST response
     // itself does not confirm whether an account exists.
-    await addShare(vm, parsed.data.email, parsed.data.role);
+    const { notice } = await addShareWithNotice(vm, parsed.data.email, parsed.data.role);
     await recordAudit({
       action: 'vm.share', actor: user, targetType: 'vm', targetId: vm.id,
       detail: `${parsed.data.email} as ${parsed.data.role}`, req,
@@ -985,6 +990,10 @@ router.post('/:id/shares', shareLimiter, async (req: Request, res: Response) => 
     res.status(202).json({
       message: 'Shared. Someone without a ProxMate account yet gets access once they register with that address through an invite sent to it.',
     });
+    // The recipient of a live share hears about it after the answer above has gone
+    // out, so mail delivery can't change the response or how long it took. A
+    // pending share (no account yet) has no notice and sends nothing.
+    if (notice) sendLater('share', () => sendShareEmail(notice, user));
   } catch (err) {
     if (err instanceof ShareError) { res.status(err.status).json({ error: err.message }); return; }
     res.status(500).json({ error: 'Failed to share the VM' });

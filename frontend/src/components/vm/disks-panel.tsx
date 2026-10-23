@@ -139,7 +139,7 @@ export function DisksPanel({
         </CardTitle>
         <CardDescription>
           {readOnly
-            ? "This VM was set up by an admin — its disks are managed by them and can't be changed here."
+            ? "Set up by your admin — only an admin can change its disks."
             : "The root disk is managed from the VM resize controls. Add extra data disks here — they count toward the owner's storage quota."}
         </CardDescription>
       </CardHeader>

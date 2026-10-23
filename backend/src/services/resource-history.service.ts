@@ -10,6 +10,9 @@ import { tagsMarkRow } from './vm.service.js';
  * Admin Monitor. Samples are denormalized + pruned to a rolling retention window.
  */
 const RETENTION_DAYS = envNumber('RESOURCE_HISTORY_DAYS', 14, 1);
+
+/** Minutes between samples (the scheduler's history tick); one sample stands for this much running time. */
+export const SAMPLE_INTERVAL_MINUTES = 5;
 const DAY_MS = 86_400_000;
 
 interface PveResource {

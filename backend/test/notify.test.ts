@@ -13,7 +13,16 @@ vi.mock('../src/lib/url-safety.js', () => ({
 import { getConfig, setConfig } from '../src/services/config.service.js';
 import { getMailConfig, sendMail } from '../src/services/mail.service.js';
 import { prisma } from '../src/lib/prisma.js';
-import { notify, saveNotifyConfig, sendTestNotification, maskWebhookUrl } from '../src/services/notify.service.js';
+import {
+  notify,
+  notifyWebhook,
+  saveNotifyConfig,
+  sendTestNotification,
+  maskWebhookUrl,
+  maskTelegramToken,
+  parseNtfyTopicUrl,
+} from '../src/services/notify.service.js';
+import { assertSafeOutboundUrl } from '../src/lib/url-safety.js';
 
 const getConfigMock = vi.mocked(getConfig);
 const setConfigMock = vi.mocked(setConfig);
@@ -172,5 +181,134 @@ describe('maskWebhookUrl', () => {
   it('returns empty for no URL and a placeholder for an unparsable one', () => {
     expect(maskWebhookUrl('')).toBe('');
     expect(maskWebhookUrl('not a url SECRET')).toBe('…');
+  });
+});
+
+const TG_TOKEN = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw';
+
+describe('ntfy channel', () => {
+  it('publishes JSON (topic, title, priority, tags) to the server root with the access token', async () => {
+    configure({ notify_ntfy_url: 'https://ntfy.example.com/alerts-x1', notify_ntfy_token: 'tk_SECRET' });
+    await notify({ event: 'auth.lockout', title: 'bob@example.com', message: 'locked — 5 attempts' });
+
+    expect(assertSafeOutboundUrl).toHaveBeenCalledWith('https://ntfy.example.com/alerts-x1', 'ntfy URL');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, opts] = fetchMock.mock.calls[0] as [string, { body: string; headers: Record<string, string>; redirect: string }];
+    expect(url).toBe('https://ntfy.example.com/');
+    expect(opts.headers.authorization).toBe('Bearer tk_SECRET');
+    expect(opts.redirect).toBe('error');
+    expect(JSON.parse(opts.body)).toEqual({
+      topic: 'alerts-x1',
+      title: 'ProxMate — Account locked: bob@example.com',
+      message: 'locked — 5 attempts',
+      priority: 4,
+      tags: ['proxmate', 'lock'],
+    });
+  });
+
+  it('publishes anonymously without a token and keeps a server sub-path', async () => {
+    configure({ notify_ntfy_url: 'https://example.com/ntfy/ops' });
+    await notify({ event: 'access.expired', title: 't', message: 'm' });
+    const [url, opts] = fetchMock.mock.calls[0] as [string, { body: string; headers: Record<string, string> }];
+    expect(url).toBe('https://example.com/ntfy/');
+    expect(opts.headers.authorization).toBeUndefined();
+    expect(JSON.parse(opts.body)).toMatchObject({ topic: 'ops', priority: 3 });
+  });
+
+  it('names a refused token in the test result', async () => {
+    configure({ notify_ntfy_url: 'https://ntfy.sh/t', notify_ntfy_token: 'tk_bad' });
+    fetchMock.mockResolvedValue({ ok: false, status: 403 });
+    const r = await sendTestNotification();
+    expect(r.results).toEqual([{ channel: 'ntfy', ok: false, error: expect.stringContaining('access token') }]);
+  });
+});
+
+describe('Telegram channel', () => {
+  it('sends plain text to the Bot API sendMessage for the chat', async () => {
+    configure({ notify_telegram_bot_token: TG_TOKEN, notify_telegram_chat_id: '-1001234567890' });
+    await notify({ event: 'vm.error', title: 'web-01', message: 'create failed' });
+
+    const [url, opts] = fetchMock.mock.calls[0] as [string, { body: string; redirect: string }];
+    expect(url).toBe(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`);
+    expect(opts.redirect).toBe('error');
+    const body = JSON.parse(opts.body);
+    expect(body).toMatchObject({ chat_id: '-1001234567890', disable_web_page_preview: true });
+    expect(body.text).toContain('VM error');
+    expect(body.text).toContain('create failed');
+    expect(body.parse_mode).toBeUndefined();
+  });
+
+  it("reports the Bot API's reason, never the token, when a send fails", async () => {
+    configure({ notify_telegram_bot_token: TG_TOKEN, notify_telegram_chat_id: '42' });
+    fetchMock.mockResolvedValue({ ok: false, status: 400, json: async () => ({ ok: false, description: 'Bad Request: chat not found' }) });
+    const r = await sendTestNotification();
+    expect(r.results[0]).toMatchObject({ channel: 'telegram', ok: false, error: 'Telegram responded 400: Bad Request: chat not found' });
+
+    fetchMock.mockRejectedValue(Object.assign(new Error(`fetch failed for bot${TG_TOKEN}`), { cause: { code: 'ECONNRESET' } }));
+    const r2 = await sendTestNotification();
+    expect(r2.results[0]!.error).toBe("couldn't reach Telegram (ECONNRESET)");
+    expect(JSON.stringify(r2)).not.toContain(TG_TOKEN.split(':')[1]);
+  });
+
+  it('is part of push-only dispatch alongside the webhook and ntfy', async () => {
+    configure({
+      notify_webhook_url: 'https://hook',
+      notify_ntfy_url: 'https://ntfy.sh/t',
+      notify_telegram_bot_token: TG_TOKEN,
+      notify_telegram_chat_id: '42',
+      notify_email_enabled: 'true',
+    });
+    getMailConfigMock.mockResolvedValue({ host: 'smtp' } as never);
+    await notifyWebhook({ event: 'auth.lockout', title: 't', message: 'm' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(sendMailMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('saveNotifyConfig — ntfy and Telegram', () => {
+  it('encrypts the ntfy URL and token and the Telegram bot token; the chat id is stored plain', async () => {
+    await saveNotifyConfig({
+      ntfyUrl: 'https://ntfy.sh/t',
+      ntfyToken: 'tk_x',
+      telegramBotToken: TG_TOKEN,
+      telegramChatId: ' 42 ',
+      emailEnabled: false,
+      events: [],
+    });
+    expect(setConfigMock).toHaveBeenCalledWith('notify_ntfy_url', 'https://ntfy.sh/t', true);
+    expect(setConfigMock).toHaveBeenCalledWith('notify_ntfy_token', 'tk_x', true);
+    expect(setConfigMock).toHaveBeenCalledWith('notify_telegram_bot_token', TG_TOKEN, true);
+    expect(setConfigMock).toHaveBeenCalledWith('notify_telegram_chat_id', '42');
+  });
+
+  it('keeps stored secrets when fields are blank or omitted, and clears on request', async () => {
+    await saveNotifyConfig({ ntfyUrl: '', ntfyToken: '', telegramBotToken: '', emailEnabled: false, events: [] });
+    const keys = () => setConfigMock.mock.calls.map((c) => c[0]);
+    expect(keys()).not.toContain('notify_ntfy_url');
+    expect(keys()).not.toContain('notify_ntfy_token');
+    expect(keys()).not.toContain('notify_telegram_bot_token');
+    expect(keys()).not.toContain('notify_telegram_chat_id');
+
+    setConfigMock.mockClear();
+    await saveNotifyConfig({ clearNtfy: true, clearTelegram: true, emailEnabled: false, events: [] });
+    expect(setConfigMock).toHaveBeenCalledWith('notify_ntfy_url', '', false);
+    expect(setConfigMock).toHaveBeenCalledWith('notify_ntfy_token', '', false);
+    expect(setConfigMock).toHaveBeenCalledWith('notify_telegram_bot_token', '', false);
+    expect(setConfigMock).toHaveBeenCalledWith('notify_telegram_chat_id', '');
+  });
+});
+
+describe('maskTelegramToken / parseNtfyTopicUrl', () => {
+  it('shows only the public bot id', () => {
+    expect(maskTelegramToken(TG_TOKEN)).toBe('123456789:…');
+    expect(maskTelegramToken('')).toBe('');
+    expect(maskTelegramToken('garbage')).toBe('…');
+  });
+
+  it('splits a topic URL into server and topic, and refuses one without a topic', () => {
+    expect(parseNtfyTopicUrl('https://ntfy.sh/my-topic')).toEqual({ server: 'https://ntfy.sh/', topic: 'my-topic' });
+    expect(parseNtfyTopicUrl('https://x.example/a/b/topic_1')).toEqual({ server: 'https://x.example/a/b/', topic: 'topic_1' });
+    expect(() => parseNtfyTopicUrl('https://ntfy.sh/')).toThrow(/topic/);
+    expect(() => parseNtfyTopicUrl('https://ntfy.sh/t?auth=x')).toThrow(/plain topic URL/);
   });
 });

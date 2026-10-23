@@ -57,6 +57,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { BroadcastCard } from "@/components/admin/broadcast-card";
+import { UsageDigestCard } from "@/components/admin/usage-digest-card";
 
 // Sentinel for "let the backend auto-pick the first backup-capable storage".
 const BACKUP_AUTO = "__auto__";
@@ -121,6 +122,19 @@ export default function SettingsPage() {
   const [notifyHasWebhook, setNotifyHasWebhook] = useState(false);
   const [notifyWebhookMasked, setNotifyWebhookMasked] = useState("");
   const [notifyClearWebhook, setNotifyClearWebhook] = useState(false);
+  // ntfy + Telegram push channels: secrets are write-only, like the webhook URL.
+  const [ntfyUrl, setNtfyUrl] = useState("");
+  const [ntfyToken, setNtfyToken] = useState("");
+  const [ntfyHasUrl, setNtfyHasUrl] = useState(false);
+  const [ntfyUrlMasked, setNtfyUrlMasked] = useState("");
+  const [ntfyHasToken, setNtfyHasToken] = useState(false);
+  const [ntfyClear, setNtfyClear] = useState(false);
+  const [ntfyClearToken, setNtfyClearToken] = useState(false);
+  const [tgToken, setTgToken] = useState("");
+  const [tgChatId, setTgChatId] = useState("");
+  const [tgHasToken, setTgHasToken] = useState(false);
+  const [tgTokenMasked, setTgTokenMasked] = useState("");
+  const [tgClear, setTgClear] = useState(false);
   const [notifyEmailEnabled, setNotifyEmailEnabled] = useState(false);
   const [notifyEmailTo, setNotifyEmailTo] = useState("");
   const [notifyEvents, setNotifyEvents] = useState<NotifyEvent[]>([]);
@@ -252,6 +266,7 @@ export default function SettingsPage() {
           const n = res.data.notify;
           setNotifyHasWebhook(n.hasWebhookUrl);
           setNotifyWebhookMasked(n.webhookUrlMasked);
+          applyPushState(n);
           setNotifyEmailEnabled(n.emailEnabled);
           setNotifyEmailTo(n.emailTo);
           setNotifyEvents(n.events);
@@ -386,6 +401,16 @@ export default function SettingsPage() {
     }
   }
 
+  /** Reflect what the server stores for the ntfy / Telegram channels (secrets masked). */
+  function applyPushState(n: AdminSettings["notify"]) {
+    setNtfyHasUrl(!!n.hasNtfyUrl);
+    setNtfyUrlMasked(n.ntfyUrlMasked ?? "");
+    setNtfyHasToken(!!n.hasNtfyToken);
+    setTgHasToken(!!n.hasTelegramBotToken);
+    setTgTokenMasked(n.telegramBotTokenMasked ?? "");
+    setTgChatId(n.telegramChatId ?? "");
+  }
+
   function toggleNotifyEvent(event: NotifyEvent) {
     setNotifyEvents((evs) => (evs.includes(event) ? evs.filter((e) => e !== event) : [...evs, event]));
   }
@@ -401,15 +426,28 @@ export default function SettingsPage() {
         emailEnabled: notifyEmailEnabled,
         emailTo: notifyEmailTo.trim() || undefined,
         events: notifyEvents,
+        // Blank secrets keep the stored ones; the chat id is sent as shown.
+        ntfyUrl: ntfyClear ? undefined : ntfyUrl.trim() || undefined,
+        ntfyToken: ntfyClear || ntfyClearToken ? undefined : ntfyToken.trim() || undefined,
+        clearNtfy: ntfyClear,
+        clearNtfyToken: ntfyClearToken,
+        telegramBotToken: tgClear ? undefined : tgToken.trim() || undefined,
+        telegramChatId: tgClear || !(tgHasToken || tgToken.trim()) ? undefined : tgChatId.trim(),
+        clearTelegram: tgClear,
       });
-      // Reload so the masked value reflects what the server now stores.
-      if (notifyClearWebhook || newWebhook) {
-        const fresh = await api.get<AdminSettings>("/admin/settings");
-        setNotifyHasWebhook(fresh.data.notify.hasWebhookUrl);
-        setNotifyWebhookMasked(fresh.data.notify.webhookUrlMasked);
-        setNotifyWebhook("");
-        setNotifyClearWebhook(false);
-      }
+      // Reload so the masked values reflect what the server now stores.
+      const fresh = await api.get<AdminSettings>("/admin/settings");
+      setNotifyHasWebhook(fresh.data.notify.hasWebhookUrl);
+      setNotifyWebhookMasked(fresh.data.notify.webhookUrlMasked);
+      setNotifyWebhook("");
+      setNotifyClearWebhook(false);
+      applyPushState(fresh.data.notify);
+      setNtfyUrl("");
+      setNtfyToken("");
+      setNtfyClear(false);
+      setNtfyClearToken(false);
+      setTgToken("");
+      setTgClear(false);
       toast.success("Notification settings saved.");
     } catch (err) {
       toast.error(apiError(err));
@@ -867,7 +905,8 @@ export default function SettingsPage() {
               </CardTitle>
               <CardDescription>
                 Optional. Get alerted when something needs attention. The webhook works with Discord,
-                Slack, Mattermost, or any JSON receiver; email reuses the SMTP settings above.
+                Slack, Mattermost, or any JSON receiver; ntfy and Telegram push to your phone; email
+                reuses the SMTP settings above.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -900,6 +939,118 @@ export default function SettingsPage() {
                     Remove the webhook
                   </label>
                 )}
+
+                <div className="grid gap-4 rounded-lg border p-4">
+                  <span className="text-sm font-medium">ntfy</span>
+                  <FormField
+                    label="Topic URL"
+                    htmlFor="ntfyUrl"
+                    hint={
+                      ntfyHasUrl
+                        ? `A topic is set (${ntfyUrlMasked}). Leave blank to keep it, or paste a new URL to replace it.`
+                        : "ntfy.sh or your own server, ending in the topic name. Leave blank for no ntfy."
+                    }
+                  >
+                    <Input
+                      id="ntfyUrl"
+                      value={ntfyUrl}
+                      onChange={(e) => setNtfyUrl(e.target.value)}
+                      disabled={ntfyClear}
+                      placeholder={ntfyHasUrl ? ntfyUrlMasked : "https://ntfy.sh/my-proxmate-alerts"}
+                    />
+                  </FormField>
+                  <FormField
+                    label="Access token"
+                    htmlFor="ntfyToken"
+                    hint={
+                      ntfyHasToken
+                        ? "A token is set. Leave blank to keep it."
+                        : "Optional — for a protected topic (tk_…). Leave blank to publish without one."
+                    }
+                  >
+                    <Input
+                      id="ntfyToken"
+                      type="password"
+                      value={ntfyToken}
+                      onChange={(e) => setNtfyToken(e.target.value)}
+                      disabled={ntfyClear || ntfyClearToken}
+                      placeholder={ntfyHasToken ? "••••••••" : ""}
+                    />
+                  </FormField>
+                  {(ntfyHasUrl || ntfyHasToken) && (
+                    <div className="flex flex-wrap gap-x-6 gap-y-2">
+                      {ntfyHasToken && (
+                        <label className="flex items-center gap-2 text-sm select-none">
+                          <input
+                            type="checkbox"
+                            checked={ntfyClearToken}
+                            disabled={ntfyClear}
+                            onChange={(e) => setNtfyClearToken(e.target.checked)}
+                            className="size-4 rounded border-input accent-primary"
+                          />
+                          Remove the token
+                        </label>
+                      )}
+                      <label className="flex items-center gap-2 text-sm select-none">
+                        <input
+                          type="checkbox"
+                          checked={ntfyClear}
+                          onChange={(e) => setNtfyClear(e.target.checked)}
+                          className="size-4 rounded border-input accent-primary"
+                        />
+                        Remove ntfy
+                      </label>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid gap-4 rounded-lg border p-4">
+                  <span className="text-sm font-medium">Telegram</span>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <FormField
+                      label="Bot token"
+                      htmlFor="tgToken"
+                      hint={
+                        tgHasToken
+                          ? `A bot is set (${tgTokenMasked}). Leave blank to keep it.`
+                          : "From @BotFather. Leave blank for no Telegram."
+                      }
+                    >
+                      <Input
+                        id="tgToken"
+                        type="password"
+                        value={tgToken}
+                        onChange={(e) => setTgToken(e.target.value)}
+                        disabled={tgClear}
+                        placeholder={tgHasToken ? tgTokenMasked : "123456789:AA…"}
+                      />
+                    </FormField>
+                    <FormField
+                      label="Chat id"
+                      htmlFor="tgChatId"
+                      hint="A user, group or channel id (groups start with -100), or @channelname."
+                    >
+                      <Input
+                        id="tgChatId"
+                        value={tgChatId}
+                        onChange={(e) => setTgChatId(e.target.value)}
+                        disabled={tgClear}
+                        placeholder="-1001234567890"
+                      />
+                    </FormField>
+                  </div>
+                  {tgHasToken && (
+                    <label className="flex items-center gap-2 text-sm select-none">
+                      <input
+                        type="checkbox"
+                        checked={tgClear}
+                        onChange={(e) => setTgClear(e.target.checked)}
+                        className="size-4 rounded border-input accent-primary"
+                      />
+                      Remove Telegram
+                    </label>
+                  )}
+                </div>
 
                 <label className="flex items-center gap-2 text-sm select-none">
                   <input
@@ -949,6 +1100,8 @@ export default function SettingsPage() {
               </form>
             </CardContent>
           </Card>
+
+          <UsageDigestCard />
 
           <BroadcastCard />
         </TabsContent>
