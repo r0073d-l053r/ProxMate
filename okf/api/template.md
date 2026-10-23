@@ -29,7 +29,7 @@ The Template Store: tenants list published templates and deploy VMs from them (c
 |---|---|---|---|
 | GET | `/api/templates` | user | Published templates (`listPublished`). In OpenAPI doc. |
 | GET | `/api/templates/cloud-init-status` | user | Which ProxMate extras snippets exist on each node. |
-| POST | `/api/templates/deploy` | user (`forUserId`/`quotaExempt` admin-only) | Deploy a VM from a published template; 201 `{ vm, status }`. In OpenAPI doc. |
+| POST | `/api/templates/deploy` | user (`forUserId`/`quotaExempt` admin-only) | Deploy a VM from a published template; 201 `{ vm, status }`. An admin deploying for a tenant (`forUserId`) emails the tenant after the response ([activity-mail](/services/activity-mail.md)). In OpenAPI doc. |
 | GET | `/api/templates/all` | admin | All templates including unpublished. |
 | GET | `/api/templates/cloud-images` | admin | Curated cloud images with arch (`curatedImagesWithArch`). |
 | GET | `/api/templates/cloud-init-extras` | admin | Docker/Tailscale extras status and snippet bundles. |

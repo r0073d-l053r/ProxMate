@@ -159,6 +159,7 @@ Fill in the **PRODUCTION** block (replace the domain). The key values:
 | `ALLOW_PRIVATE_OUTBOUND_URLS` | *(optional)* `true` | Admin-configured **webhooks** and **cloud-image URLs** are blocked from targeting private/loopback/metadata addresses (SSRF guard). Set `true` only if you legitimately point at a **LAN** service (self-hosted Mattermost/ntfy, a local image mirror). The scheme + no-credentials checks always stay enforced. |
 | `MATESTATE_CRON` / `ACCESS_EXPIRY_CRON` | *(optional)* 5-field cron | Override the guest-backup schedule (default Sundays 03:00) and the compute-access-window sweep (default hourly at :20). |
 | `APPDB_BACKUP_CRON` / `BALANCER_CRON` / `TEMPLATE_REFRESH_CRON` | *(optional)* 5-field cron | Override the app-database snapshot schedule (default nightly 02:30), the Cluster Balancer and the cloud-image template refresh. An unset or invalid expression uses the built-in schedule. |
+| `USAGE_DIGEST_CRON` | *(optional)* 5-field cron | Override when the weekly usage digest goes to users who opted in (default Mondays 08:00 server time). An unset or invalid expression uses the default. |
 | `AUTH_RATE_LIMIT_MAX` / `_WINDOW_MS` | *(optional)* default `20` / `900000` | Login / register / invite throttle per IP. |
 | `AUTH_LOCKOUT_MAX` / `AUTH_LOCKOUT_MINUTES` | *(optional)* default `10` / `15` | Per-account lockout after consecutive failed passwords (auto-unlocks). |
 | `SHARE_RATE_LIMIT_MAX` / `_WINDOW_MS` | *(optional)* default `30` / `3600000` | Sharing a VM by email, per signed-in user. |
@@ -293,6 +294,9 @@ approving resets by hand:
 - **Invites** sent by email, **account-lockout** alerts, backup-failure and
   provisioning-error notifications, and the **single-use backup download links**
   (`BACKUP_DOWNLOAD_DIR`, §4) — which cannot work at all without it.
+- **Tenant activity emails** — a tenant hears when an admin sets a VM up in their account, or when a
+  VM is shared with them or their share level changes — and the opt-in **weekly usage digest**
+  (`USAGE_DIGEST_CRON`, default Mondays 08:00). Without SMTP these are skipped with a log line.
 
 All of it renders from one branded template, so verifying a single send covers the lot.
 

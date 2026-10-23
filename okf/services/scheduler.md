@@ -34,6 +34,7 @@ Single place where periodic work is registered. `startScheduler()` is called fro
 | Guest ownership-tag backfill | `*/15 * * * *` | — | `markerRunning` | [vm](/services/vm.md) `runGuestMarkerBackfill`; a no-op once a pass completed without Proxmox errors (also run at boot from index.ts) |
 | Malformed stored schedules report | once, 20 s after start | — | — | [power-schedule](/services/power-schedule.md) `reportInvalidStoredCrons` |
 | Access-expiry sweep | `20 * * * *` | `ACCESS_EXPIRY_CRON` | `accessRunning` | [access-sweep](/services/access-sweep.md) `runAccessExpiryTick`; also once 15 s after start |
+| Weekly usage digest | `0 8 * * 1` (Mon 08:00) | `USAGE_DIGEST_CRON` | `digestRunning` | [usage-digest](/services/usage-digest.md) `runUsageDigest` (`usageDigestTick`); no-op while disabled or SMTP is off; no catch-up |
 
 # Key functions
 

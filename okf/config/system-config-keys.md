@@ -25,7 +25,7 @@ The key list was built by grepping every `getConfig('…')` / `setConfig('…')`
 
 # Encryption
 
-When `sensitive=true`, `setConfig` stores `encrypt(value)`: AES-256-GCM with a random 12-byte IV and a 16-byte auth tag, serialized as `ivHex:tagHex:ciphertextHex`. The key is `ENCRYPTION_KEY`, which must be 64 hex chars. `getConfig` decrypts whenever the row's `sensitive` flag is set.[^crypto] `GET /api/admin/settings` returns booleans (`hasSecret`, `hasPass`, `hasGatewayKey`, `kiosk.pinSet`) instead of the Proxmox token secret, SMTP password, SSO client secret, IDE gateway key and kiosk PIN. The decrypted `notify_webhook_url` is the exception: it is returned as `notify.webhookUrl`. The write paths for those four secrets keep the existing value when the submitted field is blank; `kiosk_exit_pin` and `notify_webhook_url` are cleared by `''`. See [backend environment](/env/backend-environment.md) for key handling.
+When `sensitive=true`, `setConfig` stores `encrypt(value)`: AES-256-GCM with a random 12-byte IV and a 16-byte auth tag, serialized as `ivHex:tagHex:ciphertextHex`. The key is `ENCRYPTION_KEY`, which must be 64 hex chars. `getConfig` decrypts whenever the row's `sensitive` flag is set.[^crypto] `GET /api/admin/settings` returns booleans (`hasSecret`, `hasPass`, `hasGatewayKey`, `kiosk.pinSet`) instead of the Proxmox token secret, SMTP password, SSO client secret, IDE gateway key and kiosk PIN. The notification secrets (`notify_webhook_url`, `notify_ntfy_url`, `notify_ntfy_token`, `notify_telegram_bot_token`) are reported as `has…` booleans plus a masked form. The write paths for those secrets keep the existing value when the submitted field is blank; `kiosk_exit_pin` is cleared by `''` and the notification secrets by their `clear*` flags. See [backend environment](/env/backend-environment.md) for key handling.
 
 # Schema
 
@@ -63,6 +63,10 @@ When `sensitive=true`, `setConfig` stores `encrypt(value)`: AES-256-GCM with a r
 | `notify_email_to` | no | [notifications](/config/notifications.md) |
 | `notify_events` | no | [notifications](/config/notifications.md) |
 | `notify_events_version` | no | [notifications](/config/notifications.md) |
+| `notify_ntfy_token` | **yes when non-empty** | [notifications](/config/notifications.md) |
+| `notify_ntfy_url` | **yes when non-empty** | [notifications](/config/notifications.md) |
+| `notify_telegram_bot_token` | **yes when non-empty** | [notifications](/config/notifications.md) |
+| `notify_telegram_chat_id` | no | [notifications](/config/notifications.md) |
 | `notify_webhook_url` | **yes when non-empty** | [notifications](/config/notifications.md) |
 | `proxmox_host` | no | [proxmox-connection](/config/proxmox-connection.md) |
 | `proxmox_token_id` | no | [proxmox-connection](/config/proxmox-connection.md) |
@@ -86,11 +90,12 @@ When `sensitive=true`, `setConfig` stores `encrypt(value)`: AES-256-GCM with a r
 | `sso_issuer` | no | [sso](/config/sso.md) |
 | `sso_scopes` | no | [sso](/config/sso.md) |
 | `template_refresh_enabled` | no | [template-refresh](/config/template-refresh.md) |
+| `usage_digest_enabled` | no | [usage-digest](/config/usage-digest.md) |
 
 # Gotchas
 
 - Two keys are read but never written by any route or UI: `frontend_url` and `ide_min_ram_mb`. They can only be set by editing the DB directly.
-- Boolean keys are stored as `"true"` / `"false"` strings. Most readers test `=== 'true'`, so a missing row means false. `isolation_enabled` is the exception: it tests `!== 'false'`, so a missing row means **on**.
+- Boolean keys are stored as `"true"` / `"false"` strings. Most readers test `=== 'true'`, so a missing row means false. `isolation_enabled` and `usage_digest_enabled` are the exceptions: they test `!== 'false'`, so a missing row means **on**.
 - `GET /api/admin/settings` aggregates most groups in one response ([admin API](/api/admin.md)). Tenant isolation (`/api/admin/isolation`), the cluster balancer (`/api/admin/balancer`) and cloud-init (`/api/templates/cloud-init-config`) have their own endpoints.
 
 [^config-svc]: backend/src/services/config.service.ts

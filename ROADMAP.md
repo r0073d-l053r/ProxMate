@@ -47,12 +47,6 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 ### Tenant-experience follow-ups
 
-- **Notify the tenant on admin deploy-for-tenant** — a granted VM just appears in their account
-  today; send the branded "you've been granted a VM" email + in-app note.
-- **Share notifications** — email the recipient when a VM is shared with them or their preset level
-  (Viewer / Operator / Manager) changes.
-- **Surface admin-managed / quota-exempt to the owner** — a badge + one-line explainer on the VM
-  detail ("set up by your admin — only an admin can resize it") instead of just the 403 on attempt.
 - **Read-only console (input-blocked viewing)** — a Viewer share gets no console today; the noted
   follow-up is a view-only, input-blocked console stream.
 
@@ -104,11 +98,9 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 5. **Guest-agent file push.** Reuse the exact trust model as password-reset / SSH-key-inject (QEMU
    guest agent, argv-safe) to let an owner upload a small file into a VM (e.g. a config or starter
    script) from the browser — no SSH. Size-capped, owner/Manager only. _CE._
-6. **More notification channels.** The webhook engine supports Discord/Slack/Mattermost/generic; add
-   **ntfy** and **Telegram** presets, plus a weekly per-tenant **usage digest** email. _CE._
-7. **Two-person approval for destructive admin actions.** Optional policy: a second admin must confirm
+6. **Two-person approval for destructive admin actions.** Optional policy: a second admin must confirm
    a bulk-delete / node-drain / firewall-disable before it runs. Rides the existing audit log. _EDU._
-8. **Status page / scheduled reports.** A lightweight public/authed status page (node health, capacity,
+7. **Status page / scheduled reports.** A lightweight public/authed status page (node health, capacity,
    incidents) and optional scheduled admin reports (capacity trend, top consumers) off the existing
    `ResourceSample` + cluster-health data. _EDU._
 
@@ -117,6 +109,19 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 ## ✅ Shipped — condensed index
 
 Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
+
+### Unreleased
+
+- **Tenant notifications.** A tenant is emailed when an admin sets a VM up in their account, and
+  when a VM is shared with them or their level changes (an address with no account gets nothing,
+  and the owner sees the same answer either way). Users can turn these activity emails off under
+  Security → Email preferences.
+- **Admin-managed badge.** A VM an admin set up shows a badge and "Set up by your admin — only an
+  admin can resize or rebuild it." to its tenant instead of silently missing controls.
+- **ntfy and Telegram channels** for admin event notifications, alongside the webhook and email,
+  with secrets encrypted and shown masked and a per-channel **Send test**.
+- **Weekly usage digest.** Opt-in per user (off by default) with an admin switch: their machines,
+  running hours, average CPU and memory, and quota in use, Mondays 08:00 (`USAGE_DIGEST_CRON`).
 
 - **v1.2.0 — sharing, placement and least privilege.** Share a VM with someone before they sign
   up (pending shares, claimed only by a confirmed address); template deploys on shared storage

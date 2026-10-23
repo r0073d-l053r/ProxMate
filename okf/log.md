@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-10-23
+* **Creation**: Documented the [activity-mail](/services/activity-mail.md) and [usage-digest](/services/usage-digest.md) services and the [usage digest setting](/config/usage-digest.md).
+* **Update**: Added the ntfy and Telegram channels to [notifications](/config/notifications.md) and the [notify service](/services/notify.md); new [User](/database/user.md) email preferences, `USAGE_DIGEST_CRON`, and the share and deploy-for-tenant emails in the [VM](/api/vm.md), [template](/api/template.md), [auth](/api/auth.md) and [admin](/api/admin.md) APIs.
+
 ## 2026-10-20
 * **Update**: Documented [pending shares](/database/pending-vm-share.md), template deploy placement, start/restart waiting for the Proxmox task, and the least-privilege token in [privileges](/proxmox/privileges.md), with what a live Proxmox VE 9.2 cluster proved.
 
