@@ -292,8 +292,8 @@ Servers with a self-signed certificate can be trusted after you confirm the cert
 SHA-256 fingerprint. It needs no server changes.
 
 The [Android workflow](.github/workflows/android.yml) builds a debug APK on every change
-under `android/` (artifact `proxmate-android-debug`), plus a signed release APK when the
-signing secrets are set. Build, install and signing steps are in
+under `android/` (artifact `proxmate-android-debug`), plus a signed release APK on `main` and
+version tags when the signing secrets are set. Build, install and signing steps are in
 [android/README.md](./android/README.md).
 
 ---
