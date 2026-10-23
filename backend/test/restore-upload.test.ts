@@ -6,6 +6,7 @@ vi.mock('../src/lib/prisma.js', () => ({
   },
 }));
 vi.mock('../src/services/proxmox.service.js', () => ({
+  getGuestPool: vi.fn(async () => undefined),
   getClient: vi.fn(),
   getBackupNodes: vi.fn(),
   extractBackupConfig: vi.fn(),
@@ -244,6 +245,16 @@ describe('restoreFromUpload', () => {
     expect(client.put.mock.invocationCallOrder[client.put.mock.calls.indexOf(nicPut!)]!).toBeLessThan(isolationOrder);
     // The uploaded archive is a transient carrier — removed after success.
     expect(pve.deleteBackup).toHaveBeenCalledWith('pve-0', 'backups', VOLID);
+  });
+
+  it('restores into the configured Proxmox pool', async () => {
+    vi.mocked(pve.getGuestPool).mockResolvedValueOnce('proxmate');
+    await restoreFromUpload(user, { filename: FILENAME, name: 'migrated-web' });
+    expect(pve.restoreNewGuest).toHaveBeenCalledWith(
+      expect.objectContaining({ vmid: 200, pool: 'proxmate' }),
+      expect.anything(),
+      'qemu',
+    );
   });
 
   it('derives LXC restores from the filename', async () => {

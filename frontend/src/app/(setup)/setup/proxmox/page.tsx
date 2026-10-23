@@ -19,6 +19,7 @@ export default function SetupProxmoxPage() {
   const [tokenId, setTokenId] = useState("");
   const [tokenSecret, setTokenSecret] = useState("");
   const [verifySsl, setVerifySsl] = useState(false);
+  const [pool, setPool] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [testing, setTesting] = useState(false);
   const [tested, setTested] = useState(false);
@@ -28,6 +29,9 @@ export default function SetupProxmoxPage() {
     if (!/^https?:\/\/.+/.test(host)) e.host = "Enter a full URL, e.g. https://192.168.1.100:8006";
     if (!tokenId.trim()) e.tokenId = "API token ID is required";
     if (!tokenSecret.trim()) e.tokenSecret = "API token secret is required";
+    if (pool.trim() && !/^[A-Za-z0-9_-]{1,64}$/.test(pool.trim())) {
+      e.pool = "Pool names use only letters, digits, '-' and '_'";
+    }
     setErrors(e);
     return Object.keys(e).length === 0;
   }
@@ -37,7 +41,7 @@ export default function SetupProxmoxPage() {
     setTesting(true);
     setTested(false);
     try {
-      await api.post("/setup/proxmox", { host, tokenId, tokenSecret, verifySsl });
+      await api.post("/setup/proxmox", { host, tokenId, tokenSecret, verifySsl, pool: pool.trim() });
       const res = await api.post<{
         version: string;
         nodeCount: number;
@@ -134,6 +138,23 @@ export default function SetupProxmoxPage() {
             Verify TLS certificate
             <span className="text-xs text-muted-foreground">(disable for self-signed certs)</span>
           </label>
+
+          <FormField
+            label="Proxmox pool (optional)"
+            htmlFor="pool"
+            error={errors.pool}
+            hint="For a token scoped to a resource pool (deploy/proxmox-token.sh --pool): every guest ProxMate creates is placed in it. Leave empty otherwise."
+          >
+            <Input
+              id="pool"
+              value={pool}
+              onChange={(e) => {
+                setPool(e.target.value);
+                setTested(false);
+              }}
+              placeholder="e.g. proxmate"
+            />
+          </FormField>
 
           <Button type="submit" variant="outline" disabled={testing}>
             {testing ? <Loader2 className="animate-spin" /> : tested ? <CircleCheck /> : <Plug />}

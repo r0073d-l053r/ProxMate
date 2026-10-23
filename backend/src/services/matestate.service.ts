@@ -311,7 +311,13 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
 
     await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'restoring' } });
     const upid = await pve.restoreBackup(
-      { node: vm.proxmoxNode, vmid: vm.proxmoxVmId, volid: mateState.volid, storage: restoreStorage },
+      {
+        node: vm.proxmoxNode,
+        vmid: vm.proxmoxVmId,
+        volid: mateState.volid,
+        storage: restoreStorage,
+        pool: await pve.getGuestPool(),
+      },
       client,
       kind,
     );

@@ -39,15 +39,8 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 - **`ENCRYPTION_KEY` loss-safety.** Losing the key means losing the Proxmox token, SMTP creds,
   tenant AI keys, and TOTP secrets in one stroke. The docs runbook pairs key backup with DB backups
-  explicitly, and the app-database backup card already carries a static reminder. Still open: an
-  admin warning that stays visible until an admin confirms the key is backed up.
-- **Pool-scoped Proxmox token (optional).** The `ProxMate` role is granted on `/`, because placement,
-  migration and the balancer work across every node, so the per-guest boundary today is ProxMate's
-  ownership-tag check rather than a Proxmox permission. Offer a mode where the role is granted on a
-  Proxmox resource pool instead: ProxMate puts every guest it creates, clones or restores into that
-  pool, and Proxmox itself denies the token any guest outside it. Needs the node, storage and SDN
-  paths the role still requires outside the pool worked out, a connection-test check that the pool
-  exists, and `deploy/proxmox-token.sh` support.
+  explicitly; still open: an admin Settings warning that persists until the key is confirmed backed
+  up.
 - **Production validation passes.** The shipped OIDC SSO flow and the full 2FA/passkey matrix
   (TOTP, recovery codes, passkeys, invite-enforced 2FA) each need a documented end-to-end QA pass
   on a live deployment.
@@ -142,6 +135,15 @@ Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
   or — admin — one copy into each chosen user's account. The whole batch is checked against quota
   before anything is cloned; copies deploy a few at a time, each placed and isolated like a single
   deploy, with per-copy results. _CE primitive._
+- **Pool-scoped Proxmox token (optional) — needs live verification.** A `proxmox_pool` setting
+  (setup wizard and Admin → Settings) places every guest ProxMate creates, clones, restores or
+  imports in that resource pool. `deploy/proxmox-token.sh --pool <name>` creates the pool and
+  grants the guest privileges on `/pool/<name>` only, with `Sys.Audit` on `/nodes`, `Datastore.*`
+  on `/storage`, `SDN.*` on `/sdn/zones` and `Sys.Audit`/`Sys.Modify` on `/` alone. The
+  connection test checks the pool exists, the guest privileges on it, guest privileges still on
+  `/`, and managed guests outside the pool (with a one-click move for guests carrying a ProxMate
+  ownership tag). Still to do: run it end to end on a PVE 9 cluster and confirm Proxmox refuses
+  the token on a guest outside the pool while every feature works inside it.
 
 ### Released
 

@@ -169,7 +169,9 @@ describe('privileges that are not blocking but will bite later', () => {
 
     const r = await testProxmoxConnection();
     expect(r.connected).toBe(true);
-    expect(r.warnings).toEqual([]);
+    expect(r.warnings.some((w) => / is missing/.test(w))).toBe(false);
+    // The one thing left to say: ProxMate must be told to create its guests in that pool.
+    expect(r.warnings).toEqual([expect.stringMatching(/granted only on \/pool\/students, but no Proxmox pool is set/)]);
   });
 });
 

@@ -8,6 +8,7 @@ vi.mock('../src/lib/prisma.js', () => ({
 vi.mock('../src/services/config.service.js', () => ({ getConfig: vi.fn() }));
 vi.mock('../src/services/notify.service.js', () => ({ notify: vi.fn(async () => undefined) }));
 vi.mock('../src/services/proxmox.service.js', () => ({
+  getGuestPool: vi.fn(async () => undefined),
   getClient: vi.fn(async () => ({})),
   pickBestNode: vi.fn(async () => 'pve-0'),
   getImportStorages: vi.fn(async () => ['local']),
@@ -73,6 +74,16 @@ describe('refreshTemplate', () => {
 
     // Old template VM (9000 on pve-2) removed — cloud images are full-cloned, so it's unreferenced.
     expect(deleteVm).toHaveBeenCalledWith('pve-2', 9000, expect.anything());
+  });
+
+  it('builds the new template VM in the configured Proxmox pool', async () => {
+    findUnique.mockResolvedValue(cloudTpl());
+    vi.mocked(pve.getGuestPool).mockResolvedValueOnce('proxmate');
+    await refreshTemplate('t1');
+    expect(pve.createCloudInitVm).toHaveBeenCalledWith(
+      expect.objectContaining({ vmid: 9100, pool: 'proxmate' }),
+      expect.anything(),
+    );
   });
 
   it('refuses a non-cloud-init template (no build)', async () => {

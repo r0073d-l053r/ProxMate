@@ -60,6 +60,11 @@ export function templateMarker(templateId: string): string {
   return `${MARKER_PREFIX}template-${templateId.toLowerCase()}`;
 }
 
+/** Whether a Proxmox tag list carries this template's marker. */
+export function tagsMarkTemplate(raw: string | undefined, templateId: string): boolean {
+  return parsePveTags(raw).includes(templateMarker(templateId));
+}
+
 /** Tag a registered template's Proxmox guest with its template marker (replacing any other ProxMate tag). */
 export async function markTemplateGuest(
   template: { id: string; proxmoxNode: string; proxmoxVmId: number },
@@ -957,6 +962,7 @@ async function createVmLocked(user: User, input: CreateVmInput, release: () => v
         isoStorage,
         iso: input.os,
         tags: guestMarker(vm.id),
+        pool: await pve.getGuestPool(),
       },
       client,
     );
@@ -1110,6 +1116,7 @@ async function createContainerLocked(
         password: input.password,
         sshPublicKeys: input.sshKey,
         tags: guestMarker(vm.id),
+        pool: await pve.getGuestPool(),
       },
       client,
     );
@@ -1564,6 +1571,7 @@ async function provisionTemplateDeploy(
         full: plan.full,
         storage: plan.storage,
         target: node,
+        pool: await pve.getGuestPool(),
       },
       client,
     );
@@ -1829,7 +1837,7 @@ async function duplicateVmLocked(
       ? configured
       : undefined;
     const upid = await pve.cloneVm(
-      { node, templateVmid: current.proxmoxVmId, newVmid: vmid, name: newName, full: true, storage },
+      { node, templateVmid: current.proxmoxVmId, newVmid: vmid, name: newName, full: true, storage, pool: await pve.getGuestPool() },
       client,
     );
     cloneTask = { node, upid };
@@ -2879,6 +2887,7 @@ async function rebuildVmLocked(
           isoStorage: isoStorage!,
           iso: source.os,
           tags: guestMarker(current.id),
+          pool: await pve.getGuestPool(),
         },
         client,
       );
@@ -2898,6 +2907,7 @@ async function rebuildVmLocked(
           name: current.name,
           full: plan.full,
           storage: plan.storage,
+          pool: await pve.getGuestPool(),
         },
         client,
       );
