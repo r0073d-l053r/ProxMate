@@ -453,8 +453,38 @@ export interface UpdateStatus {
   updatedAt?: string;
 }
 
+/** A guest carrying a ProxMate ownership marker, as the connection test reports it. */
+export interface PoolGuest {
+  vmid: number;
+  node: string;
+  name: string;
+  kind: "qemu" | "lxc";
+  template: boolean;
+  /** The pool it is in now, or null for none. */
+  pool: string | null;
+}
+
+/** The connection test's pool section (present only when a Proxmox pool is configured). */
+export interface PoolReport {
+  name: string;
+  exists: boolean | null;
+  missingOnPool: string[];
+  guestPrivilegesOnRoot: string[];
+  outside: PoolGuest[];
+  notVisible: Array<{ vmid: number; name: string }>;
+}
+
+export interface ProxmoxConnectionResult {
+  version: string;
+  nodeCount: number;
+  vmCount: number;
+  storageCount: number;
+  warnings?: string[];
+  pool?: PoolReport;
+}
+
 export interface AdminSettings {
-  proxmox: { host: string | null; tokenId: string | null; verifySsl: boolean; hasSecret: boolean };
+  proxmox: { host: string | null; tokenId: string | null; verifySsl: boolean; pool: string; hasSecret: boolean };
   defaults: { storage: string | null; bridge: string | null; isoStorage: string | null; backupStorage: string | null };
   smtp:
     | { configured: false }

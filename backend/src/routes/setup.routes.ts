@@ -10,7 +10,7 @@ import {
   completeSetup,
   hasAdmin,
 } from '../services/setup.service.js';
-import { NETWORK_NAME_RE } from '../services/proxmox.service.js';
+import { NETWORK_NAME_RE, POOL_ID_RE } from '../services/proxmox.service.js';
 import { setAuthCookies } from '../lib/cookies.js';
 import { authLimiter } from '../middleware/rate-limit.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -90,6 +90,12 @@ const ProxmoxConfigSchema = z.object({
   tokenId: z.string().min(1),
   tokenSecret: z.string().min(1),
   verifySsl: z.boolean().default(true),
+  // Optional: the Proxmox resource pool every guest ProxMate creates is placed in.
+  pool: z
+    .string()
+    .trim()
+    .refine((v) => v === '' || POOL_ID_RE.test(v), "Pool names use only letters, digits, '-' and '_'.")
+    .optional(),
 });
 
 router.post('/proxmox', async (req: Request, res: Response) => {

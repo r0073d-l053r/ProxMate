@@ -20,13 +20,21 @@ import {
 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
-import type { AdminSettings, ProxmoxResources, IsolationStatus, NotifyEvent } from "@/lib/types";
+import type {
+  AdminSettings,
+  ProxmoxResources,
+  IsolationStatus,
+  NotifyEvent,
+  PoolReport,
+  ProxmoxConnectionResult,
+} from "@/lib/types";
 import { IsolationStatusNote, isolationView } from "@/components/admin/isolation-status";
 import { NOTIFY_EVENT_LABELS } from "@/lib/types";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { UpdatesCard } from "@/components/admin/updates-card";
 import { RescueIsoCard } from "@/components/admin/rescue-iso-card";
 import { UnmatchedVmsCard } from "@/components/admin/unmatched-vms-card";
+import { PoolGuestsNotice } from "@/components/admin/pool-guests-notice";
 import { TemplateRefreshCard } from "@/components/admin/template-refresh-card";
 import { IdeSettingsCard } from "@/components/admin/ide-settings-card";
 import { AppDbBackupCard } from "@/components/admin/appdb-backup-card";
@@ -94,6 +102,8 @@ export default function SettingsPage() {
   const [tokenId, setTokenId] = useState("");
   const [tokenSecret, setTokenSecret] = useState("");
   const [verifySsl, setVerifySsl] = useState(false);
+  const [pool, setPool] = useState("");
+  const [poolReport, setPoolReport] = useState<PoolReport | null>(null);
   const [hasSecret, setHasSecret] = useState(false);
   const [savingConn, setSavingConn] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -234,6 +244,7 @@ export default function SettingsPage() {
         setHost(proxmox.host ?? "");
         setTokenId(proxmox.tokenId ?? "");
         setVerifySsl(proxmox.verifySsl);
+        setPool(proxmox.pool ?? "");
         setHasSecret(proxmox.hasSecret);
         setStorage(defaults.storage ?? "");
         setBridge(defaults.bridge ?? "");
@@ -285,6 +296,7 @@ export default function SettingsPage() {
         tokenId,
         tokenSecret: tokenSecret || undefined,
         verifySsl,
+        pool: pool.trim(),
       });
       if (tokenSecret) setHasSecret(true);
       setTokenSecret("");
@@ -300,13 +312,8 @@ export default function SettingsPage() {
   async function testConnection() {
     setTesting(true);
     try {
-      const res = await api.post<{
-        version: string;
-        nodeCount: number;
-        vmCount: number;
-        storageCount: number;
-        warnings?: string[];
-      }>("/admin/settings/proxmox/test");
+      const res = await api.post<ProxmoxConnectionResult>("/admin/settings/proxmox/test");
+      setPoolReport(res.data.pool ?? null);
       toast.success(
         `Connected to Proxmox VE ${res.data.version} — ${res.data.nodeCount} nodes, ` +
           `${res.data.vmCount} guests, ${res.data.storageCount} storages visible`,
@@ -562,6 +569,18 @@ export default function SettingsPage() {
                   />
                   Verify TLS certificate
                 </label>
+                <FormField
+                  label="Proxmox pool (optional)"
+                  htmlFor="pool"
+                  hint="Every guest ProxMate creates, clones, restores or imports is placed in this resource pool, so the token can be scoped to it. Leave empty to not use a pool."
+                >
+                  <Input
+                    id="pool"
+                    value={pool}
+                    onChange={(e) => setPool(e.target.value)}
+                    placeholder="e.g. proxmate"
+                  />
+                </FormField>
                 <div className="flex gap-2">
                   <Button type="submit" disabled={savingConn}>
                     {savingConn ? <Loader2 className="animate-spin" /> : <Save />}
@@ -572,6 +591,7 @@ export default function SettingsPage() {
                     Test connection
                   </Button>
                 </div>
+                {poolReport && <PoolGuestsNotice report={poolReport} onMoved={testConnection} />}
               </form>
             </CardContent>
           </Card>

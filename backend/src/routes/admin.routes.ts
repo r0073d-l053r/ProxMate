@@ -7,7 +7,7 @@ import { requireAdmin } from '../middleware/admin.js';
 import { enforceMfaSetup } from '../middleware/mfa.js';
 import { assertPublicHttpUrlShape } from '../lib/url-safety.js';
 import { getConfig, setConfig } from '../services/config.service.js';
-import { testProxmoxConnection, saveDefaults } from '../services/setup.service.js';
+import { testProxmoxConnection, saveDefaults, saveGuestPool } from '../services/setup.service.js';
 import {
   isClusterFirewallEnabled,
   getClusterStats,
@@ -20,7 +20,9 @@ import {
   listPciMappings,
   pveMessage,
   NETWORK_NAME_RE,
+  POOL_ID_RE,
 } from '../services/proxmox.service.js';
+import { moveManagedGuestsIntoPool } from '../services/guest-pool.service.js';
 import { listAudit, recordAudit } from '../services/audit.service.js';
 import { getUsageByUser } from '../services/resource-history.service.js';
 import { getLiveStats, addLiveFeedSubscriber } from '../services/live-stats.service.js';
@@ -103,10 +105,11 @@ router.get('/audit', async (req: Request, res: Response) => {
 // Returns current config (never the Proxmox token secret).
 
 router.get('/settings', async (_req: Request, res: Response) => {
-  const [host, tokenId, verifySsl, storage, bridge, isoStorage, backupStorage, rescueIso, templateRefresh] = await Promise.all([
+  const [host, tokenId, verifySsl, pool, storage, bridge, isoStorage, backupStorage, rescueIso, templateRefresh] = await Promise.all([
     getConfig('proxmox_host'),
     getConfig('proxmox_token_id'),
     getConfig('proxmox_verify_ssl'),
+    getConfig('proxmox_pool'),
     getConfig('default_storage'),
     getConfig('default_bridge'),
     getConfig('iso_storage'),
@@ -121,7 +124,13 @@ router.get('/settings', async (_req: Request, res: Response) => {
   // reported only as "is one set" plus a masked form that shows where it points.
   const { webhookUrl, ...notifyCfg } = await getNotifyConfig();
   res.json({
-    proxmox: { host, tokenId, verifySsl: verifySsl === 'true', hasSecret: !!(await getConfig('proxmox_token_secret')) },
+    proxmox: {
+      host,
+      tokenId,
+      verifySsl: verifySsl === 'true',
+      pool: pool ?? '',
+      hasSecret: !!(await getConfig('proxmox_token_secret')),
+    },
     defaults: { storage, bridge, isoStorage, backupStorage },
     rescueIso,
     templateRefreshEnabled: templateRefresh === 'true',
@@ -501,6 +510,12 @@ const ProxmoxUpdateSchema = z.object({
   tokenId: z.string().min(1),
   tokenSecret: z.string().optional(),
   verifySsl: z.boolean().default(true),
+  // Optional resource pool for every guest ProxMate creates; '' clears it, omitted keeps it.
+  pool: z
+    .string()
+    .trim()
+    .refine((v) => v === '' || POOL_ID_RE.test(v), "Pool names use only letters, digits, '-' and '_'.")
+    .optional(),
 });
 
 router.put('/settings/proxmox', async (req: Request, res: Response) => {
@@ -509,11 +524,14 @@ router.put('/settings/proxmox', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
     return;
   }
-  const { host, tokenId, tokenSecret, verifySsl } = parsed.data;
+  const { host, tokenId, tokenSecret, verifySsl, pool } = parsed.data;
+  const poolBefore = (await getConfig('proxmox_pool')) ?? '';
 
   await setConfig('proxmox_host', host);
   await setConfig('proxmox_token_id', tokenId);
   await setConfig('proxmox_verify_ssl', String(verifySsl));
+  if (pool !== undefined) await saveGuestPool(pool);
+  const poolChanged = pool !== undefined && pool !== poolBefore;
   const secretReplaced = !!tokenSecret && tokenSecret.trim().length > 0;
   if (secretReplaced) {
     await setConfig('proxmox_token_secret', tokenSecret, true);
@@ -524,7 +542,9 @@ router.put('/settings/proxmox', async (req: Request, res: Response) => {
   await recordAudit({
     action: 'admin.proxmox_config',
     actor: (req as AuthRequest).user,
-    detail: `${host} as ${tokenId}, verifySsl=${verifySsl}${secretReplaced ? ', secret replaced' : ''}`,
+    detail:
+      `${host} as ${tokenId}, verifySsl=${verifySsl}${secretReplaced ? ', secret replaced' : ''}` +
+      (poolChanged ? `, pool: ${poolBefore || '(none)'} → ${pool || '(none)'}` : ''),
     req,
   });
   res.json({ success: true });
@@ -539,6 +559,29 @@ router.post('/settings/proxmox/test', async (_req: Request, res: Response) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Connection failed';
     res.status(502).json({ connected: false, error: msg });
+  }
+});
+
+// ─── POST /api/admin/settings/proxmox/pool/move-guests ────────
+// Put every guest carrying a ProxMate ownership marker into the configured pool,
+// so a token scoped to the pool can still reach it. Guests without a marker are
+// never touched.
+
+router.post('/settings/proxmox/pool/move-guests', async (req: Request, res: Response) => {
+  try {
+    const result = await moveManagedGuestsIntoPool();
+    await recordAudit({
+      action: 'admin.proxmox_pool_move',
+      actor: (req as AuthRequest).user,
+      detail:
+        result.moved.length > 0
+          ? `moved into ${result.pool}: ${result.moved.map((g) => g.vmid).join(', ')}`
+          : `nothing to move into ${result.pool}`,
+      req,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
   }
 });
 
