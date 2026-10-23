@@ -49,7 +49,7 @@ model User {
   // Community Edition: opted out of admin broadcast (announcement) emails.
   // Transactional / security / notification emails are unaffected. The EDU
   // edition deliberately has no opt-out (instructors must reach every student).
-  broadcastOptOut Boolean @default(false)
+  broadcastOptOut     Boolean @default(false)
   // Opted out of activity emails about their own machines: a VM an admin set up
   // in their account, or a VM shared with them / a change to their share level.
   // Security, account and alert emails are unaffected.
@@ -281,6 +281,16 @@ model VirtualMachine {
   holdReason String?
   ipAddress  String?
 
+  // The long-running operation behind a `creating` row (a create, clone, upload
+  // restore or rebuild), kept so one a restart cut short can still be settled
+  // (see task-reconcile.service.ts): what it was, when it began, and the Proxmox
+  // task (UPID) driving it once there is one. Only read while the row is `creating`.
+  opKind      String? // create | create-lxc | clone | duplicate | restore-upload | rebuild-iso | rebuild-template | import
+  opStartedAt DateTime?
+  opUpid      String?
+  opSourceId  String? // a duplicate's source machine, or a template deploy's / rebuild's template
+  opArchive   String? // an upload restore's archive volid, removed once the row settles
+
   // The guest's Tailscale address (100.64.0.0/10), when Tailscale runs inside it —
   // read from the same interface listing as ipAddress and kept separate so the
   // LAN IP stays accurate. Cleared when Tailscale stops advertising.
@@ -360,6 +370,7 @@ model VirtualMachine {
   pendingShares       PendingVmShare[]
   passthroughRequests PassthroughRequest[]
   alertRules          AlertRule[]
+  autoSnapshots       AutoSnapshot[]
 
   @@index([userId])
   @@index([proxmoxVmId])
@@ -447,6 +458,9 @@ model MateState {
   volid       String   @unique // e.g. local:backup/vzdump-qemu-100-…
   size        BigInt   @default(0) // bytes (BigInt: real backups exceed Int32's ~2.1 GB)
   status      String   @default("creating") // creating | ready | restoring | error
+  // The Proxmox task (UPID) of the backup or restore in flight, so one a restart
+  // cut short can be settled from the task itself. Null otherwise.
+  upid        String?
   kind        String   @default("scheduled") // scheduled | manual
   notes       String?
   createdAt   DateTime @default(now())
@@ -629,4 +643,20 @@ model Passkey {
   lastUsedAt DateTime?
 
   @@index([userId])
+}
+
+// A Proxmox snapshot ProxMate took on its own before a risky change (resize,
+// data-disk grow, rescue). Retention only ever deletes snapshots recorded here
+// whose name and snaptime still match, so a snapshot a user made is never removed.
+model AutoSnapshot {
+  id        String   @id @default(cuid())
+  vmId      String
+  name      String // pm-auto-<op>-<timestamp>
+  op        String // resize | disk-resize | rescue
+  snaptime  Int? // Proxmox's snaptime (epoch seconds) of the snapshot taken
+  createdAt DateTime @default(now())
+
+  vm VirtualMachine @relation(fields: [vmId], references: [id], onDelete: Cascade)
+
+  @@unique([vmId, name])
 }

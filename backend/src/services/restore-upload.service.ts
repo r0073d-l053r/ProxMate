@@ -12,10 +12,14 @@ import {
   settleFailedCreate,
   syncRestoredGuest,
   assertOwnVolumes,
+  recordOpTask,
+  OP_SETTLED,
+  type VmOpKind,
   nextVmId,
   reserveVmIds,
   releaseVmId,
 } from './vm.service.js';
+import { beginInFlight } from '../lib/in-flight.js';
 import { parseGuestConfigText, guestConfigSizes } from '../lib/guest-config.js';
 import { readArchiveConfig, ArchiveConfigError } from '../lib/vzdump-archive.js';
 import * as pve from './proxmox.service.js';
@@ -207,7 +211,7 @@ export function ownCicustom(value: string): boolean {
 }
 
 /** Remove the keys a restore must not keep (STRIPPED_AFTER_RESTORE) from a restored guest. */
-async function stripRestoreFlags(
+export async function stripRestoreFlags(
   node: string,
   vmid: number,
   client: Awaited<ReturnType<typeof pve.getClient>>,
@@ -265,6 +269,17 @@ async function rebuildRestoredGuestConfig(
   if (cfg['cicustom'] !== undefined && !ownCicustom(cfg['cicustom'])) strip.push('cicustom');
   if (strip.length > 0) params.set('delete', strip.join(','));
   if ([...params.keys()].length > 0) await client.put(`/nodes/${node}/${kind}/${vmid}/config`, params);
+}
+
+/**
+ * Best-effort removal of an uploaded archive known only by its volid (as a
+ * `restore-upload` row records it in `opArchive`), for the restart reconciler.
+ */
+export async function cleanupUploadedArchive(volid: string, node: string | null): Promise<void> {
+  const storage = volid.split(':')[0] ?? '';
+  const filename = path.basename(volid.slice(volid.indexOf(':') + 1));
+  if (!storage || !VZDUMP_UPLOAD_RE.test(filename)) return;
+  await cleanupArchive(filename, node, storage, volid);
 }
 
 /**
@@ -339,8 +354,10 @@ async function cleanupArchive(filename: string, node: string | null, storage: st
 /**
  * Remove uploads ProxMate wrote and no restore is using: marked archives (and
  * their markers) and unfinished `.proxmate-upload-*.part` files untouched for
- * `olderThanMs`. A marked archive named for a VMID whose machine row is still
- * `creating` is kept. Run at startup; returns how many files were removed.
+ * `olderThanMs`. A marked archive is kept while a machine row still `creating`
+ * names its VMID or records it as its archive (`opArchive` — without a pool the
+ * archive keeps its original VMID); the restart reconciler removes it when it
+ * settles that row. Run at startup; returns how many files were removed.
  */
 export async function sweepStaleUploads(olderThanMs = 6 * 60 * 60 * 1000): Promise<number> {
   const dir = uploadDir();
@@ -353,6 +370,11 @@ export async function sweepStaleUploads(olderThanMs = 6 * 60 * 60 * 1000): Promi
   }
   const cutoff = Date.now() - olderThanMs;
   const old = async (full: string) => (await fsp.stat(full).catch(() => null))?.mtimeMs ?? Infinity;
+  const pending = await prisma.virtualMachine.findMany({
+    where: { status: 'creating', opArchive: { not: null } },
+    select: { opArchive: true },
+  });
+  const inUse = new Set(pending.map((r) => path.basename(String(r.opArchive).slice(String(r.opArchive).indexOf(':') + 1))));
   let removed = 0;
   for (const name of names) {
     if (TEMP_UPLOAD_RE.test(name)) {
@@ -365,6 +387,7 @@ export async function sweepStaleUploads(olderThanMs = 6 * 60 * 60 * 1000): Promi
     if (!marker || (await old(marker)) >= cutoff) continue;
     const archive = name.slice(MARKER_PREFIX.length);
     const vmid = Number(/^vzdump-(?:qemu|lxc)-(\d+)-/.exec(archive)?.[1]);
+    if (inUse.has(archive)) continue;
     const inFlight = await prisma.virtualMachine.count({ where: { proxmoxVmId: vmid, status: 'creating' } });
     if (inFlight > 0) continue;
     const file = resolveUnderUploadDir(archive, VZDUMP_UPLOAD_RE);
@@ -521,9 +544,14 @@ async function restoreFromUploadLocked(
         storage: cfg.diskGb,
         os: 'Restored backup',
         status: 'creating',
+        opKind: 'restore-upload' satisfies VmOpKind,
+        opStartedAt: new Date(),
+        // So an interrupted restore's archive can still be removed after a restart.
+        opArchive: volid,
       },
     });
     release(); // usage now includes this row
+    const done = beginInFlight(vm.id);
 
     let created = false;
     let restoreTask:
@@ -540,6 +568,7 @@ async function restoreFromUploadLocked(
         client,
         kind,
       );
+      await recordOpTask(vm.id, upid);
       restoreTask = {
         node,
         upid,
@@ -584,12 +613,12 @@ async function restoreFromUploadLocked(
       // guest, and the row's sizes come from the guest itself.
       await syncRestoredGuest(vm, { approvedPci: [], client });
 
-      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
+      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped', ...OP_SETTLED } });
       const startUpid = await pve.startVm(node, vmid, client, kind);
       await pve.waitForTask(node, startUpid, client);
-      const done = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
+      const running = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
       await cleanupArchive(filename, node, storage, volid);
-      return done;
+      return running;
     } catch (err) {
       // Any failure once the restore has landed leaves the row in `error`, which
       // nothing may start. A restore task still running when the wait gave up keeps
@@ -597,6 +626,8 @@ async function restoreFromUploadLocked(
       const { following } = await settleFailedCreate(vm, err, created, { task: restoreTask });
       if (following) archiveHandedOff = true;
       throw err;
+    } finally {
+      done();
     }
   } catch (err) {
     // Any pre-restore failure (reservation, rename, quota, placement, reading the

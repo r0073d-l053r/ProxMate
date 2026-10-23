@@ -99,6 +99,15 @@ beforeEach(() => {
   vi.mocked(prisma.virtualMachine.findMany).mockResolvedValue([] as never);
 });
 
+describe('MateState restore of a row still being created', () => {
+  it('is refused before anything is stopped or restored', async () => {
+    const { c } = fakePve(LIVE, LIVE);
+    await expect(restoreFromMateState(row({ status: 'creating' }), ms)).rejects.toThrow(/still being created/);
+    expect(c.post).not.toHaveBeenCalled();
+    expect(prisma.mateState.update).not.toHaveBeenCalled();
+  });
+});
+
 describe('MateState restore: resources come back only within quota (BUG-024)', () => {
   it('refuses a backup that would grow the guest past the quota the owner has since spent elsewhere', async () => {
     const { c } = fakePve(LIVE, BIG_ARCHIVE);

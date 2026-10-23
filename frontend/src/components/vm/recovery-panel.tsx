@@ -4,6 +4,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Copy, FileUp, KeyRound, KeySquare, LifeBuoy, Loader2 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
+import { autoSnapshotNote, type AutoSnapshotResult } from "@/lib/auto-snapshot";
 import type { SshKey, VmDetail } from "@/lib/types";
 import { copyText } from "@/lib/clipboard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -123,8 +124,10 @@ export function RecoveryPanel({
   async function enterRescue() {
     setWorking(true);
     try {
-      await api.post(`/vms/${vm.id}/rescue`);
-      toast.success("Booting into rescue mode — open the console to use it.");
+      const r = await api.post<{ autoSnapshot?: AutoSnapshotResult }>(`/vms/${vm.id}/rescue`);
+      toast.success("Booting into rescue mode — open the console to use it.", {
+        description: autoSnapshotNote(r.data?.autoSnapshot) ?? undefined,
+      });
       setDialog(null);
       onChanged();
     } catch (err) {

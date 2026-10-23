@@ -25,6 +25,7 @@ const FORWARDED = [
   'LOG_LEVEL',
   'GITHUB_TOKEN',
   'IDE_GUEST_PORT',
+  'RECONCILE_STUCK_MINUTES',
 ];
 
 describe('docker-compose.yml backend environment', () => {

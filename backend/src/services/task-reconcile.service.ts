@@ -1,0 +1,638 @@
+import type { MateState, VirtualMachine } from '@prisma/client';
+import { AxiosError, type AxiosInstance } from 'axios';
+import { prisma } from '../lib/prisma.js';
+import { isInFlight } from '../lib/in-flight.js';
+import { envNumber } from '../lib/env-number.js';
+import { getConfig } from './config.service.js';
+import { notify } from './notify.service.js';
+import { recordAudit } from './audit.service.js';
+import * as pve from './proxmox.service.js';
+import {
+  kindOf,
+  syncVmNodeChecked,
+  requireOurGuest,
+  tagsMarkRow,
+  tagsWithMarker,
+  parsePveTags,
+  guestMarker,
+  templateMarker,
+  notifyOwnerOfFailedRebuild,
+  cloneNonce,
+  OP_SETTLED,
+  PROVISION_FAILED_MESSAGE,
+  RESTORE_FAILED_MESSAGE,
+  type VmOpKind,
+} from './vm.service.js';
+import { stripRestoreFlags, cleanupUploadedArchive } from './restore-upload.service.js';
+
+// ─── Interrupted background operations ────────────────────────
+//
+// Creates, clones, upload restores, rebuilds, imports, MateState backups and
+// in-place restores run inside the request (or scheduler tick) that started them.
+// When the backend restarts mid-way, that continuation is gone: the row stays
+// `creating` (or its MateState `creating`/`restoring`) for good, and the
+// live-status sync deliberately leaves `creating` rows alone. This pass, run at
+// startup and then on the scheduler, settles such rows from what Proxmox shows:
+//
+// - never a row whose operation is running in this process (lib/in-flight), nor
+//   one younger than STUCK_AFTER_MS, nor one whose Proxmox task is still running,
+//   whose task can't be read right now, or whose guest holds a Proxmox lock — those
+//   are looked at again next pass. The in-flight check is repeated right before
+//   each write, and every write is conditional on the row still being the one that
+//   was read (`creating`, same `opStartedAt`), so a row something else picked up
+//   meanwhile is left to it;
+// - a guest is only ever treated as the row's when it carries the row's tag. A
+//   clone whose task finished before it was tagged is tagged here only when nothing
+//   else could claim it: no other row has its VMID, it carries no ProxMate tag but
+//   its source's, and its name is the row's. A task result alone is never enough —
+//   the VMID may have gone to someone else's guest since;
+// - a create whose only remaining step was the isolation firewall (ISO VM, LXC, ISO
+//   rebuild) is completed and left stopped; an import whose tag was written (the
+//   last step) is completed;
+// - anything else that got part-way is held with the provisioning hold, admins
+//   are notified (once per row), and a create that never produced a guest is
+//   dropped, which frees its quota.
+//
+// Nothing here deletes a guest or a backup.
+
+/** How long an operation's row must be untouched before it counts as interrupted. */
+export const STUCK_AFTER_MS = envNumber('RECONCILE_STUCK_MINUTES', 15, 1) * 60_000;
+
+/** After this long under a Proxmox lock, an admin is told (once) and the row is still left alone. */
+export const LOCK_NOTICE_AFTER_MS = 24 * 60 * 60 * 1000;
+
+/** Why the settled row's operation failed, as the owner and admins read it. */
+const INTERRUPTED = 'ProxMate was restarted before this finished, so it stopped part-way';
+
+export type ReconcileOutcome =
+  | 'in-flight'
+  | 'recent'
+  | 'busy'
+  | 'unreachable'
+  | 'completed'
+  | 'held'
+  | 'dropped'
+  | 'failed';
+
+export interface ReconcileSummary {
+  checked: number;
+  completed: number;
+  held: number;
+  dropped: number;
+  failed: number;
+  /** Left for a later pass (in flight here, too recent, still busy in Proxmox, or Proxmox unreachable). */
+  deferred: number;
+}
+
+/** Rows whose long-lock notice has gone out (per process: a restart may repeat it once). */
+const lockNoticeSent = new Set<string>();
+
+/** Test hook. */
+export function resetReconcileNotices(): void {
+  lockNoticeSent.clear();
+}
+
+/** The node a UPID names (`UPID:<node>:…`), or null for something that isn't one. */
+export function upidNode(upid: string | null | undefined): string | null {
+  const parts = (upid ?? '').split(':');
+  return parts[0] === 'UPID' && parts[1] ? parts[1] : null;
+}
+
+/**
+ * What a recorded task says: `none` when no task was recorded, `unreachable` when
+ * one was but can't be read now (a node down, a hiccup) — the row is then left for
+ * the next pass rather than settled on a guess.
+ */
+type TaskVerdict = 'running' | 'ok' | 'failed' | 'none' | 'unreachable';
+
+async function taskVerdict(upid: string | null, client: AxiosInstance): Promise<TaskVerdict> {
+  if (!upid) return 'none';
+  const node = upidNode(upid);
+  if (!node) return 'none';
+  try {
+    const st = await pve.getTaskStatus(node, upid, client);
+    if (st.status === 'running') return 'running';
+    if (st.status !== 'stopped') return 'unreachable';
+    return !st.exitstatus || st.exitstatus === 'OK' || st.exitstatus.startsWith('WARNINGS') ? 'ok' : 'failed';
+  } catch {
+    return 'unreachable';
+  }
+}
+
+/** The guest config at a row's VMID; null when there is no guest there. Throws when Proxmox can't say. */
+async function guestConfig(vm: VirtualMachine, client: AxiosInstance): Promise<Record<string, string> | null> {
+  try {
+    return await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, kindOf(vm));
+  } catch (err) {
+    if (/does not exist|not found/i.test(pve.pveMessage(err))) return null;
+    // A pool-scoped token is refused (403) on any VMID outside its pool, an empty
+    // one included. Only a VMID Proxmox would hand out next is provably empty;
+    // anything else may be a guest the token can't see, and is left alone.
+    if (err instanceof AxiosError && err.response?.status === 403) {
+      if (await pve.isVmIdFree(vm.proxmoxVmId, client)) return null;
+    }
+    throw err;
+  }
+}
+
+function tooRecent(since: Date, now: Date): boolean {
+  return now.getTime() - since.getTime() < STUCK_AFTER_MS;
+}
+
+/** The write condition that the row is still exactly the one this pass read. */
+function unchanged(row: VirtualMachine) {
+  return { id: row.id, status: 'creating', opStartedAt: row.opStartedAt };
+}
+
+class RowChanged extends Error {}
+
+/** Conditional update of a row still as read; throws RowChanged when it isn't. */
+async function settleRow(row: VirtualMachine, data: Record<string, unknown>): Promise<void> {
+  if (isInFlight(row.id)) throw new RowChanged();
+  const r = await prisma.virtualMachine.updateMany({ where: unchanged(row), data });
+  if (r.count === 0) throw new RowChanged();
+}
+
+/** Conditional removal of a row still as read (with its IDE credential rows). */
+async function dropRow(row: VirtualMachine): Promise<void> {
+  if (isInFlight(row.id)) throw new RowChanged();
+  const r = await prisma.virtualMachine.deleteMany({ where: unchanged(row) });
+  if (r.count === 0) throw new RowChanged();
+  await prisma.ideGuestSecret.deleteMany({ where: { vmId: row.id } }).catch(() => undefined);
+  await prisma.ideGatewayToken.deleteMany({ where: { vmId: row.id } }).catch(() => undefined);
+}
+
+const holdData = { status: 'error', holdReason: PROVISION_FAILED_MESSAGE, ...OP_SETTLED };
+
+/** The ProxMate tags on a guest other than this row's and its operation's source's. */
+function otherMarkers(cfg: Record<string, string>, row: VirtualMachine): string[] {
+  const allowed = new Set([guestMarker(row.id)]);
+  if (row.opSourceId) {
+    allowed.add(row.opKind === 'duplicate' ? guestMarker(row.opSourceId) : templateMarker(row.opSourceId));
+  }
+  return parsePveTags(cfg['tags']).filter((t) => t.startsWith('proxmate-') && !allowed.has(t));
+}
+
+/** Whether another row also references this VMID. */
+async function vmidShared(row: VirtualMachine): Promise<boolean> {
+  return (await prisma.virtualMachine.count({ where: { proxmoxVmId: row.proxmoxVmId, id: { not: row.id } } })) > 0;
+}
+
+/** Whether a Template Store entry references this VMID. */
+async function vmidIsTemplate(row: VirtualMachine): Promise<boolean> {
+  return (await prisma.template.count({ where: { proxmoxVmId: row.proxmoxVmId } })) > 0;
+}
+
+/** Whether a guest's description carries exactly this row's clone nonce on a line of its own. */
+function carriesNonce(cfg: Record<string, string>, row: VirtualMachine): boolean {
+  const want = cloneNonce(row.id);
+  return (cfg['description'] ?? '').split(/\r?\n/).some((l) => l.trim() === want);
+}
+
+/**
+ * Positive proof that an untagged guest at the VMID is what this row's clone (or
+ * rebuild clone) produced: the clone was created with this row's nonce as its
+ * description (clones of one template otherwise look alike), the task finished OK,
+ * no other row and no Template Store entry has the VMID, the guest carries no
+ * ProxMate tag but its source's, it isn't a template, and its name is the row's.
+ */
+async function claimableClone(row: VirtualMachine, cfg: Record<string, string>, task: TaskVerdict): Promise<boolean> {
+  if (task !== 'ok' || cfg['template'] === '1') return false;
+  if (!carriesNonce(cfg, row)) return false;
+  if (otherMarkers(cfg, row).length > 0) return false;
+  const name = kindOf(row) === 'lxc' ? cfg['hostname'] : cfg['name'];
+  if (name !== row.name) return false;
+  return !(await vmidShared(row)) && !(await vmidIsTemplate(row));
+}
+
+/** Settle one `creating` VirtualMachine row. Exported for tests. */
+export async function reconcileCreatingVm(
+  row: VirtualMachine,
+  client: AxiosInstance,
+  now: Date = new Date(),
+): Promise<ReconcileOutcome> {
+  if (isInFlight(row.id)) return 'in-flight';
+  const since = row.opStartedAt ?? row.updatedAt;
+  if (tooRecent(since, now)) return 'recent';
+
+  // "Not at the stored node" only means gone when the cluster-wide lookup worked.
+  const { vm, synced } = await syncVmNodeChecked(row);
+  if (!synced) return 'unreachable';
+
+  const task = await taskVerdict(vm.opUpid, client);
+  if (task === 'running') return 'busy';
+  if (task === 'unreachable') return 'unreachable';
+  let cfg: Record<string, string> | null;
+  try {
+    cfg = await guestConfig(vm, client);
+  } catch {
+    return 'unreachable';
+  }
+  // A Proxmox lock (create, clone, backup, ...) means Proxmox is still working on it.
+  if (cfg?.['lock']) {
+    if (now.getTime() - since.getTime() > LOCK_NOTICE_AFTER_MS && !lockNoticeSent.has(vm.id)) {
+      lockNoticeSent.add(vm.id);
+      await notify({
+        event: 'vm.error',
+        title: vm.name,
+        message:
+          `"${vm.name}" (VMID ${vm.proxmoxVmId}) has been held by a Proxmox lock (${cfg['lock']}) for over a day ` +
+          'while ProxMate waits to finish creating it. Check it in Proxmox; ProxMate leaves it alone until the lock clears.',
+      }).catch(() => undefined);
+    }
+    return 'busy';
+  }
+
+  try {
+    return await settleCreatingVm(vm, row, cfg, task, client);
+  } catch (err) {
+    if (err instanceof RowChanged) return 'in-flight'; // picked up meanwhile — not ours to settle
+    throw err;
+  }
+}
+
+async function settleCreatingVm(
+  vm: VirtualMachine,
+  row: VirtualMachine,
+  cfg: Record<string, string> | null,
+  task: TaskVerdict,
+  client: AxiosInstance,
+): Promise<ReconcileOutcome> {
+  const kind = (vm.opKind ?? null) as VmOpKind | null;
+  const ours = !!cfg && tagsMarkRow(cfg['tags'], vm.id);
+  const rebuild = kind === 'rebuild-iso' || kind === 'rebuild-template';
+  const archive = vm.opArchive; // read before the settling write clears it
+  const node = vm.proxmoxNode;
+  const hasBackups = async () => (await prisma.mateState.count({ where: { vmId: vm.id } })) > 0;
+
+  const done = async (outcome: ReconcileOutcome, what: string, notice?: string) => {
+    if (notice) {
+      await notify({ event: 'vm.error', title: vm.name, message: notice }).catch(() => undefined);
+    }
+    await recordAudit({
+      action: 'vm.reconcile',
+      targetType: 'vm',
+      targetId: vm.id,
+      detail: `${kind ?? 'operation'} of "${vm.name}" was interrupted by a restart; ${what}`,
+    });
+    return outcome;
+  };
+  const failedNotice = `${rebuild ? 'Rebuild' : 'Provisioning'} of "${vm.name}" failed: ${INTERRUPTED}`;
+  const hold = async (what: string, notice?: string) => {
+    await settleRow(row, holdData);
+    if (archive) await cleanupUploadedArchive(archive, node).catch(() => undefined);
+    if (rebuild) await notifyOwnerOfFailedRebuild(vm, true, new Error(INTERRUPTED)).catch(() => undefined);
+    return done('held', what, notice ?? failedNotice);
+  };
+  // In doubt: hold the row, write nothing to the guest, and tell an admin which
+  // guest to look at.
+  const holdForAdmin = (what: string, advice: string) =>
+    hold(
+      what,
+      `${failedNotice}. The machine is held and guest ${vm.proxmoxVmId} on ${vm.proxmoxNode} was left untouched: ${advice}`,
+    );
+  const drop = async (what: string) => {
+    await dropRow(row);
+    if (archive) await cleanupUploadedArchive(archive, node).catch(() => undefined);
+    if (rebuild) await notifyOwnerOfFailedRebuild(vm, false, new Error(INTERRUPTED)).catch(() => undefined);
+    return done('dropped', what, kind === 'import' ? undefined : failedNotice);
+  };
+
+  // ── Import: isolation first, the tag last. Tagged → every step but the final
+  // status write ran; not tagged → the import didn't happen. The guest is never
+  // ProxMate's to remove either way.
+  if (kind === 'import') {
+    if (ours) {
+      const current = await requireOurGuest(vm, { client, settlingInterrupted: true });
+      const live = await pve.getVmStatus(current.proxmoxNode, current.proxmoxVmId, client, kindOf(current)).catch(() => null);
+      const status = live?.status === 'running' || live?.status === 'paused' ? live.status : 'stopped';
+      await settleRow(row, { status, ...OP_SETTLED });
+      return done('completed', 'its tag was written, so the import was completed');
+    }
+    return drop('the guest was not tagged yet, so the record was removed and the guest stays importable');
+  }
+
+  // ── Our tagged guest whose only remaining step was the isolation firewall.
+  if ((kind === 'create' || kind === 'create-lxc' || kind === 'rebuild-iso') && task === 'ok' && ours && cfg!['template'] !== '1') {
+    try {
+      await completeFirewallOnlyCreate(vm, row, kind, client);
+      return done('completed', 'its create task had finished, so it was completed and left stopped');
+    } catch (e) {
+      if (e instanceof RowChanged) throw e;
+      console.warn(`[reconcile] could not finish "${vm.name}": ${pve.pveMessage(e)}`);
+      return hold('it could not be completed, so the machine is held');
+    }
+  }
+
+  // ── No guest at the VMID.
+  if (cfg === null) {
+    if ((rebuild || kind === null) && (await hasBackups())) {
+      return hold('there is no guest at its VMID, but it has backups to restore from; machine held');
+    }
+    return drop('no guest was created, record removed');
+  }
+
+  // ── A guest carrying this row's tag, but part-way through. The tag is the
+  // proof: only this row's own operation writes it.
+  if (ours) {
+    if (kind === 'restore-upload') {
+      if (isInFlight(row.id)) throw new RowChanged();
+      await quarantineRestoredGuest(vm, client);
+    }
+    return hold('machine held');
+  }
+
+  // ── A guest that doesn't carry this row's tag.
+  if ((kind === 'clone' || kind === 'duplicate' || kind === 'rebuild-template') && (await claimableClone(vm, cfg, task))) {
+    if (isInFlight(row.id)) throw new RowChanged();
+    // The finished clone is this row's: tag it so the owner can delete it with its
+    // row (a full clone is never left unowned), and hold it — its configuration
+    // (cloud-init, sizing, isolation) never ran.
+    await client.put(
+      `/nodes/${vm.proxmoxNode}/${kindOf(vm)}/${vm.proxmoxVmId}/config`,
+      new URLSearchParams({ tags: tagsWithMarker(cfg['tags'], vm.id) }),
+    );
+    return hold('its clone had finished, so the guest was tagged as its own and the machine held');
+  }
+  if (kind === 'restore-upload') {
+    // Nothing ties an untagged guest to this restore: after an outage the VMID may
+    // hold anything (another guest, a template, a cloud-image build). So nothing is
+    // written to it; an admin decides.
+    const archiveName = archive ? archive.slice(archive.indexOf(':') + 1) : 'the uploaded archive';
+    return holdForAdmin(
+      'the guest at its VMID is untagged, so it was left untouched; machine held',
+      `check guest ${vm.proxmoxVmId}: if it is the interrupted restore of ${archiveName}, adopt it or delete it ` +
+        '(it may still have onboot set from the archive); otherwise delete this machine.',
+    );
+  }
+  // Another machine's (or build's, or template's) guest at the VMID — it may have
+  // been reused since: nothing is written to it, and the row is dropped unless it
+  // has backups hanging off it.
+  if (otherMarkers(cfg, vm).length > 0) {
+    if ((rebuild || kind === null) && (await hasBackups())) return hold('its VMID holds another guest; machine held');
+    return drop("its VMID holds another machine's guest, record removed");
+  }
+  // Another row (or a Template Store entry) names the same VMID but the guest
+  // carries no tag: it may be that row's real guest, so this row is held rather
+  // than dropped, and the guest is left alone.
+  if ((await vmidShared(vm)) || (await vmidIsTemplate(vm))) {
+    return holdForAdmin(
+      'another record names its VMID; machine held, guest untouched',
+      `another ProxMate record also names VMID ${vm.proxmoxVmId}. Check which machine that guest belongs to, then delete the wrong record.`,
+    );
+  }
+  if (kind === 'create' || kind === 'create-lxc' || kind === 'rebuild-iso') {
+    // These creates tag the guest as they make it: an untagged guest isn't theirs.
+    if ((rebuild || kind === null) && (await hasBackups())) return hold('its VMID holds an untagged guest; machine held');
+    return drop('its VMID holds an untagged guest that is not its own, record removed');
+  }
+  return holdForAdmin(
+    'the guest at its VMID could not be confirmed as its own; it was left untouched, machine held',
+    `check guest ${vm.proxmoxVmId}: if it is this machine's interrupted ${kind ?? 'create'}, adopt it; otherwise delete this machine.`,
+  );
+}
+
+/**
+ * An interrupted upload restore's guest, before it is held: drop the archive's
+ * onboot/startup/protection and take its NICs down, so Proxmox can't boot it on a
+ * node reboot with the archive's network and no isolation.
+ */
+async function quarantineRestoredGuest(vm: VirtualMachine, client: AxiosInstance): Promise<void> {
+  const kind = kindOf(vm);
+  try {
+    await stripRestoreFlags(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
+    const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, client, kind);
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(cfg)) {
+      if (/^net\d+$/.test(k) && !/(^|,)link_down=1(,|$)/.test(v)) params.set(k, `${v.replace(/(^|,)link_down=\d/, '')},link_down=1`);
+    }
+    if ([...params.keys()].length > 0) {
+      await client.put(`/nodes/${vm.proxmoxNode}/${kind}/${vm.proxmoxVmId}/config`, params);
+    }
+  } catch (err) {
+    console.warn(`[reconcile] could not keep restored guest ${vm.proxmoxVmId} from booting: ${pve.pveMessage(err)}`);
+  }
+}
+
+/**
+ * The remaining step of an ISO VM, LXC or ISO rebuild whose create task finished:
+ * its isolation firewall. Applied on the row's own guest, then the row is left
+ * `stopped` (the owner starts it) — exactly what the interrupted create would have
+ * written before booting it.
+ */
+async function completeFirewallOnlyCreate(
+  vm: VirtualMachine,
+  row: VirtualMachine,
+  kind: 'create' | 'create-lxc' | 'rebuild-iso',
+  client: AxiosInstance,
+): Promise<void> {
+  // A rebuild is a repair path, so it may run on a row that was held before it.
+  const current = await requireOurGuest(vm, { client, allowError: kind === 'rebuild-iso', settlingInterrupted: true });
+  if (isInFlight(row.id)) throw new RowChanged();
+  if ((await getConfig('isolation_enabled')) !== 'false') {
+    await pve.configureVmIsolation(
+      current.proxmoxNode,
+      current.proxmoxVmId,
+      await pve.readIsolationOptions(),
+      client,
+      kindOf(current),
+    );
+  }
+  await settleRow(row, {
+    status: 'stopped',
+    ...OP_SETTLED,
+    // What a finished rebuild clears: its hold, and anything about the old disk.
+    ...(kind === 'rebuild-iso'
+      ? { holdReason: null, ideState: null, ideStateAt: null, deployState: null, deployStateAt: null, pendingCiPassword: null }
+      : {}),
+  });
+}
+
+/** Settle one MateState left `restoring` (an in-place restore). Exported for tests. */
+export async function reconcileRestoringMateState(
+  ms: MateState,
+  client: AxiosInstance,
+  now: Date = new Date(),
+): Promise<ReconcileOutcome> {
+  if (isInFlight(ms.id) || isInFlight(ms.vmId)) return 'in-flight';
+  if (tooRecent(ms.updatedAt, now)) return 'recent';
+  const row = await prisma.virtualMachine.findUnique({ where: { id: ms.vmId } });
+  if (!row) return 'unreachable';
+  const { vm, synced } = await syncVmNodeChecked(row);
+  if (!synced) return 'unreachable';
+
+  const task = await taskVerdict(ms.upid, client);
+  if (task === 'running') return 'busy';
+  if (task === 'unreachable') return 'unreachable';
+  let cfg: Record<string, string> | null;
+  try {
+    cfg = await guestConfig(vm, client);
+  } catch {
+    return 'unreachable';
+  }
+  if (cfg?.['lock']) return 'busy';
+
+  // The backup itself is untouched by a restore: it is usable again.
+  if (isInFlight(ms.id) || isInFlight(ms.vmId)) return 'in-flight';
+  const freed = await prisma.mateState.updateMany({ where: { id: ms.id, status: 'restoring' }, data: { status: 'ready', upid: null } });
+  if (freed.count === 0) return 'in-flight';
+
+  // What the guest now holds is unknown — the restore's checks (tag, isolation,
+  // own volumes, sizes, PCI devices) never ran. As after any restore that didn't
+  // finish: stop it if it is running (only ever this row's own guest), and hold
+  // the row until a repair. A more specific hold already on it is kept.
+  try {
+    const ours = await requireOurGuest(vm, { allowError: true, client });
+    const st = await pve.getVmStatus(ours.proxmoxNode, ours.proxmoxVmId, client, kindOf(ours));
+    if (st.status !== 'stopped') await pve.stopVm(ours.proxmoxNode, ours.proxmoxVmId, client, kindOf(ours));
+  } catch {
+    /* not provably ours, or gone — the hold below still keeps it from being started */
+  }
+  if (!vm.holdReason) {
+    await prisma.virtualMachine.updateMany({
+      where: { id: vm.id, holdReason: null },
+      data: { status: 'error', holdReason: RESTORE_FAILED_MESSAGE },
+    });
+  }
+  await notify({
+    event: 'vm.error',
+    title: vm.name,
+    message: `The restore of "${vm.name}" was interrupted by a ProxMate restart, so the machine is held. Restore the backup again, rebuild it, or ask an admin to check it.`,
+  }).catch(() => undefined);
+  await recordAudit({
+    action: 'vm.reconcile',
+    targetType: 'vm',
+    targetId: vm.id,
+    detail: `restore of "${vm.name}" was interrupted by a restart; machine held`,
+  });
+  return 'held';
+}
+
+/** Settle one MateState left `creating` (a backup). Exported for tests. */
+export async function reconcileCreatingMateState(
+  ms: MateState,
+  client: AxiosInstance,
+  now: Date = new Date(),
+): Promise<ReconcileOutcome> {
+  if (isInFlight(ms.id)) return 'in-flight';
+  if (tooRecent(ms.createdAt, now)) return 'recent';
+
+  const task = await taskVerdict(ms.upid, client);
+  if (task === 'running') return 'busy';
+  // A recorded task that can't be read now is not a failed backup: next pass.
+  if (task === 'unreachable') return 'unreachable';
+  if (task === 'none') {
+    // No task recorded: vzdump may still hold the guest's backup lock.
+    const vm = await prisma.virtualMachine.findUnique({ where: { id: ms.vmId } });
+    if (vm) {
+      try {
+        if ((await guestConfig(vm, client))?.['lock'] === 'backup') return 'busy';
+      } catch {
+        return 'unreachable';
+      }
+    }
+  }
+
+  if (task === 'ok') {
+    // Record the archive the task's own log names (as a backup that finished in
+    // time does) — only when it is listed as this guest's.
+    const node = upidNode(ms.upid)!;
+    let lines: string[];
+    let backups: pve.PveBackup[];
+    try {
+      lines = await pve.getTaskLog(node, ms.upid!, client);
+      backups = await pve.listBackups(ms.storage, client);
+    } catch {
+      return 'unreachable';
+    }
+    const volid = pve.backupVolidFromLog(lines, ms.storage);
+    const listed = volid ? backups.find((b) => b.volid === volid && b.vmid === ms.proxmoxVmId) : undefined;
+    if (listed) {
+      if (isInFlight(ms.id)) return 'in-flight';
+      const r = await prisma.mateState.updateMany({
+        where: { id: ms.id, status: 'creating' },
+        data: { volid: listed.volid, size: BigInt(Math.trunc(listed.size ?? 0)), status: 'ready', upid: null },
+      });
+      if (r.count === 0) return 'in-flight';
+      await recordAudit({
+        action: 'matestate.reconcile',
+        targetType: 'vm',
+        targetId: ms.vmId,
+        detail: `backup ${listed.volid} finished while ProxMate was restarting; recorded`,
+      });
+      return 'completed';
+    }
+  }
+
+  // Failed, or no way to tell what it wrote: the row says so. Any archive the
+  // task did write is left where it is (nothing is deleted here).
+  if (isInFlight(ms.id)) return 'in-flight';
+  const r = await prisma.mateState.updateMany({ where: { id: ms.id, status: 'creating' }, data: { status: 'error', upid: null } });
+  if (r.count === 0) return 'in-flight';
+  const vm = await prisma.virtualMachine.findUnique({ where: { id: ms.vmId }, select: { name: true } });
+  await notify({
+    event: 'backup.failed',
+    title: vm?.name ?? `VMID ${ms.proxmoxVmId}`,
+    message: `A backup of "${vm?.name ?? ms.proxmoxVmId}" was interrupted by a ProxMate restart and did not finish.`,
+  }).catch(() => undefined);
+  await recordAudit({
+    action: 'matestate.reconcile',
+    targetType: 'vm',
+    targetId: ms.vmId,
+    detail: 'backup was interrupted by a restart; marked failed',
+  });
+  return 'failed';
+}
+
+/**
+ * One reconcile pass over every row an interrupted operation may have left
+ * behind. Cheap when there is nothing to do (two indexed queries). Each row is
+ * settled on its own; one that errors is left for the next pass.
+ */
+export async function reconcileStuckOperations(now: Date = new Date()): Promise<ReconcileSummary> {
+  const summary: ReconcileSummary = { checked: 0, completed: 0, held: 0, dropped: 0, failed: 0, deferred: 0 };
+  const [vms, states] = await Promise.all([
+    prisma.virtualMachine.findMany({ where: { status: 'creating' } }),
+    prisma.mateState.findMany({ where: { status: { in: ['creating', 'restoring'] } } }),
+  ]);
+  if (vms.length === 0 && states.length === 0) return summary;
+
+  let client: AxiosInstance;
+  try {
+    client = await pve.getClient();
+  } catch {
+    summary.deferred = vms.length + states.length; // Proxmox unreachable — next pass
+    return summary;
+  }
+
+  const count = (o: ReconcileOutcome) => {
+    summary.checked += 1;
+    if (o === 'completed') summary.completed += 1;
+    else if (o === 'held') summary.held += 1;
+    else if (o === 'dropped') summary.dropped += 1;
+    else if (o === 'failed') summary.failed += 1;
+    else summary.deferred += 1;
+  };
+
+  for (const vm of vms) {
+    try {
+      count(await reconcileCreatingVm(vm, client, now));
+    } catch (err) {
+      console.error(`[reconcile] "${vm.name}" (row ${vm.id}) could not be settled:`, err);
+      count('unreachable');
+    }
+  }
+  for (const ms of states) {
+    try {
+      count(
+        ms.status === 'restoring'
+          ? await reconcileRestoringMateState(ms, client, now)
+          : await reconcileCreatingMateState(ms, client, now),
+      );
+    } catch (err) {
+      console.error(`[reconcile] MateState ${ms.id} could not be settled:`, err);
+      count('unreachable');
+    }
+  }
+  return summary;
+}

@@ -1517,6 +1517,8 @@ export async function cloneVm(
     target?: string;
     /** Resource pool the clone joins; see getGuestPool. */
     pool?: string;
+    /** The clone's description (ProxMate writes its row nonce here; see cloneNonce). */
+    description?: string;
   },
   client?: AxiosInstance,
 ): Promise<string> {
@@ -1529,6 +1531,7 @@ export async function cloneVm(
   if (opts.full && opts.storage) params.set('storage', opts.storage);
   if (opts.target && opts.target !== opts.node) params.set('target', opts.target);
   if (opts.pool) params.set('pool', opts.pool);
+  if (opts.description) params.set('description', opts.description);
   const res = await c.post<{ data: string }>(
     `/nodes/${opts.node}/qemu/${opts.templateVmid}/clone`,
     params,
@@ -2950,6 +2953,18 @@ export async function listSnapshots(
   return (res.data.data ?? [])
     .filter((s) => s.name !== 'current')
     .sort((a, b) => (b.snaptime ?? 0) - (a.snaptime ?? 0));
+}
+
+/**
+ * Whether Proxmox can snapshot this VM as it is configured now — false when one
+ * of its disks sits on storage without snapshot support (plain LVM, raw files).
+ */
+export async function canSnapshot(node: string, vmid: number, client?: AxiosInstance): Promise<boolean> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: { hasFeature?: number | boolean } }>(
+    `/nodes/${node}/qemu/${vmid}/feature?feature=snapshot`,
+  );
+  return !!res.data.data?.hasFeature;
 }
 
 /** Create a snapshot (optionally capturing RAM state). Returns the task UPID. */

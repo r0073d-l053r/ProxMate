@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Camera, Loader2, Trash2, RotateCcw, Plus, MemoryStick } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import type { Snapshot } from "@/lib/types";
+import { AUTO_SNAPSHOT_PREFIX, isAutoSnapshotName } from "@/lib/auto-snapshot";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -55,7 +56,8 @@ export function SnapshotsPanel({ vmId, vmName }: { vmId: string; vmName: string 
 
   useEffect(load, [load]);
 
-  const nameValid = NAME_RE.test(name);
+  const reserved = isAutoSnapshotName(name);
+  const nameValid = NAME_RE.test(name) && !reserved;
 
   async function create() {
     setBusy("create");
@@ -133,7 +135,13 @@ export function SnapshotsPanel({ vmId, vmName }: { vmId: string; vmName: string 
               <FormField
                 label="Name"
                 htmlFor="snapname"
-                error={name && !nameValid ? "Start with a letter; letters, numbers, _ and -." : undefined}
+                error={
+                  reserved
+                    ? `Names starting with "${AUTO_SNAPSHOT_PREFIX}" are kept for automatic snapshots.`
+                    : name && !nameValid
+                      ? "Start with a letter; letters, numbers, _ and -."
+                      : undefined
+                }
               >
                 <Input
                   id="snapname"
@@ -200,6 +208,14 @@ export function SnapshotsPanel({ vmId, vmName }: { vmId: string; vmName: string 
                     <div className="flex items-center gap-2 text-sm font-medium">
                       {snap.name}
                       {snap.vmstate ? <MemoryStick className="size-3.5 text-muted-foreground" /> : null}
+                      {isAutoSnapshotName(snap.name) ? (
+                        <span
+                          className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground"
+                          title="Taken automatically before a resize or rescue boot. Older automatic snapshots are removed as new ones are taken."
+                        >
+                          Automatic
+                        </span>
+                      ) : null}
                     </div>
                     <div className="truncate text-xs text-muted-foreground">
                       {formatSnapTime(snap.snaptime)}

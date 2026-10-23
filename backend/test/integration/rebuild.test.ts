@@ -150,6 +150,16 @@ describe('rebuildVm — guest identity', () => {
     expect(client.delete).not.toHaveBeenCalled();
     expect(client.post).not.toHaveBeenCalled();
   });
+
+  it('refuses a row still in `creating` (an operation the restart reconciler may be settling)', async () => {
+    const client = fakePve();
+    getClientMock.mockResolvedValue(client as never);
+    await expect(rebuildVm(admin, { ...VM, status: 'creating' } as never, { kind: 'iso', os: 'debian.iso' })).rejects.toThrow(
+      /still being created/,
+    );
+    expect(client.delete).not.toHaveBeenCalled();
+    expect(client.post).not.toHaveBeenCalled();
+  });
 });
 
 describe('rebuildVm — failure after teardown', () => {
@@ -209,6 +219,7 @@ describe('rebuildVm — template / cloud-init redeploy', () => {
     const cloneCall = client.post.mock.calls.find((c) => /\/qemu\/100\/clone$/.test(c[0] as string));
     expect(cloneCall).toBeDefined();
     expect(bodyOf(cloneCall!).newid).toBe('110');
+    expect(bodyOf(cloneCall!).description).toBe('proxmate-row:vm-1');
 
     // Cloud-init was applied with the supplied user + DHCP.
     const ciCall = client.put.mock.calls.find((c) => bodyOf(c).ciuser === 'matey');
@@ -231,7 +242,10 @@ describe('rebuildVm — template / cloud-init redeploy', () => {
 
     const roomy = { id: 'u1', role: 'user', maxCpu: 8, maxRam: 16384, maxStorage: 40 } as never;
     await rebuildVm(roomy, held, { kind: 'iso', os: 'debian.iso' });
-    expect(update).toHaveBeenCalledWith({ where: { id: 'vm-1' }, data: { status: 'stopped', holdReason: null } });
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'vm-1' },
+      data: { status: 'stopped', holdReason: null, opKind: null, opStartedAt: null, opUpid: null, opSourceId: null, opArchive: null },
+    });
   });
 
   it('rejects (and does NOT tear down) when a larger template disk exceeds quota', async () => {

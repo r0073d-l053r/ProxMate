@@ -6,6 +6,11 @@ import { AxiosError } from 'axios';
 // deploy path, and every copy's outcome is reported on its own.
 
 const rows: Array<Record<string, unknown>> = [];
+/** A row matching a where clause of plain values (Dates compared by time). */
+const sameRow = (r: Record<string, unknown>, where: Record<string, unknown>) =>
+  Object.entries(where).every(([k, v]) =>
+    v instanceof Date ? r[k] instanceof Date && (r[k] as Date).getTime() === v.getTime() : r[k] === v,
+  );
 const USERS: Record<string, Record<string, unknown>> = {
   u1: { id: 'u1', email: 'u1@example.com', role: 'user', maxCpu: 8, maxRam: 16384, maxStorage: 200 },
   u2: { id: 'u2', email: 'u2@example.com', role: 'user', maxCpu: 8, maxRam: 16384, maxStorage: 200 },
@@ -32,6 +37,18 @@ vi.mock('../src/lib/prisma.js', () => ({
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) => rows.find((r) => r['id'] === where.id) ?? null),
       delete: vi.fn(async ({ where }: { where: { id: string } }) => {
         rows.splice(rows.findIndex((r) => r['id'] === where.id), 1);
+      }),
+      // The restart reconciler's conditional writes (by id + status + opStartedAt).
+      updateMany: vi.fn(async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        const hit = rows.filter((r) => sameRow(r, where));
+        for (const r of hit) Object.assign(r, data);
+        return { count: hit.length };
+      }),
+      deleteMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
+        const i = rows.findIndex((r) => sameRow(r, where));
+        if (i < 0) return { count: 0 };
+        rows.splice(i, 1);
+        return { count: 1 };
       }),
     },
     template: { findMany: vi.fn(async () => []) },
@@ -68,6 +85,8 @@ import {
 } from '../src/services/bulk-deploy.service.js';
 import { BatchQuotaError, CreateOptionError, reserveVmIds, releaseVmId, nextVmId } from '../src/services/vm.service.js';
 import { recordAudit } from '../src/services/audit.service.js';
+import { isInFlight, resetInFlight } from '../src/lib/in-flight.js';
+import { reconcileCreatingVm, STUCK_AFTER_MS } from '../src/services/task-reconcile.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
 
 const ok = (data: unknown) => Promise.resolve({ data: { data } });
@@ -193,6 +212,9 @@ describe('deploying a batch', () => {
     expect(seen.items[1]!.error).toMatch(/storage full/);
     expect(seen.finishedAt).not.toBeNull();
     const clones = c.post.mock.calls.filter((x) => /\/clone$/.test(String(x[0]))).map((x) => bodyOf(x)['newid']);
+    // Each copy is cloned with its own row nonce.
+    const nonces = c.post.mock.calls.filter((x) => /\/clone$/.test(String(x[0]))).map((x) => bodyOf(x)['description']);
+    expect(nonces.sort()).toEqual(batch.items.map((i) => `proxmate-row:${i.vmId}`).sort());
     expect(clones.sort()).toEqual(['100', '101', '102']);
     // The failed copy left no guest, so its row is gone; the others are running.
     expect(rows.map((r) => [r['name'], r['status']])).toEqual([['web-1', 'running'], ['web-3', 'running']]);
@@ -305,10 +327,96 @@ describe('VMID reservations', () => {
     expect(await nextVmId(asClient(c))).toBe(100);
   });
 
+  it('skips a VMID a row still creating or held in error names, even with no guest there', async () => {
+    const c = cluster();
+    rows.push({ id: 'held1', proxmoxVmId: 100, status: 'error' });
+    expect(await nextVmId(asClient(c))).toBe(101);
+  });
+
   it('never hands the same VMID to two reservations running side by side', async () => {
     const c = cluster();
     const [a, b] = await Promise.all([reserveVmIds(3, asClient(c)), reserveVmIds(3, asClient(c))]);
     expect(new Set([...a!, ...b!]).size).toBe(6);
     for (const id of [...a!, ...b!]) releaseVmId(id);
+  });
+});
+
+describe('bulk deploys and the restart reconciler', () => {
+  it('lets go of every copy\'s in-flight registration when the batch can\'t be started after reserving', async () => {
+    cluster();
+    vi.mocked(recordAudit).mockRejectedValueOnce(new Error('audit store unavailable'));
+    const copies = await planBatch(tenant, { namePattern: 'web-{n}', count: 2 });
+    await expect(startTemplateBatch(tenant, template, copies, input)).rejects.toThrow(/audit store/);
+    expect(rows).toHaveLength(2);
+    expect(rows.some((r) => isInFlight(r['id'] as string))).toBe(false);
+  });
+
+  it('keeps every reserved copy in flight from reservation until its provision settles', async () => {
+    const c = cluster();
+    // Clone tasks don't finish until released, so later copies sit queued.
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const get = c.get.getMockImplementation()!;
+    c.get.mockImplementation(async (url: string, opts?: { params?: { vmid?: number } }) => {
+      if (/\/tasks\/.*\/status$/.test(url)) await gate;
+      return get(url, opts);
+    });
+    const copies = await planBatch(admin, { namePattern: 'web-{n}', count: 5 });
+    const batch = await startTemplateBatch(admin, template, copies, input);
+    // Queued (never started) and deploying copies alike are in flight, and a pass
+    // long after their opStartedAt leaves every one of them alone.
+    expect(batch.items.every((i) => isInFlight(i.vmId))).toBe(true);
+    expect(rows.every((r) => r['opKind'] === 'clone' && r['opStartedAt'] instanceof Date)).toBe(true);
+    const later = new Date(Date.now() + STUCK_AFTER_MS * 10);
+    for (const r of rows) expect(await reconcileCreatingVm(r as never, asClient(c), later)).toBe('in-flight');
+    open();
+    await waitForBatch(batch.id);
+    expect(batch.items.some((i) => isInFlight(i.vmId))).toBe(false);
+  });
+
+  it('after a restart, a queued copy that never started (no guest, no task) is dropped, freeing its quota', async () => {
+    const c = cluster();
+    resetInFlight(); // what a restart leaves: nothing in flight
+    const old = new Date(Date.now() - STUCK_AFTER_MS - 60_000);
+    rows.push({
+      id: 'queued1', userId: 'u1', name: 'web-9', type: 'qemu', proxmoxVmId: 150, proxmoxNode: 'pve1',
+      status: 'creating', holdReason: null, opKind: 'clone', opStartedAt: old, opUpid: null, updatedAt: old,
+      cpu: 2, ram: 2048, storage: 10,
+    });
+    c.get.mockImplementation((url: string) => {
+      if (url === '/cluster/resources') return ok([]);
+      if (/\/qemu\/150\/config$/.test(url)) return Promise.reject(new Error('Configuration file does not exist'));
+      return ok(null);
+    });
+    expect(await reconcileCreatingVm(rows[0] as never, asClient(c), new Date())).toBe('dropped');
+    expect(rows.find((r) => r['id'] === 'queued1')).toBeUndefined();
+    expect(c.delete).not.toHaveBeenCalled();
+  });
+
+  it('under a pool-scoped token (403 on an empty VMID) drops the row only when the VMID is provably free', async () => {
+    const c = cluster();
+    resetInFlight();
+    const old = new Date(Date.now() - STUCK_AFTER_MS - 60_000);
+    const queued = {
+      id: 'queued2', userId: 'u1', name: 'web-8', type: 'qemu', proxmoxVmId: 160, proxmoxNode: 'pve1',
+      status: 'creating', holdReason: null, opKind: 'clone', opStartedAt: old, opUpid: null, updatedAt: old,
+    };
+    rows.push({ ...queued });
+    const forbidden = () =>
+      Promise.reject(new AxiosError('Permission check failed', '403', undefined, undefined, { status: 403, data: {} } as never));
+    const get = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string, opts?: { params?: { vmid?: number } }) => {
+      if (url === '/cluster/resources') return ok([]);
+      if (/\/qemu\/160\/config$/.test(url)) return forbidden();
+      return get(url, opts);
+    });
+    // Taken by a guest the token can't see: left alone.
+    used.add(160);
+    expect(await reconcileCreatingVm(rows[0] as never, asClient(c), new Date())).toBe('unreachable');
+    expect(rows).toHaveLength(1);
+    // Free: the create never happened, so the row goes.
+    used.delete(160);
+    expect(await reconcileCreatingVm(rows[0] as never, asClient(c), new Date())).toBe('dropped');
+    expect(rows).toHaveLength(0);
   });
 });

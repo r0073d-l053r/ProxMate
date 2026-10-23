@@ -36,6 +36,7 @@ ProxMate's name for a VM backup (always "MateState", never "droplet"). Each row 
 | volid | String | `@unique` | e.g. `local:backup/vzdump-qemu-100-...`. Placeholder `pending:<vmid>:<ms>` while creating. |
 | size | BigInt | `@default(0)` | Bytes. |
 | status | String | `@default("creating")` | `creating`, `ready`, `restoring`, `error`. |
+| upid | String? | | The Proxmox task of the backup or restore in flight, so the [restart reconciler](/services/task-reconcile.md) can settle a row a restart cut short. Null otherwise (migration `20261023130000_reliability_reconcile_autosnapshot`). |
 | kind | String | `@default("scheduled")` | `scheduled` or `manual`. |
 | notes | String? | | |
 | createdAt | DateTime | `@default(now())` | |
@@ -54,6 +55,7 @@ ProxMate's name for a VM backup (always "MateState", never "droplet"). Each row 
 - After each successful backup, `pruneOldMateStates` keeps only the newest N `ready` rows. N is the VM's `backupKeep`, or `MATESTATE_RETENTION` = 2. It deletes the Proxmox file best-effort, then the row.[^svc]
 - Backup storage comes from the `backup_storage` [SystemConfig](/database/system-config.md) key; if unset, the first storage with `backup` content is picked and saved there.[^svc]
 - Restore requires `status === 'ready'` and a matching `vmId`. The row is `restoring` during the operation and returns to `ready` afterwards.[^svc]
+- A row left `creating` or `restoring` by a restart is settled by the [restart reconciler](/services/task-reconcile.md): a backup whose task finished is recorded from the task log (else marked `error`, nothing deleted); an interrupted restore returns the row to `ready` and holds the VM with the restore-failed hold.[^svc]
 
 # Gotchas
 

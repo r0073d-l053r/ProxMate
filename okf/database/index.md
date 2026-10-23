@@ -4,12 +4,13 @@ The Prisma/SQLite schema: one concept per model.
 
 # Database
 
-* [ProxMate database](proxmate-database.md) - The single Prisma-managed SQLite database behind the ProxMate backend, with its 22 core models, migration history and the module schema seam.
+* [ProxMate database](proxmate-database.md) - The single Prisma-managed SQLite database behind the ProxMate backend, with its 25 core models, migration history and the module schema seam.
 
 # Prisma Model
 
 * [AlertRule](alert-rule.md) - A tenant-defined threshold alert on one VM (cpu, memory, disk or down), evaluated every 5 minutes and delivered by email and admin webhook.
 * [ApiToken](api-token.md) - A personal API token (pm_ prefix) for CLI, Terraform or script access that acts as its owning user.
+* [AutoSnapshot](auto-snapshot.md) - A Proxmox snapshot ProxMate took on its own before a resize, data-disk grow or rescue boot, recorded so retention only ever deletes snapshots it made itself.
 * [AuditLog](audit-log.md) - An append-only record of who did what, deliberately not foreign-keyed to User so the trail outlives deleted accounts.
 * [DownloadToken](download-token.md) - A single-use one-hour token, emailed to a tenant, that streams one MateState backup file off an admin-mounted backup share.
 * [IdeGatewayToken](ide-gateway-token.md) - Per-user per-VM token (pmide_ prefix) that authenticates the in-guest IDE AI agent to the ProxMate LLM gateway.

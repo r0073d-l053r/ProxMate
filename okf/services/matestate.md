@@ -54,6 +54,7 @@ On first boot the catch-up adopts the last window as satisfied instead of backin
 # Gotchas
 
 - VMs with their own `backupCron` are excluded from the weekly run so they are never double-backed-up.[^ms]
+- Backups and restores store their Proxmox task on `MateState.upid` and register the row (a restore also the VM) in flight for their whole run, so the [restart reconciler](/services/task-reconcile.md) can settle one a restart cut short and never touches one still running.[^ms]
 - Restore is in place into the SAME VMID so identity, NIC and isolation stay intact; it is refused when that VMID holds a guest that is not the row's (an empty VMID is allowed), and the restored guest is re-tagged as the row's (`markClonedGuest`). A restore error resets the row to `ready` and rethrows.[^ms]
 - The archive brings back the backup-time config (cores, memory, disks, PCI devices). Afterwards the row's `cpu`/`ram`/`storage`/`hasPassthrough` are re-read from the guest under the owner's quota lock; `hostpciN` lines that were not attached (and approved) right before the restore are removed before the guest starts; CPU/RAM that no longer fit the quota are set back to the row's size.[^ms]
 - Backups run sequentially; one VM's failure is isolated and fires `notify({ event: 'backup.failed' })`.[^ms]

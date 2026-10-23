@@ -124,6 +124,23 @@ describe('enterRescue', () => {
     expect(c.post.mock.calls.some((x) => String(x[0]).endsWith('/status/stop'))).toBe(false);
   });
 
+  it('takes the automatic snapshot before the force-stop, and a failed one leaves the guest as it was', async () => {
+    configFind.mockImplementation((async ({ where }: { where: { key: string } }) =>
+      where.key === 'rescue_iso' ? { key: 'rescue_iso', value: 'local:iso/systemrescue.iso', sensitive: false } : null) as never);
+    const c = fakePve({ tags: 'proxmate-db-1', boot: 'order=scsi0', scsi0: 'ceph:vm-120-disk-0' }, 'running');
+    const get = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) =>
+      /\/feature\?feature=snapshot$/.test(url) ? Promise.resolve({ data: { data: { hasFeature: 1 } } }) : get(url));
+    c.post.mockImplementation((url: string) =>
+      /\/snapshot$/.test(url) ? Promise.reject(new Error('snapshot storage full')) : Promise.resolve({ data: { data: 'UPID:x' } }));
+    getClient.mockResolvedValue(asClient(c));
+
+    await expect(enterRescue(vm({ status: 'running' }))).rejects.toThrow(/automatic snapshot.*snapshot storage full/);
+    expect(c.post.mock.calls.some((x) => String(x[0]).endsWith('/status/stop'))).toBe(false);
+    expect(c.put).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('refuses when no rescue ISO is configured', async () => {
     configFind.mockResolvedValue(null as never);
     const c = fakePve({});

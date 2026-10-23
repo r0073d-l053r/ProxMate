@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
-    virtualMachine: { create: vi.fn(), update: vi.fn(), count: vi.fn() },
+    virtualMachine: { create: vi.fn(), update: vi.fn(), count: vi.fn(), findMany: vi.fn(async () => []) },
   },
 }));
 vi.mock('../src/services/proxmox.service.js', () => ({
@@ -35,6 +35,8 @@ vi.mock('../src/services/vm.service.js', () => ({
   settleFailedCreate: vi.fn(async () => ({ following: false })),
   syncRestoredGuest: vi.fn(async () => ({})),
   assertOwnVolumes: vi.fn(async () => undefined),
+  recordOpTask: vi.fn(async () => undefined),
+  OP_SETTLED: { opKind: null, opStartedAt: null, opUpid: null },
   // No reservations held: the next VMID is whatever Proxmox hands out.
   nextVmId: vi.fn(async (client: unknown) => (await import('../src/services/proxmox.service.js')).getNextVmId(client as never)),
   reserveVmIds: vi.fn(),
@@ -307,6 +309,15 @@ describe('restoreFromUpload', () => {
       expect(await exists(`.proxmate-uploaded.${RENAMED}`)).toBe(false);
     });
 
+    it('records the renamed archive on the row, so a restart can still remove it', async () => {
+      await restoreFromUpload(user, { filename: FILENAME, name: 'migrated-web' });
+      expect(vi.mocked(prisma.virtualMachine.create).mock.calls[0]![0].data).toMatchObject({
+        opKind: 'restore-upload',
+        opArchive: `backups:backup/${RENAMED}`,
+        proxmoxVmId: 200,
+      });
+    });
+
     it('reserves the VMID before renaming, and releases it when done', async () => {
       await restoreFromUpload(user, { filename: FILENAME, name: 'migrated-web' });
       expect(reserveVmIds).toHaveBeenCalledWith(1, expect.anything());
@@ -404,6 +415,18 @@ describe('restoreFromUpload', () => {
       vi.mocked(prisma.virtualMachine.count).mockResolvedValue(1 as never);
       expect(await sweepStaleUploads()).toBe(0);
       expect(prisma.virtualMachine.count).toHaveBeenCalledWith({ where: { proxmoxVmId: 300, status: 'creating' } });
+      expect((await left()).length).toBe(2);
+    });
+
+    it('keeps an old upload a machine still creating records as its archive (left to the restart reconciler)', async () => {
+      // Without a pool the archive keeps its original VMID, so only opArchive ties it to the row.
+      await put('vzdump-qemu-300-a.vma.zst', 8 * H);
+      await put('.proxmate-uploaded.vzdump-qemu-300-a.vma.zst', 8 * H);
+      vi.mocked(prisma.virtualMachine.count).mockResolvedValue(0 as never);
+      vi.mocked(prisma.virtualMachine.findMany).mockResolvedValueOnce([
+        { opArchive: 'backups:backup/vzdump-qemu-300-a.vma.zst' },
+      ] as never);
+      expect(await sweepStaleUploads()).toBe(0);
       expect((await left()).length).toBe(2);
     });
   });

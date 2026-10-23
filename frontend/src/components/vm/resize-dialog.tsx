@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Scaling, Loader2 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
+import { autoSnapshotNote, type AutoSnapshotResult } from "@/lib/auto-snapshot";
 import type { VmDetail, MeResponse, Quota } from "@/lib/types";
 import { Input } from "@/components/ui/input";
 import { NumberInput } from "@/components/ui/number-input";
@@ -108,13 +109,14 @@ export function ResizeDialog({
     if (v) { setError(v); return; }
     setSaving(true);
     try {
-      await api.patch(`/vms/${vm.id}`, {
+      const r = await api.patch<{ autoSnapshot?: AutoSnapshotResult }>(`/vms/${vm.id}`, {
         ...(cpu !== vm.cpu ? { cpu } : {}),
         ...(ramMb !== vm.ram ? { ram: ramMb } : {}),
         ...(storageGb !== vm.storage ? { storage: storageGb } : {}),
       });
       toast.success(
         "VM resized. CPU/RAM changes may need a reboot; grow the filesystem inside the guest to use new disk space.",
+        { description: autoSnapshotNote(r.data?.autoSnapshot) ?? undefined },
       );
       onResized();
       onOpenChange(false);
