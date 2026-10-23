@@ -283,6 +283,18 @@ export async function getEffectivePermissions(client?: AxiosInstance): Promise<P
 }
 
 /**
+ * The caller's effective privileges on exactly one path (`/access/permissions?path=`),
+ * as Proxmox computes them there: unlike the full listing, a path where an ACL takes
+ * privileges away (NoAccess, or a grant above that doesn't propagate) answers for
+ * itself instead of being left out. Throws when it can't be read.
+ */
+export async function getPathPermissions(path: string, client?: AxiosInstance): Promise<Record<string, number>> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: PvePermissions }>('/access/permissions', { params: { path } });
+  return res.data.data?.[path] ?? {};
+}
+
+/**
  * How many guests the token can actually SEE. Distinct from "how many exist": that gap
  * IS the diagnosis when a token holds a grant scoped to a path containing nothing.
  */
@@ -1580,15 +1592,35 @@ export async function listVmidTasks(
 ): Promise<Array<{ upid: string; type: string; starttime?: number }> | null> {
   const c = client ?? (await getClient());
   const out: Array<{ upid: string; type: string; starttime?: number }> = [];
+  let total: number | undefined;
   for (let page = 0; page < VMID_TASK_MAX_PAGES; page += 1) {
-    const res = await c.get<{ data: Array<{ upid: string; type: string; starttime?: number }> }>(`/nodes/${node}/tasks`, {
-      params: { vmid, since, source: 'all', start: page * VMID_TASK_PAGE, limit: VMID_TASK_PAGE },
-    });
+    const res = await c.get<{ data: Array<{ upid: string; type: string; starttime?: number }>; total?: number }>(
+      `/nodes/${node}/tasks`,
+      { params: { vmid, since, source: 'all', start: page * VMID_TASK_PAGE, limit: VMID_TASK_PAGE } },
+    );
+    // The list changing length between pages means entries may have shifted past a page edge.
+    if (typeof res.data.total === 'number') {
+      if (total !== undefined && res.data.total !== total) return null;
+      total = res.data.total;
+    }
     const rows = res.data.data ?? [];
     out.push(...rows);
     if (rows.length < VMID_TASK_PAGE) return out;
   }
   return null;
+}
+
+/**
+ * Whether a node's task log still holds a task (any VMID, any user) that started at
+ * or before `until` (epoch seconds), i.e. the log reaches back at least that far.
+ * Throws when the node's task list can't be read.
+ */
+export async function taskLogReaches(node: string, until: number, client?: AxiosInstance): Promise<boolean> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Array<{ starttime?: number }> }>(`/nodes/${node}/tasks`, {
+    params: { source: 'all', until, limit: 1 },
+  });
+  return (res.data.data ?? []).some((t) => typeof t.starttime === 'number' && t.starttime <= until);
 }
 
 /** Poll a Proxmox task (UPID) until it finishes; throws if it failed. */

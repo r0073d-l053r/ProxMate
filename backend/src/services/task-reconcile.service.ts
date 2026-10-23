@@ -25,7 +25,6 @@ import {
   type VmOpKind,
 } from './vm.service.js';
 import { stripRestoreFlags, cleanupUploadedArchive, checkRestoredOrRemove } from './restore-upload.service.js';
-import { heldOn } from './guest-pool.service.js';
 
 // ─── Interrupted background operations ────────────────────────
 //
@@ -168,20 +167,27 @@ const TASK_CLOCK_SLACK_S = 60;
 /**
  * Proof that nothing has happened at a VMID since our own task started, from every
  * node's task list. It holds only when, for every node: the token has Sys.Audit on
- * that node (without it Proxmox silently lists only the token's own tasks), the
- * node's list for the VMID could be read in full, the restore's own node lists our
- * task (so its log is still complete), and no task other than ours at that VMID is
- * of a type outside HARMLESS_TASKS. Anything that can't be shown counts as no proof.
+ * exactly that node's path (without it Proxmox silently lists only the token's own
+ * tasks), the node's log reaches back to the restore's start (the restore's own
+ * node by listing our task, every other node by holding a task at least that old),
+ * the node's list for the VMID could be read in full, and no task other than ours
+ * at that VMID is of a type outside HARMLESS_TASKS. Anything that can't be shown
+ * counts as no proof: a freshly rebuilt or idle node with no task that old holds.
  */
 async function untouchedSince(vmid: number, since: number | undefined, ownUpid: string, client: AxiosInstance): Promise<boolean> {
   const ownNode = upidNode(ownUpid);
   if (!since || !ownNode) return false;
+  const from = since - TASK_CLOCK_SLACK_S;
   try {
-    const [nodes, perms] = await Promise.all([pve.getNodes(client), pve.getEffectivePermissions(client)]);
+    const nodes = await pve.getNodes(client);
     if (nodes.length === 0 || !nodes.some((n) => n.node === ownNode)) return false;
-    if (nodes.some(({ node }) => heldOn(perms, `/nodes/${node}`, ['Sys.Audit']).length === 0)) return false;
     for (const { node } of nodes) {
-      const tasks = await pve.listVmidTasks(node, vmid, since - TASK_CLOCK_SLACK_S, client);
+      const perms = await pve.getPathPermissions(`/nodes/${node}`, client);
+      if (!perms['Sys.Audit']) return false;
+    }
+    for (const { node } of nodes) {
+      if (node !== ownNode && !(await pve.taskLogReaches(node, from, client))) return false;
+      const tasks = await pve.listVmidTasks(node, vmid, from, client);
       if (tasks === null) return false; // too long to be shown complete
       if (node === ownNode && !tasks.some((t) => t.upid === ownUpid)) return false;
       if (tasks.some((t) => t.upid !== ownUpid && !HARMLESS_TASKS.has(t.type))) return false;
@@ -220,11 +226,21 @@ async function noticeLongWait(vm: VirtualMachine, reason: string, now: Date): Pr
 
 /**
  * Whether something other than the caller holds the row in flight. `own` is how
- * many of its registrations belong to the caller: a resumed follower settles the
- * row while still holding it (see resumeFollowing), so its own one doesn't count.
+ * many of its registrations belong to the caller: a pass holds the row while it
+ * settles it, and a resumed follower settles it while still holding it (see
+ * resumeFollowing), so that one registration doesn't count.
  */
 function busyElsewhere(id: string, own = 0): boolean {
   return inFlightCount(id) > own;
+}
+
+/** The one in-flight registration a settle holds on its row (a pass's, or a resumed follower's). */
+const HELD_BY_PASS = 1;
+
+/** Forget a settled row's long-wait counts. */
+function forgetLongWaits(id: string): void {
+  for (const key of [...longWaitFirstSeen.keys()]) if (key.startsWith(`${id}:`)) longWaitFirstSeen.delete(key);
+  for (const key of [...longWaitNoticeSent]) if (key.startsWith(`${id}:`)) longWaitNoticeSent.delete(key);
 }
 
 /** The guest config at a row's VMID; null when there is no guest there. Throws when Proxmox can't say. */
@@ -259,6 +275,7 @@ async function settleRow(row: VirtualMachine, data: Record<string, unknown>, own
   if (busyElsewhere(row.id, own)) throw new RowChanged();
   const r = await prisma.virtualMachine.updateMany({ where: unchanged(row), data });
   if (r.count === 0) throw new RowChanged();
+  forgetLongWaits(row.id);
 }
 
 /** Conditional removal of a row still as read (with its IDE credential rows). */
@@ -266,6 +283,7 @@ async function dropRow(row: VirtualMachine, own = 0): Promise<void> {
   if (busyElsewhere(row.id, own)) throw new RowChanged();
   const r = await prisma.virtualMachine.deleteMany({ where: unchanged(row) });
   if (r.count === 0) throw new RowChanged();
+  forgetLongWaits(row.id);
   await prisma.ideGuestSecret.deleteMany({ where: { vmId: row.id } }).catch(() => undefined);
   await prisma.ideGatewayToken.deleteMany({ where: { vmId: row.id } }).catch(() => undefined);
 }
@@ -313,13 +331,26 @@ async function claimableClone(row: VirtualMachine, cfg: Record<string, string>, 
   return !(await vmidShared(row)) && !(await vmidIsTemplate(row));
 }
 
-/** Settle one `creating` VirtualMachine row. Exported for tests. */
+/**
+ * Settle one `creating` VirtualMachine row. The row is held in flight while it is
+ * settled, so an adopt (or anything else that checks) can't start on it half-way;
+ * the settle counts that one registration as its own. Exported for tests.
+ */
 export async function reconcileCreatingVm(
   row: VirtualMachine,
   client: AxiosInstance,
   now: Date = new Date(),
 ): Promise<ReconcileOutcome> {
   if (busyElsewhere(row.id)) return 'in-flight';
+  const done = beginInFlight(row.id);
+  try {
+    return await reconcileCreatingVmHeld(row, client, now);
+  } finally {
+    done();
+  }
+}
+
+async function reconcileCreatingVmHeld(row: VirtualMachine, client: AxiosInstance, now: Date): Promise<ReconcileOutcome> {
   const since = row.opStartedAt ?? row.updatedAt;
   if (tooRecent(since, now)) return 'recent';
 
@@ -390,7 +421,7 @@ async function settleCreatingVm(
   };
   const failedNotice = `${rebuild ? 'Rebuild' : 'Provisioning'} of "${vm.name}" failed: ${INTERRUPTED}`;
   const hold = async (what: string, notice?: string) => {
-    await settleRow(row, holdData);
+    await settleRow(row, holdData, HELD_BY_PASS);
     if (archive) await cleanupUploadedArchive(archive, node, vm.id).catch(() => undefined);
     if (rebuild) await notifyOwnerOfFailedRebuild(vm, true, new Error(INTERRUPTED)).catch(() => undefined);
     return done('held', what, notice ?? failedNotice);
@@ -403,7 +434,7 @@ async function settleCreatingVm(
       `${failedNotice}. The machine is held and guest ${vm.proxmoxVmId} on ${vm.proxmoxNode} was left untouched: ${advice}`,
     );
   const drop = async (what: string) => {
-    await dropRow(row);
+    await dropRow(row, HELD_BY_PASS);
     if (archive) await cleanupUploadedArchive(archive, node, vm.id).catch(() => undefined);
     if (rebuild) await notifyOwnerOfFailedRebuild(vm, false, new Error(INTERRUPTED)).catch(() => undefined);
     return done('dropped', what, kind === 'import' ? undefined : failedNotice);
@@ -417,7 +448,7 @@ async function settleCreatingVm(
       const current = await requireOurGuest(vm, { client, settlingInterrupted: true });
       const live = await pve.getVmStatus(current.proxmoxNode, current.proxmoxVmId, client, kindOf(current)).catch(() => null);
       const status = live?.status === 'running' || live?.status === 'paused' ? live.status : 'stopped';
-      await settleRow(row, { status, ...OP_SETTLED });
+      await settleRow(row, { status, ...OP_SETTLED }, HELD_BY_PASS);
       return done('completed', 'its tag was written, so the import was completed');
     }
     return drop('the guest was not tagged yet, so the record was removed and the guest stays importable');
@@ -447,7 +478,7 @@ async function settleCreatingVm(
   // proof: only this row's own operation writes it.
   if (ours) {
     if (kind === 'restore-upload') {
-      if (busyElsewhere(row.id)) throw new RowChanged();
+      if (busyElsewhere(row.id, HELD_BY_PASS)) throw new RowChanged();
       await quarantineRestoredGuest(vm, client);
     }
     return hold('machine held');
@@ -455,7 +486,7 @@ async function settleCreatingVm(
 
   // ── A guest that doesn't carry this row's tag.
   if ((kind === 'clone' || kind === 'duplicate' || kind === 'rebuild-template') && (await claimableClone(vm, cfg, task))) {
-    if (busyElsewhere(row.id)) throw new RowChanged();
+    if (busyElsewhere(row.id, HELD_BY_PASS)) throw new RowChanged();
     // The finished clone is this row's: tag it so the owner can delete it with its
     // row (a full clone is never left unowned), and hold it — its configuration
     // (cloud-init, sizing, isolation) never ran.
@@ -539,7 +570,7 @@ async function completeFirewallOnlyCreate(
 ): Promise<void> {
   // A rebuild is a repair path, so it may run on a row that was held before it.
   const current = await requireOurGuest(vm, { client, allowError: kind === 'rebuild-iso', settlingInterrupted: true });
-  if (busyElsewhere(row.id)) throw new RowChanged();
+  if (busyElsewhere(row.id, HELD_BY_PASS)) throw new RowChanged();
   if ((await getConfig('isolation_enabled')) !== 'false') {
     await pve.configureVmIsolation(
       current.proxmoxNode,
@@ -556,7 +587,7 @@ async function completeFirewallOnlyCreate(
     ...(kind === 'rebuild-iso'
       ? { holdReason: null, ideState: null, ideStateAt: null, deployState: null, deployStateAt: null, pendingCiPassword: null }
       : {}),
-  });
+  }, HELD_BY_PASS);
 }
 
 /** Settle one MateState left `restoring` (an in-place restore). Exported for tests. */
@@ -740,9 +771,27 @@ export async function reconcileFollowedRow(
   now: Date = new Date(),
   opts: { resumed?: boolean } = {},
 ): Promise<ReconcileOutcome> {
-  const own = opts.resumed ? 1 : 0;
+  // A resumed follower already holds the row; a pass holds it while it settles it.
+  // Either way the settle below counts exactly one registration as its own.
+  if (opts.resumed) return reconcileFollowedRowHeld(row, client, now, true);
+  if (busyElsewhere(row.id)) return 'in-flight';
+  const done = beginInFlight(row.id);
+  try {
+    return await reconcileFollowedRowHeld(row, client, now, false);
+  } finally {
+    done();
+  }
+}
+
+async function reconcileFollowedRowHeld(
+  row: VirtualMachine,
+  client: AxiosInstance,
+  now: Date,
+  resumed: boolean,
+): Promise<ReconcileOutcome> {
+  const own = HELD_BY_PASS;
   if (busyElsewhere(row.id, own)) return 'in-flight';
-  if (!opts.resumed && tooRecent(row.opStartedAt ?? row.updatedAt, now)) return 'recent';
+  if (!resumed && tooRecent(row.opStartedAt ?? row.updatedAt, now)) return 'recent';
   const { vm, synced } = await syncVmNodeChecked(row);
   if (!synced) return 'unreachable';
   const upid = vm.opUpid;

@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-23
+* **Update**: [Restart reconciler](/services/task-reconcile.md): `Sys.Audit` is checked per node with `/access/permissions?path=`, every node's task log must reach back to the restore's start (a rebuilt or idle node causes a hold), a task list whose total changes between pages is no proof, and a pass holds each row in flight while it settles it so an adopt meanwhile is refused.
 * **Update**: [Restart reconciler](/services/task-reconcile.md): the task-list proof now needs `Sys.Audit` on every node (see [privileges](/proxmox/privileges.md); without it the reconciler always holds), reads each list in full page by page, needs the restore's own task in its node's list, allows 60 s of clock difference, and counts any task type not known to be harmless against it; adopt holds the row in flight while it runs; an upload restore never removes an archive another row still restores from.
 * **Update**: [Restart reconciler](/services/task-reconcile.md): a finished upload restore is only acted on with proof from every node's task list that nothing else used the VMID since; resumed followers hold the row until settled; unknown tasks and long waits settle or notify instead of looping; adopt clears op fields and is refused while in flight.
 * **Update**: [Restart reconciler](/services/task-reconcile.md) settles held rows whose late create task was being followed when the follower was lost: it resumes following, or strips and checks (removing when refused) an upload restore that finished.

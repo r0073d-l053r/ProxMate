@@ -89,7 +89,7 @@ import {
   STUCK_AFTER_MS,
   LOCK_NOTICE_AFTER_MS,
 } from '../src/services/task-reconcile.service.js';
-import { guestMarker, templateMarker, cloneNonce, PROVISION_FAILED_MESSAGE, RESTORE_FAILED_MESSAGE } from '../src/services/vm.service.js';
+import { adoptGuest, AdoptError, guestMarker, templateMarker, cloneNonce, PROVISION_FAILED_MESSAGE, RESTORE_FAILED_MESSAGE } from '../src/services/vm.service.js';
 import { fakeClient, asClient, bodyOf, type FakeClient } from './helpers.js';
 
 const ok = (data: unknown) => Promise.resolve({ data: { data } });
@@ -197,6 +197,21 @@ describe('operations still going are never touched', () => {
     const r = row({ opStartedAt: new Date(NOW.getTime() - 60_000) });
     expect(await reconcileCreatingVm(r as never, asClient(c), NOW)).toBe('recent');
     expect(rows).toHaveLength(1);
+  });
+
+  it('holds a creating row in flight while it settles it, and releases it after', async () => {
+    const c = pveWith({ guest: null, task: TASK_OK });
+    const base = c.get.getMockImplementation()!;
+    const seen: boolean[] = [];
+    c.get.mockImplementation((url: string, opts?: unknown) => {
+      seen.push(isInFlight('rowa'));
+      return base(url, opts);
+    });
+    const r = row();
+    expect(await reconcileCreatingVm(r as never, asClient(c), NOW)).toBe('dropped');
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every(Boolean)).toBe(true);
+    expect(isInFlight('rowa')).toBe(false);
   });
 
   it('leaves a row whose Proxmox task is still running', async () => {
@@ -621,23 +636,33 @@ describe('a late upload-restore follower lost to a restart', () => {
   type Tasks = Record<string, Array<{ upid: string; type: string }> | 'unreadable'>;
   /** Our own restore task, as each node's task list shows it. */
   const CLEAN: Tasks = { pve1: [{ upid: UPID, type: 'qmrestore' }], pve2: [] };
-  /** What /access/permissions answers: Sys.Audit on every node, inherited from /nodes. */
-  const AUDIT = { '/nodes': { 'Sys.Audit': 1 } };
+  /** What /access/permissions?path= answers for each exact path: Sys.Audit on every node. */
+  const AUDIT = { '/nodes/pve1': { 'Sys.Audit': 1 }, '/nodes/pve2': { 'Sys.Audit': 1 } };
+  type Perms = Record<string, Record<string, number>> | 'unreadable';
 
   const restoreGuest = (
     cfg: Record<string, string>,
     task: { status: string; exitstatus?: string; starttime?: number } | null = DONE,
     tasks: Tasks = CLEAN,
     onCheck?: () => void,
-    perms: Record<string, Record<string, number>> | 'unreadable' = AUDIT,
+    more: {
+      perms?: Perms;
+      /** Start time of the oldest task each node's log still holds (null: none). Default: an hour before the restore. */
+      oldest?: Record<string, number | null>;
+    } = {},
   ) => {
+    const perms = more.perms ?? AUDIT;
+    const oldest = more.oldest ?? {};
     let current: Record<string, string> | null = { ...cfg };
     const c = pveWith({
       guest: cfg,
       task,
       extra: (url, params) => {
         if (url === '/access/permissions') {
-          return perms === 'unreadable' ? Promise.reject(new Error('403 Permission check failed')) : ok(perms);
+          if (perms === 'unreadable') return Promise.reject(new Error('403 Permission check failed'));
+          const path = String(params?.['path'] ?? '');
+          // Only the exact-path query is a trustworthy answer for one node.
+          return ok(path ? { [path]: perms[path] ?? {} } : perms);
         }
         if (/\/qemu\/100\/config$/.test(url)) {
           return current ? ok(current) : Promise.reject(new Error("Configuration file 'qemu-server/100.conf' does not exist"));
@@ -652,6 +677,12 @@ describe('a late upload-restore follower lost to a restart', () => {
         if (listed) {
           const t = tasks[listed[1]!];
           if (t === 'unreadable' || t === undefined) return Promise.reject(new Error('node offline'));
+          if (params?.['until'] !== undefined) {
+            const first = listed[1]! in oldest ? oldest[listed[1]!] : DONE.starttime - 3600;
+            return ok(first !== null && first !== undefined && first <= Number(params['until'])
+              ? [{ upid: `UPID:${listed[1]}:old`, type: 'qmstart', starttime: first }]
+              : []);
+          }
           const start = Number(params?.['start'] ?? 0);
           return ok(t.slice(start, start + Number(params?.['limit'] ?? t.length)));
         }
@@ -724,8 +755,7 @@ describe('a late upload-restore follower lost to a restart', () => {
   it('without Sys.Audit on a node there is no proof: held, nothing written', async () => {
     // Without it Proxmox would list only the token's own tasks on that node.
     const { c } = restoreGuest(REFUSED, DONE, CLEAN, undefined, {
-      '/nodes/pve1': { 'Sys.Audit': 1 },
-      '/nodes/pve2': { 'VM.Audit': 1 },
+      perms: { '/nodes/pve1': { 'Sys.Audit': 1 }, '/nodes/pve2': { 'VM.Audit': 1 } },
     });
     const r = followed();
     expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('held');
@@ -734,7 +764,7 @@ describe('a late upload-restore follower lost to a restart', () => {
   });
 
   it('permissions that can\'t be read give no proof: held, nothing written', async () => {
-    const { c } = restoreGuest(REFUSED, DONE, CLEAN, undefined, 'unreadable');
+    const { c } = restoreGuest(REFUSED, DONE, CLEAN, undefined, { perms: 'unreadable' });
     const r = followed();
     expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('held');
     untouched(c);
@@ -743,6 +773,65 @@ describe('a late upload-restore follower lost to a restart', () => {
 
   const starts = (n: number) =>
     Array.from({ length: n }, (_, i) => ({ upid: `UPID:pve2:${i}:0:0:qmstart:100:u@pve:`, type: 'qmstart' }));
+
+  it('a NoAccess grant on one node under an inherited /nodes Sys.Audit: held, nothing written', async () => {
+    // The full listing would leave /nodes/pve2 out and fall back to /nodes; the
+    // exact-path answer for pve2 carries no Sys.Audit.
+    const { c } = restoreGuest(REFUSED, DONE, CLEAN, undefined, {
+      perms: { '/nodes': { 'Sys.Audit': 1 }, '/nodes/pve1': { 'Sys.Audit': 1 }, '/nodes/pve2': {} },
+    });
+    const r = followed();
+    expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+    expect(c.get).toHaveBeenCalledWith('/access/permissions', { params: { path: '/nodes/pve2' } });
+  });
+
+  it('Sys.Audit granted on /nodes without propagation: held, nothing written', async () => {
+    const { c } = restoreGuest(REFUSED, DONE, CLEAN, undefined, { perms: { '/nodes': { 'Sys.Audit': 1 } } });
+    const r = followed();
+    expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+  });
+
+  it('another node whose task log doesn\'t reach back to the restore (rebuilt or idle): held', async () => {
+    const { c } = restoreGuest(REFUSED, DONE, CLEAN, undefined, { oldest: { pve2: DONE.starttime + 600 } });
+    const r = followed();
+    expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+    expect(c.get).toHaveBeenCalledWith('/nodes/pve2/tasks', {
+      params: { source: 'all', until: DONE.starttime - 60, limit: 1 },
+    });
+  });
+
+  it('another node with an empty task log: held', async () => {
+    const { c } = restoreGuest(REFUSED, DONE, CLEAN, undefined, { oldest: { pve2: null } });
+    followed();
+    expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+  });
+
+  it('the restore\'s own node is shown complete by its own task, not by an older one', async () => {
+    const { c } = restoreGuest(REFUSED, DONE, CLEAN, undefined, { oldest: { pve1: null } });
+    followed();
+    expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('dropped');
+  });
+
+  it('a task list whose total changes between pages gives no proof: held', async () => {
+    const { c } = restoreGuest(REFUSED, DONE, { pve1: [{ upid: UPID, type: 'qmrestore' }], pve2: [] });
+    const base = c.get.getMockImplementation()!;
+    let page = 0;
+    c.get.mockImplementation((url: string, opts?: { params?: Record<string, unknown> }) => {
+      if (url === '/nodes/pve2/tasks' && opts?.params?.['vmid'] !== undefined) {
+        page += 1;
+        const rowsOut = page === 1 ? starts(pve.VMID_TASK_PAGE) : [];
+        return Promise.resolve({ data: { data: rowsOut, total: page === 1 ? pve.VMID_TASK_PAGE : pve.VMID_TASK_PAGE + 7 } });
+      }
+      return base(url, opts);
+    });
+    followed();
+    expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+  });
 
   it('reads a long task list page by page and still proves a clean history', async () => {
     const { c } = restoreGuest(REFUSED, DONE, { pve1: [{ upid: UPID, type: 'qmrestore' }], pve2: starts(pve.VMID_TASK_PAGE + 3) });
@@ -814,6 +903,24 @@ describe('a late upload-restore follower lost to a restart', () => {
     expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('held');
     untouched(c);
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/is a Proxmox template/) }));
+  });
+
+  it('a regular pass holds the row in flight while it settles it: an adopt started meanwhile is refused', async () => {
+    let adopt: Promise<unknown> | undefined;
+    const inFlight: boolean[] = [];
+    const { c } = restoreGuest(REFUSED, DONE, CLEAN, () => {
+      inFlight.push(isInFlight('rowa'));
+      adopt ??= adoptGuest(rows[0] as never).then(() => 'adopted', (e: unknown) => e);
+    });
+    followed();
+    expect(await reconcileStuckOperations(NOW)).toMatchObject({ dropped: 1 });
+    expect(inFlight).toEqual([true]);
+    const refused = await adopt;
+    expect(refused).toBeInstanceOf(AdoptError);
+    expect(String((refused as Error).message)).toMatch(/still being worked on/);
+    expect(c.delete).toHaveBeenCalledWith('/nodes/pve1/qemu/100');
+    // Released once the pass is done with it.
+    expect(isInFlight('rowa')).toBe(false);
   });
 
   it('task still running: following resumes, the row stays in flight through the settle, then is settled', async () => {
