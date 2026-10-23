@@ -12,6 +12,7 @@ import {
   settleFailedCreate,
   syncRestoredGuest,
   assertOwnVolumes,
+  nextVmId,
 } from './vm.service.js';
 import { parseGuestConfigText, guestConfigSizes } from '../lib/guest-config.js';
 import * as pve from './proxmox.service.js';
@@ -339,7 +340,7 @@ async function restoreFromUploadLocked(
   const pool = await pve.getGuestPool();
   let presetVmid: number | undefined;
   if (pool) {
-    presetVmid = await pve.getNextVmId(client);
+    presetVmid = await nextVmId(client);
     try {
       filename = await renameArchiveForVmid(filename, presetVmid);
     } catch (err) {
@@ -395,7 +396,7 @@ async function restoreFromUploadLocked(
       // ARM guest builds aren't shipped, so uploaded backups are x86 today.
       'amd64',
     );
-    const vmid = presetVmid ?? (await pve.getNextVmId(client));
+    const vmid = presetVmid ?? (await nextVmId(client));
 
     const vm = await prisma.virtualMachine.create({
       data: {

@@ -61,7 +61,7 @@ export function UsageDigestCard() {
         <CardDescription>
           A weekly email to each user who opts in on their Security page: their machines, running time,
           average CPU and memory, and quota in use. Only their own machines, never anyone else&rsquo;s. Sent
-          Mondays at 08:00 server time (USAGE_DIGEST_CRON); needs SMTP.
+          Mondays at 08:00 server time (UTC in Docker; USAGE_DIGEST_CRON); needs SMTP.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">

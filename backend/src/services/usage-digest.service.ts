@@ -3,6 +3,7 @@ import { getConfig, setConfig } from './config.service.js';
 import { getMailConfig, sendMail } from './mail.service.js';
 import { usageDigestEmail, type DigestVmRow, type RenderedEmail } from '../lib/email-templates.js';
 import { SAMPLE_INTERVAL_MINUTES } from './resource-history.service.js';
+import { hasAccessEnded } from './access.service.js';
 
 /**
  * Weekly per-tenant usage digest. Each user who opted in (`usageDigestOptIn`,
@@ -109,14 +110,22 @@ export interface DigestRunResult {
   failed: number;
 }
 
-/** Send every opted-in user their digest. The scheduler's weekly tick. */
+/**
+ * Send every opted-in user their digest. The scheduler's weekly tick. Users whose
+ * access window has ended are skipped: they can't sign in, and the digest would
+ * keep arriving for an account they can no longer use.
+ */
 export async function runUsageDigest(now: Date = new Date()): Promise<DigestRunResult> {
   if (!(await isUsageDigestEnabled())) return { ran: false, reason: 'disabled by the admin', sent: 0, failed: 0 };
   if (!(await getMailConfig())) return { ran: false, reason: 'SMTP is not configured', sent: 0, failed: 0 };
-  const users = await prisma.user.findMany({ where: { usageDigestOptIn: true }, select: { id: true } });
+  const users = await prisma.user.findMany({
+    where: { usageDigestOptIn: true },
+    select: { id: true, role: true, accessExpiresAt: true, accessSuspendedAt: true },
+  });
   let sent = 0;
   let failed = 0;
   for (const u of users) {
+    if (hasAccessEnded(u, now)) continue;
     try {
       const digest = await buildUsageDigest(u.id, now);
       if (!digest) continue;

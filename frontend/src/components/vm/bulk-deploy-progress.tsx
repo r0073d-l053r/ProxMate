@@ -17,26 +17,32 @@ const POLL_MS = 3000;
 export function BulkDeployProgress({ batchId, initial }: { batchId: string; initial?: DeployBatch }) {
   const [batch, setBatch] = useState<DeployBatch | null>(initial ?? null);
   const [error, setError] = useState<string | null>(null);
+  const [gone, setGone] = useState(false);
 
   useEffect(() => {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = () => {
-      api
-        .get<DeployBatch>(`/templates/deploy-bulk/${batchId}`)
-        .then((r) => {
-          if (stopped) return;
-          setBatch(r.data);
-          setError(null);
-          if (!r.data.finishedAt) timer = setTimeout(poll, POLL_MS);
-        })
-        .catch((err) => {
-          if (stopped) return;
-          setError(apiError(err));
-          timer = setTimeout(poll, POLL_MS);
-        });
+    const poll = async () => {
+      try {
+        const r = await api.get<DeployBatch>(`/templates/deploy-bulk/${batchId}`);
+        if (stopped) return;
+        setBatch(r.data);
+        setError(null);
+        if (!r.data.finishedAt) timer = setTimeout(poll, POLL_MS);
+      } catch (err) {
+        if (stopped) return;
+        // The server keeps a batch's progress only for a while (and not across a
+        // restart); its machines are unaffected, so stop asking.
+        if ((err as { response?: { status?: number } })?.response?.status === 404) {
+          setError("This batch's progress is no longer available — its machines are listed under Machines.");
+          setGone(true);
+          return;
+        }
+        setError(apiError(err));
+        timer = setTimeout(poll, POLL_MS);
+      }
     };
-    poll();
+    void poll();
     return () => {
       stopped = true;
       if (timer) clearTimeout(timer);
@@ -88,7 +94,7 @@ export function BulkDeployProgress({ batchId, initial }: { batchId: string; init
             </li>
           ))}
         </ul>
-        {batch?.finishedAt && (
+        {(batch?.finishedAt || gone) && (
           <Button className="mt-4" variant="outline" render={<Link href="/vms" />}>
             Go to machines
           </Button>

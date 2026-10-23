@@ -81,6 +81,7 @@ import {
   MIN_RAM_MB,
   GuestIdentityError,
   GuestErroredError,
+  STILL_CREATING_MESSAGE,
 } from '../services/vm.service.js';
 import {
   pushGuestFile,
@@ -118,6 +119,27 @@ const router = Router();
 router.use(requireAuth);
 // Users whose admin required 2FA can't touch VMs until they've enrolled a method.
 router.use(enforceMfaSetup);
+
+// A machine still being created (a create, import or rebuild in flight, or a bulk-deploy
+// copy waiting for its turn) can be viewed or deleted, nothing else: a clear 409 here,
+// and requireOurGuest refuses it again for every path that reaches its guest.
+router.use('/:id', async (req: Request, res: Response, next: () => void) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || (req.method === 'DELETE' && req.path === '/')) {
+    next();
+    return;
+  }
+  let status: string | undefined;
+  try {
+    status = (await prisma.virtualMachine.findUnique({ where: { id: req.params['id'] as string }, select: { status: true } }))?.status;
+  } catch {
+    // Unreadable here is left to the route: requireOurGuest still refuses the row.
+  }
+  if (status === 'creating') {
+    res.status(409).json({ error: STILL_CREATING_MESSAGE });
+    return;
+  }
+  next();
+});
 
 /**
  * Destructive per-VM actions (stop/restart/pause/delete/migrate) are refused with
@@ -1336,10 +1358,9 @@ router.post('/:id/files', guestFileLimiter, async (req: Request, res: Response) 
   const detail =
     `${vm.name} · ${dest.path} · ${file.size} bytes · sha256 ${sha256} · mode ${mode}` +
     (owner ? ` · owner ${owner}` : '');
+  let result: Awaited<ReturnType<typeof pushGuestFile>>;
   try {
-    const result = await pushGuestFile(vm, { path: dest.path, content: file.buffer, mode, owner, createParents });
-    await recordAudit({ action: 'vm.file_push', actor: user, targetType: 'vm', targetId: vm.id, detail, req });
-    res.json(result);
+    result = await pushGuestFile(vm, { path: dest.path, content: file.buffer, mode, owner, createParents });
   } catch (err) {
     const message = err instanceof GuestFileError || err instanceof GuestErroredError || err instanceof GuestIdentityError
       ? err.message
@@ -1354,7 +1375,12 @@ router.post('/:id/files', guestFileLimiter, async (req: Request, res: Response) 
       return;
     }
     res.status(502).json({ error: message });
+    return;
   }
+  // The file is in the guest: an audit hiccup must not turn that into a failure.
+  await recordAudit({ action: 'vm.file_push', actor: user, targetType: 'vm', targetId: vm.id, detail, req })
+    .catch(() => undefined);
+  res.json(result);
 });
 
 // ─── POST /api/vms/:id/rescue + /rescue/exit ──────────────────
@@ -1845,8 +1871,8 @@ router.post('/:id/console', async (req: Request, res: Response) => {
     const { ticket, port } = await requestVncProxy(vm.proxmoxNode, vm.proxmoxVmId, kindOf(vm));
     recordConsoleGrant(ticket, { vmId: vm.id, userId: user.id, transport: 'vnc', port, mode });
     await recordAudit({
-      action: 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
-      detail: `graphical console of ${vm.name}${mode === 'view' ? ' (view only)' : ''}`, req,
+      action: mode === 'view' ? 'vm.console_view_open' : 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `graphical console of ${vm.name}`, req,
     });
     res.json({ ticket, port, viewOnly: mode === 'view' });
   } catch (err) {
@@ -1880,8 +1906,8 @@ router.post('/:id/serial', async (req: Request, res: Response) => {
     const ticket = await requestTermProxy(vm.proxmoxNode, vm.proxmoxVmId, undefined, kind);
     recordConsoleGrant(ticket.ticket, { vmId: vm.id, userId: user.id, transport: 'serial', port: ticket.port, mode });
     await recordAudit({
-      action: 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
-      detail: `text console of ${vm.name}${mode === 'view' ? ' (view only)' : ''}`, req,
+      action: mode === 'view' ? 'vm.console_view_open' : 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `text console of ${vm.name}`, req,
     });
     res.json({ ...ticket, viewOnly: mode === 'view' });
   } catch (err) {

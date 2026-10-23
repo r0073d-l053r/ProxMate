@@ -136,7 +136,7 @@ curl -H "$AUTH" "$BASE/templates/deploy-bulk/<batch id>"
   admin or a Manager share) and answers `{ path, size, sha256, verified }`. The path must
   be absolute and normalized and not under `/proc`, `/sys` or `/dev` (**400** otherwise);
   a file over the limit (`GUEST_FILE_PUSH_MAX_BYTES`, 1 MiB by default, at most 8 MiB)
-  answers **413**, a container or a guest whose agent doesn't answer **409**. Limited per
+  answers **413**, a container or a guest whose agent doesn't answer **409**. Into a folder other users can write to (or reached through a symlink) the file is written as `owner`; without one that push answers **400**. Limited per
   signed-in user (30 per 10 minutes; `GUEST_FILE_RATE_LIMIT_MAX`, `_WINDOW_MS`).
 - **Bulk deploys** (`POST /templates/deploy-bulk`) take `count` copies (1–20, admins
   1–50) named from `namePattern` (`{n}` is the copy number and is required for more than
