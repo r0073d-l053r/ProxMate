@@ -495,7 +495,7 @@ export async function neutraliseAfterFailure(
  * neutralised and removed (see neutraliseRestoredGuest). The error is rethrown
  * with `guestRemoved` set when the guest is gone.
  */
-async function checkRestoredOrRemove(
+export async function checkRestoredOrRemove(
   node: string,
   vmid: number,
   kind: pve.GuestKind,
@@ -894,7 +894,8 @@ async function restoreFromUploadLocked(
     } catch (err) {
       // Any failure once the restore has landed leaves the row in `error`, which
       // nothing may start. A restore task still running when the wait gave up keeps
-      // reading the archive; its follower removes the archive once it ends.
+      // reading the archive; its follower removes the archive once it ends (or, if
+      // that follower is lost, the restart reconciler does: task-reconcile.service.ts).
       if (created) await neutraliseAfterFailure(node, vmid, kind, client, err);
       const { following } = await settleFailedCreate(vm, err, created, { task: restoreTask });
       if (following) archiveHandedOff = true;

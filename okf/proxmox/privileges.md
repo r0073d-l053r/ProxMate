@@ -188,8 +188,10 @@ What changes with a pool-scoped token:
   the tenant is told the backup contains settings ProxMate won't restore. `onboot`, `startup` and
   `protection` are removed right after the restore task, before the check, on every restore path.
   The late-task follower runs the same check (and removal) once the task finishes OK, whether or
-  not the row is still there, and drops the row when the guest is removed; a restart ends the
-  follower and the row stays held. When a later step fails after the check passed, the guest is
+  not the row is still there, and drops the row when the guest is removed. While it follows, the
+  held row keeps its op fields; if the follower is lost (a restart, its 6 h limit, a poll error),
+  the restart reconciler resumes following a task still running, or runs the same strip, check and
+  removal once the task has finished OK. When a later step fails after the check passed, the guest is
   neutralised without the delete (an over-quota failure excepted). An in-place MateState restore of
   a container gets the check with snapshots allowed (each snapshot's config is checked) and, on
   failure, the same neutralising without the delete, then a hold. The archive's guest firewall

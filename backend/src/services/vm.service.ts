@@ -22,12 +22,19 @@ import { ALL_CAPS, CAPS_BY_ROLE, normalizeShareRole, type ShareRole, type VmCap 
 export const kindOf = (vm: { type?: string | null }): pve.GuestKind => (vm.type === 'lxc' ? 'lxc' : 'qemu');
 
 /** Flag a VM as failed in the DB and fire a best-effort vm.error notification. */
-export async function markVmError(vmId: string, name: string, err: unknown): Promise<void> {
+export async function markVmError(
+  vmId: string,
+  name: string,
+  err: unknown,
+  opts: { keepOp?: boolean } = {},
+): Promise<void> {
   // Held as well: a guest whose provisioning didn't finish never got its isolation
-  // or sizing applied, so nothing may start it (see requireOurGuest).
+  // or sizing applied, so nothing may start it (see requireOurGuest). A row whose
+  // create task is still being followed keeps its op fields, so the restart
+  // reconciler can finish settling it if the follower is lost.
   await prisma.virtualMachine.update({
     where: { id: vmId },
-    data: { status: 'error', holdReason: PROVISION_FAILED_MESSAGE, ...OP_SETTLED },
+    data: { status: 'error', holdReason: PROVISION_FAILED_MESSAGE, ...(opts.keepOp ? {} : OP_SETTLED) },
   });
   await notify({
     event: 'vm.error',
@@ -721,7 +728,7 @@ export async function settleFailedCreate(
       /* unreadable — set the generic hold */
     }
     if (!(err instanceof ForeignVolumeError) && !existing?.holdReason) {
-      await markVmError(vm.id, vm.name, err).catch(() => undefined);
+      await markVmError(vm.id, vm.name, err, { keepOp: following }).catch(() => undefined);
     }
     return { following };
   }
@@ -737,7 +744,7 @@ export async function settleFailedCreate(
 /** How long a create/clone task that outlived its wait is still followed. */
 const LATE_TASK_FOLLOW_MS = 6 * 60 * 60 * 1000;
 
-type CreateTask = {
+export type CreateTask = {
   node: string;
   upid: string;
   /**
@@ -793,10 +800,34 @@ async function settleCreateTask(vm: VirtualMachine, task: CreateTask): Promise<'
     }
     return 'done';
   }
-  // A restart ends this follower; the row then stays in `error` until it is resolved.
-  void pve
-    .waitForTask(task.node, task.upid, client, LATE_TASK_FOLLOW_MS)
+  // The row is held meanwhile with its op fields (opKind, opUpid, …) kept. If this
+  // follower is lost (a restart, its time limit, a poll error), the restart
+  // reconciler picks the row up from those fields and settles it from the task:
+  // see task-reconcile.service.ts. While it runs, the row counts as in flight.
+  followLateCreateTask(vm, task, client);
+  return 'following';
+}
+
+/**
+ * Follow a create task that outlived its wait, then settle the row from it: the
+ * task's `verify` (and, if the row still points here, `beforeTag` + tag) on
+ * success, and `afterTask` either way. Once settled, the row's op fields are
+ * cleared — only while they still name this task. A follower that ends any other
+ * way (a restart, its time limit, a poll error) leaves them for the restart
+ * reconciler, which resumes or settles the row (task-reconcile.service.ts).
+ */
+function followLateCreateTask(
+  vm: VirtualMachine,
+  task: CreateTask,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+  timeoutMs: number = LATE_TASK_FOLLOW_MS,
+): Promise<void> {
+  const done = beginInFlight(vm.id);
+  let settled = false;
+  return pve
+    .waitForTask(task.node, task.upid, client, timeoutMs)
     .then(async () => {
+      settled = true;
       try {
         await task.verify?.();
       } catch (e) {
@@ -814,9 +845,22 @@ async function settleCreateTask(vm: VirtualMachine, task: CreateTask): Promise<'
       await task.beforeTag?.();
       await markClonedGuest(row, client);
     })
-    .catch((e) => console.warn(`[vm] late create task for "${vm.name}" did not complete: ${pve.pveMessage(e)}`))
-    .finally(() => task.afterTask?.().catch(() => undefined));
-  return 'following';
+    .catch((e) => {
+      // A task Proxmox reports as failed is settled too; a timeout or a poll error
+      // is not — the op fields stay, and the restart reconciler takes it from there.
+      if (/Proxmox task failed/i.test(pve.pveMessage(e))) settled = true;
+      console.warn(`[vm] late create task for "${vm.name}" did not complete: ${pve.pveMessage(e)}`);
+    })
+    .finally(async () => {
+      if (settled) {
+        await task.afterTask?.().catch(() => undefined);
+        await (async () =>
+          prisma.virtualMachine.updateMany({ where: { id: vm.id, opUpid: task.upid }, data: OP_SETTLED }))().catch(
+          () => undefined,
+        );
+      }
+      done();
+    });
 }
 
 /**

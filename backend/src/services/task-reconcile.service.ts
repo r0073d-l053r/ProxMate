@@ -1,7 +1,7 @@
 import type { MateState, VirtualMachine } from '@prisma/client';
 import { AxiosError, type AxiosInstance } from 'axios';
 import { prisma } from '../lib/prisma.js';
-import { isInFlight } from '../lib/in-flight.js';
+import { beginInFlight, isInFlight } from '../lib/in-flight.js';
 import { envNumber } from '../lib/env-number.js';
 import { getConfig } from './config.service.js';
 import { notify } from './notify.service.js';
@@ -23,7 +23,7 @@ import {
   RESTORE_FAILED_MESSAGE,
   type VmOpKind,
 } from './vm.service.js';
-import { stripRestoreFlags, cleanupUploadedArchive } from './restore-upload.service.js';
+import { stripRestoreFlags, cleanupUploadedArchive, checkRestoredOrRemove } from './restore-upload.service.js';
 
 // ─── Interrupted background operations ────────────────────────
 //
@@ -141,7 +141,7 @@ function tooRecent(since: Date, now: Date): boolean {
 
 /** The write condition that the row is still exactly the one this pass read. */
 function unchanged(row: VirtualMachine) {
-  return { id: row.id, status: 'creating', opStartedAt: row.opStartedAt };
+  return { id: row.id, status: row.status, opStartedAt: row.opStartedAt };
 }
 
 class RowChanged extends Error {}
@@ -584,24 +584,171 @@ export async function reconcileCreatingMateState(
   return 'failed';
 }
 
+/** How long a resumed follower waits for its task before leaving it to the next pass. */
+const RESUME_FOLLOW_MS = 6 * 60 * 60 * 1000;
+
+async function resumeFollowing(vm: VirtualMachine, node: string, upid: string, client: AxiosInstance): Promise<void> {
+  const done = beginInFlight(vm.id);
+  try {
+    await pve.waitForTask(node, upid, client, RESUME_FOLLOW_MS).catch(() => undefined);
+  } finally {
+    done();
+  }
+  try {
+    const row = await prisma.virtualMachine.findUnique({ where: { id: vm.id } });
+    if (row && row.opUpid === upid) await reconcileFollowedRow(row, client, new Date(), { resumed: true });
+  } catch (err) {
+    console.error(`[reconcile] resumed follower for "${vm.name}" could not settle it:`, err);
+  }
+}
+
+/**
+ * Settle a row held in `error` while its create task was being followed (see
+ * settleCreateTask), when that follower is gone: a restart, its time limit, or a
+ * poll error. The row kept its op fields for exactly this. Still running → the
+ * follower is resumed. Failed → the archive goes, and the row is dropped when no
+ * guest is left. Finished OK → for an upload restore the task's guest is the one at
+ * the VMID (a restore never overwrites an existing guest), so it gets the late-task
+ * step: no autostart or protection, then the check, which removes it when it fails
+ * (the row is then dropped); otherwise the row stays held. A clone is tagged only
+ * on its nonce. The op fields are cleared once settled, conditionally. Exported for
+ * tests.
+ */
+export async function reconcileFollowedRow(
+  row: VirtualMachine,
+  client: AxiosInstance,
+  now: Date = new Date(),
+  opts: { resumed?: boolean } = {},
+): Promise<ReconcileOutcome> {
+  if (isInFlight(row.id)) return 'in-flight';
+  if (!opts.resumed && tooRecent(row.opStartedAt ?? row.updatedAt, now)) return 'recent';
+  const { vm, synced } = await syncVmNodeChecked(row);
+  if (!synced) return 'unreachable';
+  const upid = vm.opUpid;
+  const node = upidNode(upid);
+
+  const task = await taskVerdict(upid, client);
+  if (task === 'unreachable') return 'unreachable';
+  if (task === 'running' && upid && node) {
+    // Resume the follower lost with the restart. The row counts as in flight while
+    // it waits; once the task ends (or the wait gives up) the row is settled here,
+    // exactly as if the task had ended before the restart.
+    void resumeFollowing(vm, node, upid, client);
+    return 'busy';
+  }
+  let cfg: Record<string, string> | null;
+  try {
+    cfg = await guestConfig(vm, client);
+  } catch {
+    return 'unreachable';
+  }
+  if (cfg?.['lock']) return 'busy';
+
+  try {
+    return await settleFollowedRow(vm, row, cfg, task, client);
+  } catch (err) {
+    if (err instanceof RowChanged) return 'in-flight';
+    throw err;
+  }
+}
+
+async function settleFollowedRow(
+  vm: VirtualMachine,
+  row: VirtualMachine,
+  cfg: Record<string, string> | null,
+  task: TaskVerdict,
+  client: AxiosInstance,
+): Promise<ReconcileOutcome> {
+  const archive = vm.opArchive;
+  const cleanArchive = async () => {
+    if (archive) await cleanupUploadedArchive(archive, vm.proxmoxNode).catch(() => undefined);
+  };
+  const audit = (what: string) =>
+    recordAudit({
+      action: 'vm.reconcile',
+      targetType: 'vm',
+      targetId: vm.id,
+      detail: `followed ${vm.opKind ?? 'create'} of "${vm.name}" was settled after its follower ended; ${what}`,
+    });
+  const tell = (message: string) => notify({ event: 'vm.error', title: vm.name, message }).catch(() => undefined);
+  const keepHeld = async (what: string, message?: string) => {
+    await settleRow(row, OP_SETTLED);
+    await cleanArchive();
+    if (message) await tell(message);
+    await audit(what);
+    return 'held' as const;
+  };
+  const drop = async (what: string) => {
+    await dropRow(row);
+    await cleanArchive();
+    await tell(`Provisioning of "${vm.name}" failed: ${INTERRUPTED}`);
+    await audit(what);
+    return 'dropped' as const;
+  };
+
+  if (cfg === null) return drop('no guest is at its VMID, record removed');
+  if (task !== 'ok') return keepHeld('its task did not finish OK; machine held, guest untouched');
+
+  if (vm.opKind === 'restore-upload') {
+    if (cfg['template'] === '1' || (await vmidShared(vm)) || (await vmidIsTemplate(vm))) {
+      return keepHeld(
+        'another record names its VMID; machine held, guest untouched',
+        `The restore of "${vm.name}" finished after ProxMate stopped following it, but another record names VMID ` +
+          `${vm.proxmoxVmId}, so guest ${vm.proxmoxVmId} on ${vm.proxmoxNode} was left untouched. Check it and delete the wrong record.`,
+      );
+    }
+    if (isInFlight(row.id)) throw new RowChanged();
+    try {
+      await stripRestoreFlags(vm.proxmoxNode, vm.proxmoxVmId, client, kindOf(vm)).catch(() => undefined);
+      await checkRestoredOrRemove(vm.proxmoxNode, vm.proxmoxVmId, kindOf(vm), client);
+    } catch (err) {
+      if ((err as { guestRemoved?: boolean }).guestRemoved) {
+        return drop('the restored guest failed the check and was removed, record removed');
+      }
+      return keepHeld(
+        'the restored guest failed the check but could not be removed; machine held',
+        `The restored guest ${vm.proxmoxVmId} on ${vm.proxmoxNode} of "${vm.name}" failed ProxMate's check and could ` +
+          `not be removed (${pve.pveMessage(err)}). Delete it in Proxmox.`,
+      );
+    }
+    return keepHeld(
+      'the restored guest passed the check and was kept from starting on its own; machine held',
+      `The restore of "${vm.name}" finished after ProxMate stopped following it. Guest ${vm.proxmoxVmId} on ` +
+        `${vm.proxmoxNode} passed the check and won't start on its own; adopt it under Unconfirmed machines, or delete the machine.`,
+    );
+  }
+
+  if (!tagsMarkRow(cfg['tags'], vm.id) && (await claimableClone(vm, cfg, task))) {
+    if (isInFlight(row.id)) throw new RowChanged();
+    await client.put(
+      `/nodes/${vm.proxmoxNode}/${kindOf(vm)}/${vm.proxmoxVmId}/config`,
+      new URLSearchParams({ tags: tagsWithMarker(cfg['tags'], vm.id) }),
+    );
+    return keepHeld('its clone had finished, so the guest was tagged as its own; machine held');
+  }
+  return keepHeld('machine held, guest untouched');
+}
+
 /**
  * One reconcile pass over every row an interrupted operation may have left
- * behind. Cheap when there is nothing to do (two indexed queries). Each row is
+ * behind. Cheap when there is nothing to do (a few indexed queries). Each row is
  * settled on its own; one that errors is left for the next pass.
  */
 export async function reconcileStuckOperations(now: Date = new Date()): Promise<ReconcileSummary> {
   const summary: ReconcileSummary = { checked: 0, completed: 0, held: 0, dropped: 0, failed: 0, deferred: 0 };
-  const [vms, states] = await Promise.all([
+  const [vms, followed, states] = await Promise.all([
     prisma.virtualMachine.findMany({ where: { status: 'creating' } }),
+    // Held while a create task was followed; still carrying that task's op fields.
+    prisma.virtualMachine.findMany({ where: { status: 'error', opUpid: { not: null } } }),
     prisma.mateState.findMany({ where: { status: { in: ['creating', 'restoring'] } } }),
   ]);
-  if (vms.length === 0 && states.length === 0) return summary;
+  if (vms.length === 0 && followed.length === 0 && states.length === 0) return summary;
 
   let client: AxiosInstance;
   try {
     client = await pve.getClient();
   } catch {
-    summary.deferred = vms.length + states.length; // Proxmox unreachable — next pass
+    summary.deferred = vms.length + followed.length + states.length; // Proxmox unreachable — next pass
     return summary;
   }
 
@@ -617,6 +764,14 @@ export async function reconcileStuckOperations(now: Date = new Date()): Promise<
   for (const vm of vms) {
     try {
       count(await reconcileCreatingVm(vm, client, now));
+    } catch (err) {
+      console.error(`[reconcile] "${vm.name}" (row ${vm.id}) could not be settled:`, err);
+      count('unreachable');
+    }
+  }
+  for (const vm of followed) {
+    try {
+      count(await reconcileFollowedRow(vm, client, now));
     } catch (err) {
       console.error(`[reconcile] "${vm.name}" (row ${vm.id}) could not be settled:`, err);
       count('unreachable');

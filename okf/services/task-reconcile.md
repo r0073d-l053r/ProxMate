@@ -59,6 +59,17 @@ The rule: the reconciler never writes to a Proxmox guest without positive proof 
 
 An upload restore's archive (`opArchive`, recorded after the pool-mode rename, so it names the archive actually restored) is removed, with its upload marker, whenever its row is settled. The startup sweep of marked uploads (`sweepStaleUploads`) leaves alone any archive a `creating` row records as `opArchive` or whose VMID such a row names, so the two never race over a restore still being settled. Each settled row notifies admins once (`vm.error`; a rebuild also emails the owner) and is audited as `vm.reconcile` or `matestate.reconcile`.[^svc] [^vm]
 
+# Late tasks whose follower was lost
+
+When a create's task outlives its wait (`settleCreateTask`), the row is held in `error` but keeps its op fields (`opKind`, `opUpid`, `opArchive`, `opStartedAt`) while a follower waits for the task, and counts as in flight. The follower clears them once it has settled the row (conditionally, only while they still name its task). If the follower is lost (a restart, its 6 h limit, a poll error), the pass picks up rows in `error` that still carry a task (`reconcileFollowedRow`):
+
+- task still running: following resumes (in flight meanwhile), and the row is settled when the task ends;
+- task failed: the archive is removed; the row is dropped when no guest is at the VMID, otherwise held with the guest untouched;
+- task finished OK, upload restore: the restore never overwrites an existing guest, so the guest at the VMID is the task's, unless another record or a template names the VMID (then nothing is written and admins are told). It gets the late-task step: `onboot`/`startup`/`protection` removed, then the post-restore check, which removes the guest when it fails (the row is then dropped). A guest that passes stays untagged and the row held; admins are told to adopt it;
+- task finished OK, clone: tagged only on its row nonce; the row stays held.
+
+The op fields are cleared once the row is settled.
+
 # Key functions
 
 | Function | Signature summary | What it does |

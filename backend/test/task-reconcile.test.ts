@@ -76,9 +76,10 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
 
 import * as pve from '../src/services/proxmox.service.js';
 import { notify } from '../src/services/notify.service.js';
-import { beginInFlight, resetInFlight } from '../src/lib/in-flight.js';
+import { beginInFlight, resetInFlight, isInFlight } from '../src/lib/in-flight.js';
 import {
   reconcileCreatingVm,
+  reconcileFollowedRow,
   reconcileRestoringMateState,
   reconcileCreatingMateState,
   reconcileStuckOperations,
@@ -598,5 +599,109 @@ describe('reconcileStuckOperations', () => {
     const r = await reconcileStuckOperations(NOW);
     expect(r).toMatchObject({ checked: 2, completed: 1, deferred: 1 });
     done();
+  });
+});
+
+describe('a late upload-restore follower lost to a restart', () => {
+  const archive = 'backups:backup/vzdump-qemu-100-2026_10_01-00_00_00.vma.zst';
+  /** A row held in `error` while its restore task was followed, op fields kept. */
+  const followed = (over: Row = {}) =>
+    row({ status: 'error', holdReason: PROVISION_FAILED_MESSAGE, opKind: 'restore-upload', opArchive: archive, ...over });
+  const PASSING = {
+    name: 'web',
+    cores: '1',
+    memory: '1024',
+    scsi0: 'local-lvm:vm-100-disk-0,size=10G',
+    net0: 'virtio=AA:BB,bridge=vmbr0',
+    onboot: '1',
+  };
+  const restoreGuest = (cfg: Record<string, string>, task: { status: string; exitstatus?: string } | null = TASK_OK) => {
+    let current: Record<string, string> | null = { ...cfg };
+    const c = pveWith({
+      guest: cfg,
+      task,
+      extra: (url) => {
+        if (/\/qemu\/100\/config$/.test(url)) {
+          return current ? ok(current) : Promise.reject(new Error("Configuration file 'qemu-server/100.conf' does not exist"));
+        }
+        if (/\/qemu\/100\/pending$/.test(url)) return ok([]);
+        if (/\/qemu\/100\/snapshot$/.test(url)) return ok([]);
+        return undefined;
+      },
+    });
+    c.put.mockImplementation((url: string, body: URLSearchParams) => {
+      if (current && /\/qemu\/100\/config$/.test(url)) {
+        for (const [k, v] of body) {
+          if (k === 'delete') for (const d of v.split(',')) delete current[d];
+          else current[k] = v;
+        }
+      }
+      return ok('');
+    });
+    c.delete.mockImplementation((url: string) => {
+      if (url === '/nodes/pve1/qemu/100') current = null;
+      return ok('UPID:pve1:del');
+    });
+    return { c, cfg: () => current };
+  };
+
+  it('task OK and a refused config: the guest is removed and the row dropped', async () => {
+    const { c } = restoreGuest({ ...PASSING, hookscript: 'local:snippets/x.sh' });
+    followed();
+    expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('dropped');
+    expect(c.delete).toHaveBeenCalledWith('/nodes/pve1/qemu/100');
+    expect(rows).toHaveLength(0);
+    expect(pve.deleteBackup).toHaveBeenCalledWith('pve1', 'backups', archive);
+  });
+
+  it('task OK and a passing config: autostart and protection are stripped, the row stays held, its op fields settled', async () => {
+    const { c, cfg } = restoreGuest({ ...PASSING, protection: '1' });
+    const r = followed();
+    expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('held');
+    expect(cfg()).not.toHaveProperty('onboot');
+    expect(cfg()).not.toHaveProperty('protection');
+    expect(c.delete).not.toHaveBeenCalled();
+    expect(tagPut(c)).toBeUndefined();
+    expect(r).toMatchObject({ status: 'error', holdReason: PROVISION_FAILED_MESSAGE, opKind: null, opUpid: null, opArchive: null });
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/Guest 100 on pve1 passed the check/) }));
+  });
+
+  it('task still running: following resumes, and the row is settled once the task ends', async () => {
+    const task: { status: string; exitstatus?: string } = { status: 'running' };
+    const { c } = restoreGuest({ ...PASSING, hookscript: 'local:snippets/x.sh' }, task);
+    const r = followed();
+    expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('busy');
+    expect(isInFlight('rowa')).toBe(true);
+    // While it is followed, a pass leaves it alone.
+    expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('in-flight');
+    expect(c.delete).not.toHaveBeenCalled();
+    // The task finishes; the resumed follower settles the row.
+    task.status = 'stopped';
+    task.exitstatus = 'OK';
+    await vi.waitFor(() => expect(rows).toHaveLength(0), { timeout: 8000 });
+    expect(c.delete).toHaveBeenCalledWith('/nodes/pve1/qemu/100');
+    expect(isInFlight('rowa')).toBe(false);
+  });
+
+  it('a task that failed: the archive is removed, and the row dropped when there is no guest', async () => {
+    const c = pveWith({ guest: null, task: { status: 'stopped', exitstatus: 'restore failed' } });
+    followed();
+    expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('dropped');
+    expect(pve.deleteBackup).toHaveBeenCalledWith('pve1', 'backups', archive);
+    untouched(c);
+  });
+
+  it('never touches the guest when another record names its VMID', async () => {
+    const { c } = restoreGuest(PASSING);
+    const r = followed();
+    row({ id: 'rowb', status: 'running', opKind: null, opStartedAt: null, opUpid: null });
+    expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+  });
+
+  it('is picked up by the reconcile pass (held rows that still carry a task)', async () => {
+    restoreGuest({ ...PASSING, hookscript: 'local:snippets/x.sh' });
+    followed();
+    expect(await reconcileStuckOperations(NOW)).toMatchObject({ dropped: 1 });
   });
 });

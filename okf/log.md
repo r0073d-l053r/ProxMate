@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-23
+* **Update**: [Restart reconciler](/services/task-reconcile.md) settles held rows whose late create task was being followed when the follower was lost: it resumes following, or strips and checks (removing when refused) an upload restore that finished.
 * **Update**: [Restart reconciler](/services/task-reconcile.md) writes to a guest only with positive proof (the row tag, or the `proxmate-row:<id>` clone nonce); an interrupted upload restore's untagged guest is never changed; rows sharing a VMID are held, not dropped; `nextVmId` skips VMIDs that creating or error rows name.
 * **Update**: [Restart reconciler](/services/task-reconcile.md): guests are claimed only with the row's tag or the clone checks (never on a task result alone), writes are conditional on the row read, unreadable tasks are retried, upload restores are kept from booting and their archive removed; new `opSourceId`/`opArchive` on [VirtualMachine](/database/virtual-machine.md).
 * **Creation**: Documented the optional pool-scoped Proxmox token: the `proxmox_pool` setting in [Proxmox connection](/config/proxmox-connection.md), the [guest-pool service](/services/guest-pool.md), and the per-path ACL split of `deploy/proxmox-token.sh --pool` in [privileges](/proxmox/privileges.md).
