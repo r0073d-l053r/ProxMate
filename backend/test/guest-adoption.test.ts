@@ -35,7 +35,7 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
   return { ...actual, getClient: vi.fn() };
 });
 
-import { beginInFlight } from '../src/lib/in-flight.js';
+import { beginInFlight, isInFlight } from '../src/lib/in-flight.js';
 import { prisma } from '../src/lib/prisma.js';
 import * as pve from '../src/services/proxmox.service.js';
 import {
@@ -185,6 +185,28 @@ describe('adoptGuest (admin)', () => {
     }
     expect(c.put).not.toHaveBeenCalled();
     expect(prisma.virtualMachine.update).not.toHaveBeenCalled();
+  });
+
+  it('holds the row in flight for the whole adopt, so nothing else can start on it meanwhile', async () => {
+    const c = pveWith({ name: 'web', tags: 'prod', scsi0: 'local-lvm:vm-100-disk-0,size=10G' });
+    const seen: boolean[] = [];
+    const base = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string, opts?: unknown) => {
+      seen.push(isInFlight('rowa'));
+      return base(url, opts);
+    });
+    c.put.mockImplementation(() => {
+      seen.push(isInFlight('rowa'));
+      return ok('');
+    });
+    await adoptGuest(row({ status: 'error', holdReason: "This machine's provisioning didn't finish." }));
+    expect(seen.length).toBeGreaterThan(1);
+    expect(seen.every(Boolean)).toBe(true);
+    // Released once done, also when the adopt is refused part-way.
+    expect(isInFlight('rowa')).toBe(false);
+    pveWith({ name: 'web', tags: guestMarker('rowb') });
+    await expect(adoptGuest(row())).rejects.toBeInstanceOf(AdoptError);
+    expect(isInFlight('rowa')).toBe(false);
   });
 
   it('lifts a hold once the guest references only its own volumes', async () => {

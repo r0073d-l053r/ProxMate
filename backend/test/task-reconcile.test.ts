@@ -128,12 +128,12 @@ function pveWith(opts: {
   task?: { status: string; exitstatus?: string } | null;
   listed?: boolean;
   running?: boolean;
-  extra?: (url: string) => Promise<unknown> | undefined;
+  extra?: (url: string, params?: Record<string, unknown>) => Promise<unknown> | undefined;
 }): FakeClient {
   const c = fakeClient();
   const guest = opts.guest === undefined ? null : opts.guest;
-  c.get.mockImplementation((url: string) => {
-    const more = opts.extra?.(url);
+  c.get.mockImplementation((url: string, req?: { params?: Record<string, unknown> }) => {
+    const more = opts.extra?.(url, req?.params);
     if (more) return more;
     if (url === '/cluster/resources') {
       if (opts.listed === false) return Promise.reject(new Error('connect ECONNREFUSED'));
@@ -621,18 +621,24 @@ describe('a late upload-restore follower lost to a restart', () => {
   type Tasks = Record<string, Array<{ upid: string; type: string }> | 'unreadable'>;
   /** Our own restore task, as each node's task list shows it. */
   const CLEAN: Tasks = { pve1: [{ upid: UPID, type: 'qmrestore' }], pve2: [] };
+  /** What /access/permissions answers: Sys.Audit on every node, inherited from /nodes. */
+  const AUDIT = { '/nodes': { 'Sys.Audit': 1 } };
 
   const restoreGuest = (
     cfg: Record<string, string>,
     task: { status: string; exitstatus?: string; starttime?: number } | null = DONE,
     tasks: Tasks = CLEAN,
     onCheck?: () => void,
+    perms: Record<string, Record<string, number>> | 'unreadable' = AUDIT,
   ) => {
     let current: Record<string, string> | null = { ...cfg };
     const c = pveWith({
       guest: cfg,
       task,
-      extra: (url) => {
+      extra: (url, params) => {
+        if (url === '/access/permissions') {
+          return perms === 'unreadable' ? Promise.reject(new Error('403 Permission check failed')) : ok(perms);
+        }
         if (/\/qemu\/100\/config$/.test(url)) {
           return current ? ok(current) : Promise.reject(new Error("Configuration file 'qemu-server/100.conf' does not exist"));
         }
@@ -645,7 +651,9 @@ describe('a late upload-restore follower lost to a restart', () => {
         const listed = /^\/nodes\/([^/]+)\/tasks$/.exec(url);
         if (listed) {
           const t = tasks[listed[1]!];
-          return t === 'unreadable' || t === undefined ? Promise.reject(new Error('node offline')) : ok(t);
+          if (t === 'unreadable' || t === undefined) return Promise.reject(new Error('node offline'));
+          const start = Number(params?.['start'] ?? 0);
+          return ok(t.slice(start, start + Number(params?.['limit'] ?? t.length)));
         }
         return undefined;
       },
@@ -673,8 +681,10 @@ describe('a late upload-restore follower lost to a restart', () => {
     expect(c.delete).toHaveBeenCalledWith('/nodes/pve1/qemu/100');
     expect(rows).toHaveLength(0);
     expect(pve.deleteBackup).toHaveBeenCalledWith('pve1', 'backups', archive);
-    // The task lists were read from the restore's start.
-    expect(c.get).toHaveBeenCalledWith('/nodes/pve2/tasks', { params: expect.objectContaining({ vmid: 100, since: DONE.starttime }) });
+    // The task lists were read from a minute before the restore's start (clock slack).
+    expect(c.get).toHaveBeenCalledWith('/nodes/pve2/tasks', {
+      params: expect.objectContaining({ vmid: 100, since: DONE.starttime - 60, source: 'all', start: 0 }),
+    });
   });
 
   it('task OK, nothing else since, passing config: autostart and protection stripped, row held, op fields settled', async () => {
@@ -709,6 +719,86 @@ describe('a late upload-restore follower lost to a restart', () => {
     expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('held');
     untouched(c);
     expect(r).toMatchObject({ opUpid: null });
+  });
+
+  it('without Sys.Audit on a node there is no proof: held, nothing written', async () => {
+    // Without it Proxmox would list only the token's own tasks on that node.
+    const { c } = restoreGuest(REFUSED, DONE, CLEAN, undefined, {
+      '/nodes/pve1': { 'Sys.Audit': 1 },
+      '/nodes/pve2': { 'VM.Audit': 1 },
+    });
+    const r = followed();
+    expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+    expect(r).toMatchObject({ status: 'error', opUpid: null });
+  });
+
+  it('permissions that can\'t be read give no proof: held, nothing written', async () => {
+    const { c } = restoreGuest(REFUSED, DONE, CLEAN, undefined, 'unreadable');
+    const r = followed();
+    expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+    expect(r).toMatchObject({ status: 'error', opUpid: null });
+  });
+
+  const starts = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ upid: `UPID:pve2:${i}:0:0:qmstart:100:u@pve:`, type: 'qmstart' }));
+
+  it('reads a long task list page by page and still proves a clean history', async () => {
+    const { c } = restoreGuest(REFUSED, DONE, { pve1: [{ upid: UPID, type: 'qmrestore' }], pve2: starts(pve.VMID_TASK_PAGE + 3) });
+    followed();
+    expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('dropped');
+    expect(c.get).toHaveBeenCalledWith('/nodes/pve2/tasks', {
+      params: expect.objectContaining({ start: pve.VMID_TASK_PAGE, limit: pve.VMID_TASK_PAGE }),
+    });
+  });
+
+  it('a later create past the first page of the task list is still seen: held', async () => {
+    const { c } = restoreGuest(REFUSED, DONE, {
+      pve1: [{ upid: UPID, type: 'qmrestore' }],
+      pve2: [...starts(pve.VMID_TASK_PAGE), { upid: 'UPID:pve2:9:9:0:qmcreate:100:admin@pam:', type: 'qmcreate' }],
+    });
+    followed();
+    expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+  });
+
+  it('a task list too long to read in full gives no proof: held', async () => {
+    const { c } = restoreGuest(REFUSED, DONE, { pve1: [{ upid: UPID, type: 'qmrestore' }], pve2: starts(pve.VMID_TASK_PAGE * 20) });
+    followed();
+    expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+  });
+
+  it('the restore\'s own node not listing its task (log rotated or incomplete): held', async () => {
+    const { c } = restoreGuest(REFUSED, DONE, { pve1: [], pve2: [] });
+    followed();
+    expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+  });
+
+  it('a task type not known to be harmless counts against the proof: held', async () => {
+    const { c } = restoreGuest(REFUSED, DONE, {
+      pve1: [{ upid: UPID, type: 'qmrestore' }, { upid: 'UPID:pve1:9:9:0:qmtunnel:100:admin@pam:', type: 'qmtunnel' }],
+      pve2: [],
+    });
+    followed();
+    expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+  });
+
+  it('harmless tasks since ours (start, backup) don\'t count against it', async () => {
+    const { c } = restoreGuest(REFUSED, DONE, {
+      pve1: [
+        { upid: UPID, type: 'qmrestore' },
+        { upid: 'UPID:pve1:9:9:0:qmstart:100:u@pve:', type: 'qmstart' },
+        { upid: 'UPID:pve1:9:a:0:vzdump:100:u@pve:', type: 'vzdump' },
+      ],
+      pve2: [],
+    });
+    followed();
+    expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('dropped');
+    expect(c.delete).toHaveBeenCalledWith('/nodes/pve1/qemu/100');
   });
 
   it('a task status without a start time proves nothing: held, nothing written', async () => {
@@ -773,7 +863,11 @@ describe('a late upload-restore follower lost to a restart', () => {
     const r = followed();
     expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('unreachable');
     expect(notify).not.toHaveBeenCalled();
-    const later = new Date(OLD.getTime() + LOCK_NOTICE_AFTER_MS + 60_000);
+    // The day counts from when the wait was first seen, not from the row's start.
+    const nearly = new Date(NOW.getTime() + LOCK_NOTICE_AFTER_MS - 60_000);
+    expect(await reconcileFollowedRow(r as never, asClient(c), nearly)).toBe('unreachable');
+    expect(notify).not.toHaveBeenCalled();
+    const later = new Date(NOW.getTime() + LOCK_NOTICE_AFTER_MS + 60_000);
     expect(await reconcileFollowedRow(r as never, asClient(c), later)).toBe('unreachable');
     expect(await reconcileFollowedRow(r as never, asClient(c), later)).toBe('unreachable');
     expect(notify).toHaveBeenCalledTimes(1);

@@ -25,6 +25,7 @@ import {
   type VmOpKind,
 } from './vm.service.js';
 import { stripRestoreFlags, cleanupUploadedArchive, checkRestoredOrRemove } from './restore-upload.service.js';
+import { heldOn } from './guest-pool.service.js';
 
 // ─── Interrupted background operations ────────────────────────
 //
@@ -92,6 +93,7 @@ const lockNoticeSent = new Set<string>();
 export function resetReconcileNotices(): void {
   lockNoticeSent.clear();
   longWaitNoticeSent.clear();
+  longWaitFirstSeen.clear();
 }
 
 /** The node a UPID names (`UPID:<node>:…`), or null for something that isn't one. */
@@ -135,34 +137,54 @@ async function taskVerdict(upid: string | null, client: AxiosInstance): Promise<
   return (await readTask(upid, client)).verdict;
 }
 
-/** Task types that create, replace, remove or move a guest at a VMID. */
-const VMID_CHANGING_TASKS = new Set([
-  'qmcreate',
-  'qmrestore',
-  'qmclone',
-  'qmdestroy',
-  'vzcreate',
-  'vzrestore',
-  'vzclone',
-  'vzdestroy',
-  'qmigrate',
-  'vzmigrate',
+/**
+ * Task types that leave the guest at a VMID where it is and what it is. Any other
+ * task at the VMID since our own (a create, restore, clone, destroy, migration,
+ * tunnel, or a type not known here) counts against the proof.
+ */
+const HARMLESS_TASKS = new Set([
+  'qmstart',
+  'qmstop',
+  'qmshutdown',
+  'qmreboot',
+  'qmsuspend',
+  'qmresume',
+  'qmsnapshot',
+  'qmconfig',
+  'vzstart',
+  'vzstop',
+  'vzshutdown',
+  'vzreboot',
+  'vzsnapshot',
+  'vncproxy',
+  'vncshell',
+  'termproxy',
+  'vzdump',
 ]);
 
+/** Allowance for clock differences between nodes when reading task lists. */
+const TASK_CLOCK_SLACK_S = 60;
+
 /**
- * Proof that nothing has happened at a VMID since our own task started: on every
- * node, no other task that creates, restores, clones, destroys or migrates a
- * guest at that VMID. False when that can't be shown — a node's task list that
- * can't be read counts as not shown.
+ * Proof that nothing has happened at a VMID since our own task started, from every
+ * node's task list. It holds only when, for every node: the token has Sys.Audit on
+ * that node (without it Proxmox silently lists only the token's own tasks), the
+ * node's list for the VMID could be read in full, the restore's own node lists our
+ * task (so its log is still complete), and no task other than ours at that VMID is
+ * of a type outside HARMLESS_TASKS. Anything that can't be shown counts as no proof.
  */
 async function untouchedSince(vmid: number, since: number | undefined, ownUpid: string, client: AxiosInstance): Promise<boolean> {
-  if (!since) return false;
+  const ownNode = upidNode(ownUpid);
+  if (!since || !ownNode) return false;
   try {
-    const nodes = await pve.getNodes(client);
-    if (nodes.length === 0) return false;
+    const [nodes, perms] = await Promise.all([pve.getNodes(client), pve.getEffectivePermissions(client)]);
+    if (nodes.length === 0 || !nodes.some((n) => n.node === ownNode)) return false;
+    if (nodes.some(({ node }) => heldOn(perms, `/nodes/${node}`, ['Sys.Audit']).length === 0)) return false;
     for (const { node } of nodes) {
-      const tasks = await pve.listVmidTasks(node, vmid, since, client);
-      if (tasks.some((t) => t.upid !== ownUpid && VMID_CHANGING_TASKS.has(t.type))) return false;
+      const tasks = await pve.listVmidTasks(node, vmid, since - TASK_CLOCK_SLACK_S, client);
+      if (tasks === null) return false; // too long to be shown complete
+      if (node === ownNode && !tasks.some((t) => t.upid === ownUpid)) return false;
+      if (tasks.some((t) => t.upid !== ownUpid && !HARMLESS_TASKS.has(t.type))) return false;
     }
     return true;
   } catch {
@@ -172,15 +194,20 @@ async function untouchedSince(vmid: number, since: number | undefined, ownUpid: 
 
 /** Notices already sent per row and reason (per process: a restart may repeat one once). */
 const longWaitNoticeSent = new Set<string>();
+/** When this process first saw each row waiting for each reason. */
+const longWaitFirstSeen = new Map<string, number>();
 
 /**
  * Once a row has waited over a day on something that doesn't clear (a lock, a task
- * that can't be read), tell an admin once. The row is still left alone.
+ * that can't be read, a task still running), tell an admin once. The day counts
+ * from when this process first saw it waiting for that reason (kept in memory, so
+ * a restart starts the count again). The row is still left alone.
  */
 async function noticeLongWait(vm: VirtualMachine, reason: string, now: Date): Promise<void> {
-  const since = vm.opStartedAt ?? vm.updatedAt;
   const key = `${vm.id}:${reason}`;
-  if (now.getTime() - since.getTime() <= LOCK_NOTICE_AFTER_MS || longWaitNoticeSent.has(key)) return;
+  const first = longWaitFirstSeen.get(key) ?? now.getTime();
+  longWaitFirstSeen.set(key, first);
+  if (now.getTime() - first <= LOCK_NOTICE_AFTER_MS || longWaitNoticeSent.has(key)) return;
   longWaitNoticeSent.add(key);
   await notify({
     event: 'vm.error',
@@ -679,7 +706,13 @@ async function resumeFollowing(vm: VirtualMachine, node: string, upid: string, c
   // settles it at the same time; the settle below counts this registration as its own.
   const done = beginInFlight(vm.id);
   try {
-    await pve.waitForTask(node, upid, client, RESUME_FOLLOW_MS).catch(() => undefined);
+    let ended = true;
+    await pve.waitForTask(node, upid, client, RESUME_FOLLOW_MS).catch((err) => {
+      // Still running when the wait gives up, or the poll failed: the next pass
+      // looks again (and resumes following if the task is still running).
+      if (!(err instanceof pve.TaskFailedError)) ended = false;
+    });
+    if (!ended) return;
     const row = await prisma.virtualMachine.findUnique({ where: { id: vm.id } });
     if (row && row.opUpid === upid) await reconcileFollowedRow(row, client, new Date(), { resumed: true });
   } catch (err) {
@@ -722,8 +755,10 @@ export async function reconcileFollowedRow(
   }
   if (task === 'running' && upid && node) {
     // Resume the follower lost with the restart. The row counts as in flight while
-    // it waits; once the task ends (or the wait gives up) the row is settled here,
-    // exactly as if the task had ended before the restart.
+    // it waits; once the task ends the row is settled here, exactly as if it had
+    // ended before the restart. If the wait gives up first, the next pass resumes
+    // again; a task running for over a day is reported once.
+    await noticeLongWait(vm, `its Proxmox task ${upid} is still running`, now);
     void resumeFollowing(vm, node, upid, client);
     return 'busy';
   }

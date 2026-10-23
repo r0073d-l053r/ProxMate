@@ -63,14 +63,24 @@ An upload restore's archive (`opArchive`, recorded after the pool-mode rename, s
 
 When a create's task outlives its wait (`settleCreateTask`), the row is held in `error` (`PROVISION_FAILED_MESSAGE`) but keeps its op fields (`opKind`, `opUpid`, `opArchive`, `opStartedAt`) while a follower waits for the task, and counts as in flight. The follower clears them once it has settled the row (conditionally, only while they still name its task); a task Proxmox reports as failed (`TaskFailedError`) counts as settled. If the follower is lost (a restart, its 6 h limit, a poll error), the pass picks up held rows of a followed kind (`clone`, `duplicate`, `restore-upload`) that still carry a task (`reconcileFollowedRow`):
 
-- task still running: following resumes. The row stays in flight until the resumed follower has settled it, so the periodic pass never settles it at the same time;
-- task can't be read: left for the next pass; after a day an admin is told once (as for a guest whose Proxmox lock doesn't clear);
+- task still running: following resumes. The row stays in flight until the resumed follower has settled it, so the periodic pass never settles it at the same time. If the resumed wait gives up (6 h) or its poll fails, the row is left to the next pass, which looks again; a task still running after a day is reported to admins once;
+- task can't be read: left for the next pass; after a day an admin is told once (as for a guest whose Proxmox lock doesn't clear). The day counts from when this process first saw the row waiting for that reason (kept in memory, so a restart starts the count again);
 - Proxmox no longer knows the task (`no such task`): held, nothing written to the guest, admins told, op fields cleared;
 - task failed: the archive is removed; the row is dropped when no guest is at the VMID, otherwise held with the guest untouched;
-- task finished OK, upload restore: a finished task proves what was at the VMID then, not now. The guest is only treated as the restore's when every node's task list (`/nodes/<node>/tasks?vmid=&since=<restore start>`) shows no other create, restore, clone, destroy or migrate task at that VMID since, no other record or template names the VMID, and it isn't a template. Then it gets the late-task step: `onboot`/`startup`/`protection` removed, then the post-restore check, which removes it when it fails (the row is then dropped). A guest that passes stays untagged and the row held; admins are told to adopt it. When any of that can't be shown (a node's task list unreadable included), the row is held, nothing is written to the guest, and admins get the VMID and node;
+- task finished OK, upload restore: a finished task proves what was at the VMID then, not now. The guest is only treated as the restore's when every node's task list shows nothing else happened at that VMID since (see [Proof from task lists](#proof-from-task-lists)), no other record or template names the VMID, and it isn't a template. Then it gets the late-task step: `onboot`/`startup`/`protection` removed, then the post-restore check, which removes it when it fails (the row is then dropped). A guest that passes stays untagged and the row held; admins are told to adopt it. When any of that can't be shown (a node's task list unreadable included), the row is held, nothing is written to the guest, and admins get the VMID and node;
 - task finished OK, clone: tagged only on its row nonce; the row stays held.
 
-The op fields are cleared once the row is settled, so a row never loops. Adopting a machine or lifting its quota hold clears them too, and adopt is refused (409) while the row is in flight.
+The op fields are cleared once the row is settled, so a row never loops. Adopting a machine or lifting its quota hold clears them too. Adopt is refused (409) while something else holds the row in flight; otherwise the adopt itself holds the row in flight from start to finish, so no create, restore, follower or reconciler pass starts on it (or settles it) half-way through.
+
+# Proof from task lists
+
+The proof that nothing else used a VMID since an upload restore started (`untouchedSince`) holds only when all of these are shown:
+
+- the token has `Sys.Audit` on every `/nodes/<node>` (inherited from `/nodes` or `/` counts), read from `/access/permissions`. Without it Proxmox silently lists only the token's own tasks, so a missing privilege, or permissions that can't be read, is no proof. **Without `Sys.Audit` on the nodes the reconciler always holds a finished late upload restore** (nothing written to the guest, admins told) and an admin adopts or removes it by hand;
+- every node's list (`/nodes/<node>/tasks?vmid=&since=&source=all`) is read in full, page by page (`start`/`limit`, 500 per page). A node whose list can't be read, or a list longer than 20 pages, is no proof;
+- the restore's own node lists the restore's own task, so that node's log still reaches back that far;
+- the lists are read from 60 s before the restore's start, to allow for clock differences between nodes;
+- every other task at the VMID is of a type known to leave the guest in place (`qmstart`, `qmstop`, `qmshutdown`, `qmreboot`, `qmsuspend`, `qmresume`, `qmsnapshot`, `qmconfig`, the `vz*` equivalents, console proxies and `vzdump`). Any other type, a known one (create, restore, clone, destroy, migrate) or one not known here, counts against it.
 
 # Key functions
 

@@ -88,7 +88,7 @@ admin "test connection" action ([setup API](/api/setup.md), [admin API](/api/adm
 | `Datastore.AllocateSpace` | Warning | creating disks on a storage |
 | `Datastore.Allocate` | Warning | enabling snippets and cleaning up imported cloud images |
 | `Datastore.AllocateTemplate` | Warning | importing cloud images for the Template Store |
-| `Sys.Audit` | Warning | node health and capacity readings; also warned when `/nodes` returns no nodes |
+| `Sys.Audit` | Warning | node health and capacity readings; also warned when `/nodes` returns no nodes. Also needed on every `/nodes/<node>` for the restart reconciler to ever act on a finished late upload restore: without it the reconciler always holds such a row and writes nothing to its guest |
 | `Sys.Modify` | Warning | enforcing isolation on the cluster firewall |
 | `VM.Monitor` | Warning, only when the PVE major version is 8 or lower | the guest agent (guest IPs, login passwords, cloud-init progress) |
 | `VM.GuestAgent.Audit` / `VM.GuestAgent.Unrestricted` | Warning, only on PVE 9 or later | reading guest IPs; applying a deploy's login password and checking cloud-init progress |
@@ -191,8 +191,10 @@ What changes with a pool-scoped token:
   not the row is still there, and drops the row when the guest is removed. While it follows, the
   held row keeps its op fields; if the follower is lost (a restart, its 6 h limit, a poll error),
   the restart reconciler resumes following a task still running, or runs the same strip, check and
-  removal once the task has finished OK, but only when every node's task list (read with
-  `Sys.Audit` on `/nodes`) shows nothing else used the VMID since; otherwise it writes nothing
+  removal once the task has finished OK, but only when every node's task list shows nothing else
+  used the VMID since. That proof needs `Sys.Audit` on every `/nodes/<node>` (checked first, from
+  `/access/permissions`), since without it Proxmox lists only the token's own tasks; when it is
+  missing or can't be read, as when anything else can't be shown, the reconciler writes nothing
   to the guest and holds the row. When a later step fails after the check passed, the guest is
   neutralised without the delete (an over-quota failure excepted). An in-place MateState restore of
   a container gets the check with snapshots allowed (each snapshot's config is checked) and, on

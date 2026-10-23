@@ -287,6 +287,32 @@ describe('restoreFromUpload', () => {
     expect(pve.deleteBackup).toHaveBeenCalledWith('pve-0', 'backups', VOLID);
   });
 
+  it('a successful restore keeps the archive while another row still restores from it', async () => {
+    vi.mocked(prisma.virtualMachine.count).mockResolvedValue(1 as never);
+    await restoreFromUpload(user, { filename: FILENAME, name: 'migrated-web' });
+    expect(prisma.virtualMachine.count).toHaveBeenCalledWith({
+      where: { opArchive: VOLID, id: { not: 'vm1' }, OR: [{ status: 'creating' }, { opUpid: { not: null } }] },
+    });
+    expect(pve.deleteBackup).not.toHaveBeenCalled();
+    vi.mocked(prisma.virtualMachine.count).mockReset();
+  });
+
+  it('a failure before the restore keeps the archive while another row still restores from it', async () => {
+    vi.mocked(pve.pickBestNode).mockRejectedValueOnce(new Error('no node fits'));
+    vi.mocked(prisma.virtualMachine.count).mockResolvedValue(1 as never);
+    await expect(restoreFromUpload(user, { filename: FILENAME, name: 'migrated-web' })).rejects.toThrow(/no node fits/);
+    expect(prisma.virtualMachine.count).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ opArchive: VOLID }) }),
+    );
+    expect(pve.deleteBackup).not.toHaveBeenCalled();
+    // With nothing else using it, the same failure removes it.
+    vi.mocked(pve.pickBestNode).mockRejectedValueOnce(new Error('no node fits'));
+    vi.mocked(prisma.virtualMachine.count).mockResolvedValue(0 as never);
+    await expect(restoreFromUpload(user, { filename: FILENAME, name: 'migrated-web' })).rejects.toThrow(/no node fits/);
+    expect(pve.deleteBackup).toHaveBeenCalledWith('pve-0', 'backups', VOLID);
+    vi.mocked(prisma.virtualMachine.count).mockReset();
+  });
+
   describe('with a Proxmox pool configured', () => {
     let dir: string;
     const RENAMED = 'vzdump-qemu-200-2026_07_03-03_00_00.vma.zst';

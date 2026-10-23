@@ -733,6 +733,7 @@ async function restoreFromUploadLocked(
   let storage = '';
   let volid = '';
   let cleanupNode: string | null = null;
+  let ownRowId = '';
   let presetVmid: number | undefined;
   try {
     const client = await pve.getClient();
@@ -817,6 +818,7 @@ async function restoreFromUploadLocked(
       },
     });
     release(); // usage now includes this row
+    ownRowId = vm.id;
     const done = beginInFlight(vm.id);
 
     let created = false;
@@ -910,7 +912,8 @@ async function restoreFromUploadLocked(
       const startUpid = await pve.startVm(node, vmid, client, kind);
       await pve.waitForTask(node, startUpid, client);
       const running = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
-      await cleanupArchive(filename, node, storage, volid);
+      // Another row restoring from the same archive (or following its task) still needs it.
+      if (!(await archiveClaimedByOther(volid, vm.id))) await cleanupArchive(filename, node, storage, volid);
       return running;
     } catch (err) {
       // Any failure once the restore has landed leaves the row in `error`, which
@@ -926,8 +929,11 @@ async function restoreFromUploadLocked(
     }
   } catch (err) {
     // Any pre-restore failure (reservation, rename, quota, placement, reading the
-    // archive) drops the archive, so a rejected upload never lingers on the share.
-    if (!archiveHandedOff) await cleanupArchive(filename, cleanupNode, storage, volid);
+    // archive) drops the archive, so a rejected upload never lingers on the share,
+    // unless another row's restore from the same archive still needs it.
+    if (!archiveHandedOff && !(volid && (await archiveClaimedByOther(volid, ownRowId)))) {
+      await cleanupArchive(filename, cleanupNode, storage, volid);
+    }
     throw err;
   } finally {
     if (presetVmid !== undefined) releaseVmId(presetVmid);

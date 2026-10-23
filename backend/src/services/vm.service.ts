@@ -512,11 +512,21 @@ export class AdoptError extends Error {
  * references the VMID (the choice would be a guess), or when there is no guest.
  */
 export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
-  // A create, restore or follower still working on the row (or the restart
-  // reconciler settling it) owns it until it is done.
+  // Refused while a create, restore, follower or the restart reconciler is working
+  // on the row; otherwise the adopt itself holds the row in flight from start to
+  // finish, so none of those can start on it (or settle it) half-way through.
   if (isInFlight(vm.id)) {
     throw new AdoptError('This machine is still being worked on (a create or restore is finishing). Try again once it has settled.');
   }
+  const done = beginInFlight(vm.id);
+  try {
+    return await adoptGuestHeld(vm);
+  } finally {
+    done();
+  }
+}
+
+async function adoptGuestHeld(vm: VirtualMachine): Promise<VirtualMachine> {
   const others = await prisma.virtualMachine.count({ where: { proxmoxVmId: vm.proxmoxVmId, id: { not: vm.id } } });
   if (others > 0) throw new AdoptError('Another machine also references this VMID — remove the wrong row first.');
   // A template is shared by everyone who deploys from it; it is never one tenant's machine.

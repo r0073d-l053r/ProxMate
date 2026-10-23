@@ -1560,21 +1560,35 @@ export class TaskFailedError extends Error {
   }
 }
 
+/** One page of the task lists `listVmidTasks` reads. */
+export const VMID_TASK_PAGE = 500;
+/** Pages read before a VMID's task list counts as too long to be complete. */
+const VMID_TASK_MAX_PAGES = 20;
+
 /**
- * Tasks a node lists for one VMID since `since` (epoch seconds), finished and
- * running alike. Throws when the node's task list can't be read.
+ * Every task a node lists for one VMID since `since` (epoch seconds), finished and
+ * running alike, read page by page until a short page. Null when the list is
+ * longer than VMID_TASK_MAX_PAGES pages (it can't be shown complete). Throws when
+ * the node's task list can't be read. Without Sys.Audit on the node Proxmox lists
+ * only the caller's own tasks, so callers check that privilege first.
  */
 export async function listVmidTasks(
   node: string,
   vmid: number,
   since: number,
   client?: AxiosInstance,
-): Promise<Array<{ upid: string; type: string; starttime?: number }>> {
+): Promise<Array<{ upid: string; type: string; starttime?: number }> | null> {
   const c = client ?? (await getClient());
-  const res = await c.get<{ data: Array<{ upid: string; type: string; starttime?: number }> }>(`/nodes/${node}/tasks`, {
-    params: { vmid, since, source: 'all', limit: 1000 },
-  });
-  return res.data.data ?? [];
+  const out: Array<{ upid: string; type: string; starttime?: number }> = [];
+  for (let page = 0; page < VMID_TASK_MAX_PAGES; page += 1) {
+    const res = await c.get<{ data: Array<{ upid: string; type: string; starttime?: number }> }>(`/nodes/${node}/tasks`, {
+      params: { vmid, since, source: 'all', start: page * VMID_TASK_PAGE, limit: VMID_TASK_PAGE },
+    });
+    const rows = res.data.data ?? [];
+    out.push(...rows);
+    if (rows.length < VMID_TASK_PAGE) return out;
+  }
+  return null;
 }
 
 /** Poll a Proxmox task (UPID) until it finishes; throws if it failed. */
