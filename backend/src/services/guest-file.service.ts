@@ -120,11 +120,6 @@ const STAGING_RE = /^\/tmp\/pmpush\.[A-Za-z0-9]{8}$/;
 /** A private (0700) staging directory for the parts. */
 export const MKTEMP_ARGV: readonly string[] = ['mktemp', '-d', STAGING_TEMPLATE];
 
-/** Create the destination's parent directories (only when asked to). */
-export function mkdirArgv(dir: string): string[] {
-  return ['mkdir', '-p', '--', dir];
-}
-
 /** Best-effort cleanup of a staging directory after a failed write. */
 export function cleanupArgv(stagingDir: string): string[] {
   return ['rm', '-rf', '--', stagingDir];
@@ -136,40 +131,108 @@ export function partPath(stagingDir: string, i: number): string {
 }
 
 /**
- * The fixed script that assembles the parts into the destination. Every value
- * arrives as a positional ($1 staging dir, $2 destination, $3 mode, $4 owner
- * or empty) and is never part of the script text. It decodes into a temporary
- * sibling created under umask 077, sets mode and owner there, then renames it
- * over the destination, so the file never appears half-written or briefly with
- * looser permissions. Prints the SHA-256 of what landed.
- *
- * Exit 3: the owner user does not exist. 4: the destination is a directory.
- * 5: the parent directory does not exist. 6: a write step failed.
+ * Writes the file as the chosen owner, reading its content from stdin:
+ * $1 parent directory, $2 `./<file name>`, $3 mode. Run by {@link ASSEMBLE_SCRIPT}
+ * when the parent directory is one other users can change, so any symlink in
+ * the way only reaches what that user could write anyway.
  */
-export const ASSEMBLE_SCRIPT = [
-  's="$1"; d="$2"; m="$3"; o="$4"',
-  'case "$s" in /tmp/pmpush.*) ;; *) exit 9 ;; esac',
-  `trap 'rm -rf -- "$s"' EXIT`,
-  'if [ -n "$o" ]; then getent passwd "$o" >/dev/null || exit 3; fi',
-  '[ -d "$d" ] && exit 4',
-  'p="${d%/*}"; [ -n "$p" ] || p=/',
-  '[ -d "$p" ] || exit 5',
+export const WRITE_AS_OWNER_SCRIPT = [
+  'p="$1"; b="$2"; m="$3"',
+  'cd -P -- "$p" || exit 5',
+  '[ -d "$b" ] && exit 4',
   'umask 077',
-  't="$d.pmpush.$$"',
-  ': > "$t" || exit 6',
-  'for f in "$s"/p.*; do',
-  '  [ -e "$f" ] || continue',
-  '  base64 -d < "$f" >> "$t" || { rm -f -- "$t"; exit 6; }',
-  'done',
+  't=$(mktemp ./.pmpush.XXXXXXXX) || exit 6',
+  'cat > "$t" || { rm -f -- "$t"; exit 6; }',
   'chmod "$m" "$t" || { rm -f -- "$t"; exit 6; }',
-  'if [ -n "$o" ]; then chown "$o:$(id -gn "$o")" "$t" || { rm -f -- "$t"; exit 6; }; fi',
-  'mv -f -- "$t" "$d" || { rm -f -- "$t"; exit 6; }',
-  `sha256sum < "$d" 2>/dev/null | cut -d' ' -f1`,
+  `h=$(sha256sum < "$t" 2>/dev/null | cut -d' ' -f1)`,
+  'mv -f -- "$t" "$b" || { rm -f -- "$t"; exit 6; }',
+  'echo "$h"',
 ].join('\n');
 
-/** argv for the assemble step: `sh -c <fixed script> sh <staging> <dest> <mode> <owner>`. */
-export function assembleArgv(stagingDir: string, dest: string, mode: string, owner: string): string[] {
-  return ['/bin/sh', '-c', ASSEMBLE_SCRIPT, 'sh', stagingDir, dest, mode, owner];
+/**
+ * The fixed script that assembles the parts into the destination, run as
+ * root. Every value arrives as a positional and is never part of the script
+ * text: $1 {@link WRITE_AS_OWNER_SCRIPT}, $2 staging dir, $3 destination,
+ * $4 mode, $5 owner or empty, $6 expected part count, $7 create parents (1/0).
+ *
+ * Root writes only into a parent directory it reaches without symlinks and
+ * that nobody else can change (owned by root, not group- or other-writable),
+ * working from inside it after `cd -P`. The temporary file is made with
+ * `mktemp` (exclusive create, random name), given its mode and, if asked, its
+ * owner (`chown -h`), then renamed over the destination, so the file never
+ * appears half-written. Any other parent directory is written as the owner
+ * (setpriv, runuser or su, whichever the guest has); without an owner such a
+ * push is refused. Parent folders are created as the owner when one is given.
+ * Prints the SHA-256 of the written file.
+ *
+ * Exit 3: owner does not exist. 4: destination is a directory. 5: parent
+ * missing (or could not be created). 6: a write step failed. 7: parts missing.
+ * 8: unsafe parent and no owner. 10: no way to run as the owner.
+ */
+export const ASSEMBLE_SCRIPT = [
+  'i="$1"; s="$2"; d="$3"; m="$4"; o="$5"; n="$6"; mk="$7"',
+  'case "$s" in /tmp/pmpush.*) ;; *) exit 9 ;; esac',
+  `trap 'rm -rf -- "$s"' EXIT`,
+  'c=0; for f in "$s"/p.*; do [ -e "$f" ] && c=$((c + 1)); done',
+  '[ "$c" = "$n" ] || exit 7',
+  'if [ -n "$o" ]; then getent passwd "$o" >/dev/null || exit 3; fi',
+  // asuser <user> <fixed script> <$0> <args...>. Some su builds parse options
+  // anywhere in argv, so no argument after the script may start with "-".
+  'asuser() {',
+  '  u="$1"; c="$2"; shift 2',
+  '  if command -v setpriv >/dev/null 2>&1; then setpriv --reuid="$u" --regid="$(id -g "$u")" --init-groups -- /bin/sh -c "$c" "$@"',
+  '  elif command -v runuser >/dev/null 2>&1; then runuser -u "$u" -- /bin/sh -c "$c" "$@"',
+  '  elif command -v su >/dev/null 2>&1; then su -s /bin/sh "$u" -c "$c" "$@"',
+  '  else return 10; fi',
+  '}',
+  'decode() { for f in "$s"/p.*; do [ -e "$f" ] || continue; base64 -d < "$f" || return 6; done; }',
+  'p="${d%/*}"; [ -n "$p" ] || p=/; b="${d##*/}"',
+  'if [ "$mk" = 1 ]; then',
+  `  if [ -n "$o" ]; then asuser "$o" 'mkdir -p -- "$1"' pmpush "$p"; r=$?; else mkdir -p -- "$p"; r=$?; fi`,
+  '  [ "$r" = 10 ] && exit 10',
+  '  [ "$r" = 0 ] || exit 5',
+  'fi',
+  '[ -d "$p" ] || exit 5',
+  'if cd -P -- "$p" 2>/dev/null && [ "$(pwd -P)" = "$p" ] && [ -n "$(find . -maxdepth 0 -user 0 ! -perm -020 ! -perm -002)" ]; then',
+  '  [ -d "./$b" ] && exit 4',
+  '  umask 077',
+  '  t=$(mktemp ./.pmpush.XXXXXXXX) || exit 6',
+  '  decode > "$t" || { rm -f -- "$t"; exit 6; }',
+  '  chmod "$m" "$t" || { rm -f -- "$t"; exit 6; }',
+  '  if [ -n "$o" ]; then chown -h "$o:$(id -gn "$o")" "$t" || { rm -f -- "$t"; exit 6; }; fi',
+  `  h=$(sha256sum < "$t" 2>/dev/null | cut -d' ' -f1)`,
+  '  mv -f -- "$t" "./$b" || { rm -f -- "$t"; exit 6; }',
+  '  echo "$h"',
+  'elif [ -n "$o" ]; then',
+  '  cd /',
+  '  decode | asuser "$o" "$i" pmpush "$p" "./$b" "$m"',
+  'else',
+  '  exit 8',
+  'fi',
+].join('\n');
+
+/**
+ * argv for the assemble step:
+ * `sh -c <fixed script> sh <owner script> <staging> <dest> <mode> <owner> <parts> <mkdir>`.
+ */
+export function assembleArgv(
+  stagingDir: string,
+  dest: string,
+  mode: string,
+  owner: string,
+  parts: number,
+  createParents: boolean,
+): string[] {
+  return [
+    '/bin/sh', '-c', ASSEMBLE_SCRIPT, 'sh', WRITE_AS_OWNER_SCRIPT,
+    stagingDir, dest, mode, owner, String(parts), createParents ? '1' : '0',
+  ];
+}
+
+/** Guest stderr for an error message: control characters stripped, length capped. */
+export function guestDetail(stderr: string, max = 300): string {
+  const clean = stripControlChars(stderr).replace(/\s+/g, ' ').trim();
+  return clean.length > max ? `${clean.slice(0, max)}…` : clean;
 }
 
 // ─── Push ─────────────────────────────────────────────────────
@@ -225,20 +288,11 @@ export async function pushGuestFile(vm: VirtualMachine, input: GuestFilePushInpu
     );
   }
 
-  if (input.createParents) {
-    const parent = path.posix.dirname(dest);
-    if (parent !== '/') {
-      const r = await pve.guestExecOutput(node, vmid, mkdirArgv(parent), client, 15_000);
-      if (r.exitcode !== 0) {
-        throw new GuestFileError(`Couldn't create ${parent} in the guest${r.stderr ? `: ${r.stderr}` : ''}`, 502);
-      }
-    }
-  }
-
   const tmp = await pve.guestExecOutput(node, vmid, [...MKTEMP_ARGV], client, 15_000);
   const staging = tmp.stdout.trim();
   if (tmp.exitcode !== 0 || !STAGING_RE.test(staging)) {
-    throw new GuestFileError(`Couldn't create a staging directory in the guest${tmp.stderr ? `: ${tmp.stderr}` : ''}`, 502);
+    const why = guestDetail(tmp.stderr);
+    throw new GuestFileError(`Couldn't create a staging directory in the guest${why ? `: ${why}` : ''}`, 502);
   }
 
   let assembled = false;
@@ -247,16 +301,34 @@ export async function pushGuestFile(vm: VirtualMachine, input: GuestFilePushInpu
     for (let i = 0; i < parts.length; i++) {
       await pve.guestFileWrite(node, vmid, partPath(staging, i), parts[i]!, client);
     }
-    const r = await pve.guestExecOutput(node, vmid, assembleArgv(staging, dest, mode, owner), client, 60_000);
+    const r = await pve.guestExecOutput(
+      node, vmid, assembleArgv(staging, dest, mode, owner, parts.length, !!input.createParents), client, 60_000,
+    );
     assembled = true; // the script removes the staging directory itself
     if (r.exitcode === 3) throw new GuestFileError(`User "${owner}" does not exist in the guest`);
     if (r.exitcode === 4) throw new GuestFileError(`${dest} is a directory in the guest`);
+    const parent = path.posix.dirname(dest);
+    const why = guestDetail(r.stderr);
     if (r.exitcode === 5) {
-      throw new GuestFileError(`The folder ${path.posix.dirname(dest)} doesn't exist in the guest — choose "Create parent folders".`);
+      throw new GuestFileError(
+        input.createParents
+          ? `Couldn't create the folder ${parent} in the guest${owner ? ` as ${owner}` : ''}${why ? `: ${why}` : ''}`
+          : `The folder ${parent} doesn't exist in the guest — choose "Create parent folders".`,
+      );
+    }
+    if (r.exitcode === 7) throw new GuestFileError('Some parts of the file went missing in the guest — try again.', 502);
+    if (r.exitcode === 8) {
+      throw new GuestFileError(
+        `Other users can change ${parent}, or its path goes through a symlink, so it isn't written as root. ` +
+          'Choose the owner the file should belong to, or give the real path.',
+      );
+    }
+    if (r.exitcode === 10) {
+      throw new GuestFileError(`The guest has no setpriv, runuser or su to write the file as ${owner}.`, 502);
     }
     if (r.exitcode !== 0) {
       throw new GuestFileError(
-        `Writing the file failed inside the guest${r.stderr ? `: ${r.stderr}` : ` (exit ${r.exitcode})`}`,
+        `Writing the file failed inside the guest${owner ? ` (as ${owner} where needed)` : ''}${why ? `: ${why}` : ` (exit ${r.exitcode})`}`,
         502,
       );
     }
@@ -288,12 +360,14 @@ export const IDE_LOG_TAIL_BYTES = 64 * 1024;
 export const IDE_LOG_MAX_LINES = 500;
 /** Fixed argv: nothing from the request reaches it. */
 export const IDE_LOG_ARGV: readonly string[] = ['tail', '-c', String(IDE_LOG_TAIL_BYTES), IDE_LOG_PATH];
+/** Fixed argv for the log's size, so `truncated` reflects the file and not a re-encoding. */
+export const IDE_LOG_SIZE_ARGV: readonly string[] = ['stat', '-c', '%s', IDE_LOG_PATH];
 
 /**
  * Make guest output safe to show as plain text: drop ANSI escape sequences
  * (CSI, OSC and two-character escapes), resolve carriage-return progress lines
  * to their final state, and remove every remaining control character except
- * newline and tab, plus the Unicode bidirectional overrides.
+ * newline and tab, plus the Unicode bidirectional overrides and marks.
  */
 export function stripControlChars(text: string): string {
   const noEscapes = text
@@ -314,7 +388,7 @@ export function stripControlChars(text: string): string {
   return lines
     .join('\n')
     .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '')
-    .replace(/[‪-‮⁦-⁩]/g, '');
+    .replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '');
 }
 
 export interface IdeInstallLog {
@@ -326,9 +400,12 @@ export interface IdeInstallLog {
   missing: boolean;
 }
 
-/** Turn raw `tail -c` output into the response body: cleaned, at most IDE_LOG_MAX_LINES lines. */
-export function shapeIdeLog(raw: string): { log: string; truncated: boolean } {
-  let truncated = Buffer.byteLength(raw, 'utf8') >= IDE_LOG_TAIL_BYTES;
+/**
+ * Turn raw `tail -c` output into the response body: cleaned, at most
+ * IDE_LOG_MAX_LINES lines. `fileBytes` is the log's size on the guest.
+ */
+export function shapeIdeLog(raw: string, fileBytes?: number): { log: string; truncated: boolean } {
+  let truncated = fileBytes !== undefined ? fileBytes > IDE_LOG_TAIL_BYTES : Buffer.byteLength(raw, 'utf8') >= IDE_LOG_TAIL_BYTES;
   let lines = stripControlChars(raw).trimEnd().split('\n');
   // tail -c usually starts mid-line; drop the fragment.
   if (truncated && lines.length > 1) lines = lines.slice(1);
@@ -351,10 +428,18 @@ export async function readIdeInstallLog(vm: VirtualMachine): Promise<IdeInstallL
       409,
     );
   }
+  const size = await pve.guestExecOutput(node, vmid, [...IDE_LOG_SIZE_ARGV], client, 15_000);
+  if (size.exitcode !== 0) {
+    if (/no such file/i.test(size.stderr)) return { path: IDE_LOG_PATH, log: '', truncated: false, missing: true };
+    const why = guestDetail(size.stderr);
+    throw new GuestFileError(`Couldn't read the install log${why ? `: ${why}` : ''}`, 502);
+  }
   const r = await pve.guestExecOutput(node, vmid, [...IDE_LOG_ARGV], client, 15_000, false);
   if (r.exitcode !== 0) {
     if (/no such file/i.test(r.stderr)) return { path: IDE_LOG_PATH, log: '', truncated: false, missing: true };
-    throw new GuestFileError(`Couldn't read the install log${r.stderr ? `: ${stripControlChars(r.stderr)}` : ''}`, 502);
+    const why = guestDetail(r.stderr);
+    throw new GuestFileError(`Couldn't read the install log${why ? `: ${why}` : ''}`, 502);
   }
-  return { path: IDE_LOG_PATH, missing: false, ...shapeIdeLog(r.stdout) };
+  const bytes = Number(size.stdout.trim());
+  return { path: IDE_LOG_PATH, missing: false, ...shapeIdeLog(r.stdout, Number.isFinite(bytes) ? bytes : undefined) };
 }

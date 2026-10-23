@@ -28,6 +28,7 @@ const ACTIVITY_META: Record<string, { label: string; dot: string }> = {
   "vm.resize": { label: "Resized", dot: "bg-sky-500" },
   "vm.rebuild": { label: "Rebuilt", dot: "bg-amber-500" },
   "vm.console_open": { label: "Console opened", dot: "bg-muted-foreground" },
+  "vm.console_view_open": { label: "Console opened (view only)", dot: "bg-muted-foreground" },
   "vm.delete": { label: "Deleted", dot: "bg-red-500" },
   "snapshot.create": { label: "Snapshot taken", dot: "bg-sky-500" },
   "snapshot.rollback": { label: "Rolled back to snapshot", dot: "bg-amber-500" },
@@ -85,14 +86,11 @@ export function ActivityCard({ vmId, className }: { vmId: string; className?: st
           <ul className="space-y-3">
             {items.map((e) => {
               const meta = ACTIVITY_META[e.action] ?? { label: e.action, dot: "bg-muted-foreground" };
-              // A view-only console session is the same event, marked in its detail.
-              const label =
-                e.action === "vm.console_open" && e.detail?.endsWith("(view only)") ? "Console opened (view only)" : meta.label;
               return (
                 <li key={e.id} className="flex items-start gap-3 text-sm">
                   <span className={`mt-1.5 size-2 shrink-0 rounded-full ${meta.dot}`} />
                   <div className="min-w-0 flex-1">
-                    <span className="font-medium">{label}</span>
+                    <span className="font-medium">{meta.label}</span>
                     {e.actorEmail && (
                       <span className="text-muted-foreground"> · {e.actorEmail}</span>
                     )}

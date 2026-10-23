@@ -95,6 +95,20 @@ describe('handleConsoleUpgrade — gate', () => {
     expect(sock.write).toHaveBeenCalledWith('HTTP/1.1 403 Forbidden\r\n\r\n');
   });
 
+  it('a mismatched attempt does not use up the grant', async () => {
+    const ticket = grant({ mode: 'view' });
+    verify.mockResolvedValue({ id: 'u2', role: 'user' } as never);
+    const other = fakeSocket();
+    handleConsoleUpgrade(fakeReq(`/api/vms/vm1/console?${q(ticket)}`), other, Buffer.alloc(0));
+    await flush();
+    expect(other.write).toHaveBeenCalledWith('HTTP/1.1 403 Forbidden\r\n\r\n');
+    // The owner of the ticket still gets past the gate with it.
+    verify.mockResolvedValue({ id: 'u1', role: 'user' } as never);
+    handleConsoleUpgrade(fakeReq(`/api/vms/vm1/console?${q(ticket)}`), fakeSocket(), Buffer.alloc(0));
+    await flush();
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
+
   it('a grant is single use', async () => {
     const ticket = grant({ transport: 'serial', mode: 'view' });
     const first = fakeSocket();
@@ -245,7 +259,7 @@ describe('end to end: graphical console', () => {
 });
 
 describe('end to end: text console', () => {
-  it('a viewer session forwards the auth line, resizes and keepalives only', async () => {
+  it('a viewer session forwards the auth line and one keepalive only', async () => {
     asRole('viewer');
     const ticket = grant({ transport: 'serial', mode: 'view' });
     const { bytes } = await session(`/api/vms/vm1/serial?${q(ticket)}`, [
@@ -257,7 +271,8 @@ describe('end to end: text console', () => {
       '2',
       '0:1:x1:100:40:',
     ]);
-    expect(bytes.toString('latin1')).toBe('root@pam:PVEVNC:t\n1:80:24:21:100:40:');
+    // Resizes and input are dropped; the second keepalive comes within a second of the first.
+    expect(bytes.toString('latin1')).toBe('root@pam:PVEVNC:t\n2');
   });
 
   it('an operator session is relayed unchanged', async () => {

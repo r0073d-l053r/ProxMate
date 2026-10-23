@@ -1336,10 +1336,9 @@ router.post('/:id/files', guestFileLimiter, async (req: Request, res: Response) 
   const detail =
     `${vm.name} · ${dest.path} · ${file.size} bytes · sha256 ${sha256} · mode ${mode}` +
     (owner ? ` · owner ${owner}` : '');
+  let result: Awaited<ReturnType<typeof pushGuestFile>>;
   try {
-    const result = await pushGuestFile(vm, { path: dest.path, content: file.buffer, mode, owner, createParents });
-    await recordAudit({ action: 'vm.file_push', actor: user, targetType: 'vm', targetId: vm.id, detail, req });
-    res.json(result);
+    result = await pushGuestFile(vm, { path: dest.path, content: file.buffer, mode, owner, createParents });
   } catch (err) {
     const message = err instanceof GuestFileError || err instanceof GuestErroredError || err instanceof GuestIdentityError
       ? err.message
@@ -1354,7 +1353,12 @@ router.post('/:id/files', guestFileLimiter, async (req: Request, res: Response) 
       return;
     }
     res.status(502).json({ error: message });
+    return;
   }
+  // The file is in the guest: an audit hiccup must not turn that into a failure.
+  await recordAudit({ action: 'vm.file_push', actor: user, targetType: 'vm', targetId: vm.id, detail, req })
+    .catch(() => undefined);
+  res.json(result);
 });
 
 // ─── POST /api/vms/:id/rescue + /rescue/exit ──────────────────
@@ -1845,8 +1849,8 @@ router.post('/:id/console', async (req: Request, res: Response) => {
     const { ticket, port } = await requestVncProxy(vm.proxmoxNode, vm.proxmoxVmId, kindOf(vm));
     recordConsoleGrant(ticket, { vmId: vm.id, userId: user.id, transport: 'vnc', port, mode });
     await recordAudit({
-      action: 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
-      detail: `graphical console of ${vm.name}${mode === 'view' ? ' (view only)' : ''}`, req,
+      action: mode === 'view' ? 'vm.console_view_open' : 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `graphical console of ${vm.name}`, req,
     });
     res.json({ ticket, port, viewOnly: mode === 'view' });
   } catch (err) {
@@ -1880,8 +1884,8 @@ router.post('/:id/serial', async (req: Request, res: Response) => {
     const ticket = await requestTermProxy(vm.proxmoxNode, vm.proxmoxVmId, undefined, kind);
     recordConsoleGrant(ticket.ticket, { vmId: vm.id, userId: user.id, transport: 'serial', port: ticket.port, mode });
     await recordAudit({
-      action: 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
-      detail: `text console of ${vm.name}${mode === 'view' ? ' (view only)' : ''}`, req,
+      action: mode === 'view' ? 'vm.console_view_open' : 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `text console of ${vm.name}`, req,
     });
     res.json({ ...ticket, viewOnly: mode === 'view' });
   } catch (err) {

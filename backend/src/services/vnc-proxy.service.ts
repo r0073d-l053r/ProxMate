@@ -126,6 +126,23 @@ export function takeConsoleGrant(ticket: string): ConsoleTicketGrant | undefined
   return consoleGrants.take(ticket);
 }
 
+/**
+ * Claim a ticket's grant for a WebSocket upgrade: the grant is removed and
+ * returned only when it was minted for this VM, user, transport and port. A
+ * mismatched attempt leaves it in place, so presenting someone else's ticket
+ * can't use it up. Synchronous, so of two matching claims exactly one wins.
+ */
+export function claimConsoleGrant(
+  ticket: string,
+  expect: Omit<ConsoleTicketGrant, 'mode'>,
+): ConsoleTicketGrant | undefined {
+  const g = consoleGrants.get(ticket);
+  if (!g || g.vmId !== expect.vmId || g.userId !== expect.userId || g.transport !== expect.transport || g.port !== expect.port) {
+    return undefined;
+  }
+  return consoleGrants.take(ticket);
+}
+
 /** Flatten a ws message payload to one Buffer. */
 function toBuffer(data: RawData): Buffer {
   if (Buffer.isBuffer(data)) return data;

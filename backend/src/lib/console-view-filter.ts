@@ -37,9 +37,18 @@ const EMPTY = Buffer.alloc(0);
  * discard unread (`skip`), so a large dropped message is never buffered.
  */
 abstract class StreamFilter implements ConsoleInputFilter {
-  protected head: Buffer = EMPTY;
   protected skip = 0;
   private failed = false;
+  // The current unit's bytes: `len` of `store`. Grown by doubling, so a unit
+  // dripped in one byte per frame still costs linear time; a fresh store is
+  // started per unit because forwarded units are views into it.
+  private store: Buffer = EMPTY;
+  private len = 0;
+
+  /** The current unit so far (a view, valid until the unit completes). */
+  protected get head(): Buffer {
+    return this.store.subarray(0, this.len);
+  }
 
   /** Total bytes the current unit needs, judged from what `head` holds so far. */
   protected abstract want(): number;
@@ -67,15 +76,22 @@ abstract class StreamFilter implements ConsoleInputFilter {
         continue;
       }
       const need = this.want();
-      if (this.head.length < need) {
-        const n = Math.min(need - this.head.length, chunk.length - off);
-        this.head = Buffer.concat([this.head, chunk.subarray(off, off + n)]);
+      if (this.len < need) {
+        const n = Math.min(need - this.len, chunk.length - off);
+        if (this.len + n > this.store.length) {
+          const grown = Buffer.allocUnsafe(Math.max(need, 2 * this.store.length, 16));
+          this.store.copy(grown, 0, 0, this.len);
+          this.store = grown;
+        }
+        chunk.copy(this.store, this.len, off, off + n);
+        this.len += n;
         off += n;
       }
       // Reading part of a unit can raise what it needs (a length field, a count).
-      if (this.head.length < this.want()) continue;
+      if (this.len < this.want()) continue;
       this.complete(out);
-      this.head = EMPTY;
+      this.store = EMPTY;
+      this.len = 0;
     }
     return out.length === 1 ? out[0]! : Buffer.concat(out);
   }
@@ -102,6 +118,8 @@ const SEC_PLAIN = 256;
 const MAX_PLAIN_FIELD = 4096;
 /** The pseudo-encoding a client lists to use 7-byte extended PointerEvents. */
 const ENC_EXTENDED_MOUSE_BUTTONS = -316;
+/** Most encodings accepted in one SetEncodings (noVNC lists fewer than 30). */
+const MAX_ENCODINGS = 256;
 
 /**
  * View-only filter for the RFB stream (RFC 6143 plus the extensions noVNC uses).
@@ -157,8 +175,12 @@ export class RfbViewOnlyFilter extends StreamFilter {
     switch (type) {
       case 0: // SetPixelFormat
         return 20;
-      case 2: // SetEncodings: type, pad, u16 count, s32 × count
-        return h.length < 4 ? 4 : 4 + 4 * h.readUInt16BE(2);
+      case 2: { // SetEncodings: type, pad, u16 count, s32 × count
+        if (h.length < 4) return 4;
+        const count = h.readUInt16BE(2);
+        if (count > MAX_ENCODINGS) throw new ConsoleFilterError('too many encodings in SetEncodings');
+        return 4 + 4 * count;
+      }
       case 3: // FramebufferUpdateRequest
         return 10;
       case 4: // KeyEvent
@@ -292,14 +314,42 @@ const COLON = 0x3a;
 const NEWLINE = 0x0a;
 const isDigit = (b: number) => b >= 0x30 && b <= 0x39;
 
+/** Fewest milliseconds between two keepalives forwarded (the browser sends one every 30 s). */
+const KEEPALIVE_INTERVAL_MS = 1000;
+
 /**
  * View-only filter for the termproxy stream. The first line (`user:ticket\n`)
  * authenticates and passes. After it, messages are `0:<len>:<data>` (input — the
  * header is dropped and the `len` data bytes discarded unread), `1:<cols>:<rows>:`
- * (resize — passes) and `2` (keepalive — passes). Anything else closes the session.
+ * (resize — also dropped) and `2` (keepalive — passes, at most one a second).
+ * Anything else closes the session.
+ *
+ * Why resizes are dropped too: termproxy does not parse a stream, it parses
+ * whatever its fixed buffer holds after each read. A message cut at the buffer's
+ * end is half consumed, and the rest is parsed again as new messages — so the
+ * digits of a resize can land at the head of the buffer, and a `0` there starts
+ * the input path (`0:<n>:` then n bytes written to the terminal). What reaches
+ * termproxy after the auth line must therefore hold no `0` byte at all, however
+ * it is split. Only `2` bytes are forwarded, so it can't:
+ *
+ * - termproxy reads until its buffer holds a `\n`, takes everything before the
+ *   first `\n` as `user:ticket` and discards the newline; none of that line is
+ *   ever parsed as a message, whatever bytes (a `0` included) it contains. This
+ *   filter forwards exactly the bytes up to and including that first `\n` as the
+ *   auth line, so the two agree on where it ends.
+ * - after it, termproxy's message loop looks only at the first byte of what is
+ *   buffered: `0` → input, `1` → resize, anything else (`2` among them) consumes
+ *   one byte. A buffer of nothing but `2` bytes is consumed one byte at a time and
+ *   never reaches the input or resize path.
  */
 export class TermViewOnlyFilter extends StreamFilter {
   private phase: TermPhase = 'auth';
+  private lastKeepalive = -Infinity;
+
+  /** `now` is injectable for tests. */
+  constructor(private readonly now: () => number = Date.now) {
+    super();
+  }
 
   protected want(): number {
     const h = this.head;
@@ -359,6 +409,13 @@ export class TermViewOnlyFilter extends StreamFilter {
       this.skip = Number(h.subarray(2, h.length - 1).toString('latin1'));
       return;
     }
-    out.push(h); // resize or keepalive
+    if (h[0] === 0x32) {
+      const t = this.now();
+      if (t - this.lastKeepalive >= KEEPALIVE_INTERVAL_MS) {
+        this.lastKeepalive = t;
+        out.push(h);
+      }
+    }
+    // Resize: dropped (see the class comment).
   }
 }
