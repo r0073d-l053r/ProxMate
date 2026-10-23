@@ -1544,12 +1544,37 @@ export async function getTaskStatus(
   node: string,
   upid: string,
   client?: AxiosInstance,
-): Promise<{ status: string; exitstatus?: string }> {
+): Promise<{ status: string; exitstatus?: string; starttime?: number }> {
   const c = client ?? (await getClient());
-  const res = await c.get<{ data: { status: string; exitstatus?: string } }>(
+  const res = await c.get<{ data: { status: string; exitstatus?: string; starttime?: number } }>(
     `/nodes/${node}/tasks/${encodeURIComponent(upid)}/status`,
   );
   return res.data.data;
+}
+
+/** Thrown by waitForTask when Proxmox reports the task itself as failed. */
+export class TaskFailedError extends Error {
+  constructor(public readonly exitstatus: string) {
+    super(`Proxmox task failed: ${exitstatus}`);
+    this.name = 'TaskFailedError';
+  }
+}
+
+/**
+ * Tasks a node lists for one VMID since `since` (epoch seconds), finished and
+ * running alike. Throws when the node's task list can't be read.
+ */
+export async function listVmidTasks(
+  node: string,
+  vmid: number,
+  since: number,
+  client?: AxiosInstance,
+): Promise<Array<{ upid: string; type: string; starttime?: number }>> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: Array<{ upid: string; type: string; starttime?: number }> }>(`/nodes/${node}/tasks`, {
+    params: { vmid, since, source: 'all', limit: 1000 },
+  });
+  return res.data.data ?? [];
 }
 
 /** Poll a Proxmox task (UPID) until it finishes; throws if it failed. */
@@ -1571,7 +1596,7 @@ export async function waitForTask(
       // non-fatal warnings "WARNINGS: N" — the latter is a success (common for LXC
       // creates and vzdump backups). Anything else is a genuine failure.
       if (exitstatus && exitstatus !== 'OK' && !exitstatus.startsWith('WARNINGS')) {
-        throw new Error(`Proxmox task failed: ${exitstatus}`);
+        throw new TaskFailedError(exitstatus);
       }
       return;
     }

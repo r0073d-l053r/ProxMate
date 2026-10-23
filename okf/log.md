@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-23
+* **Update**: [Restart reconciler](/services/task-reconcile.md): a finished upload restore is only acted on with proof from every node's task list that nothing else used the VMID since; resumed followers hold the row until settled; unknown tasks and long waits settle or notify instead of looping; adopt clears op fields and is refused while in flight.
 * **Update**: [Restart reconciler](/services/task-reconcile.md) settles held rows whose late create task was being followed when the follower was lost: it resumes following, or strips and checks (removing when refused) an upload restore that finished.
 * **Update**: [Restart reconciler](/services/task-reconcile.md) writes to a guest only with positive proof (the row tag, or the `proxmate-row:<id>` clone nonce); an interrupted upload restore's untagged guest is never changed; rows sharing a VMID are held, not dropped; `nextVmId` skips VMIDs that creating or error rows name.
 * **Update**: [Restart reconciler](/services/task-reconcile.md): guests are claimed only with the row's tag or the clone checks (never on a task result alone), writes are conditional on the row read, unreadable tasks are retried, upload restores are kept from booting and their archive removed; new `opSourceId`/`opArchive` on [VirtualMachine](/database/virtual-machine.md).

@@ -35,6 +35,7 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
   return { ...actual, getClient: vi.fn() };
 });
 
+import { beginInFlight } from '../src/lib/in-flight.js';
 import { prisma } from '../src/lib/prisma.js';
 import * as pve from '../src/services/proxmox.service.js';
 import {
@@ -174,11 +175,23 @@ describe('adoptGuest (admin)', () => {
     expect(prisma.virtualMachine.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ holdReason: null }) }));
   });
 
+  it('refuses while the machine is still being worked on (a create, restore or follower in flight)', async () => {
+    const c = pveWith({ name: 'web', tags: guestMarker('rowa'), scsi0: 'local-lvm:vm-100-disk-0,size=10G' });
+    const done = beginInFlight('rowa');
+    try {
+      await expect(adoptGuest(row({ status: 'error', holdReason: 'x' }))).rejects.toThrow(/still being worked on/);
+    } finally {
+      done();
+    }
+    expect(c.put).not.toHaveBeenCalled();
+    expect(prisma.virtualMachine.update).not.toHaveBeenCalled();
+  });
+
   it('lifts a hold once the guest references only its own volumes', async () => {
     pveWith({ name: 'web', tags: guestMarker('rowa'), scsi0: 'local-lvm:vm-100-disk-0,size=10G' });
     const held = row({ status: 'error', holdReason: "This machine's provisioning didn't finish." });
     await adoptGuest(held);
-    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: { status: 'stopped', holdReason: null } });
+    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: { status: 'stopped', holdReason: null, opKind: null, opStartedAt: null, opUpid: null, opSourceId: null, opArchive: null } });
   });
 
   it('a 1.0.x error row whose untagged guest is adopted becomes startable in one step', async () => {
@@ -189,7 +202,7 @@ describe('adoptGuest (admin)', () => {
     );
     const adopted = await adoptGuest(errored);
     expect(c.put).toHaveBeenCalled(); // tagged first
-    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: { status: 'stopped', holdReason: null } });
+    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: { status: 'stopped', holdReason: null, opKind: null, opStartedAt: null, opUpid: null, opSourceId: null, opArchive: null } });
     expect(isHeld(adopted)).toBe(false);
   });
 

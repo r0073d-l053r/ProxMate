@@ -123,6 +123,36 @@ describe('settleFailedCreate for a clone whose task outlived the wait (C1)', () 
     expect(isInFlight('rowa')).toBe(false);
   });
 
+  it('a follower that loses the task (poll error) leaves the op fields for the restart reconciler', async () => {
+    const c = pveWith(templateMarker('tpl1'), { status: 'running' });
+    const afterTask = vi.fn(async () => undefined);
+    await settleFailedCreate(row, err, false, { task: { node: 'pve1', upid: 'UPID:clone', afterTask } });
+    expect(isInFlight('rowa')).toBe(true);
+    const get = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) => (/\/tasks\/.*\/status$/.test(url) ? Promise.reject(new Error('connect ETIMEDOUT')) : get(url)));
+    await vi.waitFor(() => expect(isInFlight('rowa')).toBe(false), { timeout: 5000 });
+    expect(prisma.virtualMachine.updateMany).not.toHaveBeenCalled();
+    expect(afterTask).not.toHaveBeenCalled(); // the archive stays for whoever settles the row
+    expect(c.put.mock.calls.some((x) => String(x[0]) === '/nodes/pve1/qemu/100/config')).toBe(false);
+  });
+
+  it('a follower whose task fails settles the row: cleanup runs and the op fields are cleared, nothing tagged', async () => {
+    const c = pveWith(templateMarker('tpl1'), { status: 'running' });
+    const afterTask = vi.fn(async () => undefined);
+    await settleFailedCreate(row, err, false, { task: { node: 'pve1', upid: 'UPID:clone', afterTask } });
+    const get = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) =>
+      /\/tasks\/.*\/status$/.test(url) ? ok({ status: 'stopped', exitstatus: 'clone failed' }) : get(url),
+    );
+    await vi.waitFor(() => expect(isInFlight('rowa')).toBe(false), { timeout: 5000 });
+    expect(afterTask).toHaveBeenCalled();
+    expect(prisma.virtualMachine.updateMany).toHaveBeenCalledWith({
+      where: { id: 'rowa', opUpid: 'UPID:clone' },
+      data: expect.objectContaining({ opUpid: null }),
+    });
+    expect(c.put.mock.calls.some((x) => String(x[0]) === '/nodes/pve1/qemu/100/config')).toBe(false);
+  });
+
   it('keeps a hold the row already has instead of overwriting it (audit round 3)', async () => {
     pveWith(guestMarker('rowa'));
     vi.mocked(prisma.virtualMachine.findUnique).mockResolvedValueOnce({ holdReason: 'Over quota after a restore.' } as never);

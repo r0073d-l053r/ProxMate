@@ -191,7 +191,9 @@ What changes with a pool-scoped token:
   not the row is still there, and drops the row when the guest is removed. While it follows, the
   held row keeps its op fields; if the follower is lost (a restart, its 6 h limit, a poll error),
   the restart reconciler resumes following a task still running, or runs the same strip, check and
-  removal once the task has finished OK. When a later step fails after the check passed, the guest is
+  removal once the task has finished OK, but only when every node's task list (read with
+  `Sys.Audit` on `/nodes`) shows nothing else used the VMID since; otherwise it writes nothing
+  to the guest and holds the row. When a later step fails after the check passed, the guest is
   neutralised without the delete (an over-quota failure excepted). An in-place MateState restore of
   a container gets the check with snapshots allowed (each snapshot's config is checked) and, on
   failure, the same neutralising without the delete, then a hold. The archive's guest firewall

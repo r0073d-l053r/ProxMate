@@ -28,6 +28,11 @@ export function isInFlight(id: string): boolean {
   return active.has(id);
 }
 
+/** How many operations on this row are running in this process. */
+export function inFlightCount(id: string): number {
+  return active.get(id) ?? 0;
+}
+
 /** Test hook: forget every registration. */
 export function resetInFlight(): void {
   active.clear();

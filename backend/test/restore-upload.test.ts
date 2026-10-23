@@ -67,6 +67,7 @@ import {
   restoreFromUpload,
   neutraliseRestoredGuest,
   renameArchiveForVmid,
+  cleanupUploadedArchive,
   promoteUpload,
   resolveUnderUploadDir,
   sweepStaleUploads,
@@ -449,8 +450,35 @@ describe('restoreFromUpload', () => {
       await utimes(marker, t, t);
       vi.mocked(prisma.virtualMachine.count).mockResolvedValue(1 as never);
       expect(await sweepStaleUploads()).toBe(0);
-      expect(prisma.virtualMachine.count).toHaveBeenCalledWith({ where: { proxmoxVmId: 512, status: 'creating' } });
+      expect(prisma.virtualMachine.count).toHaveBeenCalledWith({ where: { proxmoxVmId: 512, OR: [{ status: 'creating' }, { opUpid: { not: null } }] } });
       expect((await left()).length).toBe(2);
+    });
+
+    it('also keeps an archive a held row still carrying its task records (its follower may come back)', async () => {
+      await put('vzdump-qemu-300-b.vma.zst', 8 * H);
+      await put('.proxmate-uploaded.vzdump-qemu-300-b.vma.zst', 8 * H);
+      vi.mocked(prisma.virtualMachine.count).mockResolvedValue(0 as never);
+      vi.mocked(prisma.virtualMachine.findMany).mockResolvedValueOnce([
+        { opArchive: 'backups:backup/vzdump-qemu-300-b.vma.zst' },
+      ] as never);
+      expect(await sweepStaleUploads()).toBe(0);
+      expect(prisma.virtualMachine.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { opArchive: { not: null }, OR: [{ status: 'creating' }, { opUpid: { not: null } }] } }),
+      );
+      expect((await left()).length).toBe(2);
+    });
+
+    it('a settled row never removes an archive another row still needs', async () => {
+      const volid = 'backups:backup/vzdump-qemu-300-c.vma.zst';
+      vi.mocked(prisma.virtualMachine.count).mockResolvedValueOnce(1 as never);
+      await cleanupUploadedArchive(volid, 'pve-0', 'rowa');
+      expect(prisma.virtualMachine.count).toHaveBeenCalledWith({
+        where: { opArchive: volid, id: { not: 'rowa' }, OR: [{ status: 'creating' }, { opUpid: { not: null } }] },
+      });
+      expect(pve.deleteBackup).not.toHaveBeenCalled();
+      vi.mocked(prisma.virtualMachine.count).mockResolvedValueOnce(0 as never);
+      await cleanupUploadedArchive(volid, 'pve-0', 'rowa');
+      expect(pve.deleteBackup).toHaveBeenCalledWith('pve-0', 'backups', volid);
     });
 
     it('keeps an old upload a machine still creating records as its archive (left to the restart reconciler)', async () => {

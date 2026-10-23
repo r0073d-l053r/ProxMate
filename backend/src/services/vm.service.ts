@@ -13,7 +13,7 @@ import { isValidPublicKey } from './ssh-key.service.js';
 import { diskSizeGb } from './disk.service.js';
 import { guestConfigSizes, pciLines, foreignVolumeKeys, hostLevelKeys } from '../lib/guest-config.js';
 import { recordAudit } from './audit.service.js';
-import { beginInFlight } from '../lib/in-flight.js';
+import { beginInFlight, isInFlight } from '../lib/in-flight.js';
 import { autoSnapshotBefore, type AutoSnapshotResult } from './auto-snapshot.service.js';
 import { tagsForAccess } from './project.service.js';
 import { ALL_CAPS, CAPS_BY_ROLE, normalizeShareRole, type ShareRole, type VmCap } from './vm-share.service.js';
@@ -512,6 +512,11 @@ export class AdoptError extends Error {
  * references the VMID (the choice would be a guess), or when there is no guest.
  */
 export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
+  // A create, restore or follower still working on the row (or the restart
+  // reconciler settling it) owns it until it is done.
+  if (isInFlight(vm.id)) {
+    throw new AdoptError('This machine is still being worked on (a create or restore is finishing). Try again once it has settled.');
+  }
   const others = await prisma.virtualMachine.count({ where: { proxmoxVmId: vm.proxmoxVmId, id: { not: vm.id } } });
   if (others > 0) throw new AdoptError('Another machine also references this VMID — remove the wrong row first.');
   // A template is shared by everyone who deploys from it; it is never one tenant's machine.
@@ -671,7 +676,11 @@ async function clearAdoptedHold(
       }
       throw new AdoptError(`The guest couldn't be made safe to run, so it stays held: ${pve.pveMessage(err)}`);
     }
-    return prisma.virtualMachine.update({ where: { id: current.id }, data: { status: 'stopped', holdReason: null } });
+    // Settled by the admin: whatever task the row still named is done with.
+    return prisma.virtualMachine.update({
+      where: { id: current.id },
+      data: { status: 'stopped', holdReason: null, ...OP_SETTLED },
+    });
   }
   return current;
 }
@@ -848,7 +857,7 @@ function followLateCreateTask(
     .catch((e) => {
       // A task Proxmox reports as failed is settled too; a timeout or a poll error
       // is not — the op fields stay, and the restart reconciler takes it from there.
-      if (/Proxmox task failed/i.test(pve.pveMessage(e))) settled = true;
+      if (e instanceof pve.TaskFailedError) settled = true;
       console.warn(`[vm] late create task for "${vm.name}" did not complete: ${pve.pveMessage(e)}`);
     })
     .finally(async () => {
@@ -2606,7 +2615,7 @@ export async function liftQuotaHoldIfFits(vmId: string): Promise<boolean> {
       throw err;
     }
   }
-  await prisma.virtualMachine.update({ where: { id: vmId }, data: { status: 'stopped', holdReason: null } });
+  await prisma.virtualMachine.update({ where: { id: vmId }, data: { status: 'stopped', holdReason: null, ...OP_SETTLED } });
   return true;
 }
 

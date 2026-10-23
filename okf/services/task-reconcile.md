@@ -61,14 +61,16 @@ An upload restore's archive (`opArchive`, recorded after the pool-mode rename, s
 
 # Late tasks whose follower was lost
 
-When a create's task outlives its wait (`settleCreateTask`), the row is held in `error` but keeps its op fields (`opKind`, `opUpid`, `opArchive`, `opStartedAt`) while a follower waits for the task, and counts as in flight. The follower clears them once it has settled the row (conditionally, only while they still name its task). If the follower is lost (a restart, its 6 h limit, a poll error), the pass picks up rows in `error` that still carry a task (`reconcileFollowedRow`):
+When a create's task outlives its wait (`settleCreateTask`), the row is held in `error` (`PROVISION_FAILED_MESSAGE`) but keeps its op fields (`opKind`, `opUpid`, `opArchive`, `opStartedAt`) while a follower waits for the task, and counts as in flight. The follower clears them once it has settled the row (conditionally, only while they still name its task); a task Proxmox reports as failed (`TaskFailedError`) counts as settled. If the follower is lost (a restart, its 6 h limit, a poll error), the pass picks up held rows of a followed kind (`clone`, `duplicate`, `restore-upload`) that still carry a task (`reconcileFollowedRow`):
 
-- task still running: following resumes (in flight meanwhile), and the row is settled when the task ends;
+- task still running: following resumes. The row stays in flight until the resumed follower has settled it, so the periodic pass never settles it at the same time;
+- task can't be read: left for the next pass; after a day an admin is told once (as for a guest whose Proxmox lock doesn't clear);
+- Proxmox no longer knows the task (`no such task`): held, nothing written to the guest, admins told, op fields cleared;
 - task failed: the archive is removed; the row is dropped when no guest is at the VMID, otherwise held with the guest untouched;
-- task finished OK, upload restore: the restore never overwrites an existing guest, so the guest at the VMID is the task's, unless another record or a template names the VMID (then nothing is written and admins are told). It gets the late-task step: `onboot`/`startup`/`protection` removed, then the post-restore check, which removes the guest when it fails (the row is then dropped). A guest that passes stays untagged and the row held; admins are told to adopt it;
+- task finished OK, upload restore: a finished task proves what was at the VMID then, not now. The guest is only treated as the restore's when every node's task list (`/nodes/<node>/tasks?vmid=&since=<restore start>`) shows no other create, restore, clone, destroy or migrate task at that VMID since, no other record or template names the VMID, and it isn't a template. Then it gets the late-task step: `onboot`/`startup`/`protection` removed, then the post-restore check, which removes it when it fails (the row is then dropped). A guest that passes stays untagged and the row held; admins are told to adopt it. When any of that can't be shown (a node's task list unreadable included), the row is held, nothing is written to the guest, and admins get the VMID and node;
 - task finished OK, clone: tagged only on its row nonce; the row stays held.
 
-The op fields are cleared once the row is settled.
+The op fields are cleared once the row is settled, so a row never loops. Adopting a machine or lifting its quota hold clears them too, and adopt is refused (409) while the row is in flight.
 
 # Key functions
 

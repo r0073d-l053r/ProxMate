@@ -434,11 +434,30 @@ async function rebuildRestoredGuestConfig(
  * Best-effort removal of an uploaded archive known only by its volid (as a
  * `restore-upload` row records it in `opArchive`), for the restart reconciler.
  */
-export async function cleanupUploadedArchive(volid: string, node: string | null): Promise<void> {
+export async function cleanupUploadedArchive(volid: string, node: string | null, rowId?: string): Promise<void> {
   const storage = volid.split(':')[0] ?? '';
   const filename = path.basename(volid.slice(volid.indexOf(':') + 1));
   if (!storage || !VZDUMP_UPLOAD_RE.test(filename)) return;
+  if (rowId && (await archiveClaimedByOther(volid, rowId))) return;
   await cleanupArchive(filename, node, storage, volid);
+}
+
+/** Rows whose restore may still need an archive: still creating, or still carrying a task. */
+const ARCHIVE_USERS = [{ status: 'creating' }, { opUpid: { not: null } }];
+
+/**
+ * Whether a row other than `rowId` still needs this archive (it is creating, or
+ * still carries a task, with the same `opArchive`). Such an archive is left alone.
+ * A failed lookup counts as claimed.
+ */
+export async function archiveClaimedByOther(volid: string, rowId: string): Promise<boolean> {
+  try {
+    return (
+      (await prisma.virtualMachine.count({ where: { opArchive: volid, id: { not: rowId }, OR: ARCHIVE_USERS } })) > 0
+    );
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -614,7 +633,7 @@ export async function sweepStaleUploads(olderThanMs = 6 * 60 * 60 * 1000): Promi
   const cutoff = Date.now() - olderThanMs;
   const old = async (full: string) => (await fsp.stat(full).catch(() => null))?.mtimeMs ?? Infinity;
   const pending = await prisma.virtualMachine.findMany({
-    where: { status: 'creating', opArchive: { not: null } },
+    where: { opArchive: { not: null }, OR: ARCHIVE_USERS },
     select: { opArchive: true },
   });
   const inUse = new Set(pending.map((r) => path.basename(String(r.opArchive).slice(String(r.opArchive).indexOf(':') + 1))));
@@ -632,7 +651,7 @@ export async function sweepStaleUploads(olderThanMs = 6 * 60 * 60 * 1000): Promi
     if (inUse.has(archive)) continue;
     const noted = (await fsp.readFile(marker, 'utf8').catch(() => '')).trim();
     if (/^\d+$/.test(noted)) {
-      const inFlight = await prisma.virtualMachine.count({ where: { proxmoxVmId: Number(noted), status: 'creating' } });
+      const inFlight = await prisma.virtualMachine.count({ where: { proxmoxVmId: Number(noted), OR: ARCHIVE_USERS } });
       if (inFlight > 0) continue;
     }
     const file = resolveUnderUploadDir(archive, VZDUMP_UPLOAD_RE);
@@ -841,7 +860,9 @@ async function restoreFromUploadLocked(
             throw err;
           }
         },
-        afterTask: () => cleanupArchive(filename, node, storage, volid),
+        afterTask: async () => {
+          if (!(await archiveClaimedByOther(volid, vm.id))) await cleanupArchive(filename, node, storage, volid);
+        },
       };
       await pve.waitForTask(node, upid, client, 30 * 60 * 1000);
       created = true;

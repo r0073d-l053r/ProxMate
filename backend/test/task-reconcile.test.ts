@@ -15,6 +15,7 @@ let templateVmids: number[] = [];
 const matches = (r: Row, where: Record<string, unknown>) =>
   Object.entries(where).every(([k, v]) => {
     if (v && typeof v === 'object' && !(v instanceof Date) && 'not' in (v as object)) return r[k] !== (v as { not: unknown }).not;
+    if (v && typeof v === 'object' && !(v instanceof Date) && 'in' in (v as object)) return (v as { in: unknown[] }).in.includes(r[k]);
     if (v instanceof Date) return r[k] instanceof Date && (r[k] as Date).getTime() === v.getTime();
     return r[k] === v;
   });
@@ -615,7 +616,18 @@ describe('a late upload-restore follower lost to a restart', () => {
     net0: 'virtio=AA:BB,bridge=vmbr0',
     onboot: '1',
   };
-  const restoreGuest = (cfg: Record<string, string>, task: { status: string; exitstatus?: string } | null = TASK_OK) => {
+  const REFUSED = { ...PASSING, hookscript: 'local:snippets/x.sh' };
+  const DONE = { status: 'stopped', exitstatus: 'OK', starttime: 1_760_000_000 };
+  type Tasks = Record<string, Array<{ upid: string; type: string }> | 'unreadable'>;
+  /** Our own restore task, as each node's task list shows it. */
+  const CLEAN: Tasks = { pve1: [{ upid: UPID, type: 'qmrestore' }], pve2: [] };
+
+  const restoreGuest = (
+    cfg: Record<string, string>,
+    task: { status: string; exitstatus?: string; starttime?: number } | null = DONE,
+    tasks: Tasks = CLEAN,
+    onCheck?: () => void,
+  ) => {
     let current: Record<string, string> | null = { ...cfg };
     const c = pveWith({
       guest: cfg,
@@ -624,8 +636,17 @@ describe('a late upload-restore follower lost to a restart', () => {
         if (/\/qemu\/100\/config$/.test(url)) {
           return current ? ok(current) : Promise.reject(new Error("Configuration file 'qemu-server/100.conf' does not exist"));
         }
-        if (/\/qemu\/100\/pending$/.test(url)) return ok([]);
+        if (/\/qemu\/100\/pending$/.test(url)) {
+          onCheck?.();
+          return ok([]);
+        }
         if (/\/qemu\/100\/snapshot$/.test(url)) return ok([]);
+        if (url === '/nodes') return ok(Object.keys(tasks).map((node) => ({ node, status: 'online' })));
+        const listed = /^\/nodes\/([^/]+)\/tasks$/.exec(url);
+        if (listed) {
+          const t = tasks[listed[1]!];
+          return t === 'unreadable' || t === undefined ? Promise.reject(new Error('node offline')) : ok(t);
+        }
         return undefined;
       },
     });
@@ -645,16 +666,18 @@ describe('a late upload-restore follower lost to a restart', () => {
     return { c, cfg: () => current };
   };
 
-  it('task OK and a refused config: the guest is removed and the row dropped', async () => {
-    const { c } = restoreGuest({ ...PASSING, hookscript: 'local:snippets/x.sh' });
+  it('task OK, nothing else at the VMID since, refused config: the guest is removed and the row dropped', async () => {
+    const { c } = restoreGuest(REFUSED);
     followed();
     expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('dropped');
     expect(c.delete).toHaveBeenCalledWith('/nodes/pve1/qemu/100');
     expect(rows).toHaveLength(0);
     expect(pve.deleteBackup).toHaveBeenCalledWith('pve1', 'backups', archive);
+    // The task lists were read from the restore's start.
+    expect(c.get).toHaveBeenCalledWith('/nodes/pve2/tasks', { params: expect.objectContaining({ vmid: 100, since: DONE.starttime }) });
   });
 
-  it('task OK and a passing config: autostart and protection are stripped, the row stays held, its op fields settled', async () => {
+  it('task OK, nothing else since, passing config: autostart and protection stripped, row held, op fields settled', async () => {
     const { c, cfg } = restoreGuest({ ...PASSING, protection: '1' });
     const r = followed();
     expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('held');
@@ -666,9 +689,47 @@ describe('a late upload-restore follower lost to a restart', () => {
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/Guest 100 on pve1 passed the check/) }));
   });
 
-  it('task still running: following resumes, and the row is settled once the task ends', async () => {
-    const task: { status: string; exitstatus?: string } = { status: 'running' };
-    const { c } = restoreGuest({ ...PASSING, hookscript: 'local:snippets/x.sh' }, task);
+  it('a later create at the VMID on another node: held, nothing written to the guest', async () => {
+    const { c } = restoreGuest(REFUSED, DONE, {
+      pve1: [{ upid: UPID, type: 'qmrestore' }],
+      pve2: [{ upid: 'UPID:pve2:9:9:6718F100:qmcreate:100:admin@pam:', type: 'qmcreate' }],
+    });
+    const r = followed();
+    expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+    expect(r).toMatchObject({ status: 'error', opUpid: null, opKind: null });
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringMatching(/onboot.*guest 100 on pve1 was left untouched/) }),
+    );
+  });
+
+  it('a node whose task list can\'t be read: held, nothing written to the guest', async () => {
+    const { c } = restoreGuest(REFUSED, DONE, { pve1: [{ upid: UPID, type: 'qmrestore' }], pve2: 'unreadable' });
+    const r = followed();
+    expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+    expect(r).toMatchObject({ opUpid: null });
+  });
+
+  it('a task status without a start time proves nothing: held, nothing written', async () => {
+    const { c } = restoreGuest(REFUSED, { status: 'stopped', exitstatus: 'OK' });
+    followed();
+    expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+  });
+
+  it('a guest that is a template gets its own reason', async () => {
+    const { c } = restoreGuest({ ...PASSING, template: '1' });
+    followed();
+    expect(await reconcileFollowedRow(rows[0] as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/is a Proxmox template/) }));
+  });
+
+  it('task still running: following resumes, the row stays in flight through the settle, then is settled', async () => {
+    const task: { status: string; exitstatus?: string; starttime?: number } = { status: 'running', starttime: DONE.starttime };
+    const inFlightDuringCheck: boolean[] = [];
+    const { c } = restoreGuest(REFUSED, task, CLEAN, () => inFlightDuringCheck.push(isInFlight('rowa')));
     const r = followed();
     expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('busy');
     expect(isInFlight('rowa')).toBe(true);
@@ -680,6 +741,9 @@ describe('a late upload-restore follower lost to a restart', () => {
     task.exitstatus = 'OK';
     await vi.waitFor(() => expect(rows).toHaveLength(0), { timeout: 8000 });
     expect(c.delete).toHaveBeenCalledWith('/nodes/pve1/qemu/100');
+    // The periodic pass could not have settled it meanwhile: still in flight during the check.
+    expect(inFlightDuringCheck.length).toBeGreaterThan(0);
+    expect(inFlightDuringCheck.every(Boolean)).toBe(true);
     expect(isInFlight('rowa')).toBe(false);
   });
 
@@ -691,6 +755,32 @@ describe('a late upload-restore follower lost to a restart', () => {
     untouched(c);
   });
 
+  it('a task Proxmox no longer knows: held, nothing written, op fields cleared so it doesn\'t loop', async () => {
+    const { c } = restoreGuest(REFUSED, null);
+    c.get.mockImplementation(((base) => (url: string, opts?: unknown) =>
+      /\/tasks\/.*\/status$/.test(url) ? Promise.reject(new Error("no such task 'UPID:…'")) : base(url, opts))(
+      c.get.getMockImplementation()!,
+    ));
+    const r = followed();
+    expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('held');
+    untouched(c);
+    expect(r).toMatchObject({ opUpid: null, opKind: null });
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/no longer knows its task/) }));
+  });
+
+  it('a task that stays unreadable is left alone, and an admin is told once after a day', async () => {
+    const { c } = restoreGuest(REFUSED, null);
+    const r = followed();
+    expect(await reconcileFollowedRow(r as never, asClient(c), NOW)).toBe('unreachable');
+    expect(notify).not.toHaveBeenCalled();
+    const later = new Date(OLD.getTime() + LOCK_NOTICE_AFTER_MS + 60_000);
+    expect(await reconcileFollowedRow(r as never, asClient(c), later)).toBe('unreachable');
+    expect(await reconcileFollowedRow(r as never, asClient(c), later)).toBe('unreachable');
+    expect(notify).toHaveBeenCalledTimes(1);
+    untouched(c);
+    expect(r['opUpid']).toBe(UPID);
+  });
+
   it('never touches the guest when another record names its VMID', async () => {
     const { c } = restoreGuest(PASSING);
     const r = followed();
@@ -699,9 +789,13 @@ describe('a late upload-restore follower lost to a restart', () => {
     untouched(c);
   });
 
-  it('is picked up by the reconcile pass (held rows that still carry a task)', async () => {
-    restoreGuest({ ...PASSING, hookscript: 'local:snippets/x.sh' });
+  it('is picked up by the reconcile pass — only held rows of a follow-capable kind that still carry a task', async () => {
+    restoreGuest(REFUSED);
     followed();
-    expect(await reconcileStuckOperations(NOW)).toMatchObject({ dropped: 1 });
+    // Not followed rows: another hold, or a kind that is never followed.
+    row({ id: 'rowq', proxmoxVmId: 101, status: 'error', holdReason: 'Over quota', opKind: 'restore-upload' });
+    row({ id: 'rowi', proxmoxVmId: 102, status: 'error', holdReason: PROVISION_FAILED_MESSAGE, opKind: 'create' });
+    expect(await reconcileStuckOperations(NOW)).toMatchObject({ checked: 1, dropped: 1 });
+    expect(rows.map((x) => x['id']).sort()).toEqual(['rowi', 'rowq']);
   });
 });

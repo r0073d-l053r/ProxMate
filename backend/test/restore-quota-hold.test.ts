@@ -177,6 +177,9 @@ describe('a restore that leaves the guest over its storage quota (audit MAJOR 2)
     await expect(restoreFromMateState(db.rows.get('rowa') as never, ms)).rejects.toBeInstanceOf(QuotaError);
     await removeDataDisk(db.rows.get('rowa') as never, 'scsi1');
     expect(db.rows.get('rowa')).toMatchObject({ storage: 32, status: 'stopped', holdReason: null });
+    // Lifting the hold also settles any task the row still named, so the restart
+    // reconciler never takes the now-running machine for an interrupted one.
+    expect(db.rows.get('rowa')).toMatchObject({ opKind: null, opUpid: null, opArchive: null });
   });
 });
 
