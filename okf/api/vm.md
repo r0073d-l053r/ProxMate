@@ -26,7 +26,8 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 - `router.use(requireAuth)` then `router.use(enforceMfaSetup)`.[^routes]
 - Per-VM authorization helpers (from the vm service), all returning 404 `VM not found` when the caller lacks access:[^routes]
   - `getViewableVm`: any access including read-only shares (reads).
-  - `getVmWithCap(id, user, cap)`: capability `configure`, `power`, `backups` or `console`.
+  - `getVmWithCap(id, user, cap)`: capability `configure`, `power` or `backups`.
+  - Console ticket mints use `resolveVmAccess` + `consoleModeFor`: `console` (interactive) or `console_view` (view-only, Viewer shares).
   - `getOwnedVm`: owner or admin only; shares never qualify (delete, bulk, rebuild, shares, migrate, convert).
   - `resolveVmAccess`: detail view; returns `access` badge and `caps`.
 - Admin-only (role check in handler, 403): `migrate-targets`, `migrate`, `convert-template`; `node`, `forUserId`, `quotaExempt` on create (enforced in `resolveCreateTarget`); `backupKeep` (silently forced to `null` for non-admins).[^routes]
@@ -87,8 +88,8 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | POST | `/api/vms/:id/snapshots` | `backups` | `{ name, description?, includeRam? }`; waits for the task; 201. Audited `snapshot.create`. |
 | POST | `/api/vms/:id/snapshots/:name/rollback` | `backups` | Roll back (waits up to 300 s) via matestate `rollbackToSnapshot`: 403 `Quota exceeded` when the snapshot's config would grow the guest past the owner's quota; afterwards the guest is re-tagged, a snapshot holding a `hostpciN` not attached now is refused, and the row's cpu/ram/storage/hasPassthrough are re-synced. Audited `snapshot.rollback`. |
 | DELETE | `/api/vms/:id/snapshots/:name` | `backups` | Delete snapshot. Audited `snapshot.delete`. |
-| POST | `/api/vms/:id/console` | `console` + not locked | Mint a vncproxy `{ ticket, port }` for the WebSocket relay (refused unless the guest is the row's own, `requireOurGuest`). |
-| POST | `/api/vms/:id/serial` | `console` | Mint a termproxy ticket (same guest-identity check); 409 `no_serial` if a QEMU VM has no serial console. |
+| POST | `/api/vms/:id/console` | `console` or `console_view` + not locked | Mint a vncproxy `{ ticket, port, viewOnly }` for the WebSocket relay (refused unless the guest is the row's own, `requireOurGuest`). The mode (`interactive` with `console`, else `view`) is recorded with the ticket via `recordConsoleGrant`; `viewOnly` only tells the browser how to draw. Audited `vm.console_open` (detail ends "(view only)" for a view-only session). |
+| POST | `/api/vms/:id/serial` | `console` or `console_view` | Mint a termproxy `{ ticket, port, user, viewOnly }` (same guest-identity check, mode recording and audit); 409 `no_serial` if a QEMU VM has no serial console. |
 
 # Gotchas
 

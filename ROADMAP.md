@@ -53,8 +53,6 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
   (Viewer / Operator / Manager) changes.
 - **Surface admin-managed / quota-exempt to the owner** — a badge + one-line explainer on the VM
   detail ("set up by your admin — only an admin can resize it") instead of just the 403 on attempt.
-- **Read-only console (input-blocked viewing)** — a Viewer share gets no console today; the noted
-  follow-up is a view-only, input-blocked console stream.
 
 ### IDE follow-ups
 
@@ -117,6 +115,16 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 ## ✅ Shipped — condensed index
 
 Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
+
+### Unreleased
+
+- **View-only console for Viewer shares.** A Viewer share can watch a VM's graphical and text
+  consoles. The relay enforces it: it parses the browser's RFB and termproxy streams and drops
+  every keyboard, mouse, clipboard, resize-desktop and power message before Proxmox sees it, and
+  forces a shared VNC session so a viewer never disconnects anyone else. Console opens are audited
+  (`vm.console_open`, marked "view only" for viewers).
+
+### Released
 
 - **v1.2.0 — sharing, placement and least privilege.** Share a VM with someone before they sign
   up (pending shares, claimed only by a confirmed address); template deploys on shared storage

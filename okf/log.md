@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-10-23
+* **Update**: Documented the view-only console: the `console_view` capability held by [Viewer shares](/database/vm-share.md), console ticket grants and the input filters in the [console relay](/api/console.md), and the `vm.console_open` audit entry.
+
 ## 2026-10-20
 * **Update**: Documented [pending shares](/database/pending-vm-share.md), template deploy placement, start/restart waiting for the Proxmox task, and the least-privilege token in [privileges](/proxmox/privileges.md), with what a live Proxmox VE 9.2 cluster proved.
 

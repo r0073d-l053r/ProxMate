@@ -232,8 +232,21 @@ only — the tenant's per-VM Activity feed shows just their own and their shared
 ### 4.2 VM sharing levels (what tenants can grant each other)
 
 A VM's owner can share it from **VM ▸ Settings ▸ Shared access** at three levels: **Viewer**
-(details, metrics, activity), **Operator** (adds power actions + console), **Manager** (adds
-settings, disks, and backups including downloads). The ProxMate IDE opens only for the
+(details, metrics, activity, and a view-only console), **Operator** (adds power actions + an
+interactive console), **Manager** (adds settings, disks, and backups including downloads).
+
+| Level | See the VM | Console | Power | Settings, disks, backups |
+|---|---|---|---|---|
+| Viewer | yes | view only | no | no |
+| Operator | yes | interactive | yes | no |
+| Manager | yes | interactive | yes | yes |
+
+A Viewer opens the console from **View console** on the VM page (graphical or text). The console
+shows a **View only** label: the screen and terminal output are live, but keyboard, mouse,
+clipboard and paste are not sent. This is enforced by ProxMate's console relay, which drops every
+input message from a view-only session before it reaches Proxmox, so a modified browser can't get
+around it. A viewer always joins as a shared session and never disconnects anyone else's console.
+Every console opened is recorded in the VM's activity feed (marked "view only" for viewers). The ProxMate IDE opens only for the
 owner, never through a share. No share can ever delete, rebuild,
 migrate, or re-share the VM — those stay with the owner (and you, the admin). The API enforces
 every level server-side.

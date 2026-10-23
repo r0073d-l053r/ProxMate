@@ -47,9 +47,11 @@ Per-VM sharing. The row stores only the preset *name*. Capabilities come from `C
 
   | Role | Caps |
   |---|---|
-  | viewer | view |
-  | operator | view, power, console |
-  | manager | view, power, console, configure, backups, ide |
+  | viewer | view, console_view |
+  | operator | view, console_view, power, console |
+  | manager | view, console_view, power, console, configure, backups, ide |
+
+- `console_view` is a view-only console (the relay drops every input message); `console` is interactive and implies `console_view`.[^svc]
 
 - No share can delete, migrate, rebuild, manage shares or request passthrough. Those actions stay owner/admin-only via `getOwnedVm`.[^svc]
 - `addShare` looks the target up by email (lowercased), refuses the VM's owner, and upserts on `(vmId, userId)`, so re-sharing just changes the role. An address with no account gets a [PendingVmShare](/database/pending-vm-share.md) instead, and the owner's list shows both kinds the same way.[^svc]
