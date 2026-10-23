@@ -44,6 +44,7 @@ import { VmStatusBadge } from "@/components/vm/vm-status-badge";
 import { HoldBanner, isVmHeld } from "@/components/vm/hold-banner";
 import { NotesCard } from "@/components/vm/notes-card";
 import { TagsCard } from "@/components/vm/tags-card";
+import { ProjectCard } from "@/components/vm/project-card";
 import { MetricsCard } from "@/components/vm/metrics-card";
 import { ActivityCard } from "@/components/vm/activity-card";
 import { ResizeDialog } from "@/components/vm/resize-dialog";
@@ -965,6 +966,8 @@ export default function VmDetailPage() {
                   </CardContent>
                 </Card>
               )}
+
+              {isManager && <ProjectCard vmId={vm.id} tags={vm.tags} onSaved={load} />}
 
               {canConfigure && <TagsCard vmId={vm.id} initial={vm.tags} onSaved={load} />}
 
