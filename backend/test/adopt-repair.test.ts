@@ -176,7 +176,7 @@ describe('which list an adopt checks against', () => {
     fakePve({ ...CLONE, usb1: 'host=1234:5678' });
     await expect(adoptGuest(errored({ holdReason: 'held' }))).rejects.toThrow(/"usb1"/);
     fakePve({ ...CLONE, scsi1: 'local-lvm:vm-200-disk-0,size=1G' });
-    await expect(adoptGuest(errored({ holdReason: 'held' }))).rejects.toThrow(/"scsi1"/);
+    await expect(adoptGuest(errored({ holdReason: 'held' }))).rejects.toThrow(/aren.t its own \(scsi1\)/);
     const { c } = fakePve(CLONE);
     const base = c.get.getMockImplementation()!;
     c.get.mockImplementation((url: string) =>

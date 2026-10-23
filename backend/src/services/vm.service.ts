@@ -473,7 +473,6 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
   if (identity === 'ours') {
     const fromUpload = isUploadRestoreRow(current);
     if (current.holdReason !== QUOTA_HOLD_MESSAGE && isHeld(current)) {
-      await assertAdoptableConfig(current, client, fromUpload ? 'upload' : 'tenant');
       // Never lift a hold while the guest still references a volume that isn't its
       // own: that is what a foreign-volume hold is about, and a guest whose
       // provisioning didn't finish was never checked.
@@ -484,6 +483,7 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
           `The guest still references disks that aren't its own (${foreign.join(', ')}). Detach them in Proxmox first.`,
         );
       }
+      await assertAdoptableConfig(current, client, fromUpload ? 'upload' : 'tenant');
     }
     return clearAdoptedHold(current, { fromRestore: fromUpload });
   }
