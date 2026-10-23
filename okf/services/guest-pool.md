@@ -28,7 +28,7 @@ With the optional `proxmox_pool` setting, every guest ProxMate creates, clones, 
 | `managedGuests` | `(client) => { guests, notVisible }` | One `/cluster/resources?type=vm` read plus the VirtualMachine and Template rows. A guest counts only when its tags carry the marker of a row **at that VMID** (`proxmate-<row id>` or `proxmate-template-<id>`). `notVisible` lists rows (not `creating`) and templates whose VMID the token cannot see.[^pool] |
 | `checkGuestPool` | `(client, perms, pool, guestPrivileges) => { report, blocking, warnings }` | The connection test's pool section, described below.[^pool] |
 | `poolScopedWithoutSetting` | `(perms) => string[]` | With no pool set: the `/pool/<id>` paths holding `VM.Allocate` when neither `/` nor `/vms` does, so the test can say which pool to configure.[^pool] |
-| `moveManagedGuestsIntoPool` | `(client?) => { pool, moved }` | Takes the managed guests outside the pool, re-reads each one's config and keeps only those whose own `tags` still carry their row's marker, then calls `pve.addGuestsToPool`. Throws when no pool is configured.[^pool] |
+| `moveManagedGuestsIntoPool` | `(client?) => { pool, moved, failed }` | Takes the managed guests outside the pool, re-reads each one's config and keeps only those whose own `tags` still carry their row's marker, then adds them one request per guest (a guest in another pool also needs `Pool.Allocate` there, and one refusal must not stop the rest). Each outcome is `{ vmid, name, template, from }`, failures add `error`. Throws when no pool is configured.[^pool] |
 
 `pve.addGuestsToPool(pool, vmids)` sends `PUT /pools` with `poolid`, `vms` and `allow-move=1` (Proxmox VE 8.1+), falling back to `PUT /pools/{poolid}` on a 501 or 404 (8.0). Proxmox wants `Pool.Allocate` on `/pool/<name>` and `VM.Allocate` on each guest.[^pve]
 
@@ -38,10 +38,15 @@ With the optional `proxmox_pool` setting, every guest ProxMate creates, clones, 
 |---|---|---|
 | Pool not listed by `GET /pools` while the token holds `Pool.Audit` on it | **Blocking** | The pool does not exist; every create would fail. Names `pveum pool add <name>`. |
 | Pool not listed and no `Pool.Audit` | Warning (`exists: null`) | Existence cannot be confirmed. |
-| Guest privileges missing on `/pool/<name>` | Warning (`missingOnPool`) | Lists each one. An unlisted path inherits its parent's answer from `/access/permissions`. |
+| `VM.Allocate` held neither on `/pool/<name>` nor on `/vms` | **Blocking** | Every create into the pool would be refused. |
+| Other guest privileges missing on `/pool/<name>` | Warning (`missingOnPool`) | Lists each one (the list includes `Pool.Audit` and `Pool.Allocate`). An unlisted path inherits its parent's answer from `/access/permissions`. |
 | `VM.*` privileges held on `/` or `/vms` | Warning (`guestPrivilegesOnRoot`) | The token still reaches every guest; the pool limits nothing until that grant is removed. |
 | Managed guests outside the pool | Warning (`outside`) | Points at "Move managed guests into the pool". |
-| Rows/templates whose guest is not visible | Warning (`notVisible`) | Prints `pveum pool modify <name> --vms <ids> --allow-move 1` for root. |
+| Rows/templates whose guest is not visible | Warning (`notVisible`) | Prints `pveum pool modify <name> --vms <ids> --allow-move 1` for root, and notes that a gone guest's backups are outside the pool too. |
+| `Sys.Modify` on `/` | Warning | Held: the pool does not fully contain the token (cluster backup jobs, firewall groups and IP sets, cluster options). Not held: the cluster firewall must be enabled once by hand. |
+| No way to run `download-url` | Warning | Needs `Sys.AccessNetwork` on `/nodes` (8.2+) or `Sys.Audit`+`Sys.Modify` on `/`. |
+| `Datastore.Allocate` on `/storage` | Warning | It can delete any volume and edit any storage. |
+| `Datastore.Allocate` missing on the snippet storage (`SNIPPET_STORAGE`), the ISO storage, or, with restore uploads enabled, the backup storage | Warning | Names the storage and the script option. |
 
 The guest privilege list comes from `setup.service` (`VM.Audit`, the `VM.*` operational privileges, the release's guest-agent privileges, `Pool.Audit`).[^setup]
 
@@ -49,7 +54,8 @@ The guest privilege list comes from `setup.service` (`VM.Audit`, the `VM.*` oper
 
 - Setting the pool does not move anything; existing guests stay where they are until the admin action (or root) moves them.[^pool]
 - The move action needs the token to still reach the guests, i.e. it works while the earlier `/` grant is in place. `deploy/proxmox-token.sh --pool` keeps that grant until `--drop-root-grant`.[^pool]
-- Templates registered from an existing Proxmox template carry a template marker and are moved too: cloning needs `VM.Clone` on the template, which a pool-scoped token only has inside the pool.[^pool]
+- Templates registered from an existing Proxmox template carry a template marker and are moved too: cloning needs `VM.Clone` on the template, which a pool-scoped token only has inside the pool. The admin UI asks before moving a template that is in another pool.[^pool]
+- Guest import (`guest-import.service`) adds an imported guest to the pool; a refusal is recorded in the audit entry and does not undo the import.
 
 # Relationships
 

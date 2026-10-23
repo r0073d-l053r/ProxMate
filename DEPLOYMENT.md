@@ -119,38 +119,54 @@ and braces there. The old `--with-ide` option is still accepted and changes noth
 
 **Pool-scoped token (optional).** With the grant on `/`, the boundary between guests is
 ProxMate's ownership-tag check, not a Proxmox permission. `--pool <name>` instead grants the
-guest privileges on a Proxmox resource pool, so Proxmox itself refuses the token every guest
-outside it:
+guest privileges on a Proxmox resource pool, so Proxmox itself refuses the token guests outside it:
 
 ```bash
 bash proxmox-token.sh --dry-run --pool proxmate   # prints the ACL plan and the commands
 bash proxmox-token.sh --pool proxmate             # creates the pool if missing
+#   --snippet-storage <id>   the SNIPPET_STORAGE ProxMate writes cloud-init snippets to (default local)
+#   --import-storage <id>    where cloud images are downloaded (the ISO storage; default local)
+#   --backup-storage <id>    the backup storage, if tenants restore uploaded backups
+#   --with-cluster-firewall  let ProxMate enable the cluster firewall (see below)
 ```
 
 | Path | Role | Privileges |
 | --- | --- | --- |
 | `/pool/<name>` | `ProxMate-Guest` | every `VM.*` privilege above, `Pool.Audit`, `Pool.Allocate` |
-| `/nodes` | `ProxMate-Infra` | `Sys.Audit` |
-| `/storage` | `ProxMate-Infra` | `Datastore.Allocate`, `.AllocateSpace`, `.AllocateTemplate`, `.Audit` |
+| `/nodes` | `ProxMate-Infra` | `Sys.Audit`, `Sys.AccessNetwork` (8.2+, cloud-image downloads) |
+| `/storage` | `ProxMate-Infra` | `Datastore.Audit`, `.AllocateSpace`, `.AllocateTemplate` |
+| `/storage/<snippet, import, backup storage>` | `ProxMate-Storage` | the same plus `Datastore.Allocate` |
 | `/sdn/zones` | `ProxMate-Infra` | `SDN.Audit`, `SDN.Use` |
 | `/mapping` (with `--with-passthrough`) | `ProxMate-Infra` | `Mapping.Audit`, `Mapping.Use` |
-| `/`, not propagated | `ProxMate-Cluster` | `Sys.Audit`, `Sys.Modify` (cluster firewall, cluster status, cloud-image downloads) |
+| `/`, not propagated | `ProxMate-Cluster` | `Sys.Audit`; `Sys.Modify` only with `--with-cluster-firewall` |
+
+`Sys.Modify` on `/` also opens cluster backup jobs, the cluster firewall's groups and IP sets and
+other cluster settings, so it is opt-in: while the token holds it the pool does not fully contain
+it. Without it, turn on tenant isolation's cluster firewall once by hand as root (Datacenter →
+Firewall: add an accept rule for your management network on ports 8006 and 22, then enable it);
+the connection test warns until it is on. Before Proxmox VE 8.2 there is no `Sys.AccessNetwork`,
+so the script grants `Sys.Modify` on `/` for cloud-image downloads and says so.
 
 Then set **Proxmox pool** to the same name (setup wizard, or Admin → Settings → Proxmox
-connection): every guest ProxMate creates, clones, restores or imports is placed in it. Setting it
-does not move existing guests. When switching an existing install over:
+connection): every guest ProxMate creates, clones, restores, imports or adopts through "Import
+existing guests" is placed in it. Setting it does not move existing guests. When switching an
+existing install over:
 
 1. Run the script with `--pool <name>`. It keeps the token's earlier `ProxMate` grant on `/`.
 2. Set the pool in ProxMate and run the connection test. It warns that the token still holds guest
    privileges on `/`, and lists the guests ProxMate manages that are outside the pool.
 3. Click **Move managed guests into the pool**. Only guests carrying a ProxMate ownership tag
-   (machines and Template Store templates) are moved; re-test until nothing is listed.
+   (machines and Template Store templates) are moved, one at a time; a template in another pool is
+   moved only after you confirm. Re-test until nothing is listed.
 4. Run `bash proxmox-token.sh --pool <name> --drop-root-grant` and test again: the `/` warning is
    gone. A guest left outside the pool is now invisible to ProxMate (its row reads as unconfirmed);
    as root, `pveum pool modify <name> --vms <vmid> --allow-move 1` puts it in.
 
-Templates you register by hand must be in the pool too, since cloning checks `VM.Clone` on the
-template. This mode has not yet been run end to end on a live cluster.
+With a pool-scoped token ProxMate only sees guests in the pool: the Cluster Balancer, alerts and
+"Import existing guests" work on those alone. Templates you register by hand must be in the pool,
+since cloning checks `VM.Clone` on the template. Backups of a guest that was deleted, or destroyed
+by a rebuild that then failed, are outside the pool with it: restore those as root. This mode has
+not yet been run end to end on a live cluster.
 
 ---
 

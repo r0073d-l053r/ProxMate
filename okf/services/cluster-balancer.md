@@ -51,6 +51,7 @@ Cron `*/15 * * * *`, overridable with env `BALANCER_CRON`; under `balancerRunnin
 
 # Gotchas
 
+- With a pool-scoped token (`proxmox_pool` and `deploy/proxmox-token.sh --pool`) the snapshot only contains guests in the pool, so guests outside it are neither counted in a node's load nor moved.
 - Proxmox placement is authoritative (`r.node` overrides the DB's `proxmoxNode`) since VMs may move outside ProxMate.[^bal]
 - `migratableTargets` preflight fails open: an unreadable result (null) leaves the VM unrestricted; the apply re-validates.[^bal]
 - Drain with an explicit target is an admin override: only arch and storage-locality are enforced, not capacity or anti-affinity. Auto drain falls back to ignoring anti-affinity when no safe node exists.[^bal]
