@@ -282,6 +282,22 @@ separate [security workflow](.github/workflows/security.yml) (CodeQL, Trivy, SBO
 
 ---
 
+## Android app
+
+[`android/`](./android) holds a native Android app (Kotlin, Android 8.0+) for an existing
+ProxMate server. You enter the server address, sign in natively (email and password, plus
+a TOTP or recovery code when 2FA is on), and the app opens the full web UI, consoles
+included, already signed in. Passkeys and SSO use the web sign-in page inside the app.
+Servers with a self-signed certificate can be trusted after you confirm the certificate's
+SHA-256 fingerprint. It needs no server changes.
+
+The [Android workflow](.github/workflows/android.yml) builds a debug APK on every change
+under `android/` (artifact `proxmate-android-debug`), plus a signed release APK when the
+signing secrets are set. Build, install and signing steps are in
+[android/README.md](./android/README.md).
+
+---
+
 ## Documentation
 
 The three tenant guides are surfaced in-app under **Help & Docs**, along with the admin
