@@ -23,7 +23,7 @@ type ShareRole = VmShare["role"];
 
 /**
  * Owner/admin panel to share a VM with another tenant at a preset level:
- * Viewer (see it) → Operator (+ power & console) → Manager (+ settings, backups,
+ * Viewer (see it, watch the console) → Operator (+ power & interactive console) → Manager (+ settings, backups,
  * IDE). No share can ever delete, rebuild, migrate, or re-share the VM — the API
  * enforces every level server-side.
  */
@@ -81,8 +81,8 @@ export function SharePanel({ vmId }: { vmId: string }) {
         <CardDescription>
           Give another ProxMate user access at a level you choose:{" "}
           <span className="font-medium text-foreground">Viewer</span> sees details, metrics and
-          activity; <span className="font-medium text-foreground">Operator</span> adds power actions
-          and the console; <span className="font-medium text-foreground">Manager</span> adds settings,
+          activity and can watch the console (view only); <span className="font-medium text-foreground">Operator</span> adds power actions
+          and an interactive console; <span className="font-medium text-foreground">Manager</span> adds settings,
           disks, backups (including downloads) and the IDE. Nobody you share with can delete,
           rebuild, or re-share this VM.
         </CardDescription>

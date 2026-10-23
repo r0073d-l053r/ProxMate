@@ -8,8 +8,10 @@ import type { RFBOptions } from "@novnc/novnc";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ConsoleTopBar, type ConsoleMode } from "./console-top-bar";
+import { ViewOnlyBadge } from "./view-only-badge";
 
 type RfbInstance = {
+  viewOnly: boolean;
   scaleViewport: boolean;
   showDotCursor: boolean;
   background: string;
@@ -132,6 +134,8 @@ export function VncConsole({
   const [error, setError] = useState<string | null>(null);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
+  // Set from the server's answer, never chosen here: the relay enforces it too.
+  const [viewOnly, setViewOnly] = useState(false);
 
   /**
    * Size the console box to the largest rectangle of the framebuffer's aspect
@@ -184,8 +188,10 @@ export function VncConsole({
     }
 
     try {
-      const res = await api.post<{ ticket: string; port: string }>(`/vms/${id}/console`);
+      const res = await api.post<{ ticket: string; port: string; viewOnly?: boolean }>(`/vms/${id}/console`);
       const { ticket, port } = res.data;
+      const watchOnly = res.data.viewOnly === true;
+      setViewOnly(watchOnly);
 
       // Auth rides on the httpOnly session cookie (sent on the WS handshake) —
       // no token in the URL.
@@ -195,8 +201,12 @@ export function VncConsole({
       const { default: RFB } = await import("@novnc/novnc");
       if (!screenRef.current) return;
 
-      const options: RFBOptions = { credentials: { password: ticket } };
+      // Always a shared session, so opening the console never disconnects anyone else.
+      const options: RFBOptions = { credentials: { password: ticket }, shared: true };
       const rfb = new RFB(screenRef.current, wsUrl, options) as unknown as RfbInstance;
+      // View-only: noVNC sends no keyboard, mouse or clipboard input (and the
+      // server drops any that arrives anyway).
+      rfb.viewOnly = watchOnly;
       rfb.scaleViewport = true; // scale the framebuffer to fill the (fit-sized) box
       rfb.showDotCursor = true; // show a dot when the guest sends no cursor (text consoles)
       rfb.background = "#000";
@@ -298,17 +308,23 @@ export function VncConsole({
           {state === "disconnected" && "Disconnected"}
           {state === "error" && "Error"}
         </span>
-        <Button variant="outline" size="sm" disabled={state !== "connected"} onClick={openPaste}>
-          <ClipboardPaste /> Paste
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={state !== "connected"}
-          onClick={() => rfbRef.current?.sendCtrlAltDel()}
-        >
-          <Keyboard /> Ctrl+Alt+Del
-        </Button>
+        {viewOnly ? (
+          <ViewOnlyBadge />
+        ) : (
+          <>
+            <Button variant="outline" size="sm" disabled={state !== "connected"} onClick={openPaste}>
+              <ClipboardPaste /> Paste
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={state !== "connected"}
+              onClick={() => rfbRef.current?.sendCtrlAltDel()}
+            >
+              <Keyboard /> Ctrl+Alt+Del
+            </Button>
+          </>
+        )}
         <Button variant="outline" size="sm" onClick={connect}>
           <RefreshCw /> Reconnect
         </Button>
@@ -337,7 +353,7 @@ export function VncConsole({
             </div>
           )}
 
-          {pasteOpen && (
+          {pasteOpen && !viewOnly && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 p-4">
               <div className="w-full max-w-lg rounded-xl border bg-background p-4 shadow-xl">
                 <div className="mb-2 flex items-center justify-between">
