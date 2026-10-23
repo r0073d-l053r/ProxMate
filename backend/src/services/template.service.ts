@@ -613,7 +613,7 @@ async function buildCloudTemplateVm(opts: {
   try {
     vmid = await nextVmId(client);
     const createUpid = await pve.createCloudInitVm(
-      { node, vmid, name: safeName, importFrom, diskStorage, bridge, pool: await pve.getGuestPool(), tags: buildTag },
+      { node, vmid, name: safeName, importFrom, diskStorage, bridge, tags: buildTag, pool: await pve.getGuestPool() },
       client,
     );
     created = true;

@@ -108,6 +108,7 @@ import { ALERT_METRICS, MAX_ALERT_RULES_PER_VM } from '../services/alert.service
 import { downloadsEnabled, requestBackupDownload, DownloadError } from '../services/download.service.js';
 import {
   restoreUploadsEnabled,
+  markUploaded,
   restoreFromUpload,
   resolveUnderUploadDir,
   uploadDir,
@@ -390,6 +391,8 @@ router.post('/restore-upload', async (req: Request, res: Response) => {
 
   try {
     await fsp.rename(tempPath, finalPath);
+    // Marks it as an upload ProxMate wrote, so a sweep may remove it if it is left behind.
+    await markUploaded(filename);
     const vm = await restoreFromUpload(user, { filename, name: parsed.data.name });
     await recordAudit({
       action: 'vm.restore_upload',

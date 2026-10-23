@@ -31,6 +31,10 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 ### Production hardening & ops
 
+- **Pool mode: recovering a machine whose guest is gone.** With a pool-scoped token, a guest's
+  backups leave the pool when the guest is destroyed, so a rebuild that fails after destroying the
+  old guest leaves backups the token cannot list or restore (root can). Keep the old guest until the
+  new one exists, or give rebuild a restore path that works before the VMID is back in the pool.
 - **Production validation passes.** The shipped OIDC SSO flow and the full 2FA/passkey matrix
   (TOTP, recovery codes, passkeys, invite-enforced 2FA) each need a documented end-to-end QA pass
   on a live deployment.
@@ -85,6 +89,18 @@ Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
 
 ### Unreleased
 
+- **Pool-scoped Proxmox token (optional) — needs live verification.** A `proxmox_pool` setting
+  (setup wizard and Admin → Settings) places every guest ProxMate creates, clones, restores or
+  imports in that resource pool. `deploy/proxmox-token.sh --pool <name>` creates the pool and
+  grants the guest privileges on `/pool/<name>` only, with `Sys.Audit`/`Sys.AccessNetwork` on
+  `/nodes`, `Datastore.*` without `Datastore.Allocate` on `/storage` (that one only on a storage
+  named for it), `SDN.*` on `/sdn/zones`, and `Sys.Audit` on `/` alone (`Sys.Modify` opt-in with
+  `--with-cluster-firewall`). Uploaded backups are renamed to their reserved VMID and read on the
+  share, so Proxmox never has to expose the backup storage. The connection test checks the pool exists, the guest privileges on it,
+  guest privileges still on `/`, what still reaches past the pool, and managed guests outside the
+  pool (with a one-click, per-guest move for guests carrying a ProxMate ownership tag). Still to
+  do: run it end to end on a PVE 9 cluster and confirm Proxmox refuses the token on a guest outside
+  the pool while every feature works inside it.
 - **Number fields can be cleared and retyped.** Emptying a numeric field no longer leaves a stuck
   `0` that turns the next digit into "02"; min/max apply when the field loses focus.
 - **Projects (tag rollups).** A **Projects** page groups a tenant's VMs by a `project:<name>` tag:
@@ -122,15 +138,6 @@ Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
   or — admin — one copy into each chosen user's account. The whole batch is checked against quota
   before anything is cloned; copies deploy a few at a time, each placed and isolated like a single
   deploy, with per-copy results. _CE primitive._
-- **Pool-scoped Proxmox token (optional) — needs live verification.** A `proxmox_pool` setting
-  (setup wizard and Admin → Settings) places every guest ProxMate creates, clones, restores or
-  imports in that resource pool. `deploy/proxmox-token.sh --pool <name>` creates the pool and
-  grants the guest privileges on `/pool/<name>` only, with `Sys.Audit` on `/nodes`, `Datastore.*`
-  on `/storage`, `SDN.*` on `/sdn/zones` and `Sys.Audit`/`Sys.Modify` on `/` alone. The
-  connection test checks the pool exists, the guest privileges on it, guest privileges still on
-  `/`, and managed guests outside the pool (with a one-click move for guests carrying a ProxMate
-  ownership tag). Still to do: run it end to end on a PVE 9 cluster and confirm Proxmox refuses
-  the token on a guest outside the pool while every feature works inside it.
 
 - **Interrupted operations are settled.** At startup and every 5 minutes, rows a backend restart left
   `creating` (a create, clone, upload restore or rebuild) or with a MateState `creating`/`restoring`

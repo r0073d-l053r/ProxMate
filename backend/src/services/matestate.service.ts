@@ -331,13 +331,9 @@ async function restoreFromMateStateTracked(vm: VirtualMachine, mateState: MateSt
 
     await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'restoring' } });
     const upid = await pve.restoreBackup(
-      {
-        node: vm.proxmoxNode,
-        vmid: vm.proxmoxVmId,
-        volid: mateState.volid,
-        storage: restoreStorage,
-        pool: await pve.getGuestPool(),
-      },
+      // No `pool`: an in-place restore keeps the guest's pool membership, and naming
+      // a pool would fail for a guest an admin has since put in another one.
+      { node: vm.proxmoxNode, vmid: vm.proxmoxVmId, volid: mateState.volid, storage: restoreStorage },
       client,
       kind,
     );

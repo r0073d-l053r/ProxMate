@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Admin import of a Proxmox guest ProxMate didn't create: only a guest nothing else
 // could claim is accepted, and an accepted one gets this row's tag (its other tags
@@ -141,14 +141,77 @@ describe('listing importable guests', () => {
     ]);
     const list = await listImportableGuests();
     expect(list.map((g) => g.vmid)).toEqual([200, 204]);
-    expect(list[1]).toEqual({ vmid: 204, node: 'pve2', name: 'ct', type: 'lxc', status: 'stopped', cpu: 1, ramMb: 512, diskGb: 8 });
+    expect(list[1]).toEqual({ vmid: 204, node: 'pve2', name: 'ct', type: 'lxc', status: 'stopped', cpu: 1, ramMb: 512, diskGb: 8, pool: null });
   });
 });
 
 describe('importing a guest', () => {
+  describe('with a Proxmox pool configured', () => {
+    let base: ((key: string) => Promise<string | null>) | undefined;
+    beforeEach(async () => {
+      const { getConfig } = await import('../src/services/config.service.js');
+      base = vi.mocked(getConfig).getMockImplementation() as never;
+      vi.mocked(getConfig).mockImplementation(async (key: string) => (key === 'proxmox_pool' ? 'proxmate' : base!(key)));
+    });
+    afterEach(async () => {
+      const { getConfig } = await import('../src/services/config.service.js');
+      vi.mocked(getConfig).mockImplementation(base as never);
+    });
+
+    it('adds the imported guest to the pool and says so in the audit entry', async () => {
+      const c = cluster(BASE_CFG);
+      await importGuest(ADMIN, { vmid: 200, owner: owner() });
+      const put = c.put.mock.calls.find((x) => x[0] === '/pools');
+      expect(bodyOf(put!)).toEqual({ poolid: 'proxmate', vms: '200', 'allow-move': '1' });
+      expect(recordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'vm.import', detail: expect.stringMatching(/added to pool proxmate$/) }),
+      );
+    });
+
+    it('still imports when the pool refuses the guest, and records why', async () => {
+      const c = cluster(BASE_CFG);
+      c.put.mockImplementation((url: string) =>
+        url === '/pools' ? Promise.reject(new Error('Permission check failed')) : ok(''),
+      );
+      const { vm } = await importGuest(ADMIN, { vmid: 200, owner: owner() });
+      expect(vm).toMatchObject({ proxmoxVmId: 200 });
+      expect(recordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ detail: expect.stringMatching(/not added to pool proxmate: Permission check failed/) }),
+      );
+    });
+
+    it('refuses a guest in another pool unless the admin confirms the move', async () => {
+      const c = cluster(BASE_CFG);
+      const baseGet = c.get.getMockImplementation()!;
+      c.get.mockImplementation((url: string) =>
+        url.startsWith('/cluster/resources')
+          ? ok([{ type: 'qemu', vmid: 200, node: 'pve1', name: 'legacy-web', tags: 'prod;web', pool: 'lab', status: 'running' }])
+          : baseGet(url),
+      );
+      await expect(importGuest(ADMIN, { vmid: 200, owner: owner() })).rejects.toMatchObject({ code: 'pool_move', status: 409 });
+      expect(c.put).not.toHaveBeenCalled();
+
+      const r = await importGuest(ADMIN, { vmid: 200, owner: owner(), movePool: true });
+      expect(r.poolNote).toBe('Added to the Proxmox pool proxmate (moved out of lab).');
+      expect(bodyOf(c.put.mock.calls.find((x) => x[0] === '/pools')!)).toEqual({ poolid: 'proxmate', vms: '200', 'allow-move': '1' });
+    });
+
+    it('leaves a guest that is already in the pool alone', async () => {
+      const c = cluster(BASE_CFG);
+      const baseGet = c.get.getMockImplementation()!;
+      c.get.mockImplementation((url: string) =>
+        url.startsWith('/cluster/resources')
+          ? ok([{ type: 'qemu', vmid: 200, node: 'pve1', name: 'legacy-web', tags: 'prod;web', pool: 'proxmate', status: 'running' }])
+          : baseGet(url),
+      );
+      await importGuest(ADMIN, { vmid: 200, owner: owner() });
+      expect(c.put.mock.calls.some((x) => x[0] === '/pools')).toBe(false);
+    });
+  });
+
   it('writes the marker (keeping its tags), applies isolation, records the row and audits it', async () => {
     const c = cluster(BASE_CFG);
-    const vm = await importGuest(ADMIN, { vmid: 200, owner: owner() });
+    const { vm } = await importGuest(ADMIN, { vmid: 200, owner: owner() });
 
     expect(vm).toMatchObject({
       userId: 'u1', proxmoxVmId: 200, proxmoxNode: 'pve1', type: 'qemu', name: 'legacy-web',
@@ -207,7 +270,7 @@ describe('importing a guest', () => {
     await expect(importGuest(ADMIN, { vmid: 200, owner: owner() })).rejects.toBeInstanceOf(QuotaError);
     expect(rows).toHaveLength(1);
 
-    const vm = await importGuest(ADMIN, { vmid: 200, owner: owner(), quotaExempt: true, adminManaged: false });
+    const { vm } = await importGuest(ADMIN, { vmid: 200, owner: owner(), quotaExempt: true, adminManaged: false });
     // An exempt grant is always admin-managed.
     expect(vm).toMatchObject({ quotaExempt: true, adminManaged: true });
   });
@@ -284,7 +347,7 @@ describe('importing a guest', () => {
       if (/\/snapshot\/clean\/config$/.test(url)) return ok({ ...BASE_CFG, vmstate: 'local-lvm:vm-200-state-clean' });
       return base(url);
     });
-    await expect(importGuest(ADMIN, { vmid: 200, owner: owner() })).resolves.toMatchObject({ proxmoxVmId: 200 });
+    await expect(importGuest(ADMIN, { vmid: 200, owner: owner() })).resolves.toMatchObject({ vm: { proxmoxVmId: 200 } });
   });
 
   it('treats virtiofs and ivshmem as host-level', () => {
@@ -306,7 +369,7 @@ describe('imports and the restart reconciler', () => {
       if (id) seen.push(isInFlight(id));
       return put(url, body);
     });
-    const vm = await importGuest(ADMIN, { vmid: 200, owner: owner() });
+    const { vm } = await importGuest(ADMIN, { vmid: 200, owner: owner() });
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every(Boolean)).toBe(true);
     expect(isInFlight(vm.id)).toBe(false);

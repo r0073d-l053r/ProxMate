@@ -57,7 +57,7 @@ The rule: the reconciler never writes to a Proxmox guest without positive proof 
 | MateState `creating` | task OK and its log names an archive listed for the VMID | Recorded `ready` with volid and size. |
 | MateState `creating` | task failed, or none recorded and no backup lock | `error`; nothing deleted; `backup.failed` notified. |
 
-An upload restore's archive (`opArchive`) is removed whenever its row is settled. Each settled row notifies admins once (`vm.error`; a rebuild also emails the owner) and is audited as `vm.reconcile` or `matestate.reconcile`.[^svc] [^vm]
+An upload restore's archive (`opArchive`, recorded after the pool-mode rename, so it names the archive actually restored) is removed, with its upload marker, whenever its row is settled. The startup sweep of marked uploads (`sweepStaleUploads`) leaves alone any archive a `creating` row records as `opArchive` or whose VMID such a row names, so the two never race over a restore still being settled. Each settled row notifies admins once (`vm.error`; a rebuild also emails the owner) and is audited as `vm.reconcile` or `matestate.reconcile`.[^svc] [^vm]
 
 # Key functions
 

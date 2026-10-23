@@ -11,7 +11,8 @@ vi.mock("@/lib/api", () => ({
   },
   apiError: (e: unknown) => String(e),
 }));
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));
+vi.mock("sonner", () => ({ toast }));
 // A native <select> stands in for the popover select, which jsdom can't open.
 vi.mock("@/components/ui/select", () => ({
   Select: ({ value, onValueChange, children }: { value: string; onValueChange: (v: string) => void; children: ReactNode }) => (
@@ -47,6 +48,8 @@ beforeEach(() => {
     }),
   );
   post.mockReset().mockResolvedValue({});
+  toast.success.mockReset();
+  toast.info.mockReset();
 });
 afterEach(cleanup);
 
@@ -84,6 +87,39 @@ describe("ImportGuestsCard", () => {
     const confirm = screen.getAllByRole("button", { name: /Import/ });
     fireEvent.click(confirm[confirm.length - 1]!);
     await screen.findByText(/would exceed u2@example.com's quota/);
+  });
+
+  it("asks before moving a guest out of another Proxmox pool, then imports with the move confirmed", async () => {
+    post
+      .mockRejectedValueOnce({ response: { data: { code: "pool_move", error: 'This guest is in the Proxmox pool "lab".' } } })
+      .mockResolvedValueOnce({ data: { vm: {}, poolNote: "Added to the Proxmox pool proxmate (moved out of lab)." } });
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<ImportGuestsCard />);
+    await screen.findByText("legacy-web");
+    fireEvent.click(screen.getByRole("button", { name: "Import" }));
+    fireEvent.change(await screen.findByLabelText("Owner"), { target: { value: "u2" } });
+    const confirm = screen.getAllByRole("button", { name: /Import/ });
+    fireEvent.click(confirm[confirm.length - 1]!);
+    await waitFor(() =>
+      expect(post).toHaveBeenLastCalledWith("/admin/guests/import", { vmid: 200, ownerId: "u2", movePool: true }),
+    );
+    expect(ask).toHaveBeenCalled();
+    await waitFor(() =>
+      expect(toast.info).toHaveBeenCalledWith("Added to the Proxmox pool proxmate (moved out of lab).", expect.anything()),
+    );
+  });
+
+  it("imports nothing when the admin declines the pool move", async () => {
+    post.mockRejectedValueOnce({ response: { data: { code: "pool_move" } } });
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<ImportGuestsCard />);
+    await screen.findByText("legacy-web");
+    fireEvent.click(screen.getByRole("button", { name: "Import" }));
+    fireEvent.change(await screen.findByLabelText("Owner"), { target: { value: "u2" } });
+    const confirm = screen.getAllByRole("button", { name: /Import/ });
+    fireEvent.click(confirm[confirm.length - 1]!);
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("says so when every guest is managed", async () => {

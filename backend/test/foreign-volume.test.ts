@@ -125,6 +125,22 @@ describe('assertOwnVolumes (audit round 2, blocker 2)', () => {
     expect(await pve.listGuestVolumes('pve1', 100, asClient(c))).toEqual(new Set(['local-lvm:vm-100-disk-7']));
   });
 
+  it('with unusedAreForeign, refuses an unused disk named for the VMID (a leftover the pool hid from the listing)', async () => {
+    const c = pveWith({ scsi0: 'local-lvm:vm-100-disk-0,size=32G', unused0: 'local-lvm:vm-100-disk-3' });
+    await expect(assertOwnVolumes(row(), undefined, new Set(), { unusedAreForeign: true })).rejects.toBeInstanceOf(ForeignVolumeError);
+    // Unused lines are never detached (that would free the volume); the row is held.
+    expect(c.put).not.toHaveBeenCalled();
+    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({
+      where: { id: 'rowa' },
+      data: { status: 'error', holdReason: FOREIGN_VOLUME_MESSAGE, opKind: null, opStartedAt: null, opUpid: null, opSourceId: null, opArchive: null },
+    });
+  });
+
+  it('without it, an unused disk named for the VMID is the guest\'s own', async () => {
+    pveWith({ scsi0: 'local-lvm:vm-100-disk-0,size=32G', unused0: 'local-lvm:vm-100-disk-3' });
+    await expect(assertOwnVolumes(row())).resolves.toBeUndefined();
+  });
+
   it('passes a guest that only has its own volumes', async () => {
     const c = pveWith({ scsi0: 'local-lvm:vm-100-disk-0,size=32G' });
     await expect(assertOwnVolumes(row())).resolves.toBeUndefined();

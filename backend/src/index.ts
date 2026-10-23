@@ -21,6 +21,7 @@ import { handleIdeUpgrade } from './services/ide-proxy.service.js';
 import { startScheduler, reconcileTick } from './services/scheduler.service.js';
 import { reconcileInterruptedPassthroughApplies } from './services/passthrough-request.service.js';
 import { runGuestMarkerBackfill } from './services/vm.service.js';
+import { sweepStaleUploads } from './services/restore-upload.service.js';
 import { envNumber } from './lib/env-number.js';
 
 const PORT = Math.floor(envNumber('PORT', 4000, 1));
@@ -84,4 +85,9 @@ server.listen(PORT, BIND_ADDR, () => {
   void runGuestMarkerBackfill()
     .then((r) => logger.info(r, 'guest ownership tag backfill done'))
     .catch((err) => logger.error({ err }, 'guest ownership tag backfill failed'));
+  // Uploaded backups left behind by a restore that never finished (the server
+  // stopped mid-way). Only files ProxMate marked as its own uploads are removed.
+  void sweepStaleUploads()
+    .then((removed) => removed > 0 && logger.info({ removed }, 'stale backup uploads removed'))
+    .catch((err) => logger.error({ err }, 'stale backup upload sweep failed'));
 });

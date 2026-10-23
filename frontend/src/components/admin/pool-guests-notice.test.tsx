@@ -9,7 +9,7 @@ vi.mock("@/lib/api", () => ({
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock("sonner", () => ({ toast }));
 
-import { PoolGuestsNotice } from "./pool-guests-notice";
+import { PoolGuestsNotice, poolMovePrompt } from "./pool-guests-notice";
 import type { PoolReport } from "@/lib/types";
 
 const report = (over: Partial<PoolReport> = {}): PoolReport => ({
@@ -26,7 +26,17 @@ const report = (over: Partial<PoolReport> = {}): PoolReport => ({
 });
 
 beforeEach(() => {
-  post.mockReset().mockResolvedValue({ data: { pool: "proxmate", moved: [{ vmid: 100, name: "web" }, { vmid: 9000, name: "debian" }] } });
+  post.mockReset().mockResolvedValue({
+    data: {
+      pool: "proxmate",
+      moved: [
+        { vmid: 100, name: "web", template: false, from: null },
+        { vmid: 9000, name: "debian", template: true, from: "other" },
+      ],
+      failed: [],
+    },
+  });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
   toast.success.mockReset();
   toast.error.mockReset();
 });
@@ -57,6 +67,37 @@ describe("PoolGuestsNotice", () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/Pool\.Allocate/)));
     expect(onMoved).not.toHaveBeenCalled();
     expect(screen.getByText(/web — in no pool/)).toBeTruthy();
+  });
+
+  it("asks before moving a guest out of another pool, and does nothing on cancel", async () => {
+    vi.mocked(window.confirm).mockReturnValue(false);
+    render(<PoolGuestsNotice report={report()} />);
+    fireEvent.click(screen.getByRole("button", { name: /Move managed guests into the pool/ }));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringMatching(/9000 debian \(template\) \(pool other\)/));
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("does not ask when no guest is in another pool", () => {
+    expect(poolMovePrompt(report({ outside: [report().outside[0]!] }))).toBeNull();
+  });
+
+  it("asks about a machine in another pool too", () => {
+    const machine = { vmid: 101, node: "pve1", name: "db", kind: "qemu" as const, template: false, pool: "lab" };
+    expect(poolMovePrompt(report({ outside: [machine] }))).toMatch(/101 db \(pool lab\)/);
+  });
+
+  it("reports each guest Proxmox refused", async () => {
+    post.mockResolvedValue({
+      data: {
+        pool: "proxmate",
+        moved: [{ vmid: 100, name: "web", template: false, from: null }],
+        failed: [{ vmid: 9000, name: "debian", template: true, from: "other", error: "Permission check failed (/pool/other, Pool.Allocate)" }],
+      },
+    });
+    render(<PoolGuestsNotice report={report()} />);
+    fireEvent.click(screen.getByRole("button", { name: /Move managed guests into the pool/ }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/9000 debian was not moved: .*Pool\.Allocate/), expect.anything()));
+    expect(toast.success).toHaveBeenCalledWith("Moved 1 guest into proxmate.");
   });
 
   it("renders nothing when every managed guest is in the pool", () => {

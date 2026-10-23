@@ -109,6 +109,77 @@ function heldOn(perms: pve.PvePermissions, path: string, wanted: readonly string
   return wanted.filter((p) => !!on[p]);
 }
 
+/** "8.2.4" → [8, 2]; null parts when unparseable. */
+function pveRelease(version: string): [number | null, number | null] {
+  const m = /^(\d+)\.(\d+)/.exec(version.trim());
+  return m ? [Number(m[1]), Number(m[2])] : [null, null];
+}
+
+/**
+ * What a pool-scoped token still holds, or lacks, outside the pool: the grants
+ * that let it reach past the pool (Sys.Modify on /, Datastore.Allocate on every
+ * storage) and the narrow ones the script grants instead (Sys.AccessNetwork for
+ * cloud-image downloads, Datastore.Allocate on the storages that need it).
+ * Warnings only: each names what is affected.
+ */
+async function infraWarnings(client: AxiosInstance, perms: pve.PvePermissions, version: string): Promise<string[]> {
+  const out: string[] = [];
+  const sysModify = heldOn(perms, '/', ['Sys.Modify']).length > 0;
+  if (sysModify) {
+    out.push(
+      'The token holds Sys.Modify on /, so the pool does not fully contain it: Proxmox also lets it manage ' +
+        "cluster backup jobs, the cluster firewall's groups, IP sets and options, and other cluster settings. " +
+        'ProxMate needs it only to enable the cluster firewall; without it, do that step once by hand as root.',
+    );
+  } else if (!(await pve.isClusterFirewallEnabled(client).catch(() => false))) {
+    // Once the cluster firewall is on, ProxMate has nothing left to do there.
+    out.push(
+      'Sys.Modify on / is not granted, so ProxMate cannot enable the cluster firewall or write its management ' +
+        'rules for tenant isolation. Do it once as root (Datacenter → Firewall: add an accept rule for your ' +
+        'management network on ports 8006 and 22, then enable it), or grant it with ' +
+        'deploy/proxmox-token.sh --with-cluster-firewall, which widens what the token can reach.',
+    );
+  }
+
+  const [major, minor] = pveRelease(version);
+  const hasAccessNetwork = major !== null && (major > 8 || (major === 8 && (minor ?? 0) >= 2));
+  const canDownload =
+    (sysModify && heldOn(perms, '/', ['Sys.Audit']).length > 0) ||
+    (hasAccessNetwork && heldOn(perms, '/nodes', ['Sys.AccessNetwork']).length > 0);
+  if (!canDownload) {
+    out.push(
+      hasAccessNetwork
+        ? 'Sys.AccessNetwork is missing on /nodes — importing cloud images for the Template Store will fail. ' +
+            'deploy/proxmox-token.sh --pool grants it.'
+        : `Proxmox VE ${version} checks Sys.Audit and Sys.Modify on / for cloud-image downloads, and the token ` +
+            'lacks them — importing cloud images for the Template Store will fail.',
+    );
+  }
+
+  if (heldOn(perms, '/storage', ['Datastore.Allocate']).length > 0) {
+    out.push(
+      'The token holds Datastore.Allocate on /storage, which lets it delete any volume and change any storage ' +
+        'definition, inside the pool or not. Grant it only on the storages that need it ' +
+        '(deploy/proxmox-token.sh --pool, with --snippet-storage / --import-storage if wanted).',
+    );
+  }
+  // Datastore.Allocate is only needed on the snippet storage to turn its snippets
+  // content type on; once it is on (or root turned it on), nothing is missing.
+  const snippetStorage = pve.snippetWriteConfig()?.storage;
+  if (snippetStorage && heldOn(perms, `/storage/${snippetStorage}`, ['Datastore.Allocate']).length === 0) {
+    const storages = await pve.getStorages(client).catch(() => []);
+    const content = storages.find((st) => st.storage === snippetStorage)?.content ?? '';
+    if (!content.split(',').includes('snippets')) {
+      out.push(
+        `The snippet storage "${snippetStorage}" does not have the snippets content type, and the token lacks ` +
+          `Datastore.Allocate there to turn it on. Do it once as root (Datacenter → Storage → ${snippetStorage} → ` +
+          `Content: Snippets), or grant it there only with deploy/proxmox-token.sh --pool --snippet-storage ${snippetStorage}.`,
+      );
+    }
+  }
+  return out;
+}
+
 /**
  * The connection test's pool section. `guestPrivileges` is the list the token
  * needs on every guest (it depends on the Proxmox VE release). Blocking problems
@@ -118,8 +189,9 @@ export async function checkGuestPool(
   client: AxiosInstance,
   perms: pve.PvePermissions,
   pool: string,
-  guestPrivileges: readonly string[],
+  opts: { guestPrivileges: readonly string[]; version: string },
 ): Promise<{ report: PoolReport; blocking: string[]; warnings: string[] }> {
+  const { guestPrivileges } = opts;
   const blocking: string[] = [];
   const warnings: string[] = [];
   const poolPath = `/pool/${pool}`;
@@ -145,6 +217,13 @@ export async function checkGuestPool(
 
   const held = new Set(heldOn(perms, poolPath, guestPrivileges));
   const missingOnPool = guestPrivileges.filter((p) => !held.has(p));
+  const allocateAnywhere = held.has('VM.Allocate') || heldOn(perms, '/vms', ['VM.Allocate']).length > 0;
+  if (!allocateAnywhere) {
+    blocking.push(
+      `VM.Allocate is missing on ${poolPath} (and on /vms), so Proxmox will refuse every guest ProxMate creates ` +
+        `in the pool. Grant the guest role there: deploy/proxmox-token.sh --pool ${pool}.`,
+    );
+  }
   if (missingOnPool.length > 0) {
     warnings.push(
       `The token is missing ${missingOnPool.join(', ')} on ${poolPath}, so those actions will fail on guests in the pool. ` +
@@ -185,9 +264,12 @@ export async function checkGuestPool(
     warnings.push(
       `${notVisible.length} machine(s) or template(s) ProxMate knows are not visible to the token ` +
         `(VMIDs ${notVisible.map((g) => g.vmid).join(', ')}): they are outside the pool, or gone. ` +
-        `As root on a node: \`pveum pool modify ${pool} --vms ${notVisible.map((g) => g.vmid).join(',')} --allow-move 1\`.`,
+        `As root on a node: \`pveum pool modify ${pool} --vms ${notVisible.map((g) => g.vmid).join(',')} --allow-move 1\`. ` +
+        'For a machine whose guest is gone, its backups are outside the pool too: the token can no longer list ' +
+        'or delete them, so restore one as root, or rebuild the machine first.',
     );
   }
+  warnings.push(...(await infraWarnings(client, perms, opts.version)));
 
   return {
     report: { name: pool, exists, missingOnPool, guestPrivilegesOnRoot, outside, notVisible },
@@ -208,14 +290,26 @@ export function poolScopedWithoutSetting(perms: pve.PvePermissions): string[] {
     .map((path) => path.slice('/pool/'.length));
 }
 
+/** One guest the move action handled. */
+export interface MoveOutcome {
+  vmid: number;
+  name: string;
+  template: boolean;
+  /** The pool it was in before, or null for none. */
+  from: string | null;
+}
+
 /**
  * Admin action: put every guest carrying a ProxMate marker that is outside the
  * configured pool into it. A guest is moved only when its own config confirms the
  * marker the listing showed, so nothing without a ProxMate marker is ever touched.
+ * One request per guest: a guest in another pool also needs Pool.Allocate there,
+ * and one refusal must not stop the rest.
  */
 export async function moveManagedGuestsIntoPool(client?: AxiosInstance): Promise<{
   pool: string;
-  moved: Array<{ vmid: number; name: string }>;
+  moved: MoveOutcome[];
+  failed: Array<MoveOutcome & { error: string }>;
 }> {
   const pool = await pve.getGuestPool();
   if (!pool) throw new Error('No Proxmox pool is configured.');
@@ -226,14 +320,21 @@ export async function moveManagedGuestsIntoPool(client?: AxiosInstance): Promise
     prisma.virtualMachine.findMany({ select: { id: true, proxmoxVmId: true } }),
     prisma.template.findMany({ select: { id: true, proxmoxVmId: true } }),
   ]);
-  const confirmed: ManagedGuest[] = [];
+  const moved: MoveOutcome[] = [];
+  const failed: Array<MoveOutcome & { error: string }> = [];
   for (const g of guests.filter((x) => x.pool !== pool)) {
-    const cfg = await pve.getVmConfig(g.node, g.vmid, c, g.kind);
-    const ours =
-      rows.some((r) => r.proxmoxVmId === g.vmid && tagsMarkRow(cfg['tags'], r.id)) ||
-      templates.some((t) => t.proxmoxVmId === g.vmid && tagsMarkTemplate(cfg['tags'], t.id));
-    if (ours) confirmed.push(g);
+    const outcome: MoveOutcome = { vmid: g.vmid, name: g.name, template: g.template, from: g.pool };
+    try {
+      const cfg = await pve.getVmConfig(g.node, g.vmid, c, g.kind);
+      const ours =
+        rows.some((r) => r.proxmoxVmId === g.vmid && tagsMarkRow(cfg['tags'], r.id)) ||
+        templates.some((t) => t.proxmoxVmId === g.vmid && tagsMarkTemplate(cfg['tags'], t.id));
+      if (!ours) continue;
+      await pve.addGuestsToPool(pool, [g.vmid], c);
+      moved.push(outcome);
+    } catch (err) {
+      failed.push({ ...outcome, error: pve.pveMessage(err) });
+    }
   }
-  await pve.addGuestsToPool(pool, confirmed.map((g) => g.vmid), c);
-  return { pool, moved: confirmed.map((g) => ({ vmid: g.vmid, name: g.name })) };
+  return { pool, moved, failed };
 }

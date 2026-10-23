@@ -32,6 +32,8 @@ export class ImportError extends Error {
   constructor(
     message: string,
     public status = 409,
+    /** Set when the admin can retry with a confirmation (`pool_move`: the guest is in another pool). */
+    public code?: 'pool_move',
   ) {
     super(message);
     this.name = 'ImportError';
@@ -47,6 +49,8 @@ export interface ImportableGuest {
   cpu: number;
   ramMb: number;
   diskGb: number;
+  /** The Proxmox pool it is in, or null. */
+  pool: string | null;
 }
 
 type ResourceEntry = {
@@ -55,6 +59,7 @@ type ResourceEntry = {
   node?: string;
   name?: string;
   tags?: string;
+  pool?: string;
   template?: number;
   status?: string;
   maxcpu?: number;
@@ -94,6 +99,7 @@ export async function listImportableGuests(): Promise<ImportableGuest[]> {
       cpu: r.maxcpu ?? 0,
       ramMb: Math.round((r.maxmem ?? 0) / 1024 / 1024),
       diskGb: Math.round((r.maxdisk ?? 0) / 1024 ** 3),
+      pool: r.pool || null,
     }))
     .sort((a, b) => a.vmid - b.vmid);
 }
@@ -148,6 +154,14 @@ export interface ImportGuestInput {
   quotaExempt?: boolean;
   /** The owner may operate but not resize it. Defaults to true for another user's account. */
   adminManaged?: boolean;
+  /** With a Proxmox pool configured: the admin agreed to move the guest out of the pool it is in. */
+  movePool?: boolean;
+}
+
+/** An import's outcome; `poolNote` says what happened with the configured Proxmox pool, if any. */
+export interface ImportResult {
+  vm: VirtualMachine;
+  poolNote: string | null;
 }
 
 /**
@@ -156,11 +170,11 @@ export interface ImportGuestInput {
  * the owner's quota lock. Refused with an ImportError when the guest can't safely
  * be handed over, or a QuotaError when it doesn't fit the owner's quota.
  */
-export async function importGuest(actor: AuditActor, input: ImportGuestInput): Promise<VirtualMachine> {
+export async function importGuest(actor: AuditActor, input: ImportGuestInput): Promise<ImportResult> {
   return withVmidLock(input.vmid, () => importGuestLocked(actor, input));
 }
 
-async function importGuestLocked(actor: AuditActor, input: ImportGuestInput): Promise<VirtualMachine> {
+async function importGuestLocked(actor: AuditActor, input: ImportGuestInput): Promise<ImportResult> {
   const { vmid, owner } = input;
   if ((await prisma.virtualMachine.count({ where: { proxmoxVmId: vmid } })) > 0) {
     throw new ImportError('A machine already references this VMID — it is managed by ProxMate already.');
@@ -175,6 +189,17 @@ async function importGuestLocked(actor: AuditActor, input: ImportGuestInput): Pr
   if (!guest?.node) throw new ImportError('There is no Proxmox guest at this VMID.', 404);
   const kind = guest.type as pve.GuestKind;
   const node = guest.node;
+  // Joining the configured pool takes a guest out of any other pool it is in, which
+  // may be how something else reaches it: only with the admin's say-so.
+  const pool = await pve.getGuestPool();
+  if (pool && guest.pool && guest.pool !== pool && !input.movePool) {
+    throw new ImportError(
+      `This guest is in the Proxmox pool "${guest.pool}". Importing it moves it into "${pool}", out of ` +
+        `"${guest.pool}". Confirm to import it anyway.`,
+      409,
+      'pool_move',
+    );
+  }
 
   // Decide on the guest's own config: the resource listing may lag or omit tags.
   const cfg = await pve.getVmConfig(node, vmid, client, kind);
@@ -257,7 +282,7 @@ async function importGuestLocked(actor: AuditActor, input: ImportGuestInput): Pr
   // Until it settles, the restart reconciler leaves this row alone.
   const done = beginInFlight(vm.id);
   try {
-    return await finishImport(actor, vm, { cfg, client, kind, node, vmid, name, owner, cpu, sizes, quotaExempt });
+    return await finishImport(actor, vm, { cfg, client, kind, node, vmid, name, owner, cpu, sizes, quotaExempt, pool, guest });
   } finally {
     done();
   }
@@ -277,9 +302,11 @@ async function finishImport(
     cpu: number;
     sizes: { ram: number; storage: number };
     quotaExempt: boolean;
+    pool: string | null | undefined;
+    guest: ResourceEntry;
   },
-): Promise<VirtualMachine> {
-  const { cfg, client, kind, node, vmid, name, owner, cpu, sizes, quotaExempt } = a;
+): Promise<ImportResult> {
+  const { cfg, client, kind, node, vmid, name, owner, cpu, sizes, quotaExempt, pool, guest } = a;
   // Isolation first, the tag last: the guest only becomes the owner's once it is
   // isolated, so a failure part-way never leaves a tagged guest a tenant could use
   // without its firewall. The row (in `creating`, which every tenant action refuses)
@@ -317,6 +344,26 @@ async function finishImport(
     );
   }
 
+  // Last, once it is isolated and tagged: with a Proxmox pool configured the guest
+  // joins it, like every guest ProxMate creates, so a pool-scoped token keeps
+  // reaching it. Not fatal (the import is complete and nothing needs undoing): the
+  // connection test lists a managed guest outside the pool, and the move action
+  // fixes it.
+  let poolNote: string | null = null;
+  let auditPool = '';
+  if (pool && guest.pool !== pool) {
+    try {
+      await pve.addGuestsToPool(pool, [vmid], client);
+      poolNote = `Added to the Proxmox pool ${pool}${guest.pool ? ` (moved out of ${guest.pool})` : ''}.`;
+      auditPool = `, added to pool ${pool}${guest.pool ? ` from ${guest.pool}` : ''}`;
+    } catch (err) {
+      poolNote =
+        `Not added to the Proxmox pool ${pool}: ${pve.pveMessage(err)}. ` +
+        'Use "Move managed guests into the pool" after the connection test.';
+      auditPool = `; not added to pool ${pool}: ${pve.pveMessage(err)}`;
+    }
+  }
+
   const live = await pve.getVmStatus(node, vmid, client, kind).catch(() => null);
   const status = live?.status === 'running' || live?.status === 'paused' ? live.status : 'stopped';
   const updated = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status, ...OP_SETTLED } });
@@ -327,8 +374,9 @@ async function finishImport(
     targetId: vm.id,
     detail:
       `${name} (${kind} vmid ${vmid} on ${node}) imported for ${owner.email}: ${cpu} vCPU, ${sizes.ram} MB, ${sizes.storage} GB` +
-      (quotaExempt ? ' (quota-exempt)' : ''),
+      (quotaExempt ? ' (quota-exempt)' : '') +
+      auditPool,
   });
-  return updated;
+  return { vm: updated, poolNote };
 }
 

@@ -7,10 +7,34 @@ import { api, apiError } from "@/lib/api";
 import type { PoolReport } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 
-/** The admin action's answer: the guests it put into the pool. */
+/** One guest the admin action handled. */
+interface MoveOutcome {
+  vmid: number;
+  name: string;
+  template: boolean;
+  from: string | null;
+}
+
+/** The admin action's answer: what it moved, and what Proxmox refused (one request per guest). */
 interface MoveResult {
   pool: string;
-  moved: Array<{ vmid: number; name: string }>;
+  moved: MoveOutcome[];
+  failed: Array<MoveOutcome & { error: string }>;
+}
+
+/**
+ * The confirmation shown before moving guests (machines or templates) that sit in
+ * another Proxmox pool, or null when there are none. Moving one takes it out of
+ * that pool, which may be how other users or tools reach it.
+ */
+export function poolMovePrompt(report: PoolReport): string | null {
+  const elsewhere = report.outside.filter((g) => g.pool && g.pool !== report.name);
+  if (elsewhere.length === 0) return null;
+  return (
+    `These guests are in another Proxmox pool and will be moved out of it into ${report.name}:\n\n` +
+    elsewhere.map((g) => `${g.vmid} ${g.name}${g.template ? " (template)" : ""} (pool ${g.pool})`).join("\n") +
+    "\n\nAnything that reaches them through their current pool will lose them. Move them?"
+  );
 }
 
 /**
@@ -23,11 +47,15 @@ export function PoolGuestsNotice({ report, onMoved }: { report: PoolReport; onMo
   if (report.outside.length === 0) return null;
 
   async function move() {
+    const prompt = poolMovePrompt(report);
+    if (prompt && !window.confirm(prompt)) return;
     setMoving(true);
     try {
       const res = await api.post<MoveResult>("/admin/settings/proxmox/pool/move-guests");
-      const n = res.data.moved.length;
-      toast.success(n === 0 ? "Nothing needed moving." : `Moved ${n} guest${n === 1 ? "" : "s"} into ${res.data.pool}.`);
+      const { moved, failed, pool } = res.data;
+      if (moved.length > 0) toast.success(`Moved ${moved.length} guest${moved.length === 1 ? "" : "s"} into ${pool}.`);
+      else if (failed.length === 0) toast.success("Nothing needed moving.");
+      for (const f of failed) toast.error(`${f.vmid} ${f.name} was not moved: ${f.error}`, { duration: 12000 });
       onMoved?.(); // the caller re-runs the connection test for a fresh report
     } catch (err) {
       toast.error(apiError(err));

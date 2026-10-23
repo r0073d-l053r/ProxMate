@@ -30,6 +30,14 @@ export interface ImportableGuest {
   cpu: number;
   ramMb: number;
   diskGb: number;
+  /** The Proxmox pool it is in, or null. */
+  pool?: string | null;
+}
+
+/** The API's refusal when importing would move the guest out of another Proxmox pool. */
+function isPoolMoveRefusal(err: unknown): boolean {
+  const data = (err as { response?: { data?: { code?: string } } })?.response?.data;
+  return data?.code === "pool_move";
 }
 
 /** One guest's resources, in words, for the list and the dialog. */
@@ -81,13 +89,18 @@ export function ImportGuestsCard() {
       return;
     }
     setBusy(true);
+    const body = { vmid: picked.vmid, ownerId, ...(countQuota ? {} : { quotaExempt: true }) };
     try {
-      await api.post("/admin/guests/import", {
-        vmid: picked.vmid,
-        ownerId,
-        ...(countQuota ? {} : { quotaExempt: true }),
-      });
+      let res;
+      try {
+        res = await api.post<{ poolNote?: string | null }>("/admin/guests/import", body);
+      } catch (err) {
+        // The guest is in another Proxmox pool: importing moves it into ProxMate's.
+        if (!isPoolMoveRefusal(err) || !window.confirm(`${apiError(err)}\n\nMove it and import?`)) throw err;
+        res = await api.post<{ poolNote?: string | null }>("/admin/guests/import", { ...body, movePool: true });
+      }
       toast.success(`Imported "${picked.name ?? picked.vmid}" (VMID ${picked.vmid}).`);
+      if (res.data?.poolNote) toast.info(res.data.poolNote, { duration: 12000 });
       setPicked(null);
       load();
     } catch (err) {
@@ -107,6 +120,8 @@ export function ImportGuestsCard() {
         <CardDescription>
           Proxmox guests ProxMate doesn&apos;t manage yet. Importing one hands it to a user: it is tagged as
           theirs, moved to the default bridge with the isolation firewall, and counted toward their quota.
+          With a Proxmox pool configured it is also added to that pool. A token scoped to the pool only sees
+          guests already in it, so this list then shows only those.
         </CardDescription>
       </CardHeader>
       <CardContent>
