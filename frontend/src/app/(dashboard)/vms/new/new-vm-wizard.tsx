@@ -16,6 +16,8 @@ import { NumberInput } from "@/components/ui/number-input";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/form-field";
 import { TemplateIcon } from "@/components/template-icon";
+import { BulkDeployProgress } from "@/components/vm/bulk-deploy-progress";
+import { MAX_COPIES, MAX_COPIES_ADMIN, namePatternError, type DeployBatch } from "@/lib/bulk-deploy";
 import {
   Select,
   SelectContent,
@@ -113,6 +115,12 @@ export default function NewVmWizard() {
   const [forUserId, setForUserId] = useState<string>(SELF);
   const [countQuota, setCountQuota] = useState(true);
   const [nodeChoice, setNodeChoice] = useState<string>(AUTO_NODE);
+  // Template deploys only: several copies at once (`name` is then a `{n}` pattern),
+  // or — admin — one copy into each of several users' accounts.
+  const [copies, setCopies] = useState(1);
+  const [perUser, setPerUser] = useState(false);
+  const [perUserIds, setPerUserIds] = useState<string[]>([]);
+  const [batch, setBatch] = useState<DeployBatch | null>(null);
 
   const meId = useAuthStore((s) => s.user?.id);
   useEffect(() => {
@@ -193,6 +201,11 @@ export default function NewVmWizard() {
   const bundleReady =
     cloudOnDemand || selectedFeatures.length === 0 || nodeSnippets.includes(cloudSnippetFile(selectedFeatures));
   const minDisk = template?.diskGb ?? 1;
+  const usePerUser = !!template && isAdmin && perUser;
+  // How many machines this deploy makes, and whether it goes through the bulk route.
+  const batchSize = !template ? 1 : usePerUser ? perUserIds.length : copies;
+  const isBulk = !!template && (usePerUser || copies > 1);
+  const maxCopies = isAdmin ? MAX_COPIES_ADMIN : MAX_COPIES;
 
   // Which preset (if any) the current cpu/ram/disk match, so its chip highlights.
   const activePreset = SIZE_PRESETS.find(
@@ -238,7 +251,14 @@ export default function NewVmWizard() {
 
   function validate(): boolean {
     const e: Record<string, string> = {};
-    if (!/^[a-zA-Z0-9-]+$/.test(name)) e.name = "Use letters, numbers and hyphens only";
+    if (isBulk) {
+      const bad = namePatternError(name, batchSize, usePerUser);
+      if (bad) e.name = bad;
+    } else if (!/^[a-zA-Z0-9-]+$/.test(name)) e.name = "Use letters, numbers and hyphens only";
+    if (template && !usePerUser && (!Number.isInteger(copies) || copies < 1 || copies > maxCopies)) {
+      e.copies = `Between 1 and ${maxCopies} copies`;
+    }
+    if (usePerUser && perUserIds.length === 0) e.perUser = "Choose at least one user";
     if (isRestore) {
       // Sizing comes from inside the backup (quota is enforced server-side from
       // the archive's embedded config), so only the name + file matter here.
@@ -248,12 +268,14 @@ export default function NewVmWizard() {
       setErrors(e);
       return Object.keys(e).length === 0;
     }
+    // Several copies are judged together, as the backend does: all of them fit or none deploy.
+    const each = batchSize > 1 ? ` (${batchSize} copies)` : "";
     if (cpu < 1) e.cpu = "At least 1 vCPU";
-    else if (!isAdmin && cpu > cpuLeft) e.cpu = `Exceeds your remaining ${cpuLeft} vCPU`;
-    if (!isAdmin && ramGb * 1024 > ramLeftMb) e.ram = `Exceeds your remaining ${formatRam(ramLeftMb)}`;
+    else if (!isAdmin && cpu * batchSize > cpuLeft) e.cpu = `Exceeds your remaining ${cpuLeft} vCPU${each}`;
+    if (!isAdmin && ramGb * 1024 * batchSize > ramLeftMb) e.ram = `Exceeds your remaining ${formatRam(ramLeftMb)}${each}`;
     if (storageGb < minDisk)
       e.storage = template ? `Template needs at least ${minDisk} GB` : "At least 1 GB";
-    else if (!isAdmin && storageGb > storageLeft) e.storage = `Exceeds your remaining ${storageLeft} GB`;
+    else if (!isAdmin && storageGb * batchSize > storageLeft) e.storage = `Exceeds your remaining ${storageLeft} GB${each}`;
     if (isCustom && !os) e.os = "Select an installation ISO";
     if (isContainer) {
       if (!lxcTemplate) e.lxcTemplate = "Select a container template";
@@ -330,9 +352,8 @@ export default function NewVmWizard() {
         toast.success(`Container "${name}" is being created.`);
         router.push(`/vms/${res.data.vm.id}`);
       } else {
-        const res = await api.post<{ vm: VirtualMachine }>("/templates/deploy", {
+        const body = {
           templateId: source,
-          name,
           cpu,
           ram: ramGb * 1024,
           storage: storageGb,
@@ -344,6 +365,24 @@ export default function NewVmWizard() {
                 features: selectedFeatures.length ? selectedFeatures : undefined,
               }
             : {}),
+        };
+        if (isBulk) {
+          // Quota is checked for the whole batch up front; the copies then deploy in
+          // the background and their progress is shown here.
+          const res = await api.post<DeployBatch>("/templates/deploy-bulk", {
+            ...body,
+            namePattern: name,
+            ...(usePerUser
+              ? { forUserIds: perUserIds, ...(!countQuota ? { quotaExempt: true } : {}) }
+              : { count: copies, ...adminOpts(false) }),
+          });
+          toast.success(`Deploying ${res.data.items.length} × ${template?.name}.`);
+          setBatch(res.data);
+          return;
+        }
+        const res = await api.post<{ vm: VirtualMachine }>("/templates/deploy", {
+          ...body,
+          name,
           // Template clones stay on the template's node — no node option here.
           ...adminOpts(false),
         });
@@ -355,6 +394,20 @@ export default function NewVmWizard() {
       setUploadPct(null);
       setSubmitting(false);
     }
+  }
+
+  if (batch) {
+    return (
+      <div className="mx-auto max-w-xl">
+        <PageHeader title="Deploying machines" description="Each copy deploys on its own; one failing doesn't stop the rest.">
+          <Button variant="ghost" render={<Link href="/vms" />}>
+            <ArrowLeft />
+            Back
+          </Button>
+        </PageHeader>
+        <BulkDeployProgress batchId={batch.id} initial={batch} />
+      </div>
+    );
   }
 
   return (
@@ -462,6 +515,51 @@ export default function NewVmWizard() {
                     <div className="flex items-center gap-1.5 text-sm font-medium">
                       <Rocket className="size-3.5" /> Admin options
                     </div>
+                    {template && (
+                      <label className="flex cursor-pointer items-start gap-2.5 rounded-md border bg-background p-3">
+                        <input
+                          type="checkbox"
+                          checked={perUser}
+                          onChange={(e) => {
+                            setPerUser(e.target.checked);
+                            setErrors({});
+                          }}
+                          className="mt-0.5 size-4 accent-primary"
+                        />
+                        <span className="text-sm">
+                          <span className="font-medium">One machine for each of several users</span>
+                          <span className="block text-xs text-muted-foreground">
+                            Deploys one copy of this template into each chosen user&apos;s account.
+                          </span>
+                        </span>
+                      </label>
+                    )}
+                    {usePerUser && (
+                      <FormField label={`Users (${perUserIds.length} chosen)`} error={errors.perUser}>
+                        <div className="grid max-h-48 gap-1 overflow-y-auto rounded-md border bg-background p-2">
+                          {adminUsers.length === 0 ? (
+                            <p className="text-xs text-muted-foreground">No other users yet.</p>
+                          ) : (
+                            adminUsers.map((u) => (
+                              <label key={u.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                                <input
+                                  type="checkbox"
+                                  checked={perUserIds.includes(u.id)}
+                                  onChange={(e) =>
+                                    setPerUserIds((ids) =>
+                                      e.target.checked ? [...ids, u.id] : ids.filter((x) => x !== u.id),
+                                    )
+                                  }
+                                  className="size-4 accent-primary"
+                                />
+                                {u.displayName} <span className="text-muted-foreground">· {u.email}</span>
+                              </label>
+                            ))
+                          )}
+                        </div>
+                      </FormField>
+                    )}
+                    {!usePerUser && (
                     <FormField
                       label="Deploy for"
                       hint={forUserId === SELF ? "Your own VM (admin account)." : "The VM lands in this tenant's account — they own it."}
@@ -480,7 +578,8 @@ export default function NewVmWizard() {
                         </SelectContent>
                       </Select>
                     </FormField>
-                    {forUserId !== SELF && (
+                    )}
+                    {(forUserId !== SELF || usePerUser) && (
                       <label className="flex cursor-pointer items-start gap-2.5 rounded-md border bg-background p-3">
                         <input
                           type="checkbox"
@@ -527,9 +626,38 @@ export default function NewVmWizard() {
                   </div>
                 )}
 
-                <FormField label="Name" htmlFor="name" error={errors.name} hint="e.g. web-server-01">
+                <FormField
+                  label={isBulk ? "Name pattern" : "Name"}
+                  htmlFor="name"
+                  error={errors.name}
+                  hint={
+                    isBulk
+                      ? usePerUser
+                        ? "Each user's copy gets this name; {n} becomes 1, 2, 3 … if you want them numbered."
+                        : "{n} becomes the copy number — web-{n} gives web-1, web-2, …"
+                      : "e.g. web-server-01"
+                  }
+                >
                   <Input id="name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
                 </FormField>
+
+                {template && !usePerUser && (
+                  <FormField
+                    label="Copies"
+                    htmlFor="copies"
+                    error={errors.copies}
+                    hint={`Deploy up to ${maxCopies} identical machines at once; quota must cover all of them.`}
+                  >
+                    <Input
+                      id="copies"
+                      type="number"
+                      min={1}
+                      max={maxCopies}
+                      value={copies}
+                      onChange={(e) => setCopies(Math.floor(Number(e.target.value) || 1))}
+                    />
+                  </FormField>
+                )}
 
                 {!isRestore && (
                 <>
@@ -896,7 +1024,9 @@ export default function NewVmWizard() {
                         ? uploadPct !== null
                           ? "Restoring…"
                           : "Upload & restore"
-                        : "Deploy"}
+                        : isBulk
+                          ? `Deploy ${batchSize}`
+                          : "Deploy"}
                 </Button>
               </form>
             </CardContent>

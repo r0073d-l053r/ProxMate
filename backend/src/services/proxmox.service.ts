@@ -414,6 +414,11 @@ export async function pickBestNode(
   client?: AxiosInstance,
   candidateNodes?: string[],
   arch?: Arch,
+  /**
+   * Guests already placed on a node but not yet there (a bulk deploy placing its
+   * copies one after another): counted as used, so the copies spread out.
+   */
+  pending?: Map<string, { cpu: number; ramMb: number; storageGb: number }>,
 ): Promise<string> {
   const c = client ?? (await getClient());
   const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources');
@@ -463,15 +468,16 @@ export async function pickBestNode(
 
   const scored: NodePlacement[] = nodes.map((n) => {
     const maxcpu = n.maxcpu ?? 0;
-    const freeCpu = Math.max(0, maxcpu - (n.cpu ?? 0) * maxcpu);
-    const freeMem = Math.max(0, (n.maxmem ?? 0) - (n.mem ?? 0));
+    const queued = n.node ? pending?.get(n.node) : undefined;
+    const freeCpu = Math.max(0, maxcpu - (n.cpu ?? 0) * maxcpu - (queued?.cpu ?? 0));
+    const freeMem = Math.max(0, (n.maxmem ?? 0) - (n.mem ?? 0) - (queued?.ramMb ?? 0) * 1024 * 1024);
     const pool = n.node ? poolByNode.get(n.node) : undefined;
     const hasDisk = !!pool && pool.total > 0;
-    const freeDisk = pool ? pool.free : null;
+    const freeDisk = pool ? Math.max(0, pool.free - (queued?.storageGb ?? 0) * 1024 * 1024 * 1024) : null;
 
     const memFrac = n.maxmem ? freeMem / n.maxmem : 0;
     const cpuFrac = maxcpu ? freeCpu / maxcpu : 0;
-    const diskFrac = hasDisk ? pool!.free / pool!.total : 0;
+    const diskFrac = hasDisk ? freeDisk! / pool!.total : 0;
 
     let score = hasDisk
       ? memFrac * 0.5 + cpuFrac * 0.35 + diskFrac * 0.15
@@ -849,6 +855,21 @@ export async function getNextVmId(client?: AxiosInstance): Promise<number> {
   const c = client ?? (await getClient());
   const res = await c.get<{ data: string }>('/cluster/nextid');
   return parseInt(res.data.data, 10);
+}
+
+/**
+ * Whether no guest uses `vmid`: Proxmox answers `/cluster/nextid?vmid=N` with N
+ * when it is free and refuses it (400) when it is taken.
+ */
+export async function isVmIdFree(vmid: number, client?: AxiosInstance): Promise<boolean> {
+  const c = client ?? (await getClient());
+  try {
+    const res = await c.get<{ data: string }>('/cluster/nextid', { params: { vmid } });
+    return parseInt(String(res.data.data), 10) === vmid;
+  } catch (err) {
+    if (err instanceof AxiosError && err.response?.status === 400) return false;
+    throw err;
+  }
 }
 
 export interface CreateVmConfig {

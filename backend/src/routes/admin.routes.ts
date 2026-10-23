@@ -45,7 +45,8 @@ import {
   detachPassthrough,
   PassthroughRequestError,
 } from '../services/passthrough-request.service.js';
-import { getOwnedVm, listUnmatchedVms, adoptGuest, AdoptError } from '../services/vm.service.js';
+import { getOwnedVm, listUnmatchedVms, adoptGuest, AdoptError, QuotaError } from '../services/vm.service.js';
+import { listImportableGuests, importGuest, ImportError } from '../services/guest-import.service.js';
 import {
   checkForUpdate,
   getUpdateStatus,
@@ -1138,6 +1139,48 @@ router.post('/vms/:id/adopt', async (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (err) {
     if (err instanceof AdoptError) { res.status(409).json({ error: err.message }); return; }
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── Importing guests ProxMate didn't create ──────────────────
+// Proxmox guests no machine references and that carry no ProxMate tag can be
+// brought under management for a chosen owner: tagged, isolated like a new guest,
+// and counted toward the owner's quota (unless the admin marks them exempt).
+
+router.get('/guests/importable', async (_req: Request, res: Response) => {
+  try {
+    res.json(await listImportableGuests());
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+const ImportGuestSchema = z.object({
+  vmid: z.number().int().positive(),
+  ownerId: z.string().min(1).max(64),
+  quotaExempt: z.boolean().optional(),
+  adminManaged: z.boolean().optional(),
+});
+
+router.post('/guests/import', async (req: Request, res: Response) => {
+  const parsed = ImportGuestSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Choose a guest and an owner.' }); return; }
+  const owner = await prisma.user.findUnique({ where: { id: parsed.data.ownerId } });
+  if (!owner) { res.status(404).json({ error: 'No such user to import for.' }); return; }
+  try {
+    const vm = await importGuest((req as AuthRequest).user, { ...parsed.data, owner });
+    res.status(201).json({ vm });
+  } catch (err) {
+    if (err instanceof ImportError) { res.status(err.status).json({ error: err.message }); return; }
+    if (err instanceof QuotaError) {
+      res.status(403).json({
+        error: `Importing this guest would exceed ${owner.email}'s quota (${Object.keys(err.details).join(', ')}). ` +
+          'Raise their quota or import it as quota-exempt.',
+        details: err.details,
+      });
+      return;
+    }
     res.status(502).json({ error: pveMessage(err) });
   }
 });

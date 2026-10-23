@@ -232,6 +232,15 @@ The tenant is **emailed** that a machine was set up for them (needs SMTP), and o
 see an **Admin-managed** badge with "Set up by your admin — only an admin can resize or rebuild
 it." instead of the resize and rebuild controls.
 
+**Several machines at once.** For a Template Store source the wizard has a **Copies** field: with
+more than one copy the name becomes a pattern, and `{n}` is the copy number (`web-{n}` gives
+`web-1`, `web-2`, …). Tenants can deploy up to 20 copies at a time, admins up to 50. Admins can
+also tick **One machine for each of several users** and choose the users: each gets one copy in
+their own account (admin-managed, and quota-exempt if you untick **Count against their quota**).
+Quota is checked for the whole batch before anything is cloned — if it doesn't all fit, nothing is
+deployed. The copies then deploy a few at a time, each placed and isolated like a single deploy,
+and the wizard shows each copy's result; one failing doesn't stop the rest.
+
 ### 4.2 VM sharing levels (what tenants can grant each other)
 
 A VM's owner can share it from **VM ▸ Settings ▸ Shared access** at three levels: **Viewer**
@@ -359,6 +368,7 @@ A few things worth knowing day-to-day:
   digest** on the same page. _(The EDU edition has
   no opt-out — instructors must be able to reach every student.)_
 - **Unconfirmed machines** (**Settings → Maintenance → Unconfirmed machines**). ProxMate tags every guest it manages (`proxmate-<id>`) and only acts on a guest that carries its own machine's tag. The card lists machines whose VMID holds no guest with their tag — typically machines from before ownership tags that the automatic tagging couldn't match (left in `error` or `creating`, renamed so the Proxmox name differs, or sharing a VMID with another machine). Those machines can't be started, opened, backed up or deleted until you settle them: **Adopt** tags the guest at the VMID as that machine's and, for an `error` or held machine, re-applies network isolation and re-reads its sizes (as a restore does) before clearing that state, **Remove row** deletes only the ProxMate record and leaves the guest alone. Admins are notified once when the automatic tagging leaves machines unmatched.
+- **Import existing guests** (**Settings → Maintenance → Import existing guests**). Lists the Proxmox guests (VMs and containers) ProxMate doesn't manage: no machine references them, they carry no ProxMate tag, and they aren't templates. **Import** one and choose its owner: ProxMate records it as their machine from its current size, tags it (keeping its other tags), moves its network interfaces to the default bridge with the isolation firewall — exactly as for a new machine — and counts it toward the owner's quota. Untick **Count against their quota** to import it as a grant instead; an import that would exceed the quota is refused with the owner named. Guests that reference another guest's disks or host paths, have host devices (PCI, USB, serial), raw host settings or hook scripts, or are privileged containers are refused — remove those in Proxmox first (a GPU can then be attached through a passthrough request). Expect the guest's network to change when it moves to the default bridge.
 - **Machines that can't run.** A machine left in `error`, or held after a create, rebuild or restore that didn't finish (or a restore that left its owner over quota), can't be started and its console and IDE don't open; its page says why. It can be restored, rebuilt, adopted under **Unconfirmed machines**, or deleted. Bulk actions, migrations, the Balancer and node drains also skip a machine while its IDE installs or its cloud-init deploy finishes, and report it.
 - **Deleting a tenant** in **Admin → Users** also destroys their VMs on Proxmox. If any of their machines can't be deleted with its guest (an unconfirmed machine, or a guest that fails to delete), the account is kept and the machines are listed — settle them under **Unconfirmed machines**, then delete again.
 - **Re-configuring Proxmox** later (new host, rotated token) is in **Admin → Settings**; the existing token secret is kept if you leave the field blank.
