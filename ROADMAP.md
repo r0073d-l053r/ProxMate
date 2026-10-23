@@ -88,27 +88,20 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolation model.
 
-1. **Adopt an existing (unmanaged) Proxmox VM.** ProxMate only manages guests it created. An
-   admin-only **import** flow would let an operator onboard an existing cluster: pick an unmanaged
-   guest, assign an owner + quota accounting, apply the per-VM isolation firewall, and start managing
-   it — no rebuild. Closes the biggest "I already have VMs" adoption gap. _CE._
-2. **Bulk deploy from a template (class provisioning).** Deploy *N* VMs from one template in a single
-   action — for a tenant, or one-per-tenant across a selected group — each auto-placed and
-   isolation-firewalled. The concrete primitive behind EDU "assignment templates." _CE primitive, EDU UX._
-3. **Auto-snapshot before risky ops.** Optionally take a snapshot right before a rebuild/resize/rescue
+1. **Auto-snapshot before risky ops.** Optionally take a snapshot right before a rebuild/resize/rescue
    (QEMU) so a bad change is one rollback away. Snapshots already exist; this just wires a safety net
    into the destructive paths, with a retention cap. _CE._
-4. **Projects (tag rollups).** Tags exist per-VM; add a **project view** that groups a tenant's VMs by
+2. **Projects (tag rollups).** Tags exist per-VM; add a **project view** that groups a tenant's VMs by
    a `project:<name>` tag with a per-project resource + cost rollup and bulk actions scoped to the
    group. Low-risk, high polish. _CE._
-5. **Guest-agent file push.** Reuse the exact trust model as password-reset / SSH-key-inject (QEMU
+3. **Guest-agent file push.** Reuse the exact trust model as password-reset / SSH-key-inject (QEMU
    guest agent, argv-safe) to let an owner upload a small file into a VM (e.g. a config or starter
    script) from the browser — no SSH. Size-capped, owner/Manager only. _CE._
-6. **More notification channels.** The webhook engine supports Discord/Slack/Mattermost/generic; add
+4. **More notification channels.** The webhook engine supports Discord/Slack/Mattermost/generic; add
    **ntfy** and **Telegram** presets, plus a weekly per-tenant **usage digest** email. _CE._
-7. **Two-person approval for destructive admin actions.** Optional policy: a second admin must confirm
+5. **Two-person approval for destructive admin actions.** Optional policy: a second admin must confirm
    a bulk-delete / node-drain / firewall-disable before it runs. Rides the existing audit log. _EDU._
-8. **Status page / scheduled reports.** A lightweight public/authed status page (node health, capacity,
+6. **Status page / scheduled reports.** A lightweight public/authed status page (node health, capacity,
    incidents) and optional scheduled admin reports (capacity trend, top consumers) off the existing
    `ResourceSample` + cluster-health data. _EDU._
 
@@ -117,6 +110,19 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 ## ✅ Shipped — condensed index
 
 Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
+
+### Unreleased
+
+- **Import an existing Proxmox guest (admin).** Settings → Maintenance → Import existing guests lists
+  QEMU and LXC guests ProxMate doesn't manage; importing one for an owner tags it, applies the default
+  bridge and isolation firewall, and counts it toward their quota (or as a grant). Guests with another
+  guest's disks, host devices or a privileged container are refused. _CE._
+- **Bulk deploy from a template.** Deploy up to 20 copies (admins 50) from a `web-{n}` name pattern,
+  or — admin — one copy into each chosen user's account. The whole batch is checked against quota
+  before anything is cloned; copies deploy a few at a time, each placed and isolated like a single
+  deploy, with per-copy results. _CE primitive._
+
+### Released
 
 - **v1.2.0 — sharing, placement and least privilege.** Share a VM with someone before they sign
   up (pending shares, claimed only by a confirmed address); template deploys on shared storage
