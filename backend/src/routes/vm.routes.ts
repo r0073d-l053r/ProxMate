@@ -78,6 +78,7 @@ import {
   ourGuestOrNull,
   tagsMarkRow,
   MIN_RAM_MB,
+  STILL_CREATING_MESSAGE,
 } from '../services/vm.service.js';
 import { isValidPublicKey } from '../services/ssh-key.service.js';
 import { isIdeInstalling } from '../services/ide-provision.service.js';
@@ -104,6 +105,27 @@ const router = Router();
 router.use(requireAuth);
 // Users whose admin required 2FA can't touch VMs until they've enrolled a method.
 router.use(enforceMfaSetup);
+
+// A machine still being created (a create, import or rebuild in flight, or a bulk-deploy
+// copy waiting for its turn) can be viewed or deleted, nothing else: a clear 409 here,
+// and requireOurGuest refuses it again for every path that reaches its guest.
+router.use('/:id', async (req: Request, res: Response, next: () => void) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || (req.method === 'DELETE' && req.path === '/')) {
+    next();
+    return;
+  }
+  let status: string | undefined;
+  try {
+    status = (await prisma.virtualMachine.findUnique({ where: { id: req.params['id'] as string }, select: { status: true } }))?.status;
+  } catch {
+    // Unreadable here is left to the route: requireOurGuest still refuses the row.
+  }
+  if (status === 'creating') {
+    res.status(409).json({ error: STILL_CREATING_MESSAGE });
+    return;
+  }
+  next();
+});
 
 /**
  * Destructive per-VM actions (stop/restart/pause/delete/migrate) are refused with

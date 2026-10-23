@@ -1,8 +1,9 @@
+import crypto from 'node:crypto';
 import type { Template, VirtualMachine } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { getConfig, setConfig } from './config.service.js';
 import * as pve from './proxmox.service.js';
-import { requireOurGuest, markTemplateGuest, templateGuestIdentity } from './vm.service.js';
+import { requireOurGuest, markTemplateGuest, templateGuestIdentity, nextVmId } from './vm.service.js';
 import { notify } from './notify.service.js';
 
 /** Published templates shown in the user-facing Template Store. */
@@ -603,13 +604,18 @@ async function buildCloudTemplateVm(opts: {
   // it before a download of up to 15 minutes would leave it free for any other
   // provision to claim in the meantime.
   let vmid = 0;
-  // Set once Proxmox has accepted OUR create for this VMID. Only then is whatever
-  // sits at the VMID ours to clean up — if the create itself was refused (e.g. the
-  // id was taken after all), that guest belongs to someone else.
+  // Set once Proxmox has accepted OUR create for this VMID. Only then may whatever
+  // sits at the VMID be ours to clean up — if the create itself was refused (e.g. the
+  // id was taken after all), that guest belongs to someone else. Even then the
+  // guest is only deleted when it carries this build's tag (see buildGuestIsOurs).
   let created = false;
+  const buildTag = `proxmate-build-${crypto.randomUUID().slice(0, 8)}`;
   try {
-    vmid = await pve.getNextVmId(client);
-    const createUpid = await pve.createCloudInitVm({ node, vmid, name: safeName, importFrom, diskStorage, bridge }, client);
+    vmid = await nextVmId(client);
+    const createUpid = await pve.createCloudInitVm(
+      { node, vmid, name: safeName, importFrom, diskStorage, bridge, tags: buildTag },
+      client,
+    );
     created = true;
     await pve.waitForTask(node, createUpid, client, 600_000);
     const diskGb = pve.primaryDiskSizeGb(await pve.getVmConfig(node, vmid, client));
@@ -621,8 +627,25 @@ async function buildCloudTemplateVm(opts: {
     return { node, vmid, diskGb, arch, guestAgent };
   } catch (err) {
     await pve.deleteStorageVolume(node, importFrom, client).catch(() => {});
-    if (created) await pve.deleteVm(node, vmid, client).catch(() => {});
+    if (created && (await buildGuestIsOurs(node, vmid, buildTag, client))) {
+      await pve.deleteVm(node, vmid, client).catch(() => {});
+    }
     throw err;
+  }
+}
+
+/** Whether the guest at `vmid` is the one this build created (it carries the build's tag). */
+async function buildGuestIsOurs(
+  node: string,
+  vmid: number,
+  buildTag: string,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<boolean> {
+  try {
+    const cfg = await pve.getVmConfig(node, vmid, client);
+    return (cfg['tags'] ?? '').split(/[;,\s]+/).includes(buildTag);
+  } catch {
+    return false; // gone, or can't be read: nothing of ours to remove
   }
 }
 

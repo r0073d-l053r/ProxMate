@@ -241,6 +241,40 @@ describe('a copy removed while it waits', () => {
   });
 });
 
+describe('a guest tagged for a queued copy appearing at its VMID', () => {
+  it('stops that copy and holds its row instead of moving it to another VMID', async () => {
+    const c = cluster();
+    const base = c.get.getMockImplementation()!;
+    const copies = await planBatch(tenant, { namePattern: 'web-{n}', count: 4 });
+    const batch = await startTemplateBatch(tenant, template, copies, { ...input, cpu: 1 });
+    const fourth = rows[3]!;
+    used.add(103);
+    c.get.mockImplementation((url: string, opts?: unknown) =>
+      url === '/cluster/resources?type=vm'
+        ? ok([{ type: 'qemu', vmid: 103, node: 'pve1', tags: `proxmate-${String(fourth['id'])}` }])
+        : base(url, opts),
+    );
+    await waitForBatch(batch.id);
+    const clones = c.post.mock.calls.filter((x) => /\/clone$/.test(String(x[0]))).map((x) => bodyOf(x)['newid']);
+    expect(clones).toEqual(['100', '101', '102']);
+    expect(fourth).toMatchObject({ proxmoxVmId: 103, status: 'error' });
+    expect(getBatch(batch.id, tenant)!.items[3]).toMatchObject({ status: 'failed', error: expect.stringMatching(/already exists at its VMID/) });
+  });
+});
+
+describe('a row still being created', () => {
+  it('is refused by every guest-changing path', async () => {
+    cluster();
+    const { requireOurGuest, STILL_CREATING_MESSAGE } = await import('../src/services/vm.service.js');
+    await expect(
+      requireOurGuest({ id: 'r', status: 'creating', holdReason: null, proxmoxVmId: 100, proxmoxNode: 'pve1' } as never, {
+        allowAbsent: true,
+        allowError: true,
+      }),
+    ).rejects.toThrow(STILL_CREATING_MESSAGE);
+  });
+});
+
 describe('placing the copies of a batch', () => {
   it('counts copies already placed on a node, so they spread out', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -269,5 +303,12 @@ describe('VMID reservations', () => {
     expect(await nextVmId(asClient(c))).toBe(102);
     for (const id of ids) releaseVmId(id);
     expect(await nextVmId(asClient(c))).toBe(100);
+  });
+
+  it('never hands the same VMID to two reservations running side by side', async () => {
+    const c = cluster();
+    const [a, b] = await Promise.all([reserveVmIds(3, asClient(c)), reserveVmIds(3, asClient(c))]);
+    expect(new Set([...a!, ...b!]).size).toBe(6);
+    for (const id of [...a!, ...b!]) releaseVmId(id);
   });
 });

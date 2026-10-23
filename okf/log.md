@@ -2,6 +2,7 @@
 
 ## 2026-10-23
 * **Creation**: Documented the [guest import](/services/guest-import.md) and [bulk deploy](/services/bulk-deploy.md) services and their routes in the [admin](/api/admin.md) and [template](/api/template.md) routers, and VMID reservations in the [vm service](/services/vm.md).
+* **Update**: Import checks every snapshot of the guest and isolates before tagging; snapshot rollback in [matestate](/services/matestate.md) refuses host-level settings and other guests' volumes; rows still `creating` are refused by `requireOurGuest` and the vm router.
 
 ## 2026-10-20
 * **Update**: Documented [pending shares](/database/pending-vm-share.md), template deploy placement, start/restart waiting for the Proxmox task, and the least-privilege token in [privileges](/proxmox/privileges.md), with what a live Proxmox VE 9.2 cluster proved.

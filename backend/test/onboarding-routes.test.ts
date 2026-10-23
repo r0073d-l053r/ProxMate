@@ -11,6 +11,7 @@ vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
     user: { findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({ id: where.id, email: `${where.id}@example.com` })) },
     template: { findUnique: vi.fn(async () => ({ id: 't1', name: 'Debian', published: true, cloudInit: false })) },
+    virtualMachine: { findUnique: vi.fn(async () => ({ id: 'queued', status: 'creating' })) },
   },
 }));
 vi.mock('../src/middleware/auth.js', () => ({
@@ -44,6 +45,7 @@ vi.mock('../src/services/bulk-deploy.service.js', async (importOriginal) => {
 
 import adminRouter from '../src/routes/admin.routes.js';
 import templateRouter from '../src/routes/template.routes.js';
+import vmRouter from '../src/routes/vm.routes.js';
 import * as importService from '../src/services/guest-import.service.js';
 import * as bulk from '../src/services/bulk-deploy.service.js';
 import { QuotaError } from '../src/services/vm.service.js';
@@ -56,6 +58,7 @@ beforeAll(async () => {
   app.use(express.json());
   app.use('/admin', adminRouter);
   app.use('/templates', templateRouter);
+  app.use('/vms', vmRouter);
   server = http.createServer(app);
   await new Promise<void>((r) => server.listen(0, r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -134,5 +137,16 @@ describe('bulk deploy routes', () => {
 
   it('hides a batch from anyone but its starter and admins', async () => {
     expect((await send('GET', '/templates/deploy-bulk/nope')).status).toBe(404);
+  });
+});
+
+describe('a machine still being created', () => {
+  it('answers 409 to anything but viewing or deleting it', async () => {
+    role = 'user';
+    for (const path of ['/vms/queued/rebuild', '/vms/queued/start', '/vms/queued/snapshots/s1/rollback']) {
+      const res = await send('POST', path, {});
+      expect(res.status, path).toBe(409);
+      expect((await res.json()).error).toMatch(/still being created/);
+    }
   });
 });

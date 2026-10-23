@@ -47,12 +47,14 @@ import { notify } from '../src/services/notify.service.js';
 const findUnique = vi.mocked(prisma.template.findUnique);
 const update = vi.mocked(prisma.template.update);
 const deleteVm = vi.mocked(pve.deleteVm);
+const defaultGetVmConfig = vi.mocked(pve.getVmConfig).getMockImplementation()!;
 
 const cloudTpl = (over: Record<string, unknown> = {}) =>
   ({ id: 't1', name: 'Ubuntu 24.04', proxmoxVmId: 9000, proxmoxNode: 'pve-2', diskGb: 8, cloudInit: true, arch: 'amd64', sourceUrl: 'https://cloud.example/ubuntu.img', ...over }) as never;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(pve.getVmConfig).mockImplementation(defaultGetVmConfig);
   vi.mocked(getConfig).mockImplementation(async (k: string) =>
     k === 'default_storage' ? 'ceph' : k === 'default_bridge' ? 'vmbr0' : k === 'iso_storage' ? 'local' : null,
   );
@@ -136,8 +138,20 @@ describe('cloud-image build VMID handling', () => {
   it('cleans up its own half-built VM when a later step fails', async () => {
     findUnique.mockResolvedValue(cloudTpl());
     vi.mocked(pve.convertToTemplate).mockRejectedValueOnce(new Error('convert failed'));
+    // The guest at the VMID carries the tag this build created it with.
+    const tagged = () => (vi.mocked(pve.createCloudInitVm).mock.calls.at(-1)![0] as { tags: string }).tags;
+    vi.mocked(pve.getVmConfig).mockImplementation(async () => ({ scsi0: 'local-lvm:vm-9100-disk-0,size=3G', tags: tagged() }));
     await expect(refreshTemplate('t1')).rejects.toThrow(/convert failed/);
+    expect(tagged()).toMatch(/^proxmate-build-/);
     expect(deleteVm).toHaveBeenCalledWith('pve-0', 9100, expect.anything());
+  });
+
+  it('leaves a guest at the VMID alone unless it carries this build’s tag', async () => {
+    findUnique.mockResolvedValue(cloudTpl());
+    vi.mocked(pve.convertToTemplate).mockRejectedValueOnce(new Error('convert failed'));
+    vi.mocked(pve.getVmConfig).mockImplementation(async () => ({ scsi0: 'local-lvm:vm-9100-disk-0,size=3G', tags: 'someone-else' }));
+    await expect(refreshTemplate('t1')).rejects.toThrow(/convert failed/);
+    expect(deleteVm).not.toHaveBeenCalled();
   });
 });
 
