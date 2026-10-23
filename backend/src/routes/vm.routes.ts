@@ -520,7 +520,11 @@ router.get('/:id', async (req: Request, res: Response) => {
   const rescueAvailable = kindOf(resolved.vm) !== 'lxc' && !!(await getConfig('rescue_iso'));
   // `caps` is what the UI gates on (per-capability buttons/tabs); `access` is the
   // display badge. Owner/admin get every capability.
-  res.json({ ...withStatus, deployState, access: resolved.access, caps: [...resolved.caps], rescueAvailable });
+  // The push-file dialog checks the size against the server's limit before uploading.
+  const filePushMaxBytes = guestFilePushMaxBytes();
+  res.json({
+    ...withStatus, deployState, access: resolved.access, caps: [...resolved.caps], rescueAvailable, filePushMaxBytes,
+  });
 });
 
 // ─── GET /api/vms/:id/metrics ─────────────────────────────────

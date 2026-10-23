@@ -60,9 +60,6 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 - **Wire the gateway as a provider for code-server's built-in Chat view** (inert today; OpenCode
   runs as a terminal TUI instead).
-- **Surface the in-guest provision log** — an `ideState: failed` today means shelling into the guest
-  to read `/var/log/pmide-provision.log`; add a "view install log" action (owner/admin, via the guest
-  agent) on the failed state so installs are debuggable from the browser.
 
 ### Deferred pending hardware
 
@@ -101,14 +98,11 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 4. **Projects (tag rollups).** Tags exist per-VM; add a **project view** that groups a tenant's VMs by
    a `project:<name>` tag with a per-project resource + cost rollup and bulk actions scoped to the
    group. Low-risk, high polish. _CE._
-5. **Guest-agent file push.** Reuse the exact trust model as password-reset / SSH-key-inject (QEMU
-   guest agent, argv-safe) to let an owner upload a small file into a VM (e.g. a config or starter
-   script) from the browser — no SSH. Size-capped, owner/Manager only. _CE._
-6. **More notification channels.** The webhook engine supports Discord/Slack/Mattermost/generic; add
+5. **More notification channels.** The webhook engine supports Discord/Slack/Mattermost/generic; add
    **ntfy** and **Telegram** presets, plus a weekly per-tenant **usage digest** email. _CE._
-7. **Two-person approval for destructive admin actions.** Optional policy: a second admin must confirm
+6. **Two-person approval for destructive admin actions.** Optional policy: a second admin must confirm
    a bulk-delete / node-drain / firewall-disable before it runs. Rides the existing audit log. _EDU._
-8. **Status page / scheduled reports.** A lightweight public/authed status page (node health, capacity,
+7. **Status page / scheduled reports.** A lightweight public/authed status page (node health, capacity,
    incidents) and optional scheduled admin reports (capacity trend, top consumers) off the existing
    `ResourceSample` + cluster-health data. _EDU._
 
@@ -117,6 +111,18 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 ## ✅ Shipped — condensed index
 
 Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
+
+### Unreleased
+
+- **View the IDE install log.** While the IDE installs, or after it failed, the VM's owner (or an
+  admin) opens **View install log**: the tail of `/var/log/pmide-provision.log` read through the
+  guest agent with a fixed command, cleaned of terminal control codes, with refresh and download.
+- **Push a file into a VM.** Owner, admin or Manager share (the `configure` capability, like SSH-key
+  add) uploads a small file (1 MiB default, up to 8 MiB via `GUEST_FILE_PUSH_MAX_BYTES`) to a strictly
+  validated path with a chosen mode and owner, through the guest agent; audited with path, size and
+  SHA-256, rate-limited per user. QEMU only.
+
+### Releases
 
 - **v1.2.0 — sharing, placement and least privilege.** Share a VM with someone before they sign
   up (pending shares, claimed only by a confirmed address); template deploys on shared storage

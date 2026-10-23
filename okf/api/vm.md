@@ -43,7 +43,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | POST | `/api/vms/restore-upload` | user | multipart `file` (vzdump archive) + `name`; restore as a new guest; 201 `{ vm, status }`. Audited `vm.restore_upload`. |
 | POST | `/api/vms/containers` | user | Create an LXC container from a vztmpl volid; 201 `{ vm, status }`. Audited `vm.create`. |
 | POST | `/api/vms/bulk` | user (`getOwnedVm` per id) + not locked (except start) | `{ action: start/stop/restart/delete, ids (1..50) }`; per-VM results; a locked VM is a per-item failure. Start, stop and restart run side by side (each waits for its guest's task); deletes run one at a time. Audited `vm.bulk_<action>`. |
-| GET | `/api/vms/:id` | any access | Detail + live status, `deployState`, `access`, `caps`, `rescueAvailable`. |
+| GET | `/api/vms/:id` | any access | Detail + live status, `deployState`, `access`, `caps`, `rescueAvailable`, `filePushMaxBytes`. |
 | GET | `/api/vms/:id/metrics` | viewable | RRD history `?timeframe=hour/day/week/month/year` (default hour). |
 | GET | `/api/vms/:id/passthrough` | viewable | Attached `hostpciN` devices (empty for LXC). |
 | GET | `/api/vms/:id/activity` | viewable | Last 20 audit entries for the VM (no IPs/actor ids; non-admins do not see admin actions except by the owner). |
