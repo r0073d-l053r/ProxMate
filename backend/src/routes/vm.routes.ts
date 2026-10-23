@@ -80,6 +80,7 @@ import {
   MIN_RAM_MB,
 } from '../services/vm.service.js';
 import { isValidPublicKey } from '../services/ssh-key.service.js';
+import { projectOf, withProject } from '../services/project.service.js';
 import { isIdeInstalling } from '../services/ide-provision.service.js';
 import { isDeploying, refreshDeployState } from '../services/deploy-lock.service.js';
 import { getLiveStats } from '../services/live-stats.service.js';
@@ -606,7 +607,8 @@ const UpdateVmSchema = z.object({
   cpu: z.number().int().positive().max(64).optional(),
   ram: RamMb.optional(),
   storage: z.number().int().positive().optional(),
-  // Optional labels for grouping/filtering. Pass [] to clear.
+  // Optional labels for grouping/filtering. Pass [] to clear. The charset has no
+  // `:`, so a `project:<name>` tag can't be set here — the project is kept as is.
   tags: z
     .array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _-]{0,30}$/, 'Letters, numbers, space, _ and - only'))
     .max(20)
@@ -631,8 +633,9 @@ router.patch('/:id', async (req: Request, res: Response) => {
       : (parsed.data.description?.trim() || null);
   const newName = parsed.data.name?.trim();
   const renaming = !!newName && newName !== vm.name;
-  // undefined = not provided; empty CSV → null (clear all tags).
-  const tags = parsed.data.tags === undefined ? undefined : normalizeTags(parsed.data.tags) || null;
+  // undefined = not provided; empty CSV → null (clear all tags). These are the
+  // plain labels: the VM's project tag (set via /api/projects/assign) is kept.
+  const tags = parsed.data.tags === undefined ? undefined : withProject(normalizeTags(parsed.data.tags), projectOf(vm.tags));
   const metaChanged = renaming || description !== undefined || tags !== undefined;
 
   const resizeInput = {

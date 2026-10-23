@@ -113,17 +113,14 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 3. **Auto-snapshot before risky ops.** Optionally take a snapshot right before a rebuild/resize/rescue
    (QEMU) so a bad change is one rollback away. Snapshots already exist; this just wires a safety net
    into the destructive paths, with a retention cap. _CE._
-4. **Projects (tag rollups).** Tags exist per-VM; add a **project view** that groups a tenant's VMs by
-   a `project:<name>` tag with a per-project resource + cost rollup and bulk actions scoped to the
-   group. Low-risk, high polish. _CE._
-5. **Guest-agent file push.** Reuse the exact trust model as password-reset / SSH-key-inject (QEMU
+4. **Guest-agent file push.** Reuse the exact trust model as password-reset / SSH-key-inject (QEMU
    guest agent, argv-safe) to let an owner upload a small file into a VM (e.g. a config or starter
    script) from the browser — no SSH. Size-capped, owner/Manager only. _CE._
-6. **More notification channels.** The webhook engine supports Discord/Slack/Mattermost/generic; add
+5. **More notification channels.** The webhook engine supports Discord/Slack/Mattermost/generic; add
    **ntfy** and **Telegram** presets, plus a weekly per-tenant **usage digest** email. _CE._
-7. **Two-person approval for destructive admin actions.** Optional policy: a second admin must confirm
+6. **Two-person approval for destructive admin actions.** Optional policy: a second admin must confirm
    a bulk-delete / node-drain / firewall-disable before it runs. Rides the existing audit log. _EDU._
-8. **Status page / scheduled reports.** A lightweight public/authed status page (node health, capacity,
+7. **Status page / scheduled reports.** A lightweight public/authed status page (node health, capacity,
    incidents) and optional scheduled admin reports (capacity trend, top consumers) off the existing
    `ResourceSample` + cluster-health data. _EDU._
 
@@ -137,6 +134,13 @@ Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
 
 - **Number fields can be cleared and retyped.** Emptying a numeric field no longer leaves a stuck
   `0` that turns the next digit into "02"; min/max apply when the field loses focus.
+- **Projects (tag rollups).** A **Projects** page groups a tenant's VMs by a `project:<name>` tag:
+  VM and running counts, allocated vCPU/RAM/disk and average CPU/RAM use from the usage samples per
+  project, with start/stop/restart for the whole project through the existing bulk route. Set a
+  project on the VM page or with **Move to project…** on the VM list (owner/admin only). VMs shared
+  with you are listed apart, without their owner's tags; admins see every owner's projects.
+
+### Released
 
 - **v1.2.0 — sharing, placement and least privilege.** Share a VM with someone before they sign
   up (pending shares, claimed only by a confirmed address); template deploys on shared storage

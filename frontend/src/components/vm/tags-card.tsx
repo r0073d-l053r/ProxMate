@@ -8,10 +8,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { plainTags } from "@/lib/projects";
 
 /**
  * Editable tags for grouping/filtering a VM. Adds/removes persist immediately via
- * PATCH (tags are sent as an array; the backend normalizes + stores them).
+ * PATCH (tags are sent as an array; the backend normalizes + stores them). The
+ * VM's `project:` tag isn't listed here — it has its own card, and the backend
+ * keeps it across label edits.
  */
 export function TagsCard({
   vmId,
@@ -24,9 +27,7 @@ export function TagsCard({
   onSaved: () => void;
   className?: string;
 }) {
-  const [tags, setTags] = useState<string[]>(() =>
-    (initial ?? "").split(",").map((t) => t.trim()).filter(Boolean),
-  );
+  const [tags, setTags] = useState<string[]>(() => plainTags(initial));
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
 

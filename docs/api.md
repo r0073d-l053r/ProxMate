@@ -84,6 +84,13 @@ curl -H "$AUTH" "$BASE/vms/<id>/migrate-targets"
 # Share a VM by email (owner/admin) — role: viewer | operator | manager
 curl -H "$AUTH" -H 'content-type: application/json' -X POST \
   -d '{"email":"friend@example.com","role":"operator"}' "$BASE/vms/<id>/shares"
+
+# Your VMs grouped by project, with usage averaged over the last 7 days
+curl -H "$AUTH" "$BASE/projects?days=7"
+
+# Move VMs you own into a project (or out of one with "project": null)
+curl -H "$AUTH" -H 'content-type: application/json' -X POST \
+  -d '{"ids":["<id>","<id>"],"project":"shop"}' "$BASE/projects/assign"
 ```
 
 ## Responses worth knowing
@@ -105,6 +112,14 @@ curl -H "$AUTH" -H 'content-type: application/json' -X POST \
   `{ id, email, role, createdAt }` per share, pending ones included and shown the same way;
   `DELETE /vms/:id/shares/:shareId` revokes either kind. A VM holds at most 100 shares
   (a new address past that answers **409**).
+- **Projects.** A project is a `project:<name>` tag on the VM (names: letters, numbers,
+  `_` and `-`, up to 32, lowercased; one project per VM). Only a VM's owner (or an admin)
+  sets it; `POST /projects/assign` answers per VM `{ id, ok, error? }`, with VMs you don't own
+  reported as `not found`. `PATCH /vms/:id` `tags` edits the other labels and keeps the
+  project. `GET /projects` answers `{ days, owners, shared }`: your VMs by project, each with
+  `vmCount`, `running`, allocated `cpu`/`ram`/`storage` and `usage { samples, avgCpuPct,
+  avgMemBytes }` (averages from the usage samples taken while each VM ran), and VMs shared
+  with you as one `shared` group without their owner's tags. Admins get every owner.
 - **Sizes.** Creates, template deploys and resizes asking for less than 64 MB of RAM
   answer **400**. A resize grows the root disk by the difference between the requested
   total and the current total.

@@ -139,6 +139,7 @@ Inline in `app.ts`:[^app]
 | `/api/auth` | [auth](/api/auth.md) | per route |
 | `/api/invites` | [invite](/api/invite.md) | requireAuth + requireAdmin (+ requireSession on create/send/list) |
 | `/api/vms` | [vm](/api/vm.md) | requireAuth + enforceMfaSetup |
+| `/api/projects` | [project](/api/project.md) | requireAuth + enforceMfaSetup |
 | `/api/proxmox` | [proxmox](/api/proxmox.md) | requireAuth + enforceMfaSetup |
 | `/api/users` | [user](/api/user.md) | requireAuth + requireAdmin + enforceMfaSetup |
 | `/api/admin` | [admin](/api/admin.md) | requireAuth + requireAdmin + enforceMfaSetup |

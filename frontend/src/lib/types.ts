@@ -677,6 +677,44 @@ export interface UserGroup {
   vms: VirtualMachine[];
 }
 
+/** Per-VM usage averages over the Projects window (from the resource-history samples). */
+export interface ProjectVmUsage {
+  samples: number;
+  avgCpu: number; // 0..1 fraction of allocated vCPUs
+  avgMem: number; // bytes
+}
+
+export interface ProjectVm {
+  id: string;
+  name: string;
+  type: GuestType;
+  status: VmStatus;
+  cpu: number;
+  ram: number; // MB
+  storage: number; // GB
+  access: VmAccess;
+  usage: ProjectVmUsage | null;
+}
+
+/** One project's rollup. `name` null is the "No project" group (and the shared group). */
+export interface ProjectGroup {
+  name: string | null;
+  vmCount: number;
+  running: number;
+  cpu: number;
+  ram: number; // MB
+  storage: number; // GB
+  usage: { samples: number; avgCpuPct: number; avgMemBytes: number };
+  vms: ProjectVm[];
+}
+
+export interface ProjectsView {
+  days: number;
+  owners: { owner: { id: string; email: string; displayName: string; role: Role }; projects: ProjectGroup[] }[];
+  /** VMs shared with the caller: one flat group, never split by the owner's projects. */
+  shared: ProjectGroup | null;
+}
+
 export interface LiveVmStats {
   status: string;
   cpu: number;       // 0..1, fraction of allocated cores
