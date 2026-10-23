@@ -49,7 +49,7 @@ class ServerActivity : AppCompatActivity() {
         binding = ActivityServerBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        intent.getStringExtra(EXTRA_MESSAGE)?.let { showError(it) }
+        ServerScreenMessage.take()?.let { showError(it) }
         if (savedInstanceState == null && saved != null) binding.serverInput.setText(saved.origin)
 
         binding.serverInput.setOnEditorActionListener { _, actionId, _ ->
@@ -215,13 +215,16 @@ class ServerActivity : AppCompatActivity() {
 
     companion object {
         private const val EXTRA_CHANGE = "change_server"
-        private const val EXTRA_MESSAGE = "message"
 
-        /** Open the server screen to change the server, optionally with a message. */
-        fun changeIntent(context: Context, message: String? = null): Intent =
-            Intent(context, ServerActivity::class.java)
+        /**
+         * Open the server screen to change the server, optionally with a message.
+         * The message travels in-process ([ServerScreenMessage]), never as an extra.
+         */
+        fun changeIntent(context: Context, message: String? = null): Intent {
+            ServerScreenMessage.set(message)
+            return Intent(context, ServerActivity::class.java)
                 .putExtra(EXTRA_CHANGE, true)
-                .apply { if (message != null) putExtra(EXTRA_MESSAGE, message) }
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        }
     }
 }

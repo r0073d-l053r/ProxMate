@@ -68,6 +68,9 @@ class ApiClient(
 ) {
     private val client: OkHttpClient
 
+    /** For POSTs: a sign-in, code or sign-out attempt is never replayed automatically. */
+    private val noRetryClient: OkHttpClient
+
     init {
         val system = systemTrustManager()
         val trustManager = PinningTrustManager(system, pinnedSha256)
@@ -91,6 +94,7 @@ class ApiClient(
                 chain.proceed(request.newBuilder().header("User-Agent", userAgent).build())
             }
             .build()
+        noRetryClient = client.newBuilder().retryOnConnectionFailure(false).build()
     }
 
     fun health(): CallResult<HealthCheck> = call(get("/api/health")) { response, body ->
@@ -155,10 +159,11 @@ class ApiClient(
 
     private fun <T> call(request: Request, handle: (Response, String?) -> T): CallResult<T> {
         return try {
-            client.newCall(request).execute().use { response ->
+            val http = if (request.method == "GET") client else noRetryClient
+            http.newCall(request).execute().use { response ->
+                // API answers are small; never buffer more than MAX_BODY of whatever comes back.
                 val body = response.body?.let { b ->
-                    // API answers are small; don't read an unexpected large page in full.
-                    if ((b.contentLength()) > MAX_BODY) null else b.string().take(MAX_BODY.toInt())
+                    if (b.contentLength() > MAX_BODY) null else BodyLimit.readUtf8(b.source(), MAX_BODY)
                 }
                 CallResult.Ok(handle(response, body))
             }
