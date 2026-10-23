@@ -244,6 +244,15 @@ describe('RfbViewOnlyFilter — client messages', () => {
     expect(() => rfbReady().push(b(t, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))).toThrow(ConsoleFilterError);
   });
 
+  it('accepts up to 256 encodings, even dripped one byte per frame, and closes past that', () => {
+    const many = setEncodings(...Array.from({ length: 256 }, (_, i) => i));
+    const f = rfbReady();
+    const out = feed(f, [...many].map((x) => b(x)));
+    expect(out.equals(many)).toBe(true);
+    const header = b(2, 0, 1, 1); // 257 encodings
+    expect(() => rfbReady().push(header)).toThrow(ConsoleFilterError);
+  });
+
   it('closes on an unknown QEMU submessage or audio operation, and an over-long fence', () => {
     expect(() => rfbReady().push(b(255, 2, 0, 0))).toThrow(ConsoleFilterError);
     expect(() => rfbReady().push(b(255, 1, 0, 3))).toThrow(ConsoleFilterError);
@@ -284,8 +293,14 @@ describe('RfbViewOnlyFilter — client messages', () => {
 
 // ─── termproxy ───────────────────────────────────────────────────────────────
 
-const AUTH = s('root@pam:PVEVNC:ABCDEF==\n');
-const term = () => new TermViewOnlyFilter();
+// An auth line full of '0' bytes: none of it may be parsed as a message.
+const AUTH = s('root@pam:PVEVNC:00A0BCDEF0==\n');
+/** A clock that moves a second per reading, so every keepalive is due. */
+const ticking = () => {
+  let t = 0;
+  return () => (t += 1000);
+};
+const term = () => new TermViewOnlyFilter(ticking());
 function termReady(): TermViewOnlyFilter {
   const f = term();
   expect(f.push(AUTH).equals(AUTH)).toBe(true);
@@ -302,16 +317,32 @@ describe('TermViewOnlyFilter', () => {
     expect(term().push(AUTH.subarray(0, AUTH.length - 1)).length).toBe(0);
   });
 
+  it('ends the auth line at the first newline, as termproxy does', () => {
+    const f = term();
+    expect(() => f.push(cat(AUTH, s('second line\n')))).toThrow(ConsoleFilterError);
+  });
+
   it('closes on an auth line with no newline within 4096 bytes', () => {
     const f = term();
     expect(f.push(Buffer.alloc(4095, 0x61)).length).toBe(0);
     expect(() => f.push(Buffer.alloc(2, 0x61))).toThrow(ConsoleFilterError);
   });
 
-  it('passes resize and keepalive messages', () => {
-    expect(termReady().push(s('1:80:24:')).equals(s('1:80:24:'))).toBe(true);
-    expect(termReady().push(s('1:99999:1:')).equals(s('1:99999:1:'))).toBe(true);
+  it('passes keepalives but drops resizes', () => {
     expect(termReady().push(s('2')).equals(s('2'))).toBe(true);
+    expect(termReady().push(s('1:80:24:')).length).toBe(0);
+    expect(termReady().push(s('1:99999:1:2')).equals(s('2'))).toBe(true);
+  });
+
+  it('forwards at most one keepalive a second', () => {
+    let now = 5000;
+    const f = new TermViewOnlyFilter(() => now);
+    f.push(AUTH);
+    expect(f.push(s('2222')).equals(s('2'))).toBe(true);
+    now += 999;
+    expect(f.push(s('2')).length).toBe(0);
+    now += 1;
+    expect(f.push(s('22')).equals(s('2'))).toBe(true);
   });
 
   it.each([
@@ -332,7 +363,7 @@ describe('TermViewOnlyFilter', () => {
     let forwarded = 0;
     for (let off = 0; off < msg.length; off += 1000) forwarded += f.push(msg.subarray(off, off + 1000)).length;
     expect(forwarded).toBe(0);
-    expect(f.push(s('1:80:24:')).equals(s('1:80:24:'))).toBe(true);
+    expect(f.push(s('2')).equals(s('2'))).toBe(true);
   });
 
   it.each([
@@ -366,6 +397,150 @@ describe('TermViewOnlyFilter', () => {
       input(Buffer.alloc(0)),
       s('2'),
     );
-    expectChunkingInvariant(term, stream, cat(AUTH, s('1:80:24:'), s('2'), s('1:120:40:'), s('2')));
+    expectChunkingInvariant(term, stream, cat(AUTH, s('2'), s('2')));
+  });
+});
+
+// ─── What termproxy itself makes of the forwarded stream ─────────────────────
+
+/**
+ * A port of Proxmox termproxy's input handling (pve-xtermjs termproxy/src/main.rs:
+ * `read_ticket_line`, `process_queue`, `remove_number` and the PTY write loop).
+ * termproxy does not parse a stream: after each read it parses whatever its
+ * fixed-capacity buffer holds, so a message cut at the buffer's end is half
+ * consumed and the rest parsed again as new messages. Returns whether the input
+ * (DATA) path was ever entered and every byte written to the terminal.
+ */
+function termproxy(reads: Buffer[], capacity: number): { dataPath: boolean; pty: Buffer } {
+  let buf = Buffer.alloc(0);
+  let dataPath = false;
+  const pty: Buffer[] = [];
+  const consume = (n: number) => {
+    buf = buf.subarray(Math.min(n, buf.length));
+  };
+
+  const removeNumber = (): number | null => {
+    for (;;) {
+      const pos = buf.indexOf(0x3a);
+      if (pos >= 0) {
+        const text = buf.subarray(0, pos).toString('latin1');
+        consume(pos + 1);
+        // Rust's usize::from_str: optional '+', then decimal digits only.
+        if (!/^\+?\d+$/.test(text)) return null;
+        return Number(text);
+      } else if (buf.length > 20) {
+        consume(20);
+      } else {
+        return null;
+      }
+    }
+  };
+
+  const processQueue = (): number | null => {
+    if (buf.length === 0) return null;
+    for (;;) {
+      if (buf.length < 2) break;
+      const msgtype = (buf[0]! - 0x30) & 0xff; // u8 subtraction wraps
+      if (msgtype === 0) {
+        dataPath = true;
+        consume(2);
+        const len = removeNumber();
+        if (len !== null) return len;
+      } else if (msgtype === 1) {
+        consume(2);
+        if (removeNumber() !== null) removeNumber();
+      } else {
+        consume(1);
+      }
+    }
+    return null;
+  };
+
+  let authed = false;
+  let remaining = 0;
+  let pending = Buffer.concat(reads.map((r) => Buffer.from(r)));
+  const sizes = reads.map((r) => r.length);
+  // Each read takes the next browser chunk, but never more than the buffer's free space.
+  let readIdx = 0;
+  let leftInRead = sizes[0] ?? 0;
+  while (pending.length > 0) {
+    const free = capacity - buf.length;
+    while (leftInRead === 0 && readIdx < sizes.length - 1) leftInRead = sizes[++readIdx]!;
+    const n = Math.min(free, leftInRead, pending.length);
+    // Parsing always consumes a buffer of two or more bytes, so this can't stall.
+    if (n === 0) throw new Error('termproxy model made no progress');
+    buf = Buffer.concat([buf, pending.subarray(0, n)]);
+    pending = pending.subarray(n);
+    leftInRead -= n;
+
+    if (!authed) {
+      const nl = buf.indexOf(0x0a);
+      if (nl < 0) {
+        if (buf.length >= capacity) throw new Error('authentication data is incomplete');
+        continue;
+      }
+      consume(nl + 1); // the ticket line and its newline: never parsed as messages
+      authed = true;
+    }
+
+    while (buf.length > 0) {
+      if (remaining === 0) {
+        const r = processQueue();
+        if (r === null) break;
+        remaining = r;
+      }
+      const len = Math.min(remaining, buf.length);
+      pty.push(buf.subarray(0, len));
+      remaining -= len;
+      consume(len);
+    }
+  }
+  return { dataPath, pty: Buffer.concat(pty) };
+}
+
+/** Every two-frame split of `stream`, plus one byte per frame. */
+function splits(stream: Buffer): Buffer[][] {
+  const out: Buffer[][] = [[stream], [...stream].map((x) => b(x))];
+  for (let i = 1; i < stream.length; i++) out.push([stream.subarray(0, i), stream.subarray(i)]);
+  return out;
+}
+
+describe('termproxy never reaches its input path through a view-only stream', () => {
+  // A viewer flooding resizes (cut anywhere, the digits re-parse as messages),
+  // mixed with input, keepalives and lookalikes.
+  const hostile = cat(
+    AUTH,
+    ...Array.from({ length: 40 }, (_, i) => s(i % 2 ? '1:30:99999:' : '1:10:2000:')),
+    input(s('rm -rf /\r')),
+    s('2'),
+    input(s('0:5:hello')),
+    s('1:0:0:'),
+    s('2'),
+  );
+
+  it('the port reproduces the problem: well-formed resizes alone, cut by the buffer, reach the input path', () => {
+    const resizesOnly = cat(AUTH, ...Array.from({ length: 40 }, () => s('1:30:99999:')));
+    // Uncut, termproxy reads them as resizes.
+    expect(termproxy([resizesOnly], 1 << 20).dataPath).toBe(false);
+    let reached = false;
+    for (const capacity of [32, 64, 256]) {
+      for (const reads of splits(resizesOnly)) {
+        const r = termproxy(reads, capacity);
+        if (r.dataPath || r.pty.length > 0) reached = true;
+      }
+    }
+    expect(reached).toBe(true);
+  });
+
+  it.each([32, 47, 64, 257, 4096])('with a %i-byte termproxy buffer, however the stream is split', (capacity) => {
+    for (const frames of splits(hostile)) {
+      const out = feed(term(), frames);
+      // What reaches termproxy, re-split at every offset into its reads.
+      for (const reads of splits(out)) {
+        const r = termproxy(reads, capacity);
+        expect(r.dataPath).toBe(false);
+        expect(r.pty.length).toBe(0);
+      }
+    }
   });
 });

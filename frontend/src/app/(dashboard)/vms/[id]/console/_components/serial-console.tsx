@@ -80,7 +80,7 @@ type TerminalLike = {
  * `0:<utf8-byte-length>:<data>`, terminal resizes as `1:<cols>:<rows>:`, and a
  * `2` keepalive. Incoming frames are raw terminal output written straight to xterm.
  * A view-only session (the server says so with the ticket) opens xterm with stdin
- * disabled and sends no keystrokes; the backend relay drops any that arrive anyway.
+ * disabled and sends no keystrokes or resizes; the backend relay drops any that arrive anyway.
  */
 export function SerialConsole({
   id,
@@ -237,8 +237,9 @@ export function SerialConsole({
     fitRef.current = fit;
     termRef.current = term;
 
-    // Resize the remote PTY whenever xterm's geometry changes.
-    term.onResize(({ cols, rows }) => sendFrame(`1:${cols}:${rows}:`));
+    // Resize the remote PTY whenever xterm's geometry changes (not on a view-only
+    // session: the relay drops a viewer's resizes).
+    if (!watchOnly) term.onResize(({ cols, rows }) => sendFrame(`1:${cols}:${rows}:`));
     // Forward keystrokes (never on a view-only session).
     if (!watchOnly) term.onData((data) => sendFrame(`0:${enc.encode(data).length}:${data}`));
 
@@ -250,7 +251,7 @@ export function SerialConsole({
     ws.onopen = () => {
       // In-band auth, then sync the PTY size to the current terminal geometry.
       ws.send(`${user}:${ticket}\n`);
-      ws.send(`1:${term.cols}:${term.rows}:`);
+      if (!watchOnly) ws.send(`1:${term.cols}:${term.rows}:`);
       setState("connected");
       term.focus();
       pingRef.current = setInterval(() => sendFrame("2"), 30_000);
