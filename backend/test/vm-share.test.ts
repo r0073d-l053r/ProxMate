@@ -21,6 +21,7 @@ import {
   CAPS_BY_ROLE,
   ALL_CAPS,
   normalizeShareRole,
+  consoleModeFor,
   type VmCap,
 } from '../src/services/vm-share.service.js';
 
@@ -46,6 +47,21 @@ describe('caps model invariants', () => {
   it('every preset can at least view, and ALL_CAPS covers the full vocabulary', () => {
     for (const role of SHARE_ROLES) expect(CAPS_BY_ROLE[role].has('view')).toBe(true);
     expect([...ALL_CAPS].sort()).toEqual([...VM_CAPS].sort());
+  });
+
+  it('console implies console_view in every preset', () => {
+    for (const role of SHARE_ROLES) {
+      if (CAPS_BY_ROLE[role].has('console')) expect(CAPS_BY_ROLE[role].has('console_view')).toBe(true);
+    }
+  });
+
+  it('consoleModeFor: viewer is view-only, operator/manager/owner interactive, no cap none', () => {
+    expect(consoleModeFor(CAPS_BY_ROLE.viewer)).toBe('view');
+    expect(consoleModeFor(CAPS_BY_ROLE.operator)).toBe('interactive');
+    expect(consoleModeFor(CAPS_BY_ROLE.manager)).toBe('interactive');
+    expect(consoleModeFor(ALL_CAPS)).toBe('interactive');
+    expect(consoleModeFor(new Set<VmCap>(['view']))).toBeNull();
+    expect(consoleModeFor(new Set<VmCap>(['console']))).toBe('interactive');
   });
 
   it('normalizeShareRole maps legacy + unknown strings safely (least privilege)', () => {
@@ -98,9 +114,9 @@ describe('resolveVmAccess', () => {
 
 describe('getVmWithCap matrix', () => {
   const expected: Record<string, Record<VmCap, boolean>> = {
-    viewer: { view: true, power: false, console: false, configure: false, backups: false, ide: false },
-    operator: { view: true, power: true, console: true, configure: false, backups: false, ide: false },
-    manager: { view: true, power: true, console: true, configure: true, backups: true, ide: true },
+    viewer: { view: true, console_view: true, power: false, console: false, configure: false, backups: false, ide: false },
+    operator: { view: true, console_view: true, power: true, console: true, configure: false, backups: false, ide: false },
+    manager: { view: true, console_view: true, power: true, console: true, configure: true, backups: true, ide: true },
   };
 
   for (const role of SHARE_ROLES) {

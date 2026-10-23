@@ -26,7 +26,7 @@ import {
   migratePreflight,
 } from '../services/proxmox.service.js';
 import type { RrdTimeframe } from '../services/proxmox.service.js';
-import { requestVncProxy, requestTermProxy } from '../services/vnc-proxy.service.js';
+import { requestVncProxy, requestTermProxy, recordConsoleGrant } from '../services/vnc-proxy.service.js';
 import { convertVmToTemplate } from '../services/template.service.js';
 import { isValidCron } from '../services/power-schedule.service.js';
 import {
@@ -38,7 +38,7 @@ import {
   deleteMateState,
   setBackupPolicy,
 } from '../services/matestate.service.js';
-import { listShares, addShare, removeShare, SHARE_ROLES, normalizeShareRole, ShareError } from '../services/vm-share.service.js';
+import { listShares, addShare, removeShare, SHARE_ROLES, normalizeShareRole, ShareError, consoleModeFor } from '../services/vm-share.service.js';
 import { listDisks, addDataDisk, resizeDataDisk, removeDataDisk } from '../services/disk.service.js';
 import {
   QuotaError,
@@ -1691,19 +1691,40 @@ router.delete('/:id/snapshots/:name', async (req: Request, res: Response) => {
   }
 });
 
+// ─── Console tickets ──────────────────────────────────────────
+// Both consoles take the console mode from the caller's capabilities: `console`
+// gives an interactive session, `console_view` alone (a Viewer share) a view-only
+// one. The mode is recorded with the ticket, and the WebSocket relay enforces it —
+// a view-only session's keyboard, mouse and clipboard never reach Proxmox. The
+// `viewOnly` field in the response only tells the browser how to draw the console.
+
+/** The VM and console mode for the caller, or null when they hold neither console cap. */
+async function consoleAccess(vmId: string, user: { id: string; role: string }) {
+  const access = await resolveVmAccess(vmId, user);
+  const mode = access ? consoleModeFor(access.caps) : null;
+  return access && mode ? { vm: access.vm, mode } : null;
+}
+
 // ─── POST /api/vms/:id/console ────────────────────────────────
 // Returns a one-time VNC ticket + port for the noVNC console.
 
 router.post('/:id/console', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  let vm = await getVmWithCap(req.params['id'] as string, user, 'console');
-  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  const granted = await consoleAccess(req.params['id'] as string, user);
+  if (!granted) { res.status(404).json({ error: 'VM not found' }); return; }
+  let vm = granted.vm;
+  const { mode } = granted;
   if (rejectIfLocked(vm, res)) return;
 
   try {
     vm = await requireOurGuest(vm);
     const { ticket, port } = await requestVncProxy(vm.proxmoxNode, vm.proxmoxVmId, kindOf(vm));
-    res.json({ ticket, port });
+    recordConsoleGrant(ticket, { vmId: vm.id, userId: user.id, transport: 'vnc', port, mode });
+    await recordAudit({
+      action: 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `graphical console of ${vm.name}${mode === 'view' ? ' (view only)' : ''}`, req,
+    });
+    res.json({ ticket, port, viewOnly: mode === 'view' });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }
@@ -1715,8 +1736,10 @@ router.post('/:id/console', async (req: Request, res: Response) => {
 
 router.post('/:id/serial', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  let vm = await getVmWithCap(req.params['id'] as string, user, 'console');
-  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  const granted = await consoleAccess(req.params['id'] as string, user);
+  if (!granted) { res.status(404).json({ error: 'VM not found' }); return; }
+  let vm = granted.vm;
+  const { mode } = granted;
 
   try {
     vm = await requireOurGuest(vm);
@@ -1731,7 +1754,12 @@ router.post('/:id/serial', async (req: Request, res: Response) => {
       }
     }
     const ticket = await requestTermProxy(vm.proxmoxNode, vm.proxmoxVmId, undefined, kind);
-    res.json(ticket);
+    recordConsoleGrant(ticket.ticket, { vmId: vm.id, userId: user.id, transport: 'serial', port: ticket.port, mode });
+    await recordAudit({
+      action: 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `text console of ${vm.name}${mode === 'view' ? ' (view only)' : ''}`, req,
+    });
+    res.json({ ...ticket, viewOnly: mode === 'view' });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }

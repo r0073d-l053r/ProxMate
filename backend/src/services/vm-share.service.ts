@@ -17,18 +17,35 @@ export class ShareError extends Error {
 // migration. No share ever deletes/destroys the VM, migrates it, manages shares,
 // requests passthrough, or rebuilds (re-images) it: that whole surface stays
 // owner/admin-only via getOwnedVm.
+//
+// `console_view` is the watch-only console: the relay drops every keyboard,
+// mouse and clipboard message (see lib/console-view-filter.ts). `console`
+// implies it, so every preset that holds `console` holds `console_view` too.
 
-export const VM_CAPS = ['view', 'power', 'console', 'configure', 'backups', 'ide'] as const;
+export const VM_CAPS = ['view', 'console_view', 'power', 'console', 'configure', 'backups', 'ide'] as const;
 export type VmCap = (typeof VM_CAPS)[number];
 
 export const SHARE_ROLES = ['viewer', 'operator', 'manager'] as const;
 export type ShareRole = (typeof SHARE_ROLES)[number];
 
 export const CAPS_BY_ROLE: Record<ShareRole, ReadonlySet<VmCap>> = {
-  viewer: new Set<VmCap>(['view']),
-  operator: new Set<VmCap>(['view', 'power', 'console']),
-  manager: new Set<VmCap>(['view', 'power', 'console', 'configure', 'backups', 'ide']),
+  viewer: new Set<VmCap>(['view', 'console_view']),
+  operator: new Set<VmCap>(['view', 'console_view', 'power', 'console']),
+  manager: new Set<VmCap>(['view', 'console_view', 'power', 'console', 'configure', 'backups', 'ide']),
 };
+
+/** How a console session may be used: full input, or watch-only. */
+export type ConsoleMode = 'interactive' | 'view';
+
+/**
+ * The console mode a capability set allows, or null for none. `console` gives an
+ * interactive session; `console_view` alone gives a view-only one.
+ */
+export function consoleModeFor(caps: ReadonlySet<VmCap>): ConsoleMode | null {
+  if (caps.has('console')) return 'interactive';
+  if (caps.has('console_view')) return 'view';
+  return null;
+}
 
 /** Every capability — what owners/admins hold. */
 export const ALL_CAPS: ReadonlySet<VmCap> = CAPS_BY_ROLE.manager;
