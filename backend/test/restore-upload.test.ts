@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
@@ -48,6 +48,7 @@ import {
   ownCicustom,
   parseBackupConfig,
   restoreFromUpload,
+  renameArchiveForVmid,
   resolveUnderUploadDir,
   RestoreUploadError,
   VZDUMP_UPLOAD_RE,
@@ -247,14 +248,63 @@ describe('restoreFromUpload', () => {
     expect(pve.deleteBackup).toHaveBeenCalledWith('pve-0', 'backups', VOLID);
   });
 
-  it('restores into the configured Proxmox pool', async () => {
-    vi.mocked(pve.getGuestPool).mockResolvedValueOnce('proxmate');
-    await restoreFromUpload(user, { filename: FILENAME, name: 'migrated-web' });
-    expect(pve.restoreNewGuest).toHaveBeenCalledWith(
-      expect.objectContaining({ vmid: 200, pool: 'proxmate' }),
-      expect.anything(),
-      'qemu',
-    );
+  describe('with a Proxmox pool configured', () => {
+    let dir: string;
+    const RENAMED = 'vzdump-qemu-200-2026_07_03-03_00_00.vma.zst';
+    beforeEach(async () => {
+      const { mkdtemp, writeFile } = await import('node:fs/promises');
+      const os = await import('node:os');
+      dir = await mkdtemp(path.join(os.tmpdir(), 'pm-upload-'));
+      await writeFile(path.join(dir, FILENAME), 'archive');
+      vi.mocked(backupDir).mockReturnValue(dir);
+      vi.mocked(pve.getGuestPool).mockResolvedValue('proxmate');
+    });
+    afterEach(async () => {
+      vi.mocked(pve.getGuestPool).mockResolvedValue(undefined);
+      const { rm } = await import('node:fs/promises');
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it('renames the archive to the new VMID before Proxmox sees it, and restores it into the pool', async () => {
+      const { existsSync } = await import('node:fs');
+      await restoreFromUpload(user, { filename: FILENAME, name: 'migrated-web' });
+      const volid = `backups:backup/${RENAMED}`;
+      expect(pve.getBackupNodes).toHaveBeenCalledWith('backups', volid, expect.anything());
+      expect(pve.extractBackupConfig).toHaveBeenCalledWith('pve-0', volid, expect.anything());
+      expect(pve.restoreNewGuest).toHaveBeenCalledWith(
+        { node: 'pve-0', vmid: 200, volid, storage: 'local-lvm', pool: 'proxmate' },
+        expect.anything(),
+        'qemu',
+      );
+      expect(pve.deleteBackup).toHaveBeenCalledWith('pve-0', 'backups', volid);
+      // Taken once, before anything reads the archive.
+      expect(pve.getNextVmId).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(pve.getNextVmId).mock.invocationCallOrder[0]!).toBeLessThan(
+        vi.mocked(pve.getBackupNodes).mock.invocationCallOrder[0]!,
+      );
+      expect(existsSync(path.join(dir, FILENAME))).toBe(false);
+    });
+
+    it('treats every unused disk on the restored guest as foreign', async () => {
+      const { assertOwnVolumes } = await import('../src/services/vm.service.js');
+      await restoreFromUpload(user, { filename: FILENAME, name: 'migrated-web' });
+      expect(assertOwnVolumes).toHaveBeenCalledWith(
+        { id: 'vm1' },
+        expect.anything(),
+        expect.any(Set),
+        { unusedAreForeign: true },
+      );
+    });
+
+    it('refuses, and drops the upload, when an archive already has the new name', async () => {
+      const { writeFile } = await import('node:fs/promises');
+      const { existsSync } = await import('node:fs');
+      await writeFile(path.join(dir, RENAMED), 'someone else');
+      await expect(restoreFromUpload(user, { filename: FILENAME, name: 'x' })).rejects.toThrow(/waiting to be restored/);
+      expect(pve.getBackupNodes).not.toHaveBeenCalled();
+      expect(existsSync(path.join(dir, FILENAME))).toBe(false);
+      expect(existsSync(path.join(dir, RENAMED))).toBe(true);
+    });
   });
 
   it('derives LXC restores from the filename', async () => {
@@ -313,7 +363,12 @@ describe('restoreFromUpload', () => {
     const { assertOwnVolumes } = await import('../src/services/vm.service.js');
     await task.beforeTag();
     expect(client.put).toHaveBeenCalledWith('/nodes/pve-0/qemu/200/config', expect.any(URLSearchParams));
-    expect(assertOwnVolumes).toHaveBeenCalledWith({ id: 'vm1' }, expect.anything(), new Set(['local-lvm:vm-200-disk-0']));
+    expect(assertOwnVolumes).toHaveBeenCalledWith(
+      { id: 'vm1' },
+      expect.anything(),
+      new Set(['local-lvm:vm-200-disk-0']),
+      { unusedAreForeign: false },
+    );
     expect(pve.configureVmIsolation).toHaveBeenCalled();
     expect(syncRestoredGuest).toHaveBeenCalledWith({ id: 'vm1' }, { approvedPci: [], client: expect.anything() });
     // The follower's cleanup is the archive removal.
@@ -445,5 +500,30 @@ describe('archive config keys an upload may not carry (BUG-027)', () => {
   it('accepts an ordinary guest (a serial socket console is fine)', () => {
     expect(() => assertRestorableConfig(`serial0: socket\n${QEMU_CFG}`, 'qemu')).not.toThrow();
     expect(() => assertRestorableConfig(LXC_CFG, 'lxc')).not.toThrow();
+  });
+});
+
+describe('renameArchiveForVmid', () => {
+  it('replaces only the VMID, keeping the rest of a valid name', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { existsSync } = await import('node:fs');
+    const os = await import('node:os');
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'pm-rename-'));
+    try {
+      vi.mocked(backupDir).mockReturnValue(dir);
+      await writeFile(path.join(dir, 'vzdump-lxc-7-2026_01_01-00_00_00.tar.zst'), 'x');
+      const renamed = await renameArchiveForVmid('vzdump-lxc-7-2026_01_01-00_00_00.tar.zst', 4321);
+      expect(renamed).toBe('vzdump-lxc-4321-2026_01_01-00_00_00.tar.zst');
+      expect(VZDUMP_UPLOAD_RE.test(renamed)).toBe(true);
+      expect(existsSync(path.join(dir, renamed))).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses anything that is not a plain vzdump name in the upload directory', async () => {
+    vi.mocked(backupDir).mockReturnValue('/nonexistent-test-mount');
+    await expect(renameArchiveForVmid('../vzdump-qemu-1-x.vma', 2)).rejects.toThrow(RestoreUploadError);
+    await expect(renameArchiveForVmid('notabackup.zip', 2)).rejects.toThrow(RestoreUploadError);
   });
 });

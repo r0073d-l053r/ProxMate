@@ -169,7 +169,7 @@ const SDN_AUDIT_WARNING =
 
 /**
  * The privileges Proxmox checks on the guest itself (/vms/<vmid>, which a pool
- * member inherits from /pool/<name>), plus Pool.Audit so the pool can be listed.
+ * member inherits from /pool/<name>), plus the pool's own Pool.Audit and Pool.Allocate.
  * VM.Audit is blocking elsewhere; here it is just one of the set.
  */
 function guestPrivilegesFor(major: number | null): string[] {
@@ -178,6 +178,8 @@ function guestPrivilegesFor(major: number | null): string[] {
     ...OPERATIONAL_PRIVILEGES.map(([p]) => p).filter((p) => p.startsWith('VM.')),
     ...guestAgentPrivileges(major).map(([p]) => p),
     'Pool.Audit',
+    // Checked when a container is created into the pool, and when the move action adds a guest.
+    'Pool.Allocate',
   ];
 }
 
@@ -273,7 +275,10 @@ export async function testProxmoxConnection(): Promise<ProxmoxConnectionResult> 
   const poolName = await getGuestPool();
   let pool: PoolReport | undefined;
   if (poolName) {
-    const checked = await checkGuestPool(client, perms, poolName, guestPrivilegesFor(major));
+    const checked = await checkGuestPool(client, perms, poolName, {
+      guestPrivileges: guestPrivilegesFor(major),
+      version,
+    });
     pool = checked.report;
     blocking.push(...checked.blocking);
     warnings.push(...checked.warnings);
@@ -298,6 +303,8 @@ export async function testProxmoxConnection(): Promise<ProxmoxConnectionResult> 
   }
 
   for (const [priv, what] of [...OPERATIONAL_PRIVILEGES, ...guestAgentPrivileges(major)]) {
+    // With a pool, the pool section says what Sys.Modify on / does and does not give.
+    if (pool && priv === 'Sys.Modify') continue;
     if (!held.has(priv)) warnings.push(`${priv} is missing — ${what} will fail.`);
   }
   if (major !== null && major >= 8 && !held.has('SDN.Use')) warnings.push(SDN_USE_WARNING);

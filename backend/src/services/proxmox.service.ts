@@ -2795,8 +2795,8 @@ export async function deleteBackup(
  * Restore a backup into an EXISTING VMID (overwrites the guest in place). The
  * guest must be stopped first. Returns the Proxmox task UPID. QEMU and LXC use
  * different restore shapes: QEMU takes `archive=<volid>` on POST /qemu; LXC takes
- * `ostemplate=<volid>` + `restore=1` on POST /lxc. `pool` restates the guest's pool
- * membership (a no-op for a guest already in it).
+ * `ostemplate=<volid>` + `restore=1` on POST /lxc. `pool`, when given, also adds the
+ * guest to that pool; an in-place restore keeps the membership it had without it.
  */
 export async function restoreBackup(
   opts: { node: string; vmid: number; volid: string; storage?: string; pool?: string },

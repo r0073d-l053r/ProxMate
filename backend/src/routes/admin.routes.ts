@@ -688,9 +688,12 @@ router.post('/settings/proxmox/pool/move-guests', async (req: Request, res: Resp
       action: 'admin.proxmox_pool_move',
       actor: (req as AuthRequest).user,
       detail:
-        result.moved.length > 0
+        (result.moved.length > 0
           ? `moved into ${result.pool}: ${result.moved.map((g) => g.vmid).join(', ')}`
-          : `nothing to move into ${result.pool}`,
+          : `nothing moved into ${result.pool}`) +
+        (result.failed.length > 0
+          ? `; refused: ${result.failed.map((g) => `${g.vmid} (${g.error})`).join(', ')}`
+          : ''),
       req,
     });
     res.json(result);

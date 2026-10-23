@@ -58,6 +58,7 @@ type ResourceEntry = {
   node?: string;
   name?: string;
   tags?: string;
+  pool?: string;
   template?: number;
   status?: string;
   maxcpu?: number;
@@ -270,6 +271,20 @@ async function importGuestLocked(actor: AuditActor, input: ImportGuestInput): Pr
     throw new ImportError(`The guest was imported but its isolation couldn't be applied, so it is held: ${pve.pveMessage(err)}`, 502);
   }
 
+  // With a Proxmox pool configured the guest joins it, like every guest ProxMate
+  // creates, so a pool-scoped token keeps reaching it. Not fatal: the connection
+  // test lists a managed guest outside the pool, and the move action fixes it.
+  let poolNote = '';
+  const pool = await pve.getGuestPool();
+  if (pool && guest.pool !== pool) {
+    try {
+      await pve.addGuestsToPool(pool, [vmid], client);
+      poolNote = `, added to pool ${pool}`;
+    } catch (err) {
+      poolNote = `; not added to pool ${pool}: ${pve.pveMessage(err)}`;
+    }
+  }
+
   const live = await pve.getVmStatus(node, vmid, client, kind).catch(() => null);
   const status = live?.status === 'running' || live?.status === 'paused' ? live.status : 'stopped';
   const updated = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status } });
@@ -280,7 +295,8 @@ async function importGuestLocked(actor: AuditActor, input: ImportGuestInput): Pr
     targetId: vm.id,
     detail:
       `${name} (${kind} vmid ${vmid} on ${node}) imported for ${owner.email}: ${cpu} vCPU, ${sizes.ram} MB, ${sizes.storage} GB` +
-      (quotaExempt ? ' (quota-exempt)' : ''),
+      (quotaExempt ? ' (quota-exempt)' : '') +
+      poolNote,
   });
   return updated;
 }

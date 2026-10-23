@@ -49,14 +49,17 @@ const GUEST = {
   'VM.GuestAgent.Audit': 1, 'VM.GuestAgent.Unrestricted': 1,
   'Pool.Audit': 1, 'Pool.Allocate': 1,
 };
-/** What `deploy/proxmox-token.sh --pool proxmate` grants, as /access/permissions reports it. */
+const DATASTORE = { 'Datastore.AllocateSpace': 1, 'Datastore.AllocateTemplate': 1, 'Datastore.Audit': 1 };
+/** What `deploy/proxmox-token.sh --pool proxmate` grants on 9.x, as /access/permissions reports it. */
 const POOL_SCOPED = {
-  '/': { 'Sys.Audit': 1, 'Sys.Modify': 1 },
-  '/nodes': { 'Sys.Audit': 1 },
-  '/storage': { 'Datastore.Allocate': 1, 'Datastore.AllocateSpace': 1, 'Datastore.AllocateTemplate': 1, 'Datastore.Audit': 1 },
-  '/sdn': { 'SDN.Audit': 1, 'SDN.Use': 1 },
+  '/': { 'Sys.Audit': 1 },
+  '/nodes': { 'Sys.Audit': 1, 'Sys.AccessNetwork': 1 },
+  '/storage': DATASTORE,
+  '/storage/local': { ...DATASTORE, 'Datastore.Allocate': 1 },
+  '/sdn/zones': { 'SDN.Audit': 1, 'SDN.Use': 1 },
   '/pool/proxmate': GUEST,
 };
+const FIREWALL_STEP = /Sys\.Modify on \/ is not granted, so ProxMate cannot enable the cluster firewall/;
 
 interface Guest { vmid: number; name: string; tags?: string; pool?: string; template?: number; type?: string }
 
@@ -91,15 +94,16 @@ beforeEach(() => {
   for (const k of Object.keys(config)) delete config[k];
   config['proxmox_pool'] = 'proxmate';
   perms.mockResolvedValue(POOL_SCOPED);
+  vi.mocked(pve.getVersion).mockResolvedValue('9.2.3');
   rows([['rowa', 100]]);
   templates([]);
 });
 
 describe('connection test with a pool configured', () => {
-  it('passes with no warnings for a pool-scoped token whose guests are all in the pool', async () => {
+  it('passes for a pool-scoped token whose guests are all in the pool, noting only the manual firewall step', async () => {
     cluster([{ vmid: 100, name: 'web', tags: guestMarker('rowa'), pool: 'proxmate' }]);
     const r = await testProxmoxConnection();
-    expect(r.warnings).toEqual([]);
+    expect(r.warnings).toEqual([expect.stringMatching(FIREWALL_STEP)]);
     expect(r.pool).toMatchObject({ name: 'proxmate', exists: true, missingOnPool: [], guestPrivilegesOnRoot: [], outside: [] });
   });
 
@@ -170,6 +174,51 @@ describe('connection test with a pool configured', () => {
   });
 });
 
+describe('connection test: what a pool-scoped token still reaches outside the pool', () => {
+  beforeEach(() => {
+    cluster([{ vmid: 100, name: 'web', tags: guestMarker('rowa'), pool: 'proxmate' }]);
+  });
+
+  it('fails when VM.Allocate is held neither on the pool nor on /vms', async () => {
+    const { 'VM.Allocate': _drop, ...guest } = GUEST;
+    perms.mockResolvedValue({ ...POOL_SCOPED, '/pool/proxmate': guest, '/pool/other': { 'VM.Allocate': 1 } });
+    await expect(testProxmoxConnection()).rejects.toThrow(/VM\.Allocate is missing on \/pool\/proxmate/);
+  });
+
+  it('says plainly that Sys.Modify on / means the pool does not fully contain the token', async () => {
+    perms.mockResolvedValue({ ...POOL_SCOPED, '/': { 'Sys.Audit': 1, 'Sys.Modify': 1 } });
+    const r = await testProxmoxConnection();
+    const all = r.warnings.join('\n');
+    expect(all).toMatch(/holds Sys\.Modify on \/, so the pool does not fully contain it/);
+    expect(all).not.toMatch(FIREWALL_STEP);
+    expect(all).not.toMatch(/Sys\.Modify is missing/);
+  });
+
+  it('warns about Datastore.Allocate granted on every storage', async () => {
+    perms.mockResolvedValue({ ...POOL_SCOPED, '/storage': { ...DATASTORE, 'Datastore.Allocate': 1 } });
+    const r = await testProxmoxConnection();
+    expect(r.warnings.join('\n')).toMatch(/Datastore\.Allocate on \/storage, which lets it delete any volume/);
+  });
+
+  it('names the import storage that lacks Datastore.Allocate', async () => {
+    config['iso_storage'] = 'nfs-iso';
+    const r = await testProxmoxConnection();
+    expect(r.warnings.join('\n')).toMatch(/Datastore\.Allocate is missing on \/storage\/nfs-iso .*--import-storage nfs-iso/);
+  });
+
+  it('warns when cloud-image downloads have neither Sys.AccessNetwork nor Sys.Modify', async () => {
+    perms.mockResolvedValue({ ...POOL_SCOPED, '/nodes': { 'Sys.Audit': 1 } });
+    const r = await testProxmoxConnection();
+    expect(r.warnings.join('\n')).toMatch(/Sys\.AccessNetwork is missing on \/nodes — importing cloud images/);
+  });
+
+  it('before Proxmox VE 8.2, asks for Sys.Modify on / for downloads instead', async () => {
+    vi.mocked(pve.getVersion).mockResolvedValue('8.1.4');
+    const r = await testProxmoxConnection();
+    expect(r.warnings.join('\n')).toMatch(/Proxmox VE 8\.1\.4 checks Sys\.Audit and Sys\.Modify on \/ for cloud-image downloads/);
+  });
+});
+
 describe('connection test without a pool configured', () => {
   it('reports no pool section for the default, root-granted token', async () => {
     delete config['proxmox_pool'];
@@ -202,10 +251,37 @@ describe('moveManagedGuestsIntoPool', () => {
 
     const r = await moveManagedGuestsIntoPool();
 
-    expect(r).toEqual({ pool: 'proxmate', moved: [{ vmid: 100, name: 'web' }, { vmid: 9000, name: 'debian' }] });
-    expect(c.put).toHaveBeenCalledTimes(1);
-    expect(c.put.mock.calls[0]![0]).toBe('/pools');
-    expect(bodyOf(c.put.mock.calls[0]!)).toEqual({ poolid: 'proxmate', vms: '100,9000', 'allow-move': '1' });
+    expect(r).toEqual({
+      pool: 'proxmate',
+      moved: [
+        { vmid: 100, name: 'web', template: false, from: null },
+        { vmid: 9000, name: 'debian', template: true, from: 'other' },
+      ],
+      failed: [],
+    });
+    // One request per guest.
+    expect(c.put.mock.calls.map((x) => bodyOf(x))).toEqual([
+      { poolid: 'proxmate', vms: '100', 'allow-move': '1' },
+      { poolid: 'proxmate', vms: '9000', 'allow-move': '1' },
+    ]);
+  });
+
+  it('reports a refused guest and still moves the others', async () => {
+    rows([['rowa', 100], ['rowb', 101]]);
+    const c = cluster([
+      { vmid: 100, name: 'web', tags: guestMarker('rowa'), pool: 'locked' },
+      { vmid: 101, name: 'db', tags: guestMarker('rowb') },
+    ]);
+    c.put.mockImplementation((_url: string, body: URLSearchParams) =>
+      body.get('vms') === '100'
+        ? Promise.reject(new Error('Permission check failed (/pool/locked, Pool.Allocate)'))
+        : Promise.resolve({ data: { data: '' } }),
+    );
+    const r = await moveManagedGuestsIntoPool();
+    expect(r.moved.map((g) => g.vmid)).toEqual([101]);
+    expect(r.failed).toEqual([
+      { vmid: 100, name: 'web', template: false, from: 'locked', error: 'Permission check failed (/pool/locked, Pool.Allocate)' },
+    ]);
   });
 
   it('leaves a guest alone when its config no longer carries the marker the listing showed', async () => {

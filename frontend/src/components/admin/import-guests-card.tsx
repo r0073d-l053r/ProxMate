@@ -107,6 +107,8 @@ export function ImportGuestsCard() {
         <CardDescription>
           Proxmox guests ProxMate doesn&apos;t manage yet. Importing one hands it to a user: it is tagged as
           theirs, moved to the default bridge with the isolation firewall, and counted toward their quota.
+          With a Proxmox pool configured it is also added to that pool. A token scoped to the pool only sees
+          guests already in it, so this list then shows only those.
         </CardDescription>
       </CardHeader>
       <CardContent>

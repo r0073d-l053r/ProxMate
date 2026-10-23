@@ -2229,11 +2229,23 @@ export async function assertOwnVolumes(
    * is not this guest's either.
    */
   preexisting?: Set<string>,
+  opts: {
+    /**
+     * Count every `unusedN` line as foreign. For a fresh restore with a pool-scoped
+     * token: the volume listing taken before the restore cannot see volumes of a
+     * VMID outside the pool, so leftovers would go unnoticed, and vzdump never
+     * backs up an unused disk, so none of them can be the archive's own.
+     */
+    unusedAreForeign?: boolean;
+  } = {},
 ): Promise<void> {
   const c = client ?? (await pve.getClient());
   const kind = kindOf(vm);
   const cfg = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId, c, kind);
   const foreign = foreignVolumeKeys(cfg, vm.proxmoxVmId);
+  if (opts.unusedAreForeign) {
+    for (const key of Object.keys(cfg)) if (/^unused\d+$/.test(key) && !foreign.includes(key)) foreign.push(key);
+  }
   if (preexisting && preexisting.size > 0) {
     for (const [key, value] of Object.entries(cfg)) {
       const volume = (String(value).split(',')[0] ?? '').replace(/^file=/, '');
