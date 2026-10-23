@@ -12,17 +12,24 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 ## 🔜 Open — up next (pulled to the top)
 
-### Still open from v1.0.0 verification
+### Live-cluster checks (lab session)
 
 - **Verify the least-privilege role on Proxmox VE 8.** `deploy/proxmox-token.sh` was run end to end
   on a Proxmox VE 9.2 cluster with every feature passing. The PVE 8 variant (`VM.Monitor` instead of
   the `VM.GuestAgent.*` privileges) has not been run on real hardware yet.
+- **Restore of an archive that names another guest's disk.** Restores refuse any disk that isn't the
+  guest's own; covered by tests, not yet exercised against a real archive on a live cluster.
+- **Guest owner check on delete.** Delete confirms the guest carries the machine's own ownership tag;
+  covered by tests, not yet exercised on a live cluster. Both checks refuse when in doubt.
 
 ### Placement & reliability
 
-- **Background reconciler for Proxmox tasks.** Async UPIDs are reconciled opportunistically on read;
-  a backend restart mid-operation can leave rows stuck in `creating`/`restoring`. A worker that polls
-  tasks to completion and sweeps stuck rows at startup would make state authoritative.
+- **Background reconciler for Proxmox tasks.** A create that *fails* is already handled (the machine
+  is held and its page says why). The gap is a backend *restart* in the middle of a create, restore
+  or rebuild: the rest of that work is lost, and the status sync deliberately skips rows still in
+  `creating`, so the machine stays `creating` forever. A startup and periodic sweep that inspects
+  Proxmox and settles each stuck row closes it; the passthrough startup recovery
+  (`reconcileInterruptedPassthroughApplies`) is the pattern to follow.
 - **First-class Postgres support.** The Prisma schema is portable but the shipped migration history
   is SQLite-locked (`migration_lock.toml`), and the built-in app-DB backup uses SQLite's
   `VACUUM INTO`. Postgres today means `db push` + `pg_dump`; proper support wants a migration
@@ -32,8 +39,8 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 - **`ENCRYPTION_KEY` loss-safety.** Losing the key means losing the Proxmox token, SMTP creds,
   tenant AI keys, and TOTP secrets in one stroke. The docs runbook pairs key backup with DB backups
-  explicitly; still open: an admin Settings warning that persists until the key is confirmed backed
-  up.
+  explicitly, and the app-database backup card already carries a static reminder. Still open: an
+  admin warning that stays visible until an admin confirms the key is backed up.
 - **Pool-scoped Proxmox token (optional).** The `ProxMate` role is granted on `/`, because placement,
   migration and the balancer work across every node, so the per-guest boundary today is ProxMate's
   ownership-tag check rather than a Proxmox permission. Offer a mode where the role is granted on a
@@ -51,23 +58,31 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
   today; send the branded "you've been granted a VM" email + in-app note.
 - **Share notifications** — email the recipient when a VM is shared with them or their preset level
   (Viewer / Operator / Manager) changes.
-- **Surface admin-managed / quota-exempt to the owner** — a badge + one-line explainer on the VM
-  detail ("set up by your admin — only an admin can resize it") instead of just the 403 on attempt.
+- **Surface admin-managed / quota-exempt to the owner** — partly built: the disks panel already says
+  the VM was set up by an admin and its disks can't be changed here. Still open: a page-level badge
+  and one-line explainer on the VM detail, since resize and rebuild are otherwise just hidden.
 - **Read-only console (input-blocked viewing)** — a Viewer share gets no console today; the noted
   follow-up is a view-only, input-blocked console stream.
 
 ### IDE follow-ups
 
 - **Wire the gateway as a provider for code-server's built-in Chat view** (inert today; OpenCode
-  runs as a terminal TUI instead).
+  runs as a terminal TUI instead). Needs a decision first: the IDE settings deliberately turn the
+  built-in chat off so OpenCode is the focus.
 - **Surface the in-guest provision log** — an `ideState: failed` today means shelling into the guest
   to read `/var/log/pmide-provision.log`; add a "view install log" action (owner/admin, via the guest
   agent) on the failed state so installs are debuggable from the browser.
 
+### Mobile
+
+- **Android app.** A native app: enter the server's web address, sign in (including 2FA; SSO and
+  passkeys through the web login), then the full ProxMate UI with the session carried over. Built
+  on GitHub Actions so the APK can be downloaded from each run.
+
 ### Deferred pending hardware
 
-- **ARM guest builds (Phase 2).** The arch-aware *placement* guardrail shipped; the aarch64 VM-build
-  path (`arch=aarch64`, `machine=virt`, OVMF + EFI disk) and an arch selector need a real ARM
+- **ARM guest builds (Phase 2).** The arch-aware *placement* guardrail shipped; building an ARM VM
+  doesn't yet set the ARM-specific Proxmox settings. The aarch64 VM-build path (`arch=aarch64`, `machine=virt`, OVMF + EFI disk) and an arch selector need a real ARM
   (Pimox) node to validate.
 - **The GPU on pve-4 (host project)** — the host is vfio/IOMMU-ready and the card is bound; running it
   needs a fresh **q35 + OVMF + EFI-disk** VM (108 was installed under SeaBIOS). Owner's call when wanted.
@@ -117,6 +132,11 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 ## ✅ Shipped — condensed index
 
 Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
+
+### Unreleased
+
+- **Number fields can be cleared and retyped.** Emptying a numeric field no longer leaves a stuck
+  `0` that turns the next digit into "02"; min/max apply when the field loses focus.
 
 - **v1.2.0 — sharing, placement and least privilege.** Share a VM with someone before they sign
   up (pending shares, claimed only by a confirmed address); template deploys on shared storage

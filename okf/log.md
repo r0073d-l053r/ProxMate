@@ -1,5 +1,9 @@
 # Bundle Update Log
 
+## 2026-10-23
+* **Update**: Numeric form fields use a shared `NumberInput` (frontend/src/components/ui/number-input.tsx) that keeps the typed text and applies min/max on blur, so a field can be emptied and retyped.
+* **Update**: Roadmap corrected against the source: the reconciler gap is a backend restart mid-operation, the admin-managed explainer and the `ENCRYPTION_KEY` reminder are partly built, and two restore/delete ownership checks still need a live-cluster run.
+
 ## 2026-10-20
 * **Update**: Documented [pending shares](/database/pending-vm-share.md), template deploy placement, start/restart waiting for the Proxmox task, and the least-privilege token in [privileges](/proxmox/privileges.md), with what a live Proxmox VE 9.2 cluster proved.
 
