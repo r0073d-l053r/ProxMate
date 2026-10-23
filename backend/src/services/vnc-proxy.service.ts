@@ -1,6 +1,9 @@
 import { WebSocket, type RawData } from 'ws';
 import type { AxiosInstance } from 'axios';
 import { getClient, getConnectionConfig, type ProxmoxConnection, type GuestKind } from './proxmox.service.js';
+import { EphemeralStore } from '../lib/ephemeral-store.js';
+import type { ConsoleInputFilter } from '../lib/console-view-filter.js';
+import type { ConsoleMode } from './vm-share.service.js';
 
 export interface VncTicket {
   ticket: string;
@@ -94,8 +97,49 @@ export async function connectSerialTarget(
   return connectConsoleTarget(node, vmid, port, ticket, await getConnectionConfig(), kind);
 }
 
-/** Pipe bytes bidirectionally between the browser and Proxmox sockets. */
-export function relay(browser: WebSocket, target: WebSocket): void {
+export type ConsoleTransport = 'vnc' | 'serial';
+
+/** What ProxMate recorded when it minted a console ticket. */
+export interface ConsoleTicketGrant {
+  vmId: string;
+  userId: string;
+  transport: ConsoleTransport;
+  port: string;
+  mode: ConsoleMode;
+}
+
+/**
+ * Console tickets ProxMate minted, keyed by ticket. The WebSocket upgrade takes
+ * the grant (single use) and must match it — same VM, user, transport and port —
+ * so the session's mode is the one decided when the ticket was minted, never a
+ * flag from the browser. Proxmox expects the socket within seconds of the mint;
+ * a minute is generous.
+ */
+const consoleGrants = new EphemeralStore<ConsoleTicketGrant>(60_000);
+
+export function recordConsoleGrant(ticket: string, grant: ConsoleTicketGrant): void {
+  consoleGrants.set(ticket, grant);
+}
+
+/** Remove and return the grant for a ticket, or undefined if none is live. */
+export function takeConsoleGrant(ticket: string): ConsoleTicketGrant | undefined {
+  return consoleGrants.take(ticket);
+}
+
+/** Flatten a ws message payload to one Buffer. */
+function toBuffer(data: RawData): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (Array.isArray(data)) return Buffer.concat(data);
+  return Buffer.from(data);
+}
+
+/**
+ * Pipe bytes bidirectionally between the browser and Proxmox sockets. With an
+ * `inputFilter` (view-only sessions) every browser message passes through it
+ * first; only what it returns is forwarded, and a message it can't frame closes
+ * both sockets.
+ */
+export function relay(browser: WebSocket, target: WebSocket, inputFilter?: ConsoleInputFilter): void {
   const pending: Array<{ data: RawData; isBinary: boolean }> = [];
 
   target.on('open', () => {
@@ -112,7 +156,20 @@ export function relay(browser: WebSocket, target: WebSocket): void {
     if (browser.readyState === WebSocket.OPEN) browser.send(data, { binary: isBinary });
   });
 
-  browser.on('message', (data, isBinary) => {
+  browser.on('message', (raw, isBinary) => {
+    let data: RawData = raw;
+    if (inputFilter) {
+      let allowed: Buffer;
+      try {
+        allowed = inputFilter.push(toBuffer(raw));
+      } catch {
+        if (browser.readyState === WebSocket.OPEN) browser.close(1008, 'View-only console');
+        closeBoth();
+        return;
+      }
+      if (allowed.length === 0) return;
+      data = allowed;
+    }
     if (target.readyState === WebSocket.OPEN) target.send(data, { binary: isBinary });
     else pending.push({ data, isBinary });
   });

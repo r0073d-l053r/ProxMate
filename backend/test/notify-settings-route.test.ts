@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net';
 // whether one is set plus a masked form, and saving with the field blank keeps it.
 
 const HOOK = 'https://discord.com/api/webhooks/123/SECRET-HOOK-TOKEN';
+const TG = '123456789:SECRET-TELEGRAM-BOT-TOKEN-0123456789';
 
 vi.mock('../src/lib/prisma.js', () => ({ prisma: {} }));
 vi.mock('../src/middleware/auth.js', () => ({
@@ -31,7 +32,16 @@ vi.mock('../src/services/config.service.js', async (importOriginal) => ({
 }));
 vi.mock('../src/services/notify.service.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/services/notify.service.js')>()),
-  getNotifyConfig: vi.fn(async () => ({ webhookUrl: HOOK, emailEnabled: false, emailTo: '', events: ['vm.error'] })),
+  getNotifyConfig: vi.fn(async () => ({
+    webhookUrl: HOOK,
+    ntfyUrl: 'https://ntfy.sh/SECRET-TOPIC',
+    ntfyToken: 'tk_SECRET-NTFY-TOKEN',
+    telegramBotToken: TG,
+    telegramChatId: '-100123',
+    emailEnabled: false,
+    emailTo: '',
+    events: ['vm.error'],
+  })),
   saveNotifyConfig: vi.fn(async () => undefined),
 }));
 vi.mock('../src/services/mail.service.js', async (importOriginal) => ({
@@ -101,5 +111,46 @@ describe('PUT /api/admin/settings/notifications', () => {
   it('removes the webhook only when asked explicitly', async () => {
     expect((await put({ clearWebhookUrl: true, emailEnabled: false, events: [] })).status).toBe(200);
     expect(saveNotifyConfig).toHaveBeenCalledWith(expect.objectContaining({ clearWebhookUrl: true }));
+  });
+});
+
+describe('ntfy and Telegram settings', () => {
+  it('reports them masked, never the topic, the access token or the bot token', async () => {
+    const text = await (await fetch(`${base}/admin/settings`)).text();
+    expect(text).not.toContain('SECRET-TOPIC');
+    expect(text).not.toContain('SECRET-NTFY-TOKEN');
+    expect(text).not.toContain('SECRET-TELEGRAM');
+    const { notify } = JSON.parse(text) as { notify: Record<string, unknown> };
+    expect(notify).toMatchObject({
+      hasNtfyUrl: true,
+      ntfyUrlMasked: 'https://ntfy.sh/…',
+      hasNtfyToken: true,
+      hasTelegramBotToken: true,
+      telegramBotTokenMasked: '123456789:…',
+      telegramChatId: '-100123',
+    });
+    for (const k of ['ntfyUrl', 'ntfyToken', 'telegramBotToken']) expect(notify).not.toHaveProperty(k);
+  });
+
+  it('refuses an ntfy URL on a private host or without a topic', async () => {
+    expect((await put({ ntfyUrl: 'http://127.0.0.1/topic', emailEnabled: false, events: [] })).status).toBe(400);
+    expect((await put({ ntfyUrl: 'https://ntfy.sh/', emailEnabled: false, events: [] })).status).toBe(400);
+    expect(saveNotifyConfig).not.toHaveBeenCalled();
+  });
+
+  it('refuses a malformed bot token or chat id, and a bot token without a chat id', async () => {
+    expect((await put({ telegramBotToken: 'nope', emailEnabled: false, events: [] })).status).toBe(400);
+    expect((await put({ telegramChatId: 'not a chat', emailEnabled: false, events: [] })).status).toBe(400);
+    expect((await put({ telegramBotToken: TG.replace('SECRET-TELEGRAM-BOT-TOKEN', 'abcdefghijklmnopqrstuvwxy'), telegramChatId: '', emailEnabled: false, events: [] })).status).toBe(400);
+    expect(saveNotifyConfig).not.toHaveBeenCalled();
+  });
+
+  it('saves a valid ntfy topic and Telegram bot', async () => {
+    const tg = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw';
+    const res = await put({ ntfyUrl: 'https://ntfy.sh/ops-x', ntfyToken: 'tk_abc', telegramBotToken: tg, telegramChatId: '@proxmate_ops', emailEnabled: false, events: [] });
+    expect(res.status).toBe(200);
+    expect(saveNotifyConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ ntfyUrl: 'https://ntfy.sh/ops-x', ntfyToken: 'tk_abc', telegramBotToken: tg, telegramChatId: '@proxmate_ops' }),
+    );
   });
 });

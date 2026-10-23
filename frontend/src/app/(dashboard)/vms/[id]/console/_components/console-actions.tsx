@@ -60,6 +60,9 @@ export function ConsoleActions({ id }: { id: string }) {
     }
   }
 
+  // Power actions need the power capability; a view-only (Viewer) console gets none.
+  if (vm && !(vm.caps ?? []).includes("power")) return null;
+
   const running = vm?.status === "running";
   const stopped = vm?.status === "stopped" || vm?.status === "error";
   const paused = vm?.live?.qmpstatus === "paused";

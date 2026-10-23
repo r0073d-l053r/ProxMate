@@ -13,6 +13,7 @@ import {
   Copy,
   Cpu,
   Disc,
+  Eye,
   HardDrive,
   Hash,
   Lightbulb,
@@ -26,6 +27,7 @@ import {
   RotateCcw,
   RotateCw,
   Scaling,
+  ScrollText,
   Server,
   Square,
   SquareTerminal,
@@ -42,8 +44,10 @@ import { openPopup, pollUntil } from "@/lib/ide-launch";
 import { formatRam, formatBytes, formatUptime, formatDate } from "@/lib/format";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
 import { HoldBanner, isVmHeld } from "@/components/vm/hold-banner";
+import { AdminManagedBadge, AdminManagedNote } from "@/components/vm/admin-managed-notice";
 import { NotesCard } from "@/components/vm/notes-card";
 import { TagsCard } from "@/components/vm/tags-card";
+import { ProjectCard } from "@/components/vm/project-card";
 import { MetricsCard } from "@/components/vm/metrics-card";
 import { ActivityCard } from "@/components/vm/activity-card";
 import { ResizeDialog } from "@/components/vm/resize-dialog";
@@ -57,6 +61,7 @@ import { SharePanel } from "@/components/vm/share-panel";
 import { DisksPanel } from "@/components/vm/disks-panel";
 import { PassthroughPanel } from "@/components/vm/passthrough-panel";
 import { RecoveryPanel } from "@/components/vm/recovery-panel";
+import { IdeLogDialog } from "@/components/vm/ide-log-dialog";
 import { AlertsPanel } from "@/components/vm/alerts-panel";
 import { useAuthStore } from "@/lib/auth-store";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
@@ -156,6 +161,7 @@ export default function VmDetailPage() {
   // Typed-name confirmation for the destructive delete — must match vm.name exactly.
   const [deleteText, setDeleteText] = useState("");
   const [dialog, setDialog] = useState<ActiveDialog>(null);
+  const [ideLogOpen, setIdeLogOpen] = useState(false);
 
   // The ProxMate IDE is a desktop-only feature (a pop-out editor) — hidden in
   // mobile mode (below the `md` breakpoint), tracked live so a resize updates it.
@@ -236,7 +242,10 @@ export default function VmDetailPage() {
       if (r.status === "done" && r.value === "ready") {
         popupOrOffer("ProxMate IDE is ready.");
       } else if (r.status === "done") {
-        toast.error("The IDE install didn't finish. Check the VM and try again.");
+        toast.error("The IDE install didn't finish. Check the VM and try again.", {
+          action: { label: "View install log", onClick: () => setIdeLogOpen(true) },
+          duration: 12000,
+        });
       } else if (r.status === "timeout") {
         toast.error("The IDE install is taking unusually long — check the VM and try again.");
       }
@@ -519,6 +528,9 @@ export default function VmDetailPage() {
   const caps = new Set(vm.caps ?? []);
   const canPower = caps.has("power");
   const canConsole = caps.has("console");
+  // A Viewer share may watch the console but not type into it (the relay drops
+  // its input); it gets a "View console" menu instead of the full one.
+  const canViewConsole = !canConsole && caps.has("console_view");
   const canConfigure = caps.has("configure");
   // An admin-provisioned VM (deploy-for-tenant) is sized by the admin — the owning
   // tenant may operate it but not resize it (backend 403s too). Admins always can.
@@ -534,6 +546,9 @@ export default function VmDetailPage() {
   // Containers (LXC) don't support the QEMU-only features: rebuild, convert to
   // template, live migration, extra data disks, and snapshots.
   const isLxc = vm.type === "lxc";
+  // The IDE install log: the VM's owner, or an admin helping them (the server
+  // enforces the same rule). QEMU only, like the IDE.
+  const canReadIdeLog = !isLxc && canIde && (vm.access === "owner" || isAdmin);
 
   // Shares without the matching capability don't get the Backups / Settings tabs —
   // if a deep link asks for one anyway, land on Overview instead of an empty panel.
@@ -594,6 +609,7 @@ export default function VmDetailPage() {
             {isLxc && (
               <span className="rounded border px-1.5 py-0.5 text-[10px] font-medium">LXC</span>
             )}
+            <AdminManagedBadge vm={vm} isAdmin={isAdmin} />
             {vm.hasPassthrough && (
               <span className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
                 <Cpu className="size-2.5" /> GPU/PCI
@@ -614,10 +630,48 @@ export default function VmDetailPage() {
               </span>
             </span>
           </div>
+          <AdminManagedNote vm={vm} isAdmin={isAdmin} />
         </div>
 
-        {(canConsole || canPower || canConfigure) && (
+        {(canConsole || canViewConsole || canPower || canConfigure) && (
           <div className="flex items-center gap-2">
+            {canViewConsole && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button variant="outline" disabled={!running || held}>
+                    <Eye />
+                    View console
+                    <ChevronDown className="size-3.5 text-muted-foreground" />
+                  </Button>
+                }
+              />
+              <DropdownMenuContent align="end" className="min-w-56">
+                <DropdownMenuItem onClick={() => router.push(`/vms/${vm.id}/console`)}>
+                  <Terminal />
+                  Graphical (view only)
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => router.push(`/vms/${vm.id}/console?mode=text`)}>
+                  <SquareTerminal />
+                  Text (view only)
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() =>
+                    window.open(
+                      `/console-popout/${vm.id}`,
+                      `proxmate-console-${vm.id}`,
+                      "popup,width=960,height=540",
+                    )
+                  }
+                >
+                  <PictureInPicture2 />
+                  Pop out text console
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            )}
+
             {canConsole && (
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -791,7 +845,7 @@ export default function VmDetailPage() {
         <Card className="mb-6 border-amber-500/40 bg-amber-500/5">
           <CardContent className="py-3 text-sm text-muted-foreground">
             You have <span className="font-medium text-foreground">viewer</span> access to this VM,
-            shared by its owner. You can view its details and activity, but not operate or change it.
+            shared by its owner. You can view its details and activity and watch its console, but not operate or change it.
           </CardContent>
         </Card>
       )}
@@ -819,6 +873,26 @@ export default function VmDetailPage() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {canReadIdeLog && (vm.ideState === "failed" || vm.ideState === "installing") && (
+        <Card className={"mb-6 " + (vm.ideState === "failed" ? "border-destructive/40 bg-destructive/5" : "")}>
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm text-muted-foreground">
+            <span>
+              <span className="font-medium text-foreground">ProxMate IDE</span> —{" "}
+              {vm.ideState === "failed"
+                ? "the last install didn't finish. The install log usually says why."
+                : "installing. You can follow the install log while it runs."}
+            </span>
+            <Button variant="outline" size="sm" onClick={() => setIdeLogOpen(true)}>
+              <ScrollText />
+              View install log
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+      {canReadIdeLog && (
+        <IdeLogDialog vmId={vm.id} vmName={vm.name} open={ideLogOpen} onOpenChange={setIdeLogOpen} />
       )}
 
       <Tabs value={activeTab} onValueChange={(v) => setTab(v as TabValue)}>
@@ -966,6 +1040,8 @@ export default function VmDetailPage() {
                 </Card>
               )}
 
+              {isManager && <ProjectCard vmId={vm.id} tags={vm.tags} onSaved={load} />}
+
               {canConfigure && <TagsCard vmId={vm.id} initial={vm.tags} onSaved={load} />}
 
               <Card>
@@ -1091,6 +1167,12 @@ export default function VmDetailPage() {
             <AlertsPanel vmId={vm.id} canWrite={canConfigure} />
 
             {!isLxc && <RecoveryPanel vm={vm} busy={busy} onChanged={load} />}
+            {isLxc && (
+              <p className="mt-4 text-xs text-muted-foreground">
+                Password reset, SSH-key add and file push go through the QEMU guest agent, so containers
+                don&apos;t offer them.
+              </p>
+            )}
 
             {isManager && <SharePanel vmId={vm.id} />}
 

@@ -29,7 +29,9 @@ The Template Store: tenants list published templates and deploy VMs from them (c
 |---|---|---|---|
 | GET | `/api/templates` | user | Published templates (`listPublished`). In OpenAPI doc. |
 | GET | `/api/templates/cloud-init-status` | user | Which ProxMate extras snippets exist on each node. |
-| POST | `/api/templates/deploy` | user (`forUserId`/`quotaExempt` admin-only) | Deploy a VM from a published template; 201 `{ vm, status }`. In OpenAPI doc. |
+| POST | `/api/templates/deploy` | user (`forUserId`/`quotaExempt` admin-only) | Deploy a VM from a published template; 201 `{ vm, status }`. An admin deploying for a tenant (`forUserId`) emails the tenant after the response ([activity-mail](/services/activity-mail.md)). In OpenAPI doc. |
+| POST | `/api/templates/deploy-bulk` | user (`forUserId`/`forUserIds`/`quotaExempt` admin-only) | Deploy several copies: `count` (1..20 for tenants, 1..50 for admins) named from `namePattern` (`{n}` = copy number, required for more than one), or one copy per user in `forUserIds` (admin, max 50). Same sizing and cloud-init fields as `/deploy`. Quota is checked for the whole batch first (403 naming the owner(s), nothing deployed); 202 with the batch `{ id, items: [{ name, userId, vmId, proxmoxVmId, node, status }] }`. Audited `template.deploy_bulk` and `template.deploy_bulk_done`. See [bulk deploy](/services/bulk-deploy.md). |
+| GET | `/api/templates/deploy-bulk/:id` | user | A batch's per-copy results (`queued`/`deploying`/`done`/`failed` with `error`); 404 unless the caller started it or is an admin. |
 | GET | `/api/templates/all` | admin | All templates including unpublished. |
 | GET | `/api/templates/cloud-images` | admin | Curated cloud images with arch (`curatedImagesWithArch`). |
 | GET | `/api/templates/cloud-init-extras` | admin | Docker/Tailscale extras status and snippet bundles. |
@@ -56,7 +58,7 @@ The Template Store: tenants list published templates and deploy VMs from them (c
 # Relationships
 
 - Data: [Template](/database/template.md), [VirtualMachine](/database/virtual-machine.md), [SystemConfig](/database/system-config.md) ([cloud-init config](/config/cloud-init.md), [template refresh](/config/template-refresh.md)).
-- Services: [template](/services/template.md), [vm](/services/vm.md) (`deployFromTemplate`, `resolveCreateTarget`), [audit](/services/audit.md).
+- Services: [template](/services/template.md), [vm](/services/vm.md) (`deployFromTemplate`, `resolveCreateTarget`), [bulk deploy](/services/bulk-deploy.md), [audit](/services/audit.md).
 - Converting a VM to a template is `POST /api/vms/:id/convert-template` in the [VM router](/api/vm.md); rebuild-from-template is `POST /api/vms/:id/rebuild`.
 
 [^routes]: backend/src/routes/template.routes.ts

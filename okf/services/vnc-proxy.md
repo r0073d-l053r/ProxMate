@@ -22,7 +22,8 @@ Backs the noVNC (RFB) and xterm.js (serial) consoles. The browser connects to Pr
 | `requestVncProxy` | `(node, vmid, kind = 'qemu') => { ticket, port }` | POST `/nodes/<node>/<kind>/<vmid>/vncproxy` with `websocket=1`; the ticket is the RFB password. |
 | `requestTermProxy` | `(node, vmid, client?, kind) => { ticket, port, user }` | POST `.../termproxy`; client authenticates in-band with `${user}:${ticket}\n`. |
 | `connectVncTarget` / `connectSerialTarget` | `(node, vmid, port, ticket, kind)` | Open `wss://<host>/api2/json/nodes/<node>/<kind>/<vmid>/vncwebsocket?port=..&vncticket=..` with `Authorization: PVEAPIToken=<id>=<secret>`. |
-| `relay` | `(browser, target)` | Bidirectional pipe, buffering browser messages until the target opens; closes both on either side's close/error. |
+| `recordConsoleGrant` / `takeConsoleGrant` | `(ticket, { vmId, userId, transport, port, mode })` / `(ticket)` | In-process `EphemeralStore` (one-minute TTL) of the tickets ProxMate minted and the mode each was minted with; `take` removes the grant (single use). |
+| `relay` | `(browser, target, inputFilter?)` | Bidirectional pipe, buffering browser messages until the target opens; closes both on either side's close/error. With an `inputFilter` (view-only sessions) each browser message is passed through it and only what it returns is forwarded; a `ConsoleFilterError` closes the browser with `1008` and the target. |
 
 # Data
 

@@ -34,6 +34,12 @@ export interface MeResponse {
     hasPasskeys?: boolean;
     // CE: opted out of admin broadcast (announcement) emails. Security emails unaffected.
     broadcastOptOut?: boolean;
+    /** Opted out of activity emails (a VM an admin set up for you, VM shares). */
+    activityEmailOptOut?: boolean;
+    /** Opted in to the weekly usage digest (off by default). */
+    usageDigestOptIn?: boolean;
+    /** Whether the admin has the weekly digest turned on at all. */
+    usageDigestAvailable?: boolean;
     /** Compute-access window. null/absent = never expires. Drives the countdown banner. */
     accessExpiresAt?: string | null;
     /**
@@ -63,7 +69,7 @@ export interface EnrollmentResponse {
 export type VmAccess = "owner" | "admin" | "viewer" | "operator" | "manager";
 
 /** A per-VM capability the API grants; the UI gates buttons/tabs on these. */
-export type VmCap = "view" | "power" | "console" | "configure" | "backups" | "ide";
+export type VmCap = "view" | "console_view" | "power" | "console" | "configure" | "backups" | "ide";
 
 export interface VirtualMachine {
   id: string;
@@ -131,6 +137,8 @@ export interface VmDetail extends VirtualMachine {
   live: VmLiveStatus | null;
   /** Whether the admin has designated a rescue ISO (QEMU only). */
   rescueAvailable?: boolean;
+  /** Largest file POST /vms/:id/files accepts (bytes). */
+  filePushMaxBytes?: number;
   /** ProxMate IDE install state: null/'none' | 'installing' | 'ready' | 'failed'. */
   ideState?: "none" | "installing" | "ready" | "failed" | null;
   /** Cloud-init deploy lock: 'deploying' = still provisioning (locked); else ready. */
@@ -142,6 +150,25 @@ export interface IdeStatus {
   state: "none" | "installing" | "ready" | "failed";
   /** A 'ready' install made before per-VM guest authentication; it must be reinstalled to open. */
   reinstallRequired?: boolean;
+}
+
+/** GET /api/ide/:id/install-log */
+export interface IdeInstallLog {
+  path: string;
+  log: string;
+  /** Older output was cut off; only the tail is shown. */
+  truncated: boolean;
+  /** The guest has no install log. */
+  missing: boolean;
+}
+
+/** POST /api/vms/:id/files */
+export interface GuestFilePushResult {
+  path: string;
+  size: number;
+  sha256: string;
+  /** The guest reported the same SHA-256 back. */
+  verified: boolean;
 }
 
 /** One 1 s sample from GET /vms/:id/live-stats (cached cluster/resources). */
@@ -505,6 +532,8 @@ export interface AdminSettings {
         callbackUrl: string;
       };
   notify: NotifyConfig;
+  /** Admin switch for the weekly per-tenant usage digest (each user still opts in). */
+  usageDigestEnabled?: boolean;
   ide: IdeSettings;
   /** ProxMate app-DB backup schedule (dir empty = disabled). */
   appdbBackup: {
@@ -581,6 +610,14 @@ export interface NotifyConfig {
   hasWebhookUrl: boolean;
   /** Scheme and host only, e.g. "https://discord.com/…"; '' when unset. */
   webhookUrlMasked: string;
+  /** ntfy topic URL — like the webhook URL, only "is one set" plus scheme and host. */
+  hasNtfyUrl?: boolean;
+  ntfyUrlMasked?: string;
+  hasNtfyToken?: boolean;
+  /** Telegram bot token is never returned; the masked form keeps only the bot id ("123456:…"). */
+  hasTelegramBotToken?: boolean;
+  telegramBotTokenMasked?: string;
+  telegramChatId?: string;
   emailEnabled: boolean;
   emailTo: string;
   events: NotifyEvent[];
@@ -705,6 +742,44 @@ export interface UserGroup {
   role: Role;
   quota: { cpu: number; ram: number; storage: number };
   vms: VirtualMachine[];
+}
+
+/** Per-VM usage averages over the Projects window (from the resource-history samples). */
+export interface ProjectVmUsage {
+  samples: number;
+  avgCpu: number; // 0..1 fraction of allocated vCPUs
+  avgMem: number; // bytes
+}
+
+export interface ProjectVm {
+  id: string;
+  name: string;
+  type: GuestType;
+  status: VmStatus;
+  cpu: number;
+  ram: number; // MB
+  storage: number; // GB
+  access: VmAccess;
+  usage: ProjectVmUsage | null;
+}
+
+/** One project's rollup. `name` null is the "No project" group (and the shared group). */
+export interface ProjectGroup {
+  name: string | null;
+  vmCount: number;
+  running: number;
+  cpu: number;
+  ram: number; // MB
+  storage: number; // GB
+  usage: { samples: number; avgCpuPct: number; avgMemBytes: number };
+  vms: ProjectVm[];
+}
+
+export interface ProjectsView {
+  days: number;
+  owners: { owner: { id: string; email: string; displayName: string; role: Role }; projects: ProjectGroup[] }[];
+  /** VMs shared with the caller: one flat group, never split by the owner's projects. */
+  shared: ProjectGroup | null;
 }
 
 export interface LiveVmStats {

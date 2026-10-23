@@ -48,6 +48,7 @@ import {
   clearFailedSecondFactor,
 } from '../services/account-lockout.service.js';
 import { requestReset, resetWithToken } from '../services/password-reset.service.js';
+import { isUsageDigestEnabled } from '../services/usage-digest.service.js';
 import type { AuthRequest } from '../types/index.js';
 
 const router = Router();
@@ -461,6 +462,10 @@ router.get('/me', allowExpiredAccess, requireAuth, async (req: Request, res: Res
       hasPasskeys: (await prisma.passkey.count({ where: { userId: user.id } })) > 0,
       mfaSetupRequired: await isMfaSetupRequired(user.id),
       broadcastOptOut: user.broadcastOptOut,
+      activityEmailOptOut: user.activityEmailOptOut,
+      usageDigestOptIn: user.usageDigestOptIn,
+      // Whether the admin has the weekly digest on at all (the opt-in does nothing otherwise).
+      usageDigestAvailable: await isUsageDigestEnabled(),
       // Compute-access window. `accessExpiresAt: null` = never expires.
       // `accessExpired` is computed SERVER-side and is the only thing the UI may
       // trust to decide "expired" — a wrong client clock must not lock someone
@@ -478,23 +483,41 @@ router.get('/me', allowExpiredAccess, requireAuth, async (req: Request, res: Res
 });
 
 // ─── PUT /api/auth/email-preferences ──────────────────────────
-// Community Edition: opt in/out of admin broadcast (announcement) emails.
-// Transactional / security / notification emails are unaffected by this flag.
+// The signed-in user's own email preferences. Each field is optional; only the
+// ones sent change, and each change is audited on its own.
+//   broadcastOptOut     — Community Edition: admin broadcast (announcement) emails
+//   activityEmailOptOut — emails about a VM an admin set up for you or shared with you
+//   usageDigestOptIn    — the weekly usage digest (off by default)
+// Security / account / alert emails are unaffected by all of them.
 
-const EmailPrefsSchema = z.object({ broadcastOptOut: z.boolean() });
+const EmailPrefsSchema = z
+  .object({
+    broadcastOptOut: z.boolean().optional(),
+    activityEmailOptOut: z.boolean().optional(),
+    usageDigestOptIn: z.boolean().optional(),
+  })
+  .refine((v) => Object.values(v).some((x) => x !== undefined));
 
 router.put('/email-preferences', requireAuth, async (req: Request, res: Response) => {
   const parsed = EmailPrefsSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid preference.' }); return; }
   const u = (req as AuthRequest).user;
-  await prisma.user.update({ where: { id: u.id }, data: { broadcastOptOut: parsed.data.broadcastOptOut } });
-  await recordAudit({
-    action: parsed.data.broadcastOptOut ? 'user.broadcast_optout' : 'user.broadcast_optin',
-    actor: u,
-    detail: 'via email preferences',
-    req,
+  const { broadcastOptOut, activityEmailOptOut, usageDigestOptIn } = parsed.data;
+  const updated = await prisma.user.update({
+    where: { id: u.id },
+    data: { broadcastOptOut, activityEmailOptOut, usageDigestOptIn },
   });
-  res.json({ success: true, broadcastOptOut: parsed.data.broadcastOptOut });
+  const audits: string[] = [];
+  if (broadcastOptOut !== undefined) audits.push(broadcastOptOut ? 'user.broadcast_optout' : 'user.broadcast_optin');
+  if (activityEmailOptOut !== undefined) audits.push(activityEmailOptOut ? 'user.activity_email_optout' : 'user.activity_email_optin');
+  if (usageDigestOptIn !== undefined) audits.push(usageDigestOptIn ? 'user.usage_digest_optin' : 'user.usage_digest_optout');
+  for (const action of audits) await recordAudit({ action, actor: u, detail: 'via email preferences', req });
+  res.json({
+    success: true,
+    broadcastOptOut: updated.broadcastOptOut,
+    activityEmailOptOut: updated.activityEmailOptOut,
+    usageDigestOptIn: updated.usageDigestOptIn,
+  });
 });
 
 // ─── 2FA (TOTP) management — authenticated ────────────────────

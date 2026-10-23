@@ -2,11 +2,11 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import multer from 'multer';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { promises as fsp, existsSync } from 'node:fs';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
-import { shareLimiter } from '../middleware/rate-limit.js';
+import { shareLimiter, guestFileLimiter } from '../middleware/rate-limit.js';
 import { enforceMfaSetup } from '../middleware/mfa.js';
 import { recordAudit, listAuditForTarget } from '../services/audit.service.js';
 import {
@@ -26,7 +26,7 @@ import {
   migratePreflight,
 } from '../services/proxmox.service.js';
 import type { RrdTimeframe } from '../services/proxmox.service.js';
-import { requestVncProxy, requestTermProxy } from '../services/vnc-proxy.service.js';
+import { requestVncProxy, requestTermProxy, recordConsoleGrant } from '../services/vnc-proxy.service.js';
 import { convertVmToTemplate } from '../services/template.service.js';
 import { isValidCron } from '../services/power-schedule.service.js';
 import {
@@ -38,7 +38,8 @@ import {
   deleteMateState,
   setBackupPolicy,
 } from '../services/matestate.service.js';
-import { listShares, addShare, removeShare, SHARE_ROLES, normalizeShareRole, ShareError } from '../services/vm-share.service.js';
+import { listShares, addShareWithNotice, removeShare, SHARE_ROLES, normalizeShareRole, ShareError, consoleModeFor } from '../services/vm-share.service.js';
+import { sendDeployedForTenantEmail, sendShareEmail, sendLater } from '../services/activity-mail.service.js';
 import { listDisks, addDataDisk, resizeDataDisk, removeDataDisk } from '../services/disk.service.js';
 import {
   QuotaError,
@@ -78,8 +79,20 @@ import {
   ourGuestOrNull,
   tagsMarkRow,
   MIN_RAM_MB,
+  GuestIdentityError,
+  GuestErroredError,
 } from '../services/vm.service.js';
+import {
+  pushGuestFile,
+  validateGuestPath,
+  parseFileMode,
+  guestFilePushMaxBytes,
+  formatByteLimit,
+  GuestFileError,
+  GUEST_USERNAME_RE,
+} from '../services/guest-file.service.js';
 import { isValidPublicKey } from '../services/ssh-key.service.js';
+import { projectOf, tagsForAccess, withProject } from '../services/project.service.js';
 import { isIdeInstalling } from '../services/ide-provision.service.js';
 import { isDeploying, refreshDeployState } from '../services/deploy-lock.service.js';
 import { getLiveStats } from '../services/live-stats.service.js';
@@ -98,6 +111,7 @@ import {
 import { envNumber } from '../lib/env-number.js';
 import type { RebuildSource } from '../services/vm.service.js';
 import type { AuthRequest } from '../types/index.js';
+import type { VirtualMachine } from '@prisma/client';
 
 const router = Router();
 
@@ -225,6 +239,8 @@ router.post('/', async (req: Request, res: Response) => {
       req,
     });
     res.status(201).json({ vm, status: vm.status });
+    // An admin deploying into a tenant's account: tell the tenant (no-op otherwise).
+    sendLater('deploy-for-tenant', () => sendDeployedForTenantEmail(vm, actor));
   } catch (err) {
     if (err instanceof CreateOptionError) {
       res.status(err.status).json({ error: err.message });
@@ -427,6 +443,8 @@ router.post('/containers', async (req: Request, res: Response) => {
       req,
     });
     res.status(201).json({ vm, status: vm.status });
+    // An admin deploying into a tenant's account: tell the tenant (no-op otherwise).
+    sendLater('deploy-for-tenant', () => sendDeployedForTenantEmail(vm, actor));
   } catch (err) {
     if (err instanceof CreateOptionError) {
       res.status(err.status).json({ error: err.message });
@@ -509,7 +527,17 @@ router.get('/:id', async (req: Request, res: Response) => {
   const rescueAvailable = kindOf(resolved.vm) !== 'lxc' && !!(await getConfig('rescue_iso'));
   // `caps` is what the UI gates on (per-capability buttons/tabs); `access` is the
   // display badge. Owner/admin get every capability.
-  res.json({ ...withStatus, deployState, access: resolved.access, caps: [...resolved.caps], rescueAvailable });
+  // The push-file dialog checks the size against the server's limit before uploading.
+  const filePushMaxBytes = guestFilePushMaxBytes();
+  res.json({
+    ...withStatus,
+    tags: tagsForAccess(withStatus.tags, resolved.access),
+    deployState,
+    access: resolved.access,
+    caps: [...resolved.caps],
+    rescueAvailable,
+    filePushMaxBytes,
+  });
 });
 
 // ─── GET /api/vms/:id/metrics ─────────────────────────────────
@@ -606,7 +634,8 @@ const UpdateVmSchema = z.object({
   cpu: z.number().int().positive().max(64).optional(),
   ram: RamMb.optional(),
   storage: z.number().int().positive().optional(),
-  // Optional labels for grouping/filtering. Pass [] to clear.
+  // Optional labels for grouping/filtering. Pass [] to clear. The charset has no
+  // `:`, so a `project:<name>` tag can't be set here — the project is kept as is.
   tags: z
     .array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9 _-]{0,30}$/, 'Letters, numbers, space, _ and - only'))
     .max(20)
@@ -617,6 +646,9 @@ router.patch('/:id', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
   let vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
   if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  // A Manager-level sharee can edit labels but never sees the owner's project tag.
+  const access = vm.userId === user.id ? 'owner' : user.role === 'admin' ? 'admin' : 'shared';
+  const view = (v: VirtualMachine) => ({ ...v, tags: tagsForAccess(v.tags, access) });
 
   const parsed = UpdateVmSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -631,8 +663,9 @@ router.patch('/:id', async (req: Request, res: Response) => {
       : (parsed.data.description?.trim() || null);
   const newName = parsed.data.name?.trim();
   const renaming = !!newName && newName !== vm.name;
-  // undefined = not provided; empty CSV → null (clear all tags).
-  const tags = parsed.data.tags === undefined ? undefined : normalizeTags(parsed.data.tags) || null;
+  // undefined = not provided; empty CSV → null (clear all tags). These are the
+  // plain labels: the VM's project tag (set via /api/projects/assign) is kept.
+  const tags = parsed.data.tags === undefined ? undefined : withProject(normalizeTags(parsed.data.tags), projectOf(vm.tags));
   const metaChanged = renaming || description !== undefined || tags !== undefined;
 
   const resizeInput = {
@@ -642,7 +675,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
   };
   const resizing = Object.keys(resizeInput).length > 0;
 
-  if (!metaChanged && !resizing) { res.json(vm); return; }
+  if (!metaChanged && !resizing) { res.json(view(vm)); return; }
   // Resizing an admin-managed VM is admin-only (rename/tags stay open to the owner).
   if (resizing && rejectIfSizeLocked(vm, user, res)) return;
 
@@ -677,7 +710,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
       });
     }
 
-    res.json(vm);
+    res.json(view(vm));
   } catch (err) {
     if (err instanceof QuotaError) {
       res.status(403).json({ error: 'Quota exceeded', details: err.details });
@@ -977,7 +1010,7 @@ router.post('/:id/shares', shareLimiter, async (req: Request, res: Response) => 
     // Same response and same audit detail whether or not the address has an
     // account (the VM activity feed is visible to the tenant), so the POST response
     // itself does not confirm whether an account exists.
-    await addShare(vm, parsed.data.email, parsed.data.role);
+    const { notice } = await addShareWithNotice(vm, parsed.data.email, parsed.data.role);
     await recordAudit({
       action: 'vm.share', actor: user, targetType: 'vm', targetId: vm.id,
       detail: `${parsed.data.email} as ${parsed.data.role}`, req,
@@ -985,6 +1018,10 @@ router.post('/:id/shares', shareLimiter, async (req: Request, res: Response) => 
     res.status(202).json({
       message: 'Shared. Someone without a ProxMate account yet gets access once they register with that address through an invite sent to it.',
     });
+    // The recipient of a live share hears about it after the answer above has gone
+    // out, so mail delivery can't change the response or how long it took. A
+    // pending share (no account yet) has no notice and sends nothing.
+    if (notice) sendLater('share', () => sendShareEmail(notice, user));
   } catch (err) {
     if (err instanceof ShareError) { res.status(err.status).json({ error: err.message }); return; }
     res.status(500).json({ error: 'Failed to share the VM' });
@@ -1230,6 +1267,93 @@ router.post('/:id/ssh-keys', async (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── POST /api/vms/:id/files ──────────────────────────────────
+// Push a small file into a running QEMU guest through the guest agent. Same
+// capability as the SSH-key add (`configure`). multipart: `file`, `path`,
+// optional `mode` (default 0644), `owner` and `createParents`. The path is
+// validated strictly and only ever travels as an argv entry; the audit entry
+// records path, size and SHA-256, never the contents.
+
+const guestFileMulter = multer({
+  storage: multer.memoryStorage(),
+  // +1 so a file exactly at the limit passes and one byte over is a clean 413.
+  limits: { fileSize: guestFilePushMaxBytes() + 1, files: 1, fields: 8, fieldSize: 4096 },
+});
+
+const PushFileSchema = z.object({
+  path: z.string().min(1).max(4096),
+  mode: z.string().max(8).optional(),
+  owner: z
+    .string()
+    .max(64)
+    .refine((u) => u === '' || GUEST_USERNAME_RE.test(u), 'Invalid username')
+    .optional(),
+  createParents: z.enum(['true', 'false', '1', '0', '']).optional(),
+});
+
+router.post('/:id/files', guestFileLimiter, async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') {
+    res.status(409).json({ error: 'Pushing files needs the QEMU guest agent — containers are not supported' });
+    return;
+  }
+
+  const uploadErr = await new Promise<unknown>((resolve) => guestFileMulter.single('file')(req, res, resolve));
+  const max = guestFilePushMaxBytes();
+  if (uploadErr) {
+    if (uploadErr instanceof multer.MulterError && uploadErr.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({ error: `That file is larger than the ${formatByteLimit(max)} push limit.` });
+      return;
+    }
+    res.status(400).json({ error: uploadErr instanceof Error ? uploadErr.message : 'Upload failed' });
+    return;
+  }
+  const file = (req as Request & { file?: Express.Multer.File }).file;
+  if (!file) { res.status(400).json({ error: 'No file was uploaded.' }); return; }
+  if (file.size > max) {
+    res.status(413).json({ error: `That file is larger than the ${formatByteLimit(max)} push limit.` });
+    return;
+  }
+
+  const parsed = PushFileSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  const dest = validateGuestPath(parsed.data.path);
+  if (!dest.ok) { res.status(400).json({ error: dest.error }); return; }
+  const mode = parseFileMode(parsed.data.mode);
+  if (!mode) { res.status(400).json({ error: 'Use a mode like 0644.' }); return; }
+  const owner = parsed.data.owner ?? '';
+  const createParents = parsed.data.createParents === 'true' || parsed.data.createParents === '1';
+
+  const sha256 = createHash('sha256').update(file.buffer).digest('hex');
+  const detail =
+    `${vm.name} · ${dest.path} · ${file.size} bytes · sha256 ${sha256} · mode ${mode}` +
+    (owner ? ` · owner ${owner}` : '');
+  try {
+    const result = await pushGuestFile(vm, { path: dest.path, content: file.buffer, mode, owner, createParents });
+    await recordAudit({ action: 'vm.file_push', actor: user, targetType: 'vm', targetId: vm.id, detail, req });
+    res.json(result);
+  } catch (err) {
+    const message = err instanceof GuestFileError || err instanceof GuestErroredError || err instanceof GuestIdentityError
+      ? err.message
+      : pveMessage(err);
+    await recordAudit({
+      action: 'vm.file_push_failed', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `${detail} · ${message}`.slice(0, 1000), req,
+    });
+    if (err instanceof GuestFileError) { res.status(err.status).json({ error: err.message }); return; }
+    if (err instanceof GuestErroredError || err instanceof GuestIdentityError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    res.status(502).json({ error: message });
   }
 });
 
@@ -1691,19 +1815,40 @@ router.delete('/:id/snapshots/:name', async (req: Request, res: Response) => {
   }
 });
 
+// ─── Console tickets ──────────────────────────────────────────
+// Both consoles take the console mode from the caller's capabilities: `console`
+// gives an interactive session, `console_view` alone (a Viewer share) a view-only
+// one. The mode is recorded with the ticket, and the WebSocket relay enforces it —
+// a view-only session's keyboard, mouse and clipboard never reach Proxmox. The
+// `viewOnly` field in the response only tells the browser how to draw the console.
+
+/** The VM and console mode for the caller, or null when they hold neither console cap. */
+async function consoleAccess(vmId: string, user: { id: string; role: string }) {
+  const access = await resolveVmAccess(vmId, user);
+  const mode = access ? consoleModeFor(access.caps) : null;
+  return access && mode ? { vm: access.vm, mode } : null;
+}
+
 // ─── POST /api/vms/:id/console ────────────────────────────────
 // Returns a one-time VNC ticket + port for the noVNC console.
 
 router.post('/:id/console', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  let vm = await getVmWithCap(req.params['id'] as string, user, 'console');
-  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  const granted = await consoleAccess(req.params['id'] as string, user);
+  if (!granted) { res.status(404).json({ error: 'VM not found' }); return; }
+  let vm = granted.vm;
+  const { mode } = granted;
   if (rejectIfLocked(vm, res)) return;
 
   try {
     vm = await requireOurGuest(vm);
     const { ticket, port } = await requestVncProxy(vm.proxmoxNode, vm.proxmoxVmId, kindOf(vm));
-    res.json({ ticket, port });
+    recordConsoleGrant(ticket, { vmId: vm.id, userId: user.id, transport: 'vnc', port, mode });
+    await recordAudit({
+      action: 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `graphical console of ${vm.name}${mode === 'view' ? ' (view only)' : ''}`, req,
+    });
+    res.json({ ticket, port, viewOnly: mode === 'view' });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }
@@ -1715,8 +1860,10 @@ router.post('/:id/console', async (req: Request, res: Response) => {
 
 router.post('/:id/serial', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  let vm = await getVmWithCap(req.params['id'] as string, user, 'console');
-  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  const granted = await consoleAccess(req.params['id'] as string, user);
+  if (!granted) { res.status(404).json({ error: 'VM not found' }); return; }
+  let vm = granted.vm;
+  const { mode } = granted;
 
   try {
     vm = await requireOurGuest(vm);
@@ -1731,7 +1878,12 @@ router.post('/:id/serial', async (req: Request, res: Response) => {
       }
     }
     const ticket = await requestTermProxy(vm.proxmoxNode, vm.proxmoxVmId, undefined, kind);
-    res.json(ticket);
+    recordConsoleGrant(ticket.ticket, { vmId: vm.id, userId: user.id, transport: 'serial', port: ticket.port, mode });
+    await recordAudit({
+      action: 'vm.console_open', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `text console of ${vm.name}${mode === 'view' ? ' (view only)' : ''}`, req,
+    });
+    res.json({ ...ticket, viewOnly: mode === 'view' });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
   }

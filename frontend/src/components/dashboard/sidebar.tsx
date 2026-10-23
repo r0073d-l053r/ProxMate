@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Server, LayoutDashboard, MonitorPlay, Package, Ticket, Users, Settings, BookOpen, Activity, ScrollText, Scale } from "lucide-react";
+import { Server, LayoutDashboard, MonitorPlay, Package, Ticket, Users, Settings, BookOpen, Activity, ScrollText, Scale, FolderKanban } from "lucide-react";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { href: "/vms", label: "Virtual Machines", icon: MonitorPlay, exact: false },
+  { href: "/projects", label: "Projects", icon: FolderKanban, exact: false },
   { href: "/templates", label: "Template Store", icon: Package, exact: false },
   { href: "/help", label: "Help & Docs", icon: BookOpen, exact: false },
 ];

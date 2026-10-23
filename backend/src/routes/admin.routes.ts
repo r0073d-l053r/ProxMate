@@ -47,7 +47,8 @@ import {
   detachPassthrough,
   PassthroughRequestError,
 } from '../services/passthrough-request.service.js';
-import { getOwnedVm, listUnmatchedVms, adoptGuest, AdoptError } from '../services/vm.service.js';
+import { getOwnedVm, listUnmatchedVms, adoptGuest, AdoptError, QuotaError } from '../services/vm.service.js';
+import { listImportableGuests, importGuest, ImportError } from '../services/guest-import.service.js';
 import {
   checkForUpdate,
   getUpdateStatus,
@@ -64,8 +65,13 @@ import {
   saveNotifyConfig,
   sendTestNotification,
   maskWebhookUrl,
+  maskTelegramToken,
+  parseNtfyTopicUrl,
   NOTIFY_EVENTS,
+  TELEGRAM_TOKEN_RE,
+  TELEGRAM_CHAT_RE,
 } from '../services/notify.service.js';
+import { isUsageDigestEnabled, setUsageDigestEnabled, buildUsageDigest } from '../services/usage-digest.service.js';
 import * as sso from '../services/sso.service.js';
 import { getIdeConfig, saveIdeConfig, isValidIngressCidr } from '../services/ide.service.js';
 import { probeIdeReachability } from '../services/ide-provision.service.js';
@@ -122,7 +128,7 @@ router.get('/settings', async (_req: Request, res: Response) => {
   const ssoCfg = await sso.getSsoConfig();
   // The webhook URL carries the receiver's token, so like the other secrets it is
   // reported only as "is one set" plus a masked form that shows where it points.
-  const { webhookUrl, ...notifyCfg } = await getNotifyConfig();
+  const { webhookUrl, ntfyUrl, ntfyToken, telegramBotToken, ...notifyCfg } = await getNotifyConfig();
   res.json({
     proxmox: {
       host,
@@ -137,7 +143,18 @@ router.get('/settings', async (_req: Request, res: Response) => {
     smtp: mail
       ? { configured: true, host: mail.host, port: mail.port, secure: mail.secure, user: mail.user ?? '', from: mail.from, hasPass: !!mail.pass }
       : { configured: false },
-    notify: { ...notifyCfg, hasWebhookUrl: !!webhookUrl, webhookUrlMasked: maskWebhookUrl(webhookUrl) },
+    notify: {
+      ...notifyCfg,
+      hasWebhookUrl: !!webhookUrl,
+      webhookUrlMasked: maskWebhookUrl(webhookUrl),
+      // ntfy topic URL + token and the Telegram bot token are secrets too.
+      hasNtfyUrl: !!ntfyUrl,
+      ntfyUrlMasked: maskWebhookUrl(ntfyUrl),
+      hasNtfyToken: !!ntfyToken,
+      hasTelegramBotToken: !!telegramBotToken,
+      telegramBotTokenMasked: maskTelegramToken(telegramBotToken),
+    },
+    usageDigestEnabled: await isUsageDigestEnabled(),
     sso: ssoCfg
       ? {
           configured: true,
@@ -294,7 +311,29 @@ const NotifySchema = z.object({
   emailEnabled: z.boolean().default(false),
   emailTo: z.string().max(200).optional(), // blank = all admins
   events: z.array(z.enum(NOTIFY_EVENTS)).default([]),
+  // ntfy and Telegram fields are optional: a client that omits them leaves
+  // those channels exactly as they are. Blank secrets keep the stored ones.
+  ntfyUrl: z.string().max(2000).optional(),
+  ntfyToken: z.string().max(200).regex(/^\S*$/, 'No spaces in the access token').optional(),
+  clearNtfy: z.boolean().optional(),
+  clearNtfyToken: z.boolean().optional(),
+  telegramBotToken: z
+    .string()
+    .max(200)
+    .refine((v) => v.trim() === '' || TELEGRAM_TOKEN_RE.test(v.trim()), 'That does not look like a Telegram bot token (123456:ABC…).')
+    .optional(),
+  telegramChatId: z
+    .string()
+    .max(80)
+    .refine((v) => v.trim() === '' || TELEGRAM_CHAT_RE.test(v.trim()), 'Chat id must be a number (e.g. -1001234567890) or @channelname.')
+    .optional(),
+  clearTelegram: z.boolean().optional(),
 });
+
+/** One audit phrase for a secret-bearing channel: what happened to it, never the value. */
+function secretChange(cleared: boolean | undefined, replaced: boolean): string {
+  return cleared ? 'removed' : replaced ? 'replaced' : 'kept';
+}
 
 router.put('/settings/notifications', async (req: Request, res: Response) => {
   const parsed = NotifySchema.safeParse(req.body);
@@ -312,20 +351,58 @@ router.put('/settings/notifications', async (req: Request, res: Response) => {
       return;
     }
   }
+  const d = parsed.data;
+  const ntfyUrl = (d.ntfyUrl ?? '').trim();
+  if (ntfyUrl && !d.clearNtfy) {
+    try {
+      // Same up-front host check as the webhook (DNS re-checked at send), and
+      // the URL must name a topic.
+      assertPublicHttpUrlShape(ntfyUrl, 'ntfy URL');
+      parseNtfyTopicUrl(ntfyUrl);
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid ntfy URL' });
+      return;
+    }
+  }
+  const tgToken = (d.telegramBotToken ?? '').trim();
+  const tgChat = d.telegramChatId?.trim();
+  if (tgToken && !d.clearTelegram && tgChat === '') {
+    res.status(400).json({ error: 'Enter the Telegram chat id to send to.' });
+    return;
+  }
   await saveNotifyConfig({
     webhookUrl: url,
-    clearWebhookUrl: parsed.data.clearWebhookUrl,
-    emailEnabled: parsed.data.emailEnabled,
-    emailTo: parsed.data.emailTo,
-    events: parsed.data.events,
+    clearWebhookUrl: d.clearWebhookUrl,
+    ntfyUrl,
+    ntfyToken: d.ntfyToken,
+    clearNtfy: d.clearNtfy,
+    clearNtfyToken: d.clearNtfyToken,
+    telegramBotToken: tgToken,
+    telegramChatId: d.telegramChatId,
+    clearTelegram: d.clearTelegram,
+    emailEnabled: d.emailEnabled,
+    emailTo: d.emailTo,
+    events: d.events,
   });
-  // What changed, never the URL itself (it carries the receiver's token).
-  const webhook = parsed.data.clearWebhookUrl ? 'removed' : url ? 'replaced' : 'kept';
-  const n = parsed.data.events.length;
+  // What changed, never the URL itself (it carries the receiver's token) nor any
+  // other secret. The ntfy / Telegram parts appear only when the request touched
+  // those channels, so a save from a client that predates them reads as before.
+  const webhook = secretChange(d.clearWebhookUrl, !!url);
+  const n = d.events.length;
+  const parts = [`webhook ${webhook}`];
+  if (d.ntfyUrl !== undefined || d.ntfyToken !== undefined || d.clearNtfy || d.clearNtfyToken) {
+    const token = d.clearNtfy || d.clearNtfyToken ? 'token removed' : (d.ntfyToken ?? '').trim() ? 'token replaced' : 'token kept';
+    parts.push(`ntfy ${secretChange(d.clearNtfy, !!ntfyUrl)}${d.clearNtfy ? '' : ` (${token})`}`);
+  }
+  if (d.telegramBotToken !== undefined || d.telegramChatId !== undefined || d.clearTelegram) {
+    const chat = d.clearTelegram || tgChat === undefined ? '' : ` (chat ${tgChat || 'unset'})`;
+    parts.push(`telegram ${secretChange(d.clearTelegram, !!tgToken)}${chat}`);
+  }
+  parts.push(`email ${d.emailEnabled ? 'on' : 'off'}`, `${n} event${n === 1 ? '' : 's'}`);
   await recordAudit({
     action: 'admin.notify_config',
     actor: (req as AuthRequest).user,
-    detail: `webhook ${webhook}, email ${parsed.data.emailEnabled ? 'on' : 'off'}, ${n} event${n === 1 ? '' : 's'}`,
+    detail: parts.join(', '),
     req,
   });
   res.json({ success: true });
@@ -340,6 +417,43 @@ router.post('/settings/notifications/test', async (_req: Request, res: Response)
     res.json(await sendTestNotification());
   } catch (err) {
     res.status(400).json({ ok: false, error: err instanceof Error ? err.message : 'Test failed' });
+  }
+});
+
+// ─── Weekly usage digest ──────────────────────────────────────
+// Global on/off for the per-tenant weekly digest. Each user still has to opt in
+// on their own Security page; this only lets the admin turn it off for everyone.
+
+const UsageDigestSchema = z.object({ enabled: z.boolean() });
+
+router.put('/settings/usage-digest', async (req: Request, res: Response) => {
+  const parsed = UsageDigestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  await setUsageDigestEnabled(parsed.data.enabled);
+  await recordAudit({
+    action: 'admin.usage_digest_config',
+    actor: (req as AuthRequest).user,
+    detail: parsed.data.enabled ? 'weekly digest enabled' : 'weekly digest disabled',
+    req,
+  });
+  res.json({ success: true });
+});
+
+// Send the calling admin THEIR OWN digest now — a preview of the format that
+// also proves SMTP delivery, without emailing any tenant.
+router.post('/settings/usage-digest/preview', async (req: Request, res: Response) => {
+  const me = (req as AuthRequest).user;
+  try {
+    if (!(await isMailConfigured())) throw new Error('SMTP is not configured');
+    const digest = await buildUsageDigest(me.id);
+    if (!digest) throw new Error('User not found');
+    await sendMail({ to: digest.to, ...digest.mail });
+    res.json({ ok: true, to: digest.to });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err instanceof Error ? err.message : 'Preview failed' });
   }
 });
 
@@ -1068,6 +1182,48 @@ router.post('/vms/:id/adopt', async (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (err) {
     if (err instanceof AdoptError) { res.status(409).json({ error: err.message }); return; }
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── Importing guests ProxMate didn't create ──────────────────
+// Proxmox guests no machine references and that carry no ProxMate tag can be
+// brought under management for a chosen owner: tagged, isolated like a new guest,
+// and counted toward the owner's quota (unless the admin marks them exempt).
+
+router.get('/guests/importable', async (_req: Request, res: Response) => {
+  try {
+    res.json(await listImportableGuests());
+  } catch (err) {
+    res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+const ImportGuestSchema = z.object({
+  vmid: z.number().int().positive(),
+  ownerId: z.string().min(1).max(64),
+  quotaExempt: z.boolean().optional(),
+  adminManaged: z.boolean().optional(),
+});
+
+router.post('/guests/import', async (req: Request, res: Response) => {
+  const parsed = ImportGuestSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Choose a guest and an owner.' }); return; }
+  const owner = await prisma.user.findUnique({ where: { id: parsed.data.ownerId } });
+  if (!owner) { res.status(404).json({ error: 'No such user to import for.' }); return; }
+  try {
+    const vm = await importGuest((req as AuthRequest).user, { ...parsed.data, owner });
+    res.status(201).json({ vm });
+  } catch (err) {
+    if (err instanceof ImportError) { res.status(err.status).json({ error: err.message }); return; }
+    if (err instanceof QuotaError) {
+      res.status(403).json({
+        error: `Importing this guest would exceed ${owner.email}'s quota (${Object.keys(err.details).join(', ')}). ` +
+          'Raise their quota or import it as quota-exempt.',
+        details: err.details,
+      });
+      return;
+    }
     res.status(502).json({ error: pveMessage(err) });
   }
 });

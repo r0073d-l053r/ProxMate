@@ -50,6 +50,13 @@ model User {
   // Transactional / security / notification emails are unaffected. The EDU
   // edition deliberately has no opt-out (instructors must reach every student).
   broadcastOptOut Boolean @default(false)
+  // Opted out of activity emails about their own machines: a VM an admin set up
+  // in their account, or a VM shared with them / a change to their share level.
+  // Security, account and alert emails are unaffected.
+  activityEmailOptOut Boolean @default(false)
+  // Opted IN to the weekly usage digest (their own VMs, usage and quota). Off by
+  // default; the admin can also turn the digest off for everyone.
+  usageDigestOptIn    Boolean @default(false)
 
   // ── Compute access window ────────────────────────────────────────────────
   // How long this tenant may use the cluster. Seeded from the invite's

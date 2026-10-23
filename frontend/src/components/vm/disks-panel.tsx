@@ -7,6 +7,7 @@ import { api, apiError } from "@/lib/api";
 import type { VmDisk } from "@/lib/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -63,11 +64,10 @@ function GrowDiskDialog({ vmId, disk, onDone }: { vmId: string; disk: VmDisk; on
             filesystem inside the VM afterwards.
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <Input
-          type="number"
+        <NumberInput
           min={disk.sizeGb + 1}
           value={size}
-          onChange={(e) => setSize(Math.max(disk.sizeGb + 1, Math.floor(Number(e.target.value) || 0)))}
+          onValueChange={setSize}
           aria-label="New disk size in GB"
         />
         <AlertDialogFooter>
@@ -139,7 +139,7 @@ export function DisksPanel({
         </CardTitle>
         <CardDescription>
           {readOnly
-            ? "This VM was set up by an admin — its disks are managed by them and can't be changed here."
+            ? "Set up by your admin — only an admin can change its disks."
             : "The root disk is managed from the VM resize controls. Add extra data disks here — they count toward the owner's storage quota."}
         </CardDescription>
       </CardHeader>
@@ -202,12 +202,11 @@ export function DisksPanel({
               <label className="text-xs text-muted-foreground" htmlFor="disk-size">
                 New data disk (GB)
               </label>
-              <Input
+              <NumberInput
                 id="disk-size"
-                type="number"
                 min={1}
                 value={newSize}
-                onChange={(e) => setNewSize(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                onValueChange={setNewSize}
                 className="w-32"
               />
             </div>

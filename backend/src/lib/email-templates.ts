@@ -489,3 +489,192 @@ export function accessExpiringEmail(opts: {
 
   return { subject, text, html: wrapEmail(`Your ProxMate access ends ${when}.`, bodyRows) };
 }
+
+/** Footer line on activity emails — they can be turned off, unlike account/security mail. */
+const ACTIVITY_FOOTER_TEXT = 'You can turn these emails off in ProxMate under Security → Email preferences.';
+
+const SHARE_LEVEL_LABEL: Record<string, string> = { viewer: 'Viewer', operator: 'Operator', manager: 'Manager' };
+const SHARE_LEVEL_SUMMARY: Record<string, string> = {
+  viewer: 'see its status and details',
+  operator: 'see it, power it on and off, and open its console',
+  manager: 'see it, power it, open its console, change its settings, manage its backups and use the IDE',
+};
+const shareLevelLabel = (role: string): string => SHARE_LEVEL_LABEL[role] ?? role;
+const shareLevelSummary = (role: string): string => SHARE_LEVEL_SUMMARY[role] ?? SHARE_LEVEL_SUMMARY['viewer']!;
+
+/**
+ * Tells a tenant an admin created a machine in their account. Names the size
+ * and that only an admin can resize or rebuild it — the same wording the VM
+ * page uses, so the email and the UI agree.
+ */
+export function vmDeployedForYouEmail(opts: {
+  displayName: string;
+  vmName: string;
+  kind: 'vm' | 'lxc';
+  cpu: number;
+  ram: number; // MB
+  storage: number; // GB
+  quotaExempt: boolean;
+  adminName?: string | null;
+  vmUrl?: string;
+}): RenderedEmail {
+  const { displayName, vmName, kind, cpu, ram, storage, quotaExempt, adminName, vmUrl } = opts;
+  const what = kind === 'lxc' ? 'container' : 'virtual machine';
+  const by = adminName ? `${adminName} (an admin)` : 'An admin';
+  const subject = `[ProxMate] A new ${what} was set up for you: ${vmName}`;
+  const quotaLine = quotaExempt
+    ? 'It does not count toward your quota.'
+    : 'It counts toward your quota like the machines you create yourself.';
+  const lockLine = 'Set up by your admin — only an admin can resize or rebuild it. Otherwise you can use it like any of your machines.';
+
+  const text =
+    `Hi ${displayName},\n\n` +
+    `${by} set up a new ${what}, "${vmName}", in your ProxMate account.\n\n` +
+    `Size: ${cpu} vCPU · ${formatRamMb(ram)} RAM · ${storage} GB storage. ${quotaLine}\n\n` +
+    `${lockLine}\n\n` +
+    (vmUrl ? `Open it: ${vmUrl}\n\n` : '') +
+    ACTIVITY_FOOTER_TEXT;
+
+  const rows: Array<[string, string]> = [
+    ['Name', escapeHtml(vmName)],
+    ['vCPU', String(cpu)],
+    ['Memory', formatRamMb(ram)],
+    ['Storage', `${storage} GB`],
+    ['Quota', quotaExempt ? 'Not counted' : 'Counted'],
+  ];
+
+  const bodyRows =
+    h1(`A new ${what} is ready for you`) +
+    p(
+      `Hi ${escapeHtml(displayName)} — ${escapeHtml(by)} set up <strong style="color:${INK};">${escapeHtml(vmName)}</strong> in your ProxMate account.`,
+    ) +
+    infoTable(rows) +
+    p(escapeHtml(lockLine)) +
+    (vmUrl ? button(escapeHtml(vmUrl), `Open ${escapeHtml(vmName)}`) + linkFallback(escapeHtml(vmUrl)) : '') +
+    p(escapeHtml(ACTIVITY_FOOTER_TEXT), { color: MUTED, size: 13, mt: 16, mb: 0 });
+
+  return { subject, text, html: wrapEmail(`${vmName} was set up in your ProxMate account.`, bodyRows) };
+}
+
+/**
+ * Tells someone a VM was shared with them, or that their access level on one
+ * changed (`previousRole` set). Only ever sent to an existing account — a share
+ * to an address with no account sends nothing (an invite is the separate step).
+ */
+export function vmSharedEmail(opts: {
+  vmName: string;
+  role: string;
+  previousRole?: string | null;
+  sharedBy?: string | null;
+  vmUrl?: string;
+}): RenderedEmail {
+  const { vmName, role, previousRole, sharedBy, vmUrl } = opts;
+  const level = shareLevelLabel(role);
+  const changed = !!previousRole && previousRole !== role;
+  const who = sharedBy ?? 'Someone';
+  const subject = changed
+    ? `[ProxMate] Your access to "${vmName}" changed to ${level}`
+    : `[ProxMate] "${vmName}" was shared with you`;
+  const lead = changed
+    ? `Your access to "${vmName}" changed from ${shareLevelLabel(previousRole ?? '')} to ${level}.`
+    : `${who} shared "${vmName}" with you as ${level}.`;
+  const can = `As ${level} you can ${shareLevelSummary(role)}.`;
+
+  const text = `${lead}\n\n${can}\n\n` + (vmUrl ? `Open it: ${vmUrl}\n\n` : '') + ACTIVITY_FOOTER_TEXT;
+
+  const strong = (s: string) => `<strong style="color:${INK};">${escapeHtml(s)}</strong>`;
+  const leadHtml = changed
+    ? `Your access to ${strong(vmName)} changed from ${escapeHtml(shareLevelLabel(previousRole ?? ''))} to ${strong(level)}.`
+    : `${escapeHtml(who)} shared ${strong(vmName)} with you as ${strong(level)}.`;
+
+  const bodyRows =
+    h1(changed ? 'Your access level changed' : 'A machine was shared with you') +
+    p(leadHtml) +
+    p(escapeHtml(can)) +
+    (vmUrl ? button(escapeHtml(vmUrl), `Open ${escapeHtml(vmName)}`) + linkFallback(escapeHtml(vmUrl)) : '') +
+    p(escapeHtml(ACTIVITY_FOOTER_TEXT), { color: MUTED, size: 13, mt: 16, mb: 0 });
+
+  return { subject, text, html: wrapEmail(lead, bodyRows) };
+}
+
+/** One machine's line in the weekly usage digest. */
+export interface DigestVmRow {
+  /** Ignored when `exists` is false: the row reads "Deleted machine". */
+  name: string;
+  /** False for a machine deleted since its samples were taken (they are still the tenant's own). */
+  exists: boolean;
+  runningHours: number;
+  /** Average CPU as % of the machine's allocated cores while running. null = no samples. */
+  avgCpuPct: number | null;
+  /** Average memory in use while running, MB. null = no samples. */
+  avgMemMb: number | null;
+}
+
+/** The weekly per-tenant usage digest: their machines, the week's usage and their quota. */
+export function usageDigestEmail(opts: {
+  displayName: string;
+  periodStart: Date;
+  periodEnd: Date;
+  vms: DigestVmRow[];
+  /** [used, max] per resource; max 0 = no limit set. */
+  quota: { cpu: [number, number]; ram: [number, number]; storage: [number, number] };
+  dashboardUrl?: string;
+}): RenderedEmail {
+  const { displayName, periodStart, periodEnd, vms, quota, dashboardUrl } = opts;
+  const day = (d: Date) => d.toISOString().slice(0, 10);
+  const range = `${day(periodStart)} – ${day(periodEnd)}`;
+  const subject = `[ProxMate] Your weekly usage: ${range}`;
+  const hours = (h: number) => `${Math.round(h * 10) / 10} h`;
+  const pct = (v: number | null) => (v == null ? '—' : `${Math.round(v)}%`);
+  const mem = (v: number | null) => (v == null ? '—' : formatRamMb(v));
+  const nameOf = (v: DigestVmRow) => (v.exists ? v.name : 'Deleted machine');
+  const totalHours = vms.reduce((s, v) => s + v.runningHours, 0);
+  const cap = (used: number, max: number, fmt: (n: number) => string) =>
+    max > 0 ? `${fmt(used)} of ${fmt(max)}` : `${fmt(used)} (no limit set)`;
+  const quotaRows: Array<[string, string]> = [
+    ['vCPU', cap(quota.cpu[0], quota.cpu[1], String)],
+    ['Memory', cap(quota.ram[0], quota.ram[1], formatRamMb)],
+    ['Storage', cap(quota.storage[0], quota.storage[1], (n) => `${n} GB`)],
+  ];
+  const method = 'Running time and averages come from samples taken every few minutes while a machine runs.';
+  const optOut = 'You opted in to this weekly digest — turn it off in ProxMate under Security → Email preferences.';
+
+  const vmLines = vms.length
+    ? vms
+        .map((v) => `- ${nameOf(v)}: ${hours(v.runningHours)} running, avg CPU ${pct(v.avgCpuPct)}, avg RAM ${mem(v.avgMemMb)}`)
+        .join('\n')
+    : 'No machines this week.';
+  const text =
+    `Hi ${displayName},\n\nYour ProxMate usage for ${range}.\n\n${vmLines}\n\n` +
+    `Total running time: ${hours(totalHours)}\n\n` +
+    `Quota in use:\n${quotaRows.map(([k, v]) => `- ${k}: ${v}`).join('\n')}\n\n` +
+    `${method}\n\n` +
+    (dashboardUrl ? `${dashboardUrl}\n\n` : '') +
+    optOut;
+
+  const cell = (t: string, head: boolean, right: boolean) =>
+    `<td style="padding:8px 10px; font-size:${head ? 12 : 13}px; color:${head ? MUTED : INK}; border-bottom:1px solid ${head ? LINE : HAIR};${right ? ' text-align:right;' : ''}">${t}</td>`;
+  const vmTable = vms.length
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%; margin:4px 0 22px; border:1px solid ${LINE}; border-radius:8px;">
+<tr>${cell('Machine', true, false)}${cell('Running', true, true)}${cell('Avg CPU', true, true)}${cell('Avg RAM', true, true)}</tr>
+${vms
+  .map(
+    (v) =>
+      `<tr>${cell(escapeHtml(nameOf(v)), false, false)}${cell(hours(v.runningHours), false, true)}${cell(pct(v.avgCpuPct), false, true)}${cell(mem(v.avgMemMb), false, true)}</tr>`,
+  )
+  .join('\n')}
+</table>`
+    : p('No machines this week.', { color: MUTED });
+
+  const bodyRows =
+    h1('Your weekly usage') +
+    p(`Hi ${escapeHtml(displayName)} — here is your ProxMate usage for ${escapeHtml(range)}.`) +
+    vmTable +
+    p(`Total running time: <strong style="color:${INK};">${hours(totalHours)}</strong>`, { mb: 16 }) +
+    p('Quota in use', { color: INK, mb: 6 }) +
+    infoTable(quotaRows) +
+    (dashboardUrl ? button(escapeHtml(dashboardUrl), 'Open ProxMate') : '') +
+    p(`${method} ${optOut}`, { color: MUTED, size: 13, mt: 16, mb: 0 });
+
+  return { subject, text, html: wrapEmail(`Your ProxMate usage for ${range}.`, bodyRows) };
+}

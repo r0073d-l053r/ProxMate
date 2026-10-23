@@ -455,6 +455,11 @@ export async function pickBestNode(
   client?: AxiosInstance,
   candidateNodes?: string[],
   arch?: Arch,
+  /**
+   * Guests already placed on a node but not yet there (a bulk deploy placing its
+   * copies one after another): counted as used, so the copies spread out.
+   */
+  pending?: Map<string, { cpu: number; ramMb: number; storageGb: number }>,
 ): Promise<string> {
   const c = client ?? (await getClient());
   const res = await c.get<{ data: ClusterResource[] }>('/cluster/resources');
@@ -504,15 +509,16 @@ export async function pickBestNode(
 
   const scored: NodePlacement[] = nodes.map((n) => {
     const maxcpu = n.maxcpu ?? 0;
-    const freeCpu = Math.max(0, maxcpu - (n.cpu ?? 0) * maxcpu);
-    const freeMem = Math.max(0, (n.maxmem ?? 0) - (n.mem ?? 0));
+    const queued = n.node ? pending?.get(n.node) : undefined;
+    const freeCpu = Math.max(0, maxcpu - (n.cpu ?? 0) * maxcpu - (queued?.cpu ?? 0));
+    const freeMem = Math.max(0, (n.maxmem ?? 0) - (n.mem ?? 0) - (queued?.ramMb ?? 0) * 1024 * 1024);
     const pool = n.node ? poolByNode.get(n.node) : undefined;
     const hasDisk = !!pool && pool.total > 0;
-    const freeDisk = pool ? pool.free : null;
+    const freeDisk = pool ? Math.max(0, pool.free - (queued?.storageGb ?? 0) * 1024 * 1024 * 1024) : null;
 
     const memFrac = n.maxmem ? freeMem / n.maxmem : 0;
     const cpuFrac = maxcpu ? freeCpu / maxcpu : 0;
-    const diskFrac = hasDisk ? pool!.free / pool!.total : 0;
+    const diskFrac = hasDisk ? freeDisk! / pool!.total : 0;
 
     let score = hasDisk
       ? memFrac * 0.5 + cpuFrac * 0.35 + diskFrac * 0.15
@@ -890,6 +896,21 @@ export async function getNextVmId(client?: AxiosInstance): Promise<number> {
   const c = client ?? (await getClient());
   const res = await c.get<{ data: string }>('/cluster/nextid');
   return parseInt(res.data.data, 10);
+}
+
+/**
+ * Whether no guest uses `vmid`: Proxmox answers `/cluster/nextid?vmid=N` with N
+ * when it is free and refuses it (400) when it is taken.
+ */
+export async function isVmIdFree(vmid: number, client?: AxiosInstance): Promise<boolean> {
+  const c = client ?? (await getClient());
+  try {
+    const res = await c.get<{ data: string }>('/cluster/nextid', { params: { vmid } });
+    return parseInt(String(res.data.data), 10) === vmid;
+  } catch (err) {
+    if (err instanceof AxiosError && err.response?.status === 400) return false;
+    throw err;
+  }
 }
 
 export interface CreateVmConfig {
@@ -3820,6 +3841,7 @@ export interface GuestExecResult {
  * (`agent/exec` then poll `exec-status`). For quick, near-instant probes only —
  * e.g. reading `cloud-init status`. Times out (default 10s) rather than hanging
  * the caller; a timeout throws so callers can treat it as "couldn't determine".
+ * Output is trimmed unless `trim` is false (callers that measure it, e.g. a log tail).
  */
 export async function guestExecOutput(
   node: string,
@@ -3827,6 +3849,7 @@ export async function guestExecOutput(
   argv: string[],
   client?: AxiosInstance,
   timeoutMs = 10_000,
+  trim = true,
 ): Promise<GuestExecResult> {
   const c = client ?? (await getClient());
   const params = new URLSearchParams();
@@ -3839,9 +3862,10 @@ export async function guestExecOutput(
     const st = await c.get<{ data: AgentExecStatus }>(`/nodes/${node}/qemu/${vmid}/agent/exec-status?pid=${pid}`);
     const s = st.data.data;
     if (s.exited) {
+      const out = s['out-data'] ?? '';
       return {
         exitcode: s.exitcode ?? 0,
-        stdout: (s['out-data'] ?? '').trim(),
+        stdout: trim ? out.trim() : out,
         stderr: (s['err-data'] ?? '').trim(),
       };
     }

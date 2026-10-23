@@ -43,8 +43,8 @@
 #                         [--user proxmate@pve] [--token proxmate]
 #                         [--pool <name> [--drop-root-grant]]
 #
-#   --with-ide          also allow the ProxMate IDE's guest-agent file writes
-#                       (Proxmox VE 9; on 8 the guest-agent privilege already covers it)
+#   --with-ide          accepted for older instructions; the guest-agent file
+#                       write it used to add is now always part of the role
 #   --with-passthrough  also allow GPU/PCI passthrough through resource mappings
 #   --pool <name>       grant the guest privileges on /pool/<name> only (see above)
 #   --drop-root-grant   with --pool: remove the ProxMate role's earlier grant on /
@@ -55,7 +55,6 @@ USER_ID="proxmate@pve"
 TOKEN_NAME="proxmate"
 ROLE="ProxMate"
 DRY_RUN=0
-WITH_IDE=0
 WITH_PASSTHROUGH=0
 POOL=""
 DROP_ROOT_GRANT=0
@@ -63,7 +62,7 @@ DROP_ROOT_GRANT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
-    --with-ide) WITH_IDE=1 ;;
+    --with-ide) ;; # now always included; kept so older instructions still run
     --with-passthrough) WITH_PASSTHROUGH=1 ;;
     --user) USER_ID="${2:?--user needs a value}"; shift ;;
     --token) TOKEN_NAME="${2:?--token needs a value}"; shift ;;
@@ -111,8 +110,9 @@ PRIVS="$PRIVS Datastore.Allocate Datastore.AllocateSpace Datastore.AllocateTempl
 PRIVS="$PRIVS SDN.Audit SDN.Use Sys.Audit Sys.Modify"
 # Guest agent: Proxmox VE 9 replaced VM.Monitor with the VM.GuestAgent.* privileges.
 if [ "$PVE_MAJOR" -ge 9 ]; then
-  PRIVS="$PRIVS VM.GuestAgent.Audit VM.GuestAgent.Unrestricted"
-  [ "$WITH_IDE" -eq 1 ] && PRIVS="$PRIVS VM.GuestAgent.FileWrite"
+  # FileWrite: the IDE bootstrap and pushing a file into a VM use agent/file-write.
+  # Unrestricted already covers it on 9.2; older 9.x may check FileWrite itself.
+  PRIVS="$PRIVS VM.GuestAgent.Audit VM.GuestAgent.Unrestricted VM.GuestAgent.FileWrite"
 else
   PRIVS="$PRIVS VM.Monitor"
 fi

@@ -12,17 +12,24 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 ## 🔜 Open — up next (pulled to the top)
 
-### Still open from v1.0.0 verification
+### Live-cluster checks (lab session)
 
 - **Verify the least-privilege role on Proxmox VE 8.** `deploy/proxmox-token.sh` was run end to end
   on a Proxmox VE 9.2 cluster with every feature passing. The PVE 8 variant (`VM.Monitor` instead of
   the `VM.GuestAgent.*` privileges) has not been run on real hardware yet.
+- **Restore of an archive that names another guest's disk.** Restores refuse any disk that isn't the
+  guest's own; covered by tests, not yet exercised against a real archive on a live cluster.
+- **Guest owner check on delete.** Delete confirms the guest carries the machine's own ownership tag;
+  covered by tests, not yet exercised on a live cluster. Both checks refuse when in doubt.
 
 ### Placement & reliability
 
-- **Background reconciler for Proxmox tasks.** Async UPIDs are reconciled opportunistically on read;
-  a backend restart mid-operation can leave rows stuck in `creating`/`restoring`. A worker that polls
-  tasks to completion and sweeps stuck rows at startup would make state authoritative.
+- **Background reconciler for Proxmox tasks.** A create that *fails* is already handled (the machine
+  is held and its page says why). The gap is a backend *restart* in the middle of a create, restore
+  or rebuild: the rest of that work is lost, and the status sync deliberately skips rows still in
+  `creating`, so the machine stays `creating` forever. A startup and periodic sweep that inspects
+  Proxmox and settles each stuck row closes it; the passthrough startup recovery
+  (`reconcileInterruptedPassthroughApplies`) is the pattern to follow.
 - **First-class Postgres support.** The Prisma schema is portable but the shipped migration history
   is SQLite-locked (`migration_lock.toml`), and the built-in app-DB backup uses SQLite's
   `VACUUM INTO`. Postgres today means `db push` + `pg_dump`; proper support wants a migration
@@ -32,35 +39,28 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 - **`ENCRYPTION_KEY` loss-safety.** Losing the key means losing the Proxmox token, SMTP creds,
   tenant AI keys, and TOTP secrets in one stroke. The docs runbook pairs key backup with DB backups
-  explicitly; still open: an admin Settings warning that persists until the key is confirmed backed
-  up.
+  explicitly, and the app-database backup card already carries a static reminder. Still open: an
+  admin warning that stays visible until an admin confirms the key is backed up.
 - **Production validation passes.** The shipped OIDC SSO flow and the full 2FA/passkey matrix
   (TOTP, recovery codes, passkeys, invite-enforced 2FA) each need a documented end-to-end QA pass
   on a live deployment.
 
-### Tenant-experience follow-ups
-
-- **Notify the tenant on admin deploy-for-tenant** — a granted VM just appears in their account
-  today; send the branded "you've been granted a VM" email + in-app note.
-- **Share notifications** — email the recipient when a VM is shared with them or their preset level
-  (Viewer / Operator / Manager) changes.
-- **Surface admin-managed / quota-exempt to the owner** — a badge + one-line explainer on the VM
-  detail ("set up by your admin — only an admin can resize it") instead of just the 403 on attempt.
-- **Read-only console (input-blocked viewing)** — a Viewer share gets no console today; the noted
-  follow-up is a view-only, input-blocked console stream.
-
 ### IDE follow-ups
 
 - **Wire the gateway as a provider for code-server's built-in Chat view** (inert today; OpenCode
-  runs as a terminal TUI instead).
-- **Surface the in-guest provision log** — an `ideState: failed` today means shelling into the guest
-  to read `/var/log/pmide-provision.log`; add a "view install log" action (owner/admin, via the guest
-  agent) on the failed state so installs are debuggable from the browser.
+  runs as a terminal TUI instead). Needs a decision first: the IDE settings deliberately turn the
+  built-in chat off so OpenCode is the focus.
+
+### Mobile
+
+- **Android app.** A native app: enter the server's web address, sign in (including 2FA; SSO and
+  passkeys through the web login), then the full ProxMate UI with the session carried over. Built
+  on GitHub Actions so the APK can be downloaded from each run.
 
 ### Deferred pending hardware
 
-- **ARM guest builds (Phase 2).** The arch-aware *placement* guardrail shipped; the aarch64 VM-build
-  path (`arch=aarch64`, `machine=virt`, OVMF + EFI disk) and an arch selector need a real ARM
+- **ARM guest builds (Phase 2).** The arch-aware *placement* guardrail shipped; building an ARM VM
+  doesn't yet set the ARM-specific Proxmox settings. The aarch64 VM-build path (`arch=aarch64`, `machine=virt`, OVMF + EFI disk) and an arch selector need a real ARM
   (Pimox) node to validate.
 - **The GPU on pve-4 (host project)** — the host is vfio/IOMMU-ready and the card is bound; running it
   needs a fresh **q35 + OVMF + EFI-disk** VM (108 was installed under SeaBIOS). Owner's call when wanted.
@@ -81,27 +81,12 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolation model.
 
-1. **Adopt an existing (unmanaged) Proxmox VM.** ProxMate only manages guests it created. An
-   admin-only **import** flow would let an operator onboard an existing cluster: pick an unmanaged
-   guest, assign an owner + quota accounting, apply the per-VM isolation firewall, and start managing
-   it — no rebuild. Closes the biggest "I already have VMs" adoption gap. _CE._
-2. **Bulk deploy from a template (class provisioning).** Deploy *N* VMs from one template in a single
-   action — for a tenant, or one-per-tenant across a selected group — each auto-placed and
-   isolation-firewalled. The concrete primitive behind EDU "assignment templates." _CE primitive, EDU UX._
-3. **Auto-snapshot before risky ops.** Optionally take a snapshot right before a rebuild/resize/rescue
+1. **Auto-snapshot before risky ops.** Optionally take a snapshot right before a rebuild/resize/rescue
    (QEMU) so a bad change is one rollback away. Snapshots already exist; this just wires a safety net
    into the destructive paths, with a retention cap. _CE._
-4. **Projects (tag rollups).** Tags exist per-VM; add a **project view** that groups a tenant's VMs by
-   a `project:<name>` tag with a per-project resource + cost rollup and bulk actions scoped to the
-   group. Low-risk, high polish. _CE._
-5. **Guest-agent file push.** Reuse the exact trust model as password-reset / SSH-key-inject (QEMU
-   guest agent, argv-safe) to let an owner upload a small file into a VM (e.g. a config or starter
-   script) from the browser — no SSH. Size-capped, owner/Manager only. _CE._
-6. **More notification channels.** The webhook engine supports Discord/Slack/Mattermost/generic; add
-   **ntfy** and **Telegram** presets, plus a weekly per-tenant **usage digest** email. _CE._
-7. **Two-person approval for destructive admin actions.** Optional policy: a second admin must confirm
+2. **Two-person approval for destructive admin actions.** Optional policy: a second admin must confirm
    a bulk-delete / node-drain / firewall-disable before it runs. Rides the existing audit log. _EDU._
-8. **Status page / scheduled reports.** A lightweight public/authed status page (node health, capacity,
+3. **Status page / scheduled reports.** A lightweight public/authed status page (node health, capacity,
    incidents) and optional scheduled admin reports (capacity trend, top consumers) off the existing
    `ResourceSample` + cluster-health data. _EDU._
 
@@ -122,6 +107,43 @@ Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
   `/`, and managed guests outside the pool (with a one-click move for guests carrying a ProxMate
   ownership tag). Still to do: run it end to end on a PVE 9 cluster and confirm Proxmox refuses
   the token on a guest outside the pool while every feature works inside it.
+- **Number fields can be cleared and retyped.** Emptying a numeric field no longer leaves a stuck
+  `0` that turns the next digit into "02"; min/max apply when the field loses focus.
+- **Projects (tag rollups).** A **Projects** page groups a tenant's VMs by a `project:<name>` tag:
+  VM and running counts, allocated vCPU/RAM/disk and average CPU/RAM use from the usage samples per
+  project, with start/stop/restart for the whole project through the existing bulk route. Set a
+  project on the VM page or with **Move to project…** on the VM list (owner/admin only). VMs shared
+  with you are listed apart, without their owner's tags; admins see every owner's projects.
+- **View-only console for Viewer shares.** A Viewer share can watch a VM's graphical and text
+  consoles. The relay enforces it: it parses the browser's RFB and termproxy streams and drops
+  every keyboard, mouse, clipboard, resize-desktop and power message before Proxmox sees it, and
+  forces a shared VNC session so a viewer never disconnects anyone else. Console opens are audited
+  (`vm.console_open`, marked "view only" for viewers).
+- **View the IDE install log.** While the IDE installs, or after it failed, the VM's owner (or an
+  admin) opens **View install log**: the tail of `/var/log/pmide-provision.log` read through the
+  guest agent with a fixed command, cleaned of terminal control codes, with refresh and download.
+- **Push a file into a VM.** Owner, admin or Manager share (the `configure` capability, like SSH-key
+  add) uploads a small file (1 MiB default, up to 8 MiB via `GUEST_FILE_PUSH_MAX_BYTES`) to a strictly
+  validated path with a chosen mode and owner, through the guest agent; audited with path, size and
+  SHA-256, rate-limited per user. QEMU only.
+- **Tenant notifications.** A tenant is emailed when an admin sets a VM up in their account, and
+  when a VM is shared with them or their level changes (an address with no account gets nothing,
+  and the owner sees the same answer either way). Users can turn these activity emails off under
+  Security → Email preferences.
+- **Admin-managed badge.** A VM an admin set up shows a badge and "Set up by your admin — only an
+  admin can resize or rebuild it." to its tenant instead of silently missing controls.
+- **ntfy and Telegram channels** for admin event notifications, alongside the webhook and email,
+  with secrets encrypted and shown masked and a per-channel **Send test**.
+- **Weekly usage digest.** Opt-in per user (off by default) with an admin switch: their machines,
+  running hours, average CPU and memory, and quota in use, Mondays 08:00 (`USAGE_DIGEST_CRON`).
+- **Import an existing Proxmox guest (admin).** Settings → Maintenance → Import existing guests lists
+  QEMU and LXC guests ProxMate doesn't manage; importing one for an owner tags it, applies the default
+  bridge and isolation firewall, and counts it toward their quota (or as a grant). Guests with another
+  guest's disks, host devices or a privileged container are refused. _CE._
+- **Bulk deploy from a template.** Deploy up to 20 copies (admins 50) from a `web-{n}` name pattern,
+  or — admin — one copy into each chosen user's account. The whole batch is checked against quota
+  before anything is cloned; copies deploy a few at a time, each placed and isolated like a single
+  deploy, with per-copy results. _CE primitive._
 
 ### Released
 

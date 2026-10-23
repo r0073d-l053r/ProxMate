@@ -23,6 +23,10 @@ import {
 import { loadIdeGuestSecret } from '../services/ide-guest-auth.service.js';
 import { recordAudit } from '../services/audit.service.js';
 import { assertSafeOutboundUrl } from '../lib/url-safety.js';
+import { guestLogLimiter } from '../middleware/rate-limit.js';
+import { readIdeInstallLog, GuestFileError } from '../services/guest-file.service.js';
+import { pveMessage } from '../services/proxmox.service.js';
+import { GuestIdentityError, GuestErroredError } from '../services/vm.service.js';
 import type { AuthRequest } from '../types/index.js';
 
 const router = Router();
@@ -142,6 +146,38 @@ router.get('/:id/status', async (req: Request, res: Response) => {
   // proxy refuses it; tell the UI so it can reinstall instead of opening it.
   const reinstallRequired = state === 'ready' && !(await loadIdeGuestSecret(vm.id));
   res.json({ state, ...(reinstallRequired ? { reinstallRequired } : {}) });
+});
+
+// ─── GET /api/ide/:id/install-log ─────────────────────────────
+// The tail of the install log (/var/log/pmide-provision.log) read through the
+// guest agent with a fixed command, so a failed or slow install can be
+// diagnosed without a console. The VM's owner, like the rest of the IDE, plus
+// admins (who support the owner). Control characters are stripped server-side;
+// the client renders it as plain text.
+router.get('/:id/install-log', guestLogLimiter, async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'ide');
+  if (!vm) {
+    res.status(404).json({ error: 'VM not found' });
+    return;
+  }
+  if (!isIdeOwner(vm, user) && user.role !== 'admin') {
+    res.status(403).json({ error: "Only this VM's owner (or an admin) can read its IDE install log." });
+    return;
+  }
+  try {
+    res.json(await readIdeInstallLog(vm));
+  } catch (err) {
+    if (err instanceof GuestFileError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    if (err instanceof GuestIdentityError || err instanceof GuestErroredError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    res.status(502).json({ error: pveMessage(err) });
+  }
 });
 
 // ─── Relocate to an AVX-capable node ('node_no_avx' escape hatch) ─────────────

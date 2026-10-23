@@ -6,6 +6,7 @@ import { Scaling, Loader2 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import type { VmDetail, MeResponse, Quota } from "@/lib/types";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { FormField } from "@/components/form-field";
 import {
   AlertDialog,
@@ -124,7 +125,6 @@ export function ResizeDialog({
     }
   }
 
-  const num = (v: string, min: number) => Math.max(min, Math.floor(Number(v) || 0));
   const gb = (v: string) => Math.max(0, Number(v) || 0);
 
   return (
@@ -168,12 +168,11 @@ export function ResizeDialog({
 
         <div className="grid grid-cols-3 gap-3">
           <FormField label="vCPU" htmlFor="rs-cpu">
-            <Input
+            <NumberInput
               id="rs-cpu"
-              type="number"
               min={1}
               value={cpu}
-              onChange={(e) => { setCpu(num(e.target.value, 1)); setError(null); }}
+              onValueChange={(v) => { setCpu(v); setError(null); }}
             />
           </FormField>
           <FormField label="Memory (GB)" htmlFor="rs-ram">
@@ -191,12 +190,11 @@ export function ResizeDialog({
             />
           </FormField>
           <FormField label="Disk (GB)" htmlFor="rs-disk">
-            <Input
+            <NumberInput
               id="rs-disk"
-              type="number"
               min={vm.storage}
               value={storageGb}
-              onChange={(e) => { setStorageGb(num(e.target.value, vm.storage)); setError(null); }}
+              onValueChange={(v) => { setStorageGb(v); setError(null); }}
             />
           </FormField>
         </div>

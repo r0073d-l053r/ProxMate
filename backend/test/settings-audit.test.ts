@@ -155,6 +155,38 @@ describe('notification settings', () => {
     expect(auditEntry('admin.notify_config').detail).toBe('webhook kept, email off, 1 event');
     expect(allAuditText()).not.toContain('SECRET-PATH');
   });
+
+  it('audits ntfy and Telegram changes without the topic, the access token or the bot token', async () => {
+    const put = (body: unknown) => call('PUT', '/admin/settings/notifications', body);
+    const tg = '123456789:SECRETBOTTOKENabcdefghijklmnopqrstu';
+    expect(
+      (
+        await put({
+          ntfyUrl: 'https://ntfy.sh/SECRET-TOPIC',
+          ntfyToken: 'tk_SECRET-NTFY',
+          telegramBotToken: tg,
+          telegramChatId: '-100123',
+          emailEnabled: false,
+          events: [],
+        })
+      ).status,
+    ).toBe(200);
+    expect(auditEntry('admin.notify_config').detail).toBe(
+      'webhook kept, ntfy replaced (token replaced), telegram replaced (chat -100123), email off, 0 events',
+    );
+    vi.mocked(recordAudit).mockClear();
+    await put({ clearNtfy: true, clearTelegram: true, emailEnabled: false, events: [] });
+    expect(auditEntry('admin.notify_config').detail).toBe('webhook kept, ntfy removed, telegram removed, email off, 0 events');
+    vi.mocked(recordAudit).mockClear();
+    await put({ ntfyUrl: '', ntfyToken: '', clearNtfyToken: true, emailEnabled: false, events: [] });
+    expect(auditEntry('admin.notify_config').detail).toBe('webhook kept, ntfy kept (token removed), email off, 0 events');
+    expect(allAuditText()).not.toContain('SECRET');
+  });
+
+  it('audits the weekly usage digest toggle', async () => {
+    expect((await call('PUT', '/admin/settings/usage-digest', { enabled: false })).status).toBe(200);
+    expect(auditEntry('admin.usage_digest_config').detail).toBe('weekly digest disabled');
+  });
 });
 
 describe('tenant isolation', () => {

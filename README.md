@@ -31,6 +31,7 @@ Proxmox admin panel.
 
 - **Invite-only multi-tenancy** — invite links carry CPU/RAM/disk quotas; a per-VM firewall keeps tenants off your LAN, your other guests, and the host **once the Proxmox cluster firewall is enabled** (ProxMate walks you through that in-app)
 - **VMs & LXC containers** — create from an ISO, the Template Store, or 20 curated cloud images (16 x86-64 + 4 ARM64); resize, rebuild, rename, snapshots, power schedules, tags & bulk actions
+- **Projects** — group your VMs with a `project:<name>` tag (set it on the VM page or with *Move to project…* on the VM list) and see each project's VM and running counts, allocated vCPU/RAM/disk, average CPU/RAM use, and start/stop/restart for the whole project
 - **Share a VM** — hand another tenant access at one of three preset levels (Viewer / Operator / Manager), even before they've signed up; no share level can delete, rebuild, migrate, or re-share
 - **In-browser consoles** — graphical (noVNC) *and* a text console with clickable links, real copy/paste, and scrollback — no SSH, no open ports
 - **ProxMate IDE (beta)** — a per-VM **browser IDE** (VS Code / code-server) opened inside the tenant's own VM (owner-only), with an **in-guest AI coding agent** (OpenCode) wired to admin-controlled models; reuses your tenant-isolation firewall — [docs](docs/proxmate-ide.md)
@@ -70,9 +71,10 @@ Proxmox admin panel.
 | **Compute Access Windows** | Time-box a tenant's access — invites can grant a fixed term (or never expire), with an admin per-user override. Expiry **suspends, never deletes**: VMs stop and sign-in is refused across every auth path, but nothing is destroyed. 7-day and 1-day warning emails, plus an admin notification when a window closes |
 | **App-Database Backups** | ProxMate backs up **itself** on a nightly schedule (`VACUUM INTO`, consistent on a live DB) with rolling retention, written to a host directory you choose via `PROXMATE_BACKUP_DIR`. Pair it with an off-host copy of `ENCRYPTION_KEY` — a snapshot without the key restores nothing |
 | **Tenant Network Isolation** | Per-VM Proxmox firewall — MAC filtering, RFC1918 drop rules, and a configurable DNS allow-list — keeps guests off your LAN, your other VMs, and the host. **Requires the Proxmox cluster firewall to be enabled**; ProxMate turns it on for you from the admin UI, adding management allow-rules first so you can't lock yourself out |
-| **Share a VM** | Grant another tenant access to a guest at one of three preset levels — **Viewer** (see the VM and its status), **Operator** (+ power actions and console), **Manager** (+ config, resize, backups). No share level can delete, rebuild, migrate, re-share, or touch passthrough — those stay owner/admin only, and the ProxMate IDE opens only for the owner |
-| **Admin Deploy-for-Tenant** | Admins create a VM directly inside a chosen tenant's account, optionally pinning the node and optionally as a **quota-exempt** grant. Admin-provisioned VMs are resize- and rebuild-locked to admins, and a Manager-share resize bills the VM **owner's** quota, not the caller's |
+| **Share a VM** | Grant another tenant access to a guest at one of three preset levels — **Viewer** (see the VM and its status, view-only console), **Operator** (+ power actions and interactive console), **Manager** (+ config, resize, backups). No share level can delete, rebuild, migrate, re-share, or touch passthrough — those stay owner/admin only, and the ProxMate IDE opens only for the owner |
+| **Admin Deploy-for-Tenant** | Admins create a VM directly inside a chosen tenant's account, optionally pinning the node and optionally as a **quota-exempt** grant. Admin-provisioned VMs are resize- and rebuild-locked to admins (the VM page says so with an **Admin-managed** badge), the tenant is emailed that it was set up for them, and a Manager-share resize bills the VM **owner's** quota, not the caller's |
 | **Personal API Tokens & REST API** | Per-user `pm_…` Bearer tokens for the public REST API (OpenAPI spec included) — only the token hash is stored, and public token lookups are separately throttled. Routes that change how an account signs in or is secured need a browser session, and a password reset revokes the account's tokens |
+| **Notifications & Digests** | Admin event alerts to a webhook (Discord / Slack / Mattermost / JSON), **ntfy**, **Telegram** and email; tenants are emailed when a VM is set up for them or shared with them, and can opt in to a **weekly usage digest** of their own machines and quota |
 | **Audit Log** | Who created / deleted / restored / started which VM, plus sign-ins — an admin-viewable activity trail |
 | **Rate Limiting** | Built-in brute-force protection on the login / register / invite endpoints, plus per-account lockout with admin alerts and dedicated throttling on public token lookups |
 | **Outbound & Secret Hardening** | Admin-configured webhooks and cloud-image URLs are **SSRF-guarded** (private/loopback/metadata blocked; opt-in for LAN targets); secrets are AES-256-GCM at rest with a **fail-closed** key requirement; `/metrics` is token-gated in production |
@@ -278,6 +280,22 @@ cd backend && npm test
 Every push and PR runs [GitHub Actions](.github/workflows/ci.yml): backend typecheck +
 tests, frontend lint + build, Playwright, and Docker builds of both images, plus a
 separate [security workflow](.github/workflows/security.yml) (CodeQL, Trivy, SBOM).
+
+---
+
+## Android app
+
+[`android/`](./android) holds a native Android app (Kotlin, Android 8.0+) for an existing
+ProxMate server. You enter the server address, sign in natively (email and password, plus
+a TOTP or recovery code when 2FA is on), and the app opens the full web UI, consoles
+included, already signed in. Passkeys and SSO use the web sign-in page inside the app.
+Servers with a self-signed certificate can be trusted after you confirm the certificate's
+SHA-256 fingerprint. It needs no server changes.
+
+The [Android workflow](.github/workflows/android.yml) builds a debug APK on every change
+under `android/` (artifact `proxmate-android-debug`), plus a signed release APK when the
+signing secrets are set. Build, install and signing steps are in
+[android/README.md](./android/README.md).
 
 ---
 

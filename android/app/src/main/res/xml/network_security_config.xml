@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Trust only the system certificate authorities (user-installed CAs are not
+  trusted). A server with a self-signed certificate is accepted only after the
+  user has confirmed its exact SHA-256 fingerprint in the app; that pin is
+  enforced in code (core/CertificatePinning.kt and MainActivity.onReceivedSslError).
+
+  Cleartext: a network security config is static, but the server address is
+  chosen at run time, so it cannot list the one host that may use http://.
+  The platform therefore permits cleartext here and the app enforces the rule
+  itself: plain http is allowed only to the exact origin the user entered as an
+  http:// address after confirming the warning (ApiClient refuses any other
+  origin, and the WebView blocks every other http request and navigation in
+  shouldInterceptRequest / shouldOverrideUrlLoading). With an https:// server
+  no cleartext request is ever made, and mixed content is never allowed.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

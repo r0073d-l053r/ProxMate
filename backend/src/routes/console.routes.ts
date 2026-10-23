@@ -3,8 +3,10 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import { verifyToken } from '../services/auth.service.js';
 import { SESSION_COOKIE } from '../lib/cookies.js';
-import { getVmWithCap, syncVmNode, kindOf } from '../services/vm.service.js';
-import { connectVncTarget, connectSerialTarget, relay } from '../services/vnc-proxy.service.js';
+import { resolveVmAccess, syncVmNode, kindOf } from '../services/vm.service.js';
+import { consoleModeFor } from '../services/vm-share.service.js';
+import { connectVncTarget, connectSerialTarget, relay, takeConsoleGrant } from '../services/vnc-proxy.service.js';
+import { RfbViewOnlyFilter, TermViewOnlyFilter } from '../lib/console-view-filter.js';
 
 const CONSOLE_PATH = /^\/api\/vms\/([^/]+)\/console$/;
 const SERIAL_PATH = /^\/api\/vms\/([^/]+)\/serial$/;
@@ -27,7 +29,9 @@ function getCookie(header: string | undefined, name: string): string | undefined
  * independent of the Express 5 router internals. The browser authenticates via
  * the **httpOnly session cookie** (no JWT in the URL) and an **Origin check**
  * (anti cross-site-WS-hijacking), and supplies the `vncticket`/`port` it
- * received from `POST /api/vms/:id/console`.
+ * received from `POST /api/vms/:id/console` (or `/serial`). A session whose
+ * ticket was minted view-only is relayed through an input filter that drops
+ * every keyboard, mouse and clipboard message before it reaches Proxmox.
  */
 const wss = new WebSocketServer({ noServer: true });
 
@@ -71,17 +75,33 @@ export function handleConsoleUpgrade(req: IncomingMessage, socket: Duplex, head:
       return;
     }
 
-    // Console requires the 'console' capability (owner/admin/operator/manager;
-    // a viewer share is rejected). The POST that mints the ticket uses the SAME
-    // gate — a past bug was these two paths diverging, so keep them in lockstep.
-    const vm = await getVmWithCap(vmId, user, 'console');
-    if (!vm || !vncticket || !port) {
+    // The ticket must be one ProxMate minted, for this VM, user, transport and
+    // port; the grant is single use. Its recorded mode is the most this session
+    // gets — the browser never says whether it is view-only.
+    const grant = vncticket ? takeConsoleGrant(vncticket) : undefined;
+    const transport = isSerial ? 'serial' : 'vnc';
+    if (
+      !vncticket || !port || !grant ||
+      grant.vmId !== vmId || grant.userId !== user.id || grant.transport !== transport || grant.port !== port
+    ) {
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       socket.destroy();
       return;
     }
 
-    const baseVm = vm;
+    // Re-check access now, through the same capability rule as the ticket mint
+    // (`consoleModeFor`): a past bug was these two paths diverging, so keep them in
+    // lockstep. A share downgraded since the mint drops to view-only (or is refused).
+    const access = await resolveVmAccess(vmId, user);
+    const allowed = access ? consoleModeFor(access.caps) : null;
+    if (!access || !allowed) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    const mode = allowed === 'interactive' && grant.mode === 'interactive' ? 'interactive' : 'view';
+
+    const baseVm = access.vm;
     wss.handleUpgrade(req, socket, head, async (browserWs) => {
       try {
         const activeVm = await syncVmNode(baseVm);
@@ -89,7 +109,8 @@ export function handleConsoleUpgrade(req: IncomingMessage, socket: Duplex, head:
         const target = isSerial
           ? await connectSerialTarget(activeVm.proxmoxNode, activeVm.proxmoxVmId, port, vncticket, kind)
           : await connectVncTarget(activeVm.proxmoxNode, activeVm.proxmoxVmId, port, vncticket, kind);
-        relay(browserWs, target);
+        const filter = mode === 'view' ? (isSerial ? new TermViewOnlyFilter() : new RfbViewOnlyFilter()) : undefined;
+        relay(browserWs, target, filter);
       } catch {
         browserWs.close(1011, 'Failed to reach Proxmox console');
       }
