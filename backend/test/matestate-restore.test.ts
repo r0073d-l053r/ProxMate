@@ -342,3 +342,20 @@ describe('container restore: the restored config is checked as Proxmox holds it'
     expect(c.post.mock.calls.some((x) => /lxc\/100\/status\/start$/.test(String(x[0])))).toBe(true);
   });
 });
+
+describe('in-place restore: autostart and later failures', () => {
+  it('drops the archive\'s autostart and protection before the guest is checked, tagged or started', async () => {
+    const { state } = fakePve(LIVE, { ...LIVE, onboot: '1', protection: '1' });
+    await restoreFromMateState(row(), ms);
+    expect(state.cfg['onboot']).toBeUndefined();
+    expect(state.cfg['protection']).toBeUndefined();
+  });
+
+  it('takes the NIC down when a step after the restore fails, and leaves the guest in place', async () => {
+    vi.mocked(pve.configureVmIsolation).mockRejectedValueOnce(new Error('firewall API down'));
+    const { c, state } = fakePve(LIVE, { ...LIVE });
+    await expect(restoreFromMateState(row(), ms)).rejects.toThrow(/firewall API down/);
+    expect(state.cfg['net0']).toMatch(/link_down=1/);
+    expect(c.delete).not.toHaveBeenCalledWith('/nodes/pve1/qemu/100');
+  });
+});

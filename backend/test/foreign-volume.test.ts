@@ -87,6 +87,14 @@ describe('foreignVolumeKeys', () => {
   });
 });
 
+describe('foreignVolumeKeys and snapshot RAM state', () => {
+  it('treats a vmstate volume like any other: its own VMID only', () => {
+    expect(foreignVolumeKeys({ vmstate: 'local-lvm:vm-100-state-snap1' }, 100)).toEqual([]);
+    expect(foreignVolumeKeys({ vmstate: 'local-lvm:vm-200-state-snap1' }, 100)).toEqual(['vmstate']);
+    expect(foreignVolumeKeys({ vmstate: '/dev/sdb' }, 100)).toEqual(['vmstate']);
+  });
+});
+
 describe('assertOwnVolumes (audit round 2, blocker 2)', () => {
   it('detaches a disk line pointing at another VMID\'s volume without freeing it, holds the row and audits', async () => {
     const c = pveWith({ scsi0: 'local-lvm:vm-100-disk-0,size=32G', scsi1: 'local-lvm:vm-200-disk-0,size=10G', unused0: 'local-lvm:vm-200-disk-5' });

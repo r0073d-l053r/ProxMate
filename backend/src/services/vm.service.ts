@@ -11,7 +11,7 @@ import * as pve from './proxmox.service.js';
 import { getOfferedFeatureIds, getBaseFeatureIds } from './template.service.js';
 import { isValidPublicKey } from './ssh-key.service.js';
 import { diskSizeGb } from './disk.service.js';
-import { guestConfigSizes, pciLines, foreignVolumeKeys } from '../lib/guest-config.js';
+import { guestConfigSizes, pciLines, foreignVolumeKeys, hostLevelKeys } from '../lib/guest-config.js';
 import { recordAudit } from './audit.service.js';
 import { beginInFlight } from '../lib/in-flight.js';
 import { autoSnapshotBefore, type AutoSnapshotResult } from './auto-snapshot.service.js';
@@ -515,8 +515,8 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
   const client = await pve.getClient();
   const identity = await guestIdentity(current, client);
   if (identity === 'ours') {
+    const fromUpload = isUploadRestoreRow(current);
     if (current.holdReason !== QUOTA_HOLD_MESSAGE && isHeld(current)) {
-      await assertAdoptableConfig(current, client);
       // Never lift a hold while the guest still references a volume that isn't its
       // own: that is what a foreign-volume hold is about, and a guest whose
       // provisioning didn't finish was never checked.
@@ -527,8 +527,9 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
           `The guest still references disks that aren't its own (${foreign.join(', ')}). Detach them in Proxmox first.`,
         );
       }
+      await assertAdoptableConfig(current, client, fromUpload ? 'upload' : 'tenant');
     }
-    return clearAdoptedHold(current);
+    return clearAdoptedHold(current, { fromRestore: fromUpload });
   }
   if (identity === 'absent') {
     throw new AdoptError(
@@ -542,41 +543,77 @@ export async function adoptGuest(vm: VirtualMachine): Promise<VirtualMachine> {
   if (foreign.length > 0) {
     throw new AdoptError(`The guest references disks that aren't its own (${foreign.join(', ')}). Detach them in Proxmox first.`);
   }
-  await assertAdoptableConfig(current, client);
+  // Untagged: nothing says where its config came from, so the strictest list applies.
+  await assertAdoptableConfig(current, client, 'upload');
   await markClonedGuest(current, client);
   // The guest has just been checked (own volumes only) and tagged, so a row held or
   // left in `error` (a 1.0.x create that failed, a guest that only lacked its tag)
   // is settled here too — adopting it once is enough to make it startable.
-  return clearAdoptedHold(current);
+  return clearAdoptedHold(current, { fromRestore: true });
+}
+
+/** The `os` label of a machine restored from an uploaded backup. */
+export const UPLOAD_RESTORE_OS = 'Restored backup';
+
+/** Whether a row was created by restoring an uploaded backup (its config came from a tenant's archive). */
+export function isUploadRestoreRow(vm: Pick<VirtualMachine, 'os' | 'description'>): boolean {
+  return vm.os === UPLOAD_RESTORE_OS || !!vm.description?.startsWith('Restored from uploaded backup');
 }
 
 /**
- * Before an adopt tags a guest or lifts a hold: the guest's config, pending changes
- * and snapshots carry nothing a tenant's guest may not have (the restore allowlist —
- * a held restore, or an untagged guest left by one, may carry a container device,
- * a hook script or raw host options). PCI devices approved for this machine are
- * the one exception. Refused with the keys named.
+ * Before an adopt tags a guest or lifts a hold, check its config, pending changes
+ * and snapshots. `upload`: a restore of an uploaded backup, or a guest with no tag
+ * (nothing says where its config came from) — the upload-archive allowlist, as
+ * after a restore. `tenant`: any other machine of ours — the rollback policy, i.e.
+ * no host-level key (hostLevelKeys) and no volume that isn't its own, so a machine
+ * made from a template keeps devices such as rng0, a spice usbN, audio0 or
+ * watchdog. PCI devices approved for this machine are allowed either way. Refused
+ * with the keys named.
  */
 async function assertAdoptableConfig(
   current: VirtualMachine,
   client: Awaited<ReturnType<typeof pve.getClient>>,
+  policy: 'upload' | 'tenant',
 ): Promise<void> {
-  // Loaded lazily: restore-upload.service imports this module.
-  const { assertRestoredGuestConfig, RestoredConfigError } = await import('./restore-upload.service.js');
   const approved = new Set(await approvedPciLines(current, client));
-  try {
-    await assertRestoredGuestConfig(current.proxmoxNode, current.proxmoxVmId, kindOf(current), client, {
-      allowSnapshots: true,
-      allowKey: (key, value) => /^hostpci\d+$/.test(key) && approved.has(value),
-    });
-  } catch (err) {
-    if (err instanceof RestoredConfigError) {
-      throw new AdoptError(
-        `The guest carries settings a tenant's machine may not have (${err.problem}). Remove them in Proxmox first, then adopt again.`,
-      );
+  const isApprovedPci = (key: string, value: string) => /^hostpci\d+$/.test(key) && approved.has(value);
+  const refuse = (what: string) =>
+    new AdoptError(`The guest carries settings a tenant's machine may not have (${what}). Remove them in Proxmox first, then adopt again.`);
+  if (policy === 'upload') {
+    // Loaded lazily: restore-upload.service imports this module.
+    const { assertRestoredGuestConfig, RestoredConfigError } = await import('./restore-upload.service.js');
+    try {
+      await assertRestoredGuestConfig(current.proxmoxNode, current.proxmoxVmId, kindOf(current), client, {
+        allowSnapshots: true,
+        allowKey: isApprovedPci,
+      });
+    } catch (err) {
+      if (err instanceof RestoredConfigError) throw refuse(err.problem);
+      throw err;
     }
-    throw err;
+    return;
   }
+  const kind = kindOf(current);
+  const base = `/nodes/${current.proxmoxNode}/${kind}/${current.proxmoxVmId}`;
+  const asText = (cfg: Record<string, unknown>) =>
+    Object.fromEntries(Object.entries(cfg ?? {}).map(([k, v]) => [k, String(v)])) as Record<string, string>;
+  const bad = (cfg: Record<string, string>) => [
+    ...hostLevelKeys(cfg, kind).filter((k) => !isApprovedPci(k, cfg[k] ?? '')),
+    ...foreignVolumeKeys(cfg, current.proxmoxVmId),
+  ];
+  const [cfgRes, pendingRes, snapRes] = await Promise.all([
+    client.get<{ data: Record<string, unknown> }>(`${base}/config`),
+    client.get<{ data: Array<{ key: string; pending?: unknown; delete?: number }> }>(`${base}/pending`),
+    client.get<{ data: Array<{ name: string }> }>(`${base}/snapshot`),
+  ]);
+  const problems = bad(asText(cfgRes.data.data)).map((k) => `"${k}"`);
+  const pending = (pendingRes.data.data ?? []).filter((e) => e.pending !== undefined || e.delete).map((e) => `"${e.key}"`);
+  if (pending.length > 0) problems.push(`pending changes to ${pending.join(', ')}`);
+  for (const { name } of (snapRes.data.data ?? []).filter((x) => x.name !== 'current')) {
+    const snap = await client.get<{ data: Record<string, unknown> }>(`${base}/snapshot/${encodeURIComponent(name)}/config`);
+    for (const k of bad(asText(snap.data.data))) problems.push(`"${k}" in snapshot "${name}"`);
+  }
+  if (problems.length > 0) throw refuse(problems.join(', '));
 }
 
 /**
@@ -586,7 +623,10 @@ async function assertAdoptableConfig(
  * hold is the admin's call — they have checked the guest — and is cleared once
  * the guest has been made safe to run.
  */
-async function clearAdoptedHold(current: VirtualMachine): Promise<VirtualMachine> {
+async function clearAdoptedHold(
+  current: VirtualMachine,
+  opts: { fromRestore?: boolean } = {},
+): Promise<VirtualMachine> {
   if (current.holdReason === QUOTA_HOLD_MESSAGE) {
     if (await withQuotaLock(current.userId, () => liftQuotaHoldIfFits(current.id))) {
       return (await prisma.virtualMachine.findUnique({ where: { id: current.id } })) ?? current;
@@ -600,9 +640,20 @@ async function clearAdoptedHold(current: VirtualMachine): Promise<VirtualMachine
     // under the owner's quota, exactly as a restore does. Any failure keeps the hold.
     const client = await pve.getClient();
     try {
+      if (opts.fromRestore) {
+        // A guest whose config came from an uploaded archive (or that has no tag to
+        // say otherwise): drop autostart/protection and the archive's guest firewall
+        // before ProxMate's isolation is written. Loaded lazily (import cycle).
+        const { stripRestoreFlags } = await import('./restore-upload.service.js');
+        await stripRestoreFlags(current.proxmoxNode, current.proxmoxVmId, client, kindOf(current));
+        await pve.resetRestoredFirewall(current.proxmoxNode, current.proxmoxVmId, client, kindOf(current));
+      }
       // Loaded lazily: matestate.service imports this module.
       const { reapplyIsolation } = await import('./matestate.service.js');
       await reapplyIsolation(current, client);
+      // A held restore may have had its NICs taken down (neutraliseRestoredGuest);
+      // the checks above passed, so they come back up.
+      await pve.clearLinkDown(current.proxmoxNode, current.proxmoxVmId, client, kindOf(current));
       await syncRestoredGuest(current, { approvedPci: await approvedPciLines(current, client), client });
     } catch (err) {
       if (err instanceof QuotaError) {
@@ -690,6 +741,14 @@ type CreateTask = {
   node: string;
   upid: string;
   /**
+   * Runs once the task has finished OK, whether or not the row is still there: a
+   * finished create of ours at its VMID is the only thing that can have made the
+   * guest there, so its checks (and removal) never depend on the row. Throwing
+   * keeps the guest from being tagged; with `guestRemoved` set on the error, the
+   * guest is gone and the row is dropped.
+   */
+  verify?: () => Promise<void>;
+  /**
    * Make the finished guest safe before it is tagged as the row's (an upload
    * restore: rebuild its NICs, check its volumes, apply isolation, re-sync its
    * sizes). If it throws, the guest is never tagged.
@@ -719,6 +778,14 @@ async function settleCreateTask(vm: VirtualMachine, task: CreateTask): Promise<'
   if (st.status === 'stopped') {
     if (st.exitstatus && st.exitstatus !== 'OK' && !st.exitstatus.startsWith('WARNINGS')) return null;
     try {
+      await task.verify?.();
+    } catch (e) {
+      // Removed: settle on what is at the VMID (nothing), which drops the row.
+      if ((e as { guestRemoved?: boolean }).guestRemoved) return null;
+      console.warn(`[vm] guest of failed create "${vm.name}" left untagged: ${pve.pveMessage(e)}`);
+      return 'done';
+    }
+    try {
       await task.beforeTag?.();
       await markClonedGuest(vm, client);
     } catch (e) {
@@ -726,9 +793,20 @@ async function settleCreateTask(vm: VirtualMachine, task: CreateTask): Promise<'
     }
     return 'done';
   }
+  // A restart ends this follower; the row then stays in `error` until it is resolved.
   void pve
     .waitForTask(task.node, task.upid, client, LATE_TASK_FOLLOW_MS)
     .then(async () => {
+      try {
+        await task.verify?.();
+      } catch (e) {
+        if ((e as { guestRemoved?: boolean }).guestRemoved) {
+          // The guest is gone, as on the on-time path: drop the row if it still points here.
+          const row = await prisma.virtualMachine.findUnique({ where: { id: vm.id } }).catch(() => null);
+          if (row && row.proxmoxVmId === vm.proxmoxVmId) await deleteVmRow(vm.id).catch(() => undefined);
+        }
+        throw e;
+      }
       // Only while the row still exists and still points at this VMID: once it has
       // been deleted, the VMID is nobody's and the guest must not be claimed.
       const row = await prisma.virtualMachine.findUnique({ where: { id: vm.id } });

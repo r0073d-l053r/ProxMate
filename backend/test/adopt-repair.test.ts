@@ -30,7 +30,7 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
 import { prisma } from '../src/lib/prisma.js';
 import * as pve from '../src/services/proxmox.service.js';
 import { adoptGuest, AdoptError, isHeld, QUOTA_HOLD_MESSAGE } from '../src/services/vm.service.js';
-import { fakeClient, asClient } from './helpers.js';
+import { fakeClient, asClient, bodyOf } from './helpers.js';
 
 const ok = (data: unknown) => Promise.resolve({ data: { data } });
 
@@ -153,10 +153,51 @@ describe('adopt refuses a guest carrying settings a tenant\'s machine may not ha
   });
 
   it('checks a held guest that is already the machine\'s own before lifting the hold', async () => {
-    const { state } = fakePve({ ...LEGACY, tags: 'proxmate-rowa', dev0: '/dev/sda' });
+    const { state } = fakePve({ ...LEGACY, tags: 'proxmate-rowa', args: '-device foo' });
     row = { ...(errored({ holdReason: 'held' }) as object) };
-    await expect(adoptGuest(errored({ holdReason: 'held' }))).rejects.toThrow(/"dev0"/);
-    expect(state.cfg['dev0']).toBe('/dev/sda');
+    await expect(adoptGuest(errored({ holdReason: 'held' }))).rejects.toThrow(/"args"/);
+    expect(state.cfg['args']).toBe('-device foo');
     expect(row['holdReason']).toBe('held');
+  });
+});
+
+describe('which list an adopt checks against', () => {
+  // A machine deployed from a template keeps the template's devices.
+  const CLONE = { ...LEGACY, tags: 'proxmate-rowa', rng0: 'source=/dev/urandom', usb0: 'spice', audio0: 'device=ich9-intel-hda,driver=spice', watchdog: 'model=i6300esb' };
+
+  it('adopts a held template clone with rng0, a spice usb0, audio0 and a watchdog (the rollback policy)', async () => {
+    fakePve(CLONE);
+    row = { ...(errored({ holdReason: 'held', os: 'Debian 12' }) as object) };
+    const adopted = await adoptGuest(errored({ holdReason: 'held', os: 'Debian 12' }));
+    expect(isHeld(adopted)).toBe(false);
+  });
+
+  it('still refuses a host device, a foreign volume or a pending change on such a machine', async () => {
+    fakePve({ ...CLONE, usb1: 'host=1234:5678' });
+    await expect(adoptGuest(errored({ holdReason: 'held' }))).rejects.toThrow(/"usb1"/);
+    fakePve({ ...CLONE, scsi1: 'local-lvm:vm-200-disk-0,size=1G' });
+    await expect(adoptGuest(errored({ holdReason: 'held' }))).rejects.toThrow(/aren.t its own \(scsi1\)/);
+    const { c } = fakePve(CLONE);
+    const base = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) =>
+      url.endsWith('/pending') ? ok([{ key: 'hookscript', pending: 'local:snippets/x.pl' }]) : base(url),
+    );
+    await expect(adoptGuest(errored({ holdReason: 'held' }))).rejects.toThrow(/pending changes to "hookscript"/);
+  });
+
+  it('applies the upload-archive list to a machine restored from an uploaded backup', async () => {
+    fakePve(CLONE);
+    await expect(adoptGuest(errored({ holdReason: 'held', os: 'Restored backup' }))).rejects.toThrow(/"rng0"/);
+  });
+
+  it('for a restored or untagged guest: drops autostart and the archive firewall, and brings held NICs back up', async () => {
+    const { c, state } = fakePve({ ...LEGACY, onboot: '1', protection: '1', net0: 'virtio=AA:BB,bridge=vmbr0,firewall=1,link_down=1' });
+    await adoptGuest(errored());
+    expect(state.cfg['onboot']).toBeUndefined();
+    expect(state.cfg['protection']).toBeUndefined();
+    expect(state.cfg['net0']).not.toContain('link_down');
+    const reset = c.put.mock.calls.findIndex((x) => /\/firewall\/options$/.test(String(x[0])) && /radv/.test(String(bodyOf(x)['delete'])));
+    expect(reset).toBeGreaterThanOrEqual(0);
+    expect(c.put.mock.invocationCallOrder[reset]!).toBeLessThan(vi.mocked(pve.configureVmIsolation).mock.invocationCallOrder[0]!);
   });
 });

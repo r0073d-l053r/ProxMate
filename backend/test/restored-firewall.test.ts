@@ -1,10 +1,18 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const config: Record<string, string> = {};
+vi.mock('../src/services/config.service.js', () => ({ getConfig: vi.fn(async (k: string) => config[k] ?? null) }));
+
 import { resetRestoredFirewall } from '../src/services/proxmox.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
 
 // A restore brings back the archive's guest firewall (qemu-server.fw / pct.fw,
 // which a container's rootfs can override). All of it is cleared before ProxMate
 // writes its own isolation.
+
+beforeEach(() => {
+  for (const k of Object.keys(config)) delete config[k];
+});
 
 describe('resetRestoredFirewall', () => {
   it('removes every rule (highest first), IP set (members first) and alias, and stray options', async () => {
@@ -29,5 +37,13 @@ describe('resetRestoredFirewall', () => {
     ]);
     expect(c.put.mock.calls[0]![0]).toBe(`${base}/options`);
     expect(bodyOf(c.put.mock.calls[0]!)).toEqual({ delete: 'radv,log_level_in,log_level_out' });
+  });
+
+  it('with isolation off, also removes the archive\'s enable flag and policies (nothing rewrites them)', async () => {
+    config['isolation_enabled'] = 'false';
+    const c = fakeClient();
+    c.get.mockResolvedValue({ data: { data: [] } });
+    await resetRestoredFirewall('pve1', 200, asClient(c), 'qemu');
+    expect(bodyOf(c.put.mock.calls[0]!)).toEqual({ delete: 'radv,log_level_in,log_level_out,enable,policy_in,policy_out' });
   });
 });

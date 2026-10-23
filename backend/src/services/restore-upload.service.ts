@@ -153,7 +153,7 @@ const QEMU_KEYS = new Set([
 const QEMU_KEY_PATTERNS = [/^(ide|sata|scsi|virtio)\d+$/, /^efidisk0$/, /^tpmstate0$/, /^net\d+$/, /^ipconfig\d+$/, /^serial\d+$/, /^unused\d+$/];
 const LXC_KEYS = new Set(['swap', 'unprivileged', 'features', 'timezone', 'console', 'tty', 'cmode', 'rootfs']);
 const LXC_KEY_PATTERNS = [/^mp\d+$/, /^net\d+$/, /^unused\d+$/];
-const DISK_KEY = /^(ide|sata|scsi|virtio)\d+$|^efidisk0$|^tpmstate0$|^rootfs$|^mp\d+$|^unused\d+$/;
+const DISK_KEY = /^(ide|sata|scsi|virtio)\d+$|^efidisk0$|^tpmstate0$|^rootfs$|^mp\d+$|^unused\d+$|^vmstate$/;
 
 /** Config keys a restore may carry, but that are removed from the restored guest. */
 export const STRIPPED_AFTER_RESTORE = ['onboot', 'startup', 'protection'];
@@ -471,6 +471,25 @@ async function noteRestoreTarget(filename: string, vmid: number): Promise<void> 
 }
 
 /**
+ * After a restored guest has passed the check, a later step failed and the row
+ * will be held: keep the guest from starting on its own or reaching the network
+ * until an admin looks at it (neutraliseRestoredGuest without the delete). An
+ * over-quota failure is a quota hold, not a safety one, and is left alone; a
+ * failure of the check itself has already been handled. Best effort.
+ */
+export async function neutraliseAfterFailure(
+  node: string,
+  vmid: number,
+  kind: pve.GuestKind,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+  err: unknown,
+): Promise<void> {
+  if (err instanceof RestoredConfigError || (err as { guestRemoved?: boolean })?.guestRemoved !== undefined) return;
+  if ((err as { name?: string })?.name === 'QuotaError') return;
+  await neutraliseRestoredGuest(node, vmid, kind, client, { destroy: false }).catch(() => undefined);
+}
+
+/**
  * The post-restore check for a guest our own restore task just created at our
  * VMID: on any failure, including one to read the config, the guest is
  * neutralised and removed (see neutraliseRestoredGuest). The error is rethrown
@@ -492,6 +511,7 @@ async function checkRestoredOrRemove(
       destroy: true,
     });
     if (err && typeof err === 'object') Object.assign(err, { guestRemoved: removed });
+    else throw Object.assign(new Error(String(err)), { guestRemoved: removed });
     throw err;
   }
 }
@@ -769,7 +789,7 @@ async function restoreFromUploadLocked(
         cpu: cfg.cores,
         ram: cfg.memoryMb,
         storage: cfg.diskGb,
-        os: 'Restored backup',
+        os: 'Restored backup', // vm.service UPLOAD_RESTORE_OS
         status: 'creating',
         opKind: 'restore-upload' satisfies VmOpKind,
         opStartedAt: new Date(),
@@ -782,7 +802,7 @@ async function restoreFromUploadLocked(
 
     let created = false;
     let restoreTask:
-      | { node: string; upid: string; beforeTag: () => Promise<void>; afterTask: () => Promise<void> }
+      | { node: string; upid: string; verify: () => Promise<void>; beforeTag: () => Promise<void>; afterTask: () => Promise<void> }
       | undefined;
     try {
       // Remap all volumes onto our default pool: cross-cluster archives name
@@ -802,22 +822,32 @@ async function restoreFromUploadLocked(
         // A restore that finishes after we stopped waiting gets the same treatment
         // as one that finished in time before it is ever tied to the row (the row
         // stays held either way).
-        beforeTag: async () => {
-          // A late guest that fails the check (or can't be checked) is never tagged:
-          // it is neutralised and removed, like an on-time one.
+        // A late guest gets the on-time treatment: no autostart, the check (and
+        // removal if it fails), whether or not the row is still there.
+        verify: async () => {
+          await stripRestoreFlags(node, vmid, client, kind).catch(() => undefined);
           await checkRestoredOrRemove(node, vmid, kind, client);
-          await pve.resetRestoredFirewall(node, vmid, client, kind);
-          await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
-          await stripRestoreFlags(node, vmid, client, kind);
-          await assertOwnVolumes(vm, client, leftovers, { unusedAreForeign: !!pool });
-          await rebuildRestoredGuestConfig(node, vmid, isolate, client, kind);
-          if (isolate) await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, kind);
-          await syncRestoredGuest(vm, { approvedPci: [], client });
+        },
+        beforeTag: async () => {
+          try {
+            await pve.resetRestoredFirewall(node, vmid, client, kind);
+            await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
+            await assertOwnVolumes(vm, client, leftovers, { unusedAreForeign: !!pool });
+            await rebuildRestoredGuestConfig(node, vmid, isolate, client, kind);
+            if (isolate) await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, kind);
+            await syncRestoredGuest(vm, { approvedPci: [], client });
+          } catch (err) {
+            await neutraliseAfterFailure(node, vmid, kind, client, err);
+            throw err;
+          }
         },
         afterTask: () => cleanupArchive(filename, node, storage, volid),
       };
       await pve.waitForTask(node, upid, client, 30 * 60 * 1000);
       created = true;
+      // Nothing may start it on its own, and a protected guest couldn't be removed:
+      // the archive's autostart and protection go before anything else.
+      await stripRestoreFlags(node, vmid, client, kind).catch(() => undefined);
       // What Proxmox actually restored decides, not the archive pre-check: a guest
       // carrying settings ProxMate won't restore is removed before anything uses it.
       try {
@@ -834,9 +864,6 @@ async function restoreFromUploadLocked(
       await pve.resetRestoredFirewall(node, vmid, client, kind);
       // The archive's config carries the OLD guest's tags; tie the guest to this row.
       await markClonedGuest(vm, client);
-      // Drop the archive's protection/autostart first: a protected guest couldn't
-      // be cleaned up by the volume check below, and nothing may start it on its own.
-      await stripRestoreFlags(node, vmid, client, kind);
       // Every volume the restored config references must be this guest's own.
       await assertOwnVolumes(vm, client, leftovers, { unusedAreForeign: !!pool });
 
@@ -868,6 +895,7 @@ async function restoreFromUploadLocked(
       // Any failure once the restore has landed leaves the row in `error`, which
       // nothing may start. A restore task still running when the wait gave up keeps
       // reading the archive; its follower removes the archive once it ends.
+      if (created) await neutraliseAfterFailure(node, vmid, kind, client, err);
       const { following } = await settleFailedCreate(vm, err, created, { task: restoreTask });
       if (following) archiveHandedOff = true;
       throw err;

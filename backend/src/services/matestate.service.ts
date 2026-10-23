@@ -369,6 +369,12 @@ async function settleRestoredGuest(
   approvedPci: string[],
   client: Awaited<ReturnType<typeof pve.getClient>>,
 ): Promise<VirtualMachine> {
+  const kind: pve.GuestKind = vm.type === 'lxc' ? 'lxc' : 'qemu';
+  // Loaded lazily (restore-upload imports this module).
+  const { stripRestoreFlags, neutraliseAfterFailure } = await import('./restore-upload.service.js');
+  // A restored config may carry autostart or protection: nothing may start the
+  // guest on its own while it is being made safe, so they go first.
+  await stripRestoreFlags(vm.proxmoxNode, vm.proxmoxVmId, client, kind).catch(() => undefined);
   // A container restore applies the `etc/vzdump/pct.conf` it finds in the backed-up
   // rootfs, which the tenant controls: check what Proxmox actually restored before
   // the guest is tagged, isolated or started. Loaded lazily (restore-upload imports
@@ -394,15 +400,22 @@ async function settleRestoredGuest(
     await pve.resetRestoredFirewall(vm.proxmoxNode, vm.proxmoxVmId, client, 'lxc');
   }
   try {
-    // The config came back with its tags (a backup or snapshot from before
-    // ownership tags existed has none) — tag it as this row's again.
-    await markClonedGuest(vm, client);
-  } finally {
-    await reapplyIsolation(vm, client);
+    try {
+      // The config came back with its tags (a backup or snapshot from before
+      // ownership tags existed has none) — tag it as this row's again.
+      await markClonedGuest(vm, client);
+    } finally {
+      await reapplyIsolation(vm, client);
+    }
+    // Only this guest's own volumes, whatever the archive or snapshot referenced.
+    await assertOwnVolumes(vm, client);
+    return await syncRestoredGuest(vm, { approvedPci, client });
+  } catch (err) {
+    // The row is held after this; until an admin looks, the guest neither starts on
+    // its own nor reaches the network.
+    await neutraliseAfterFailure(vm.proxmoxNode, vm.proxmoxVmId, kind, client, err);
+    throw err;
   }
-  // Only this guest's own volumes, whatever the archive or snapshot referenced.
-  await assertOwnVolumes(vm, client);
-  return syncRestoredGuest(vm, { approvedPci, client });
 }
 
 /**

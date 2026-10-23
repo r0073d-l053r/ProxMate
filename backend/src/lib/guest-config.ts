@@ -102,7 +102,8 @@ export function hostLevelKeys(cfg: Record<string, string>, kind: 'qemu' | 'lxc')
   return out;
 }
 
-const VOLUME_KEY = /^((ide|sata|scsi|virtio)\d+|efidisk0|tpmstate0|rootfs|mp\d+|unused\d+)$/;
+// `vmstate` (a snapshot's saved RAM) is a volume too, named vm-<vmid>-state-<snapshot>.
+const VOLUME_KEY = /^((ide|sata|scsi|virtio)\d+|efidisk0|tpmstate0|rootfs|mp\d+|unused\d+|vmstate)$/;
 
 /**
  * The volume keys of a config whose volume is not this VMID's own. A volume is

@@ -122,3 +122,50 @@ describe('settleFailedCreate for a clone whose task outlived the wait (C1)', () 
     dropped();
   });
 });
+
+describe('a restore task\'s verify step (the restored guest is checked whatever the row\'s state)', () => {
+  const removed = () => Object.assign(new Error('settings ProxMate won\'t restore'), { guestRemoved: true });
+
+  it('finished in time: a removed guest drops the row and is never tagged', async () => {
+    const c = pveWith(null, { status: 'stopped', exitstatus: 'OK' });
+    const beforeTag = vi.fn(async () => undefined);
+    await settleFailedCreate(row, err, false, {
+      task: { node: 'pve1', upid: 'UPID:r', verify: async () => { throw removed(); }, beforeTag },
+    });
+    dropped();
+    expect(beforeTag).not.toHaveBeenCalled();
+    expect(c.put).not.toHaveBeenCalled();
+  });
+
+  it('finished in time: a guest that failed but stayed keeps the row held, untagged', async () => {
+    const c = pveWith(templateMarker('tpl1'), { status: 'stopped', exitstatus: 'OK' });
+    await settleFailedCreate(row, err, false, {
+      task: { node: 'pve1', upid: 'UPID:r', verify: async () => { throw Object.assign(new Error('x'), { guestRemoved: false }); } },
+    });
+    kept();
+    expect(c.put).not.toHaveBeenCalled();
+  });
+
+  it('followed: verify runs even after the row is gone, and a removed guest drops the row if it still points here', async () => {
+    const c = pveWith(templateMarker('tpl1'), { status: 'running' });
+    const verify = vi.fn(async () => { throw removed(); });
+    await settleFailedCreate(row, err, false, { task: { node: 'pve1', upid: 'UPID:r', verify } });
+    kept();
+    vi.mocked(prisma.virtualMachine.findUnique).mockResolvedValue(null as never); // the row was deleted meanwhile
+    const get = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) => (/\/tasks\/.*\/status$/.test(url) ? ok({ status: 'stopped', exitstatus: 'OK' }) : get(url)));
+    await vi.waitFor(() => expect(verify).toHaveBeenCalled(), { timeout: 5000 });
+    expect(prisma.virtualMachine.delete).not.toHaveBeenCalled();
+    expect(c.put).not.toHaveBeenCalled();
+  });
+
+  it('followed: with the row still there, a removed guest drops it', async () => {
+    vi.mocked(prisma.virtualMachine.findUnique).mockResolvedValue({ ...(row as object) } as never);
+    const c = pveWith(templateMarker('tpl1'), { status: 'running' });
+    const verify = vi.fn(async () => { throw removed(); });
+    await settleFailedCreate(row, err, false, { task: { node: 'pve1', upid: 'UPID:r', verify } });
+    const get = c.get.getMockImplementation()!;
+    c.get.mockImplementation((url: string) => (/\/tasks\/.*\/status$/.test(url) ? ok({ status: 'stopped', exitstatus: 'OK' }) : get(url)));
+    await vi.waitFor(() => dropped(), { timeout: 5000 });
+  });
+});
