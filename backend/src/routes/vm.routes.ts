@@ -2,11 +2,11 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import multer from 'multer';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { promises as fsp, existsSync } from 'node:fs';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
-import { shareLimiter } from '../middleware/rate-limit.js';
+import { shareLimiter, guestFileLimiter } from '../middleware/rate-limit.js';
 import { enforceMfaSetup } from '../middleware/mfa.js';
 import { recordAudit, listAuditForTarget } from '../services/audit.service.js';
 import {
@@ -78,7 +78,18 @@ import {
   ourGuestOrNull,
   tagsMarkRow,
   MIN_RAM_MB,
+  GuestIdentityError,
+  GuestErroredError,
 } from '../services/vm.service.js';
+import {
+  pushGuestFile,
+  validateGuestPath,
+  parseFileMode,
+  guestFilePushMaxBytes,
+  formatByteLimit,
+  GuestFileError,
+  GUEST_USERNAME_RE,
+} from '../services/guest-file.service.js';
 import { isValidPublicKey } from '../services/ssh-key.service.js';
 import { projectOf, tagsForAccess, withProject } from '../services/project.service.js';
 import { isIdeInstalling } from '../services/ide-provision.service.js';
@@ -511,6 +522,8 @@ router.get('/:id', async (req: Request, res: Response) => {
   const rescueAvailable = kindOf(resolved.vm) !== 'lxc' && !!(await getConfig('rescue_iso'));
   // `caps` is what the UI gates on (per-capability buttons/tabs); `access` is the
   // display badge. Owner/admin get every capability.
+  // The push-file dialog checks the size against the server's limit before uploading.
+  const filePushMaxBytes = guestFilePushMaxBytes();
   res.json({
     ...withStatus,
     tags: tagsForAccess(withStatus.tags, resolved.access),
@@ -518,6 +531,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     access: resolved.access,
     caps: [...resolved.caps],
     rescueAvailable,
+    filePushMaxBytes,
   });
 });
 
@@ -1244,6 +1258,93 @@ router.post('/:id/ssh-keys', async (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (err) {
     res.status(502).json({ error: pveMessage(err) });
+  }
+});
+
+// ─── POST /api/vms/:id/files ──────────────────────────────────
+// Push a small file into a running QEMU guest through the guest agent. Same
+// capability as the SSH-key add (`configure`). multipart: `file`, `path`,
+// optional `mode` (default 0644), `owner` and `createParents`. The path is
+// validated strictly and only ever travels as an argv entry; the audit entry
+// records path, size and SHA-256, never the contents.
+
+const guestFileMulter = multer({
+  storage: multer.memoryStorage(),
+  // +1 so a file exactly at the limit passes and one byte over is a clean 413.
+  limits: { fileSize: guestFilePushMaxBytes() + 1, files: 1, fields: 8, fieldSize: 4096 },
+});
+
+const PushFileSchema = z.object({
+  path: z.string().min(1).max(4096),
+  mode: z.string().max(8).optional(),
+  owner: z
+    .string()
+    .max(64)
+    .refine((u) => u === '' || GUEST_USERNAME_RE.test(u), 'Invalid username')
+    .optional(),
+  createParents: z.enum(['true', 'false', '1', '0', '']).optional(),
+});
+
+router.post('/:id/files', guestFileLimiter, async (req: Request, res: Response) => {
+  const user = (req as AuthRequest).user;
+  const vm = await getVmWithCap(req.params['id'] as string, user, 'configure');
+  if (!vm) { res.status(404).json({ error: 'VM not found' }); return; }
+  if (kindOf(vm) === 'lxc') {
+    res.status(409).json({ error: 'Pushing files needs the QEMU guest agent — containers are not supported' });
+    return;
+  }
+
+  const uploadErr = await new Promise<unknown>((resolve) => guestFileMulter.single('file')(req, res, resolve));
+  const max = guestFilePushMaxBytes();
+  if (uploadErr) {
+    if (uploadErr instanceof multer.MulterError && uploadErr.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({ error: `That file is larger than the ${formatByteLimit(max)} push limit.` });
+      return;
+    }
+    res.status(400).json({ error: uploadErr instanceof Error ? uploadErr.message : 'Upload failed' });
+    return;
+  }
+  const file = (req as Request & { file?: Express.Multer.File }).file;
+  if (!file) { res.status(400).json({ error: 'No file was uploaded.' }); return; }
+  if (file.size > max) {
+    res.status(413).json({ error: `That file is larger than the ${formatByteLimit(max)} push limit.` });
+    return;
+  }
+
+  const parsed = PushFileSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
+    return;
+  }
+  const dest = validateGuestPath(parsed.data.path);
+  if (!dest.ok) { res.status(400).json({ error: dest.error }); return; }
+  const mode = parseFileMode(parsed.data.mode);
+  if (!mode) { res.status(400).json({ error: 'Use a mode like 0644.' }); return; }
+  const owner = parsed.data.owner ?? '';
+  const createParents = parsed.data.createParents === 'true' || parsed.data.createParents === '1';
+
+  const sha256 = createHash('sha256').update(file.buffer).digest('hex');
+  const detail =
+    `${vm.name} · ${dest.path} · ${file.size} bytes · sha256 ${sha256} · mode ${mode}` +
+    (owner ? ` · owner ${owner}` : '');
+  try {
+    const result = await pushGuestFile(vm, { path: dest.path, content: file.buffer, mode, owner, createParents });
+    await recordAudit({ action: 'vm.file_push', actor: user, targetType: 'vm', targetId: vm.id, detail, req });
+    res.json(result);
+  } catch (err) {
+    const message = err instanceof GuestFileError || err instanceof GuestErroredError || err instanceof GuestIdentityError
+      ? err.message
+      : pveMessage(err);
+    await recordAudit({
+      action: 'vm.file_push_failed', actor: user, targetType: 'vm', targetId: vm.id,
+      detail: `${detail} · ${message}`.slice(0, 1000), req,
+    });
+    if (err instanceof GuestFileError) { res.status(err.status).json({ error: err.message }); return; }
+    if (err instanceof GuestErroredError || err instanceof GuestIdentityError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    res.status(502).json({ error: message });
   }
 });
 

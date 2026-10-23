@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { Copy, KeyRound, KeySquare, LifeBuoy, Loader2 } from "lucide-react";
+import { Copy, FileUp, KeyRound, KeySquare, LifeBuoy, Loader2 } from "lucide-react";
 import { api, apiError } from "@/lib/api";
 import type { SshKey, VmDetail } from "@/lib/types";
 import { copyText } from "@/lib/clipboard";
@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/form-field";
+import { FilePushDialog } from "@/components/vm/file-push-dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -43,8 +44,8 @@ function Row({
 
 /**
  * The DigitalOcean-style Recovery section of the Settings tab (QEMU only):
- * reset a guest user's password via the guest agent, and boot into / out of
- * rescue mode (an admin-designated rescue ISO).
+ * reset a guest user's password, add an SSH key or push a file via the guest
+ * agent, and boot into / out of rescue mode (an admin-designated rescue ISO).
  */
 export function RecoveryPanel({
   vm,
@@ -55,7 +56,7 @@ export function RecoveryPanel({
   busy: boolean;
   onChanged: () => void;
 }) {
-  const [dialog, setDialog] = useState<"password" | "rescue" | "sshkey" | null>(null);
+  const [dialog, setDialog] = useState<"password" | "rescue" | "sshkey" | "file" | null>(null);
   const [username, setUsername] = useState("");
   const [newPassword, setNewPassword] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
@@ -194,6 +195,20 @@ export function RecoveryPanel({
             <Button variant="outline" disabled={busy || working || !running} onClick={openSshKeyDialog}>
               <KeySquare />
               Add SSH key
+            </Button>
+          }
+        />
+        <Row
+          title="Push a file"
+          description={
+            running
+              ? "Copy a small file (a config, a script) into the machine — no SSH needed (uses the guest agent)."
+              : "Start the machine first — files are written through the running guest agent."
+          }
+          action={
+            <Button variant="outline" disabled={busy || working || !running} onClick={() => setDialog("file")}>
+              <FileUp />
+              Push file
             </Button>
           }
         />
@@ -341,6 +356,14 @@ export function RecoveryPanel({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <FilePushDialog
+        vmId={vm.id}
+        vmName={vm.name}
+        maxBytes={vm.filePushMaxBytes}
+        open={dialog === "file"}
+        onOpenChange={(o: boolean) => setDialog(o ? "file" : null)}
+      />
 
       {/* Enter-rescue confirm dialog. */}
       <AlertDialog open={dialog === "rescue"} onOpenChange={(o: boolean) => setDialog(o ? "rescue" : null)}>

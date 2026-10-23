@@ -44,7 +44,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | POST | `/api/vms/restore-upload` | user | multipart `file` (vzdump archive) + `name`; restore as a new guest; 201 `{ vm, status }`. Audited `vm.restore_upload`. |
 | POST | `/api/vms/containers` | user | Create an LXC container from a vztmpl volid; 201 `{ vm, status }`. Audited `vm.create`. |
 | POST | `/api/vms/bulk` | user (`getOwnedVm` per id) + not locked (except start) | `{ action: start/stop/restart/delete, ids (1..50) }`; per-VM results; a locked VM is a per-item failure. Start, stop and restart run side by side (each waits for its guest's task); deletes run one at a time. Audited `vm.bulk_<action>`. |
-| GET | `/api/vms/:id` | any access | Detail + live status, `deployState`, `access`, `caps`, `rescueAvailable`. |
+| GET | `/api/vms/:id` | any access | Detail + live status, `deployState`, `access`, `caps`, `rescueAvailable`, `filePushMaxBytes`. |
 | GET | `/api/vms/:id/metrics` | viewable | RRD history `?timeframe=hour/day/week/month/year` (default hour). |
 | GET | `/api/vms/:id/passthrough` | viewable | Attached `hostpciN` devices (empty for LXC). |
 | GET | `/api/vms/:id/activity` | viewable | Last 20 audit entries for the VM (no IPs/actor ids; non-admins do not see admin actions except by the owner). |
@@ -71,6 +71,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | POST | `/api/vms/:id/duplicate` | `configure` | Clone to `{ name }` (QEMU only); 201. Audited `vm.duplicate`. |
 | POST | `/api/vms/:id/reset-password` | `configure` | Reset guest user password via guest agent (QEMU only); returns `{ password }`. Audited `vm.reset_password`. |
 | POST | `/api/vms/:id/ssh-keys` | `configure` | Add `{ username, publicKey }` to the guest via guest agent (QEMU only). Audited `vm.ssh_key_add`. |
+| POST | `/api/vms/:id/files` | `configure` + `guestFileLimiter` | multipart `file` (max `GUEST_FILE_PUSH_MAX_BYTES`, default 1 MiB, at most 8 MiB; 413 above) plus `path` (absolute, normalized, not under `/proc`, `/sys`, `/dev`), optional `mode` (default `0644`, no setuid/setgid/sticky), `owner` (guest username) and `createParents` (`true`). Writes the file into the running guest through the guest agent (QEMU only, 409 for LXC or when the agent does not answer). Returns `{ path, size, sha256, verified }`. Audited `vm.file_push` (path, size, SHA-256, mode, owner; never the contents), or `vm.file_push_failed` with the reason. See [guest-file service](/services/guest-file.md). |
 | POST | `/api/vms/:id/rescue` | `configure` | Boot the admin-designated rescue ISO (QEMU only). Audited `vm.rescue_enter`. |
 | POST | `/api/vms/:id/rescue/exit` | `configure` | Leave rescue mode. Audited `vm.rescue_exit`. |
 | GET | `/api/vms/:id/alerts` | viewable | Alert rules. |
@@ -97,9 +98,10 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 - **Lock (409)** via `rejectIfLocked`: stop, restart, pause, delete, migrate and console are refused while the IDE is installing or cloud-init is still deploying; bulk stop/restart/delete report such VMs as per-item failures. Start, resume and serial do not call it.[^routes]
 - **Size lock (403)** via `rejectIfSizeLocked`: on `adminManaged` or `quotaExempt` VMs only admins may resize, add/resize/remove disks, or rebuild (closes a quota bypass). Rename/tags stay open to the owner.[^routes]
 - Validation (zod): names `^[a-zA-Z0-9-]+$` max 63; `cpu` 1..64; `ram` (create, container, resize) int >= 64 MB; ISO `os` must be a bare `*.iso`/`*.img` filename (prevents Proxmox drive-option injection); node names `^[a-zA-Z0-9][a-zA-Z0-9._-]*$`; LXC `template` must match `<storage>:vztmpl/<file>`; containers need `password` (min 5) or `sshKey`; tags max 20 each `^[a-zA-Z0-9][a-zA-Z0-9 _-]{0,30}$`; crons max 120 chars then `isValidCron`; disk slot `^(scsi|virtio|sata|ide)\d+$`; snapshot names `^[a-zA-Z][a-zA-Z0-9_-]*$` max 40; share role accepts `SHARE_ROLES` plus legacy `co-owner`/`read-only` normalized.[^routes]
-- Max 12 snapshots per VM (409). Snapshots, disks, rebuild, convert, duplicate, pause, password reset, SSH key injection and rescue are QEMU-only.[^routes]
+- Max 12 snapshots per VM (409). Snapshots, disks, rebuild, convert, duplicate, pause, password reset, SSH key injection, file push and rescue are QEMU-only.[^routes]
 - Alerts: metric `down` forces `threshold = 0`; other metrics require `threshold` 1..100.[^routes]
 - PATCH rename hits Proxmox first so a PVE failure does not desync the DB; disk is grow-only (enforced in the service).[^routes]
+- File push: multer keeps the upload in memory (one file, cap + 1 byte so an exact-size file passes); the path is checked with `validateGuestPath` here and again in the service.[^routes]
 - Restore upload: multer streams to the backup share as `.proxmate-upload-<hex>.part`, file name must match `VZDUMP_UPLOAD_RE`, size cap `RESTORE_UPLOAD_MAX_GB` (default 50, 0 disables) giving 413; refuses to overwrite an existing file (409); disabled unless the share is mounted read-write (409). The upload path is not subject to the 1 MB JSON cap (multipart).[^routes]
 - Common error mapping: `QuotaError` 403 `Quota exceeded` with `details`; `CreateOptionError` its own status; Proxmox failures 502 `pveMessage(err)`.[^routes]
 - Most per-VM reads call `syncVmNode` first because the VM may have moved nodes.[^routes]
@@ -107,7 +109,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 # Relationships
 
 - Data: [VirtualMachine](/database/virtual-machine.md), [VmShare](/database/vm-share.md), [AlertRule](/database/alert-rule.md), [MateState](/database/mate-state.md), [DownloadToken](/database/download-token.md), [Template](/database/template.md), [User](/database/user.md), [AuditLog](/database/audit-log.md).
-- Services: [vm](/services/vm.md), [proxmox](/services/proxmox.md), [vnc-proxy](/services/vnc-proxy.md), [matestate](/services/matestate.md), [vm-share](/services/vm-share.md), [disk](/services/disk.md), [download](/services/download.md), [restore-upload](/services/restore-upload.md), [deploy-lock](/services/deploy-lock.md), [live-stats](/services/live-stats.md), [power-schedule](/services/power-schedule.md), [alert](/services/alert.md), [template](/services/template.md), [audit](/services/audit.md).
+- Services: [vm](/services/vm.md), [proxmox](/services/proxmox.md), [vnc-proxy](/services/vnc-proxy.md), [matestate](/services/matestate.md), [vm-share](/services/vm-share.md), [disk](/services/disk.md), [download](/services/download.md), [restore-upload](/services/restore-upload.md), [deploy-lock](/services/deploy-lock.md), [live-stats](/services/live-stats.md), [power-schedule](/services/power-schedule.md), [alert](/services/alert.md), [template](/services/template.md), [audit](/services/audit.md), [guest-file](/services/guest-file.md).
 - WebSocket side of the console: [console relay](/api/console.md).[^console] Public download side: [download router](/api/download.md).
 - Proxmox: [guest lifecycle](/proxmox/guest-lifecycle.md), [storage](/proxmox/storage.md).
 

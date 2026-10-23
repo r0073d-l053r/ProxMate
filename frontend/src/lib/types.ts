@@ -131,6 +131,8 @@ export interface VmDetail extends VirtualMachine {
   live: VmLiveStatus | null;
   /** Whether the admin has designated a rescue ISO (QEMU only). */
   rescueAvailable?: boolean;
+  /** Largest file POST /vms/:id/files accepts (bytes). */
+  filePushMaxBytes?: number;
   /** ProxMate IDE install state: null/'none' | 'installing' | 'ready' | 'failed'. */
   ideState?: "none" | "installing" | "ready" | "failed" | null;
   /** Cloud-init deploy lock: 'deploying' = still provisioning (locked); else ready. */
@@ -142,6 +144,25 @@ export interface IdeStatus {
   state: "none" | "installing" | "ready" | "failed";
   /** A 'ready' install made before per-VM guest authentication; it must be reinstalled to open. */
   reinstallRequired?: boolean;
+}
+
+/** GET /api/ide/:id/install-log */
+export interface IdeInstallLog {
+  path: string;
+  log: string;
+  /** Older output was cut off; only the tail is shown. */
+  truncated: boolean;
+  /** The guest has no install log. */
+  missing: boolean;
+}
+
+/** POST /api/vms/:id/files */
+export interface GuestFilePushResult {
+  path: string;
+  size: number;
+  sha256: string;
+  /** The guest reported the same SHA-256 back. */
+  verified: boolean;
 }
 
 /** One 1 s sample from GET /vms/:id/live-stats (cached cluster/resources). */

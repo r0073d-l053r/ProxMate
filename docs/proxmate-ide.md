@@ -77,6 +77,13 @@ capable node instead — the VM shuts down, moves, starts again, and the IDE ope
 
 The IDE opens only on VMs **you own**. On a VM that's been shared with you (or, as an admin, on someone else's VM) use the console instead.
 
+**Install log.** While the IDE is installing, or after an install failed, the VM page shows
+**View install log**. It reads the end of `/var/log/pmide-provision.log` inside the VM through
+the guest agent (the last 64 KB, at most 500 lines) and shows it as plain text, with colour codes
+and other terminal control characters removed. **Refresh** reads it again; **Download** saves
+what is shown as a `.log` file. The VM's owner and admins can read it (admins, to help the owner);
+people the VM is shared with can't. The VM must be running with its guest agent up.
+
 ---
 
 ## For admins (enabling + controlling it)
@@ -150,6 +157,7 @@ than out-of-band via the Proxmox API. So:
 | **"Unauthorized — missing session"** when the AI agent runs | The gateway base URL is `http://` and the edge 301-redirects to https, downgrading the POST to a GET. Ensure `TRUST_PROXY=1` and `BACKEND_PUBLIC_URL`/the origin are **https**. |
 | OpenCode crashes: **"CPU lacks AVX" / illegal instruction** | The VM's CPU masks AVX. ProxMate sets `cpu: host` at IDE-enable; **reboot the VM** and reopen so it takes effect. If the node's own silicon lacks AVX, ProxMate offers a **one-click move** to a capable node (stop → move → start → IDE opens). |
 | VM becomes **unresponsive right after Open IDE** | Undersized VM — the install OOMs. Give the VM **>= 8 GB RAM** (the `ide_min_ram_mb` floor) and retry. |
+| **The install failed** ("The IDE install didn't finish") | Open **View install log** on the VM page: the last lines usually name the step (a download that failed, a full disk, no network). Fix it and open the IDE again; the install re-runs. |
 | **"The QEMU guest agent is not responding"** | Install + start `qemu-guest-agent` in the VM (the IDE installs through it). |
 | AI agent can't reach a model / 403 | The model isn't shared to that tenant (check visibility), or BYO is disabled, or a BYO endpoint was blocked as private. |
 
