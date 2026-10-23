@@ -73,6 +73,8 @@ The central identity row. Every tenant and admin is a `User`; `role` decides adm
 | maxRam | Int | `@default(0)` | Total RAM quota (MB). |
 | maxStorage | Int | `@default(0)` | Total disk quota (GB). |
 | broadcastOptOut | Boolean | `@default(false)` | Opted out of admin broadcast emails (Community Edition only). |
+| activityEmailOptOut | Boolean | `@default(false)` | Opted out of activity emails: a VM an admin set up in this account, a VM shared with this user, a change to their share level ([activity-mail](/services/activity-mail.md)). |
+| usageDigestOptIn | Boolean | `@default(false)` | Opted in to the weekly usage digest ([usage-digest](/services/usage-digest.md)). |
 | accessExpiresAt | DateTime? | | End of the compute access window; null = never expires. |
 | accessSuspendedAt | DateTime? | | Set when the window lapsed and the tenant was suspended; cleared when access is extended. |
 | accessWarned7For | DateTime? | | The deadline the 7-day warning was sent for. |

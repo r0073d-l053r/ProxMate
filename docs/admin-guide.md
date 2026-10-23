@@ -228,6 +228,9 @@ Resize it yourself from the VM's Actions ▸ Resize.
 
 Admin actions on a tenant's VM (including this deploy) are recorded in the **admin audit log**
 only — the tenant's per-VM Activity feed shows just their own and their shared users' actions.
+The tenant is **emailed** that a machine was set up for them (needs SMTP), and on its page they
+see an **Admin-managed** badge with "Set up by your admin — only an admin can resize or rebuild
+it." instead of the resize and rebuild controls.
 
 ### 4.2 VM sharing levels (what tenants can grant each other)
 
@@ -250,6 +253,11 @@ Every console opened is recorded in the VM's activity feed (marked "view only" f
 owner, never through a share. No share can ever delete, rebuild,
 migrate, or re-share the VM — those stay with the owner (and you, the admin). The API enforces
 every level server-side.
+
+Someone who already has an account is emailed when a VM is shared with them and when their level
+changes. Sharing with an address that has no account yet sends **no** email — it waits as a
+pending share, and inviting that address is a separate step — and the owner sees the same answer
+either way.
 
 ## 5. Security & Authentication Controls (SMTP, MFA, SSO)
 
@@ -331,11 +339,24 @@ A few things worth knowing day-to-day:
 - **Cluster Balancer** (**Admin → Balancer**) evens out node **memory** load — the binding constraint — by live-migrating ProxMate-managed guests off the busiest node. Pick a mode: **Off**, **Recommend only** (review the plan and apply by hand), or **Auto-apply** (acts every ~15 min; override with `BALANCER_CRON`). Tune the imbalance tolerance, a per-run move cap, and a never-move list. Keep specific guests on separate nodes with the tag `aa:<group>` (anti-affinity), and pin a guest in place with the tag `pin` or `no-balance`. It never proposes a move a guest **can't make** — a guest pinned to node-local storage is skipped automatically — and if a migration does fail, the audit log records Proxmox's real reason. Routine balancing never emails tenants.
 - **GPU / PCI passthrough** (admin-approved). When you approve a tenant's passthrough request, ProxMate first runs a **pre-flight host-readiness check** on the target node — it refuses the approval if the mapped device is missing, its PCI identity doesn't match, or IOMMU is off, and it won't auto-start a GPU unless the guest boots q35 + OVMF. Host-side prep (binding the device to `vfio-pci`, enabling IOMMU in the kernel) is still the admin's job; the check turns a would-be node crash into an upfront, legible rejection.
 - **Maintenance mode (node drain)** — also on the Balancer page. Before taking a node down, pick it and **Plan drain**: ProxMate evacuates every managed guest off it (auto best-fit, or all to one target you choose), running guests live, stopped offline. Anything it can't move automatically (e.g. a guest not managed by ProxMate) is listed so you can handle it before powering the node off.
+- **Event notifications** (**Admin → Settings → Notifications**) — backup failures, VM errors,
+  account lockouts, lapsed access windows and missing guest agents go to any mix of a **webhook**
+  (Discord, Slack, Mattermost, generic JSON), an **ntfy** topic (ntfy.sh or self-hosted, with an
+  optional access token), a **Telegram** chat (bot token from @BotFather + chat id) and **email**.
+  URLs and tokens are stored encrypted and only ever shown masked; **Send test** reports each
+  channel separately.
+- **Weekly usage digest** (**Admin → Settings → Notifications**) — users who opt in (Security →
+  Email preferences; off by default) get a Monday 08:00 email with their own machines, running
+  hours, average CPU and memory over the week, and quota in use. Turn it off for everyone with the
+  card's switch, or **Send me a preview** to see your own. Override the time with
+  `USAGE_DIGEST_CRON`.
 - **Broadcast emails** (**Admin → Settings → Broadcast email**) send an announcement to all users
   (maintenance, downtime, all-clear). In the Community Edition users may **unsubscribe from
   broadcasts** — via the unsubscribe link in each broadcast or **Security → Email preferences** — and
   are then skipped (the send result shows how many). Transactional and security emails (password
-  resets, sign-in alerts, VM notifications) are never affected by the opt-out. _(The EDU edition has
+  resets, sign-in alerts, VM notifications) are never affected by the opt-out. Users can separately
+  turn off **activity emails** (machines set up for them, shares) and opt in to the **weekly usage
+  digest** on the same page. _(The EDU edition has
   no opt-out — instructors must be able to reach every student.)_
 - **Unconfirmed machines** (**Settings → Maintenance → Unconfirmed machines**). ProxMate tags every guest it manages (`proxmate-<id>`) and only acts on a guest that carries its own machine's tag. The card lists machines whose VMID holds no guest with their tag — typically machines from before ownership tags that the automatic tagging couldn't match (left in `error` or `creating`, renamed so the Proxmox name differs, or sharing a VMID with another machine). Those machines can't be started, opened, backed up or deleted until you settle them: **Adopt** tags the guest at the VMID as that machine's and, for an `error` or held machine, re-applies network isolation and re-reads its sizes (as a restore does) before clearing that state, **Remove row** deletes only the ProxMate record and leaves the guest alone. Admins are notified once when the automatic tagging leaves machines unmatched.
 - **Machines that can't run.** A machine left in `error`, or held after a create, rebuild or restore that didn't finish (or a restore that left its owner over quota), can't be started and its console and IDE don't open; its page says why. It can be restored, rebuilt, adopted under **Unconfirmed machines**, or deleted. Bulk actions, migrations, the Balancer and node drains also skip a machine while its IDE installs or its cloud-init deploy finishes, and report it.

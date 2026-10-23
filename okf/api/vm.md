@@ -38,7 +38,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 |---|---|---|---|
 | GET | `/api/vms` | user | Caller's VMs with refreshed IPs, annotated with access. |
 | GET | `/api/vms/live-usage` | user | Aggregate live usage of caller's running VMs. |
-| POST | `/api/vms` | user | Create a QEMU VM from an ISO. 201 `{ vm, status }`. Audited `vm.create`. |
+| POST | `/api/vms` | user | Create a QEMU VM from an ISO. 201 `{ vm, status }`. Audited `vm.create`. An admin creating it for a tenant (`forUserId`) emails the tenant after the response ([activity-mail](/services/activity-mail.md)); same for containers and template deploys. |
 | GET | `/api/vms/lxc-templates` | user | LXC vztmpl templates on the cluster. |
 | GET | `/api/vms/restore-capability` | user | `{ enabled }` for restore-from-upload. |
 | POST | `/api/vms/restore-upload` | user | multipart `file` (vzdump archive) + `name`; restore as a new guest; 201 `{ vm, status }`. Audited `vm.restore_upload`. |
@@ -60,7 +60,7 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 | GET | `/api/vms/:id/migrate-targets` | admin | `{ current, targets, blockers, localDisks }` from Proxmox preflight intersected with online nodes; offline nodes are added as blockers, and a node Proxmox lists in both `allowed_nodes` and `not_allowed_nodes` without a cause is a target, not a blocker. LXC and passthrough guests get an empty `targets` list with a `*` blocker. |
 | POST | `/api/vms/:id/migrate` | admin + not locked | `{ targetNode }`; migrates and notifies owner. Audited `vm.migrate`. |
 | GET | `/api/vms/:id/shares` | owned | List shares as `{ id, email, role, createdAt }` (no sharee account id or display name). |
-| POST | `/api/vms/:id/shares` | owned + `shareLimiter` | `{ email, role }` share by email; always 202 `{ message }` with the same audit detail, whether or not the address has an account (an address with no account gets a pending share). Audited `vm.share`. |
+| POST | `/api/vms/:id/shares` | owned + `shareLimiter` | `{ email, role }` share by email; always 202 `{ message }` with the same audit detail, whether or not the address has an account (an address with no account gets a pending share). Audited `vm.share`. After the response, a live share that is new or changed level emails the recipient ([activity-mail](/services/activity-mail.md)); a pending share sends nothing. |
 | DELETE | `/api/vms/:id/shares/:shareId` | owned | Remove share. Audited `vm.unshare`. |
 | DELETE | `/api/vms/:id` | owned + not locked | Destroy the guest. `?rowOnly=true` (admin only, else 403) removes just the record and leaves the guest untouched. Audited `vm.delete` / `vm.delete_row`. |
 | POST | `/api/vms/:id/start` | `power` | Start. Audited `vm.start`. |

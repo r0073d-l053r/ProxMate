@@ -20,3 +20,4 @@ SystemConfig keys, grouped by feature.
 * [SSO (OIDC) settings](sso.md) - SystemConfig keys configuring OpenID Connect single sign-on, including the issuer, client credentials, scopes, group-to-admin mapping, JIT sign-up and login button text.
 * [Template auto-refresh setting](template-refresh.md) - SystemConfig key toggling the monthly job that rebuilds every refreshable cloud-image template so new deploys start from a patched base.
 * [Tenant isolation settings](tenant-isolation.md) - SystemConfig keys controlling per-guest firewall isolation, the DNS allow-list and the tenant VLAN tag applied to guest NICs.
+* [Weekly usage digest setting](usage-digest.md) - SystemConfig key with the admin on/off switch for the weekly per-tenant usage digest email, which each user also opts in to.

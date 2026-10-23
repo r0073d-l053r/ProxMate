@@ -36,6 +36,7 @@ Owners and admins hold `ALL_CAPS` (= manager set).[^share] The `ide` capability 
 | `consoleModeFor` | `(caps) => 'interactive' \| 'view' \| null` | `console` gives `interactive`, `console_view` alone `view`, neither `null`. The console ticket mints and the console WebSocket upgrade both use it. |
 | `listShares` | `(vmId) => ShareView[]` | Live and pending shares, oldest first, in the same shape `{ id, email, role, createdAt }` — no account id, display name or pending flag. |
 | `addShare` | `(vm, email, role) => ShareView` | An address with no account gets a [PendingVmShare](/database/pending-vm-share.md) (the route answers exactly as for a live share); the owner's own address is a 400; upsert on `(vmId, userId)` so re-sharing updates the preset; at most `MAX_SHARES_PER_VM` (100) per VM, checked before the account lookup (409). |
+| `addShareWithNotice` | `(vm, email, role) => { view, notice }` | `addShare` plus a `ShareNotice` (`{ userId, vmId, vmName, role, previousRole }`) for a live share that is new or changed level; `null` for a pending share or a same-level re-save. The route sends it via [activity-mail](/services/activity-mail.md) after answering. |
 | `claimPendingShares` | `(user) => number` | Turns pending shares for a new account's address into live ones, only when `user.emailBound`. Called after registration and SSO sign-up. |
 | `removeShare` | `(vmId, shareId) => boolean` | Revokes a live or pending share; false if neither is on this VM. |
 | `ShareError` | `(message, status = 400)` | Route-surfaced error. |
@@ -51,6 +52,7 @@ Owners and admins hold `ALL_CAPS` (= manager set).[^share] The `ide` capability 
 
 # Relationships
 
+- Notices go out through [activity-mail](/services/activity-mail.md).
 - Called by the [vm router](/api/vm.md); capability checks (`getVmWithCap`) live in [vm service](/services/vm.md) and are used by [ide-proxy](/services/ide-proxy.md) and [ide-gateway](/services/ide-gateway.md).
 
 [^share]: backend/src/services/vm-share.service.ts

@@ -102,6 +102,7 @@ The backend loads `.env` with `import 'dotenv/config'` (the first line of `src/i
 | `TEMPLATE_REFRESH_CRON` | `0 4 1 * *` | Template refresh tick, which acts only when enabled ([template refresh](/config/template-refresh.md)). |
 | `APPDB_BACKUP_CRON` | `30 2 * * *` | App-DB snapshot ([appdb backup](/config/appdb-backup.md)). |
 | `ACCESS_EXPIRY_CRON` | `20 * * * *` | Tenant access-expiry sweep. |
+| `USAGE_DIGEST_CRON` | `0 8 * * 1` (Mon 08:00) | Weekly usage digest to users who opted in, while the admin has it on ([usage digest](/config/usage-digest.md)). |
 
 All schedules are read in `scheduler.service.ts`.[^scheduler]
 

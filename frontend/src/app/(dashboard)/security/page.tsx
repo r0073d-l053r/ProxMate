@@ -39,6 +39,9 @@ export default function SecurityPage() {
   const [creatingToken, setCreatingToken] = useState(false);
   const [newToken, setNewToken] = useState<string | null>(null);
   const [broadcastOptOut, setBroadcastOptOut] = useState<boolean | null>(null);
+  const [activityOptOut, setActivityOptOut] = useState(false);
+  const [digestOptIn, setDigestOptIn] = useState(false);
+  const [digestAvailable, setDigestAvailable] = useState(true);
   const [savingPrefs, setSavingPrefs] = useState(false);
   const setStoreMfa = useAuthStore((s) => s.setMfaSetupRequired);
 
@@ -67,16 +70,23 @@ export default function SecurityPage() {
         setMfaRequired(required);
         setStoreMfa(required);
         setBroadcastOptOut(!!r.data.user.broadcastOptOut);
+        setActivityOptOut(!!r.data.user.activityEmailOptOut);
+        setDigestOptIn(!!r.data.user.usageDigestOptIn);
+        setDigestAvailable(r.data.user.usageDigestAvailable !== false);
       })
       .catch(() => {});
   }, [setStoreMfa]);
 
-  async function saveEmailPrefs(optOut: boolean) {
+  type EmailPrefs = { broadcastOptOut?: boolean; activityEmailOptOut?: boolean; usageDigestOptIn?: boolean };
+
+  async function saveEmailPrefs(change: EmailPrefs, done: string) {
     setSavingPrefs(true);
     try {
-      await api.put("/auth/email-preferences", { broadcastOptOut: optOut });
-      setBroadcastOptOut(optOut);
-      toast.success(optOut ? "You won't receive announcement emails." : "Announcement emails re-enabled.");
+      const r = await api.put<EmailPrefs>("/auth/email-preferences", change);
+      setBroadcastOptOut(!!r.data.broadcastOptOut);
+      setActivityOptOut(!!r.data.activityEmailOptOut);
+      setDigestOptIn(!!r.data.usageDigestOptIn);
+      toast.success(done);
     } catch (err) {
       toast.error(apiError(err));
     } finally {
@@ -576,9 +586,8 @@ export default function SecurityPage() {
             <Mail className="size-5" /> Email preferences
           </CardTitle>
           <CardDescription>
-            Announcement emails are the broadcasts your administrator sends to all users (maintenance
-            notices, general updates). Security and account emails — password resets, sign-in alerts —
-            are always delivered.
+            Choose which optional emails you get. Security and account emails — password resets, sign-in
+            alerts — and the alerts you set on your machines are always delivered.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -587,22 +596,72 @@ export default function SecurityPage() {
               <Loader2 className="size-4 animate-spin" /> Loading…
             </div>
           ) : (
-            <label className="flex cursor-pointer items-start gap-3 text-sm">
-              <input
-                type="checkbox"
-                className="mt-0.5 size-4 accent-primary"
-                checked={!broadcastOptOut}
-                disabled={savingPrefs}
-                onChange={(e) => saveEmailPrefs(!e.target.checked)}
-              />
-              <span>
-                <span className="font-medium">Receive announcement emails</span>
-                <span className="block text-xs text-muted-foreground">
-                  Uncheck to unsubscribe from admin broadcasts. Every broadcast also carries an
-                  unsubscribe link.
+            <div className="grid gap-4">
+              <label className="flex cursor-pointer items-start gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 size-4 accent-primary"
+                  checked={!broadcastOptOut}
+                  disabled={savingPrefs}
+                  onChange={(e) =>
+                    saveEmailPrefs(
+                      { broadcastOptOut: !e.target.checked },
+                      e.target.checked ? "Announcement emails re-enabled." : "You won't receive announcement emails.",
+                    )
+                  }
+                />
+                <span>
+                  <span className="font-medium">Receive announcement emails</span>
+                  <span className="block text-xs text-muted-foreground">
+                    The broadcasts your administrator sends to all users (maintenance notices, general
+                    updates). Every broadcast also carries an unsubscribe link.
+                  </span>
                 </span>
-              </span>
-            </label>
+              </label>
+              <label className="flex cursor-pointer items-start gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 size-4 accent-primary"
+                  checked={!activityOptOut}
+                  disabled={savingPrefs}
+                  onChange={(e) =>
+                    saveEmailPrefs(
+                      { activityEmailOptOut: !e.target.checked },
+                      e.target.checked ? "Activity emails re-enabled." : "You won't receive activity emails.",
+                    )
+                  }
+                />
+                <span>
+                  <span className="font-medium">Activity emails about my machines</span>
+                  <span className="block text-xs text-muted-foreground">
+                    When an admin sets up a machine in your account, or someone shares a machine with you or
+                    changes your access to one.
+                  </span>
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 size-4 accent-primary"
+                  checked={digestOptIn}
+                  disabled={savingPrefs}
+                  onChange={(e) =>
+                    saveEmailPrefs(
+                      { usageDigestOptIn: e.target.checked },
+                      e.target.checked ? "You'll get a weekly usage digest." : "Weekly usage digest turned off.",
+                    )
+                  }
+                />
+                <span>
+                  <span className="font-medium">Weekly usage digest</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Once a week: your machines, their running time and average CPU and memory, and how much of
+                    your quota is in use.
+                    {!digestAvailable && " Your administrator has the digest turned off right now, so none is sent."}
+                  </span>
+                </span>
+              </label>
+            </div>
           )}
         </CardContent>
       </Card>

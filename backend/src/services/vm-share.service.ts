@@ -115,10 +115,38 @@ export async function listShares(vmId: string): Promise<ShareView[]> {
  * remaining failure cases.
  */
 export async function addShare(
-  vm: { id: string; userId: string },
+  vm: { id: string; userId: string; name?: string },
   email: string,
   role: ShareRole,
 ): Promise<ShareView> {
+  return (await addShareWithNotice(vm, email, role)).view;
+}
+
+/**
+ * What the recipient of a live share should be told: it is new, or its level
+ * changed (`previousRole`). Never produced for a pending share — an address with
+ * no account is not emailed (inviting it is a separate, deliberate step) — nor
+ * for a re-share at the same level.
+ */
+export interface ShareNotice {
+  userId: string;
+  vmId: string;
+  vmName: string;
+  role: ShareRole;
+  previousRole: ShareRole | null;
+}
+
+/**
+ * {@link addShare}, plus the notice to send the recipient, if any. The notice is
+ * for the caller to deliver AFTER answering the request (see activity-mail), so
+ * neither the response nor its timing differs between an address with an account
+ * and one without.
+ */
+export async function addShareWithNotice(
+  vm: { id: string; userId: string; name?: string },
+  email: string,
+  role: ShareRole,
+): Promise<{ view: ShareView; notice: ShareNotice | null }> {
   const address = email.toLowerCase().trim();
 
   // The cap is checked before the account lookup, and the same way for both kinds of
@@ -144,7 +172,8 @@ export async function addShare(
       create: { vmId: vm.id, email: address, role },
       update: { role },
     });
-    return toView({ id: pending.id, role: pending.role, createdAt: pending.createdAt, user: { email: pending.email } });
+    const view = toView({ id: pending.id, role: pending.role, createdAt: pending.createdAt, user: { email: pending.email } });
+    return { view, notice: null };
   }
   if (target.id === vm.userId) throw new ShareError('That user already owns this VM.', 400);
 
@@ -156,7 +185,13 @@ export async function addShare(
   });
   // An earlier share to the same address, made before the account existed, is now this one.
   if (pendingForAddress) await prisma.pendingVmShare.delete({ where: { id: pendingForAddress.id } }).catch(() => undefined);
-  return toView(share);
+
+  const previousRole = liveForAddress ? normalizeShareRole(liveForAddress.role) : null;
+  const notice: ShareNotice | null =
+    previousRole === role
+      ? null // same level re-saved: nothing changed for the recipient
+      : { userId: target.id, vmId: vm.id, vmName: vm.name ?? 'a VM', role, previousRole };
+  return { view: toView(share), notice };
 }
 
 /** Revoke a share, live or pending. Returns false if it doesn't belong to this VM. */

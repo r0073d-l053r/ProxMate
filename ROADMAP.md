@@ -52,16 +52,6 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
   (TOTP, recovery codes, passkeys, invite-enforced 2FA) each need a documented end-to-end QA pass
   on a live deployment.
 
-### Tenant-experience follow-ups
-
-- **Notify the tenant on admin deploy-for-tenant** — a granted VM just appears in their account
-  today; send the branded "you've been granted a VM" email + in-app note.
-- **Share notifications** — email the recipient when a VM is shared with them or their preset level
-  (Viewer / Operator / Manager) changes.
-- **Surface admin-managed / quota-exempt to the owner** — partly built: the disks panel already says
-  the VM was set up by an admin and its disks can't be changed here. Still open: a page-level badge
-  and one-line explainer on the VM detail, since resize and rebuild are otherwise just hidden.
-
 ### IDE follow-ups
 
 - **Wire the gateway as a provider for code-server's built-in Chat view** (inert today; OpenCode
@@ -108,11 +98,9 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 3. **Auto-snapshot before risky ops.** Optionally take a snapshot right before a rebuild/resize/rescue
    (QEMU) so a bad change is one rollback away. Snapshots already exist; this just wires a safety net
    into the destructive paths, with a retention cap. _CE._
-4. **More notification channels.** The webhook engine supports Discord/Slack/Mattermost/generic; add
-   **ntfy** and **Telegram** presets, plus a weekly per-tenant **usage digest** email. _CE._
-5. **Two-person approval for destructive admin actions.** Optional policy: a second admin must confirm
+4. **Two-person approval for destructive admin actions.** Optional policy: a second admin must confirm
    a bulk-delete / node-drain / firewall-disable before it runs. Rides the existing audit log. _EDU._
-6. **Status page / scheduled reports.** A lightweight public/authed status page (node health, capacity,
+5. **Status page / scheduled reports.** A lightweight public/authed status page (node health, capacity,
    incidents) and optional scheduled admin reports (capacity trend, top consumers) off the existing
    `ResourceSample` + cluster-health data. _EDU._
 
@@ -143,6 +131,16 @@ Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
   add) uploads a small file (1 MiB default, up to 8 MiB via `GUEST_FILE_PUSH_MAX_BYTES`) to a strictly
   validated path with a chosen mode and owner, through the guest agent; audited with path, size and
   SHA-256, rate-limited per user. QEMU only.
+- **Tenant notifications.** A tenant is emailed when an admin sets a VM up in their account, and
+  when a VM is shared with them or their level changes (an address with no account gets nothing,
+  and the owner sees the same answer either way). Users can turn these activity emails off under
+  Security → Email preferences.
+- **Admin-managed badge.** A VM an admin set up shows a badge and "Set up by your admin — only an
+  admin can resize or rebuild it." to its tenant instead of silently missing controls.
+- **ntfy and Telegram channels** for admin event notifications, alongside the webhook and email,
+  with secrets encrypted and shown masked and a per-channel **Send test**.
+- **Weekly usage digest.** Opt-in per user (off by default) with an admin switch: their machines,
+  running hours, average CPU and memory, and quota in use, Mondays 08:00 (`USAGE_DIGEST_CRON`).
 
 ### Released
 

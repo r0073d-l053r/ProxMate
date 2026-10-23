@@ -34,6 +34,12 @@ export interface MeResponse {
     hasPasskeys?: boolean;
     // CE: opted out of admin broadcast (announcement) emails. Security emails unaffected.
     broadcastOptOut?: boolean;
+    /** Opted out of activity emails (a VM an admin set up for you, VM shares). */
+    activityEmailOptOut?: boolean;
+    /** Opted in to the weekly usage digest (off by default). */
+    usageDigestOptIn?: boolean;
+    /** Whether the admin has the weekly digest turned on at all. */
+    usageDigestAvailable?: boolean;
     /** Compute-access window. null/absent = never expires. Drives the countdown banner. */
     accessExpiresAt?: string | null;
     /**
@@ -496,6 +502,8 @@ export interface AdminSettings {
         callbackUrl: string;
       };
   notify: NotifyConfig;
+  /** Admin switch for the weekly per-tenant usage digest (each user still opts in). */
+  usageDigestEnabled?: boolean;
   ide: IdeSettings;
   /** ProxMate app-DB backup schedule (dir empty = disabled). */
   appdbBackup: {
@@ -572,6 +580,14 @@ export interface NotifyConfig {
   hasWebhookUrl: boolean;
   /** Scheme and host only, e.g. "https://discord.com/…"; '' when unset. */
   webhookUrlMasked: string;
+  /** ntfy topic URL — like the webhook URL, only "is one set" plus scheme and host. */
+  hasNtfyUrl?: boolean;
+  ntfyUrlMasked?: string;
+  hasNtfyToken?: boolean;
+  /** Telegram bot token is never returned; the masked form keeps only the bot id ("123456:…"). */
+  hasTelegramBotToken?: boolean;
+  telegramBotTokenMasked?: string;
+  telegramChatId?: string;
   emailEnabled: boolean;
   emailTo: string;
   events: NotifyEvent[];

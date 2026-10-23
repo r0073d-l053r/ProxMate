@@ -44,6 +44,7 @@ import { openPopup, pollUntil } from "@/lib/ide-launch";
 import { formatRam, formatBytes, formatUptime, formatDate } from "@/lib/format";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
 import { HoldBanner, isVmHeld } from "@/components/vm/hold-banner";
+import { AdminManagedBadge, AdminManagedNote } from "@/components/vm/admin-managed-notice";
 import { NotesCard } from "@/components/vm/notes-card";
 import { TagsCard } from "@/components/vm/tags-card";
 import { ProjectCard } from "@/components/vm/project-card";
@@ -608,6 +609,7 @@ export default function VmDetailPage() {
             {isLxc && (
               <span className="rounded border px-1.5 py-0.5 text-[10px] font-medium">LXC</span>
             )}
+            <AdminManagedBadge vm={vm} isAdmin={isAdmin} />
             {vm.hasPassthrough && (
               <span className="flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
                 <Cpu className="size-2.5" /> GPU/PCI
@@ -628,6 +630,7 @@ export default function VmDetailPage() {
               </span>
             </span>
           </div>
+          <AdminManagedNote vm={vm} isAdmin={isAdmin} />
         </div>
 
         {(canConsole || canViewConsole || canPower || canConfigure) && (

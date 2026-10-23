@@ -119,6 +119,8 @@ services:
       APPDB_BACKUP_CRON: ${APPDB_BACKUP_CRON:-}
       BALANCER_CRON: ${BALANCER_CRON:-}
       TEMPLATE_REFRESH_CRON: ${TEMPLATE_REFRESH_CRON:-}
+      # Weekly usage digest to users who opted in (default Mondays 08:00).
+      USAGE_DIGEST_CRON: ${USAGE_DIGEST_CRON:-}
       # Comma-separated optional modules to enable (see backend/src/modules/).
       PROXMATE_MODULES: ${PROXMATE_MODULES:-}
       # Log verbosity (pino level: fatal, error, warn, info, debug, trace).

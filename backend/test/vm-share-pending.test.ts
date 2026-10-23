@@ -22,6 +22,7 @@ vi.mock('../src/lib/prisma.js', () => ({
 import { prisma } from '../src/lib/prisma.js';
 import {
   addShare,
+  addShareWithNotice,
   removeShare,
   claimPendingShares,
   MAX_SHARES_PER_VM,
@@ -91,6 +92,33 @@ describe('addShare', () => {
   it('refuses sharing a VM with its own owner', async () => {
     vi.mocked(prisma.user.findUnique).mockResolvedValue({ id: 'owner', email: 'me@example.com' } as never);
     await expect(addShare(vm, 'me@example.com', 'viewer')).rejects.toBeInstanceOf(ShareError);
+  });
+});
+
+describe('addShareWithNotice', () => {
+  const named = { ...vm, name: 'web' };
+
+  it('has no notice for a pending share — nobody is emailed', async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    const { notice } = await addShareWithNotice(named, 'later@example.com', 'operator');
+    expect(notice).toBeNull();
+  });
+
+  it('notices a new live share, including one that replaces a pending share', async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({ id: 'u2', email: 'known@example.com' } as never);
+    vi.mocked(prisma.pendingVmShare.findUnique).mockResolvedValue({ id: 'p9' } as never);
+    const { notice } = await addShareWithNotice(named, 'known@example.com', 'viewer');
+    expect(notice).toEqual({ userId: 'u2', vmId: 'vm1', vmName: 'web', role: 'viewer', previousRole: null });
+  });
+
+  it('notices a level change with the previous level, and not a re-save at the same level', async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({ id: 'u2', email: 'known@example.com' } as never);
+    vi.mocked(prisma.vmShare.findFirst).mockResolvedValue({ id: 's1', role: 'co-owner' } as never);
+    expect((await addShareWithNotice(named, 'known@example.com', 'operator')).notice).toMatchObject({
+      role: 'operator',
+      previousRole: 'manager',
+    });
+    expect((await addShareWithNotice(named, 'known@example.com', 'manager')).notice).toBeNull();
   });
 });
 

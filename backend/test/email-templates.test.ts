@@ -8,6 +8,9 @@ import {
   announcementEmail,
   vmMaintenanceEmail,
   alertEmail,
+  vmDeployedForYouEmail,
+  vmSharedEmail,
+  usageDigestEmail,
   type RenderedEmail,
 } from '../src/lib/email-templates.js';
 
@@ -27,7 +30,25 @@ function expectBrandedShell(email: RenderedEmail) {
   expect(email.html).toContain('#18181b'); // shared ink/brand colour
 }
 
+const DIGEST_ARGS = {
+  displayName: 'Tess',
+  periodStart: new Date('2026-10-19T08:00:00Z'),
+  periodEnd: new Date('2026-10-26T08:00:00Z'),
+  vms: [
+    { name: 'web-1', exists: true, runningHours: 24.04, avgCpuPct: 12.6, avgMemMb: 1536 },
+    { name: '', exists: false, runningHours: 2, avgCpuPct: 3, avgMemMb: 512 },
+  ],
+  quota: { cpu: [2, 8] as [number, number], ram: [2048, 0] as [number, number], storage: [20, 100] as [number, number] },
+  dashboardUrl: 'https://pm.example',
+};
+
 const SAMPLES: Array<[string, RenderedEmail]> = [
+  [
+    'deployed for you',
+    vmDeployedForYouEmail({ displayName: 'Tess', vmName: 'web-1', kind: 'vm', cpu: 2, ram: 2048, storage: 20, quotaExempt: false }),
+  ],
+  ['vm shared', vmSharedEmail({ vmName: 'web-1', role: 'viewer', sharedBy: 'Owen' })],
+  ['usage digest', usageDigestEmail(DIGEST_ARGS)],
   ['password reset', passwordResetEmail('https://pm.example/reset-password?token=abc')],
   ['notification', notificationEmail('VM error', 'box-1', 'qemu exited unexpectedly')],
   [
@@ -200,6 +221,55 @@ describe('inviteEmail', () => {
     };
     expect(inviteEmail({ ...base, require2fa: true }).html).toContain('Two-step auth');
     expect(inviteEmail({ ...base, require2fa: false }).html).not.toContain('Two-step auth');
+  });
+});
+
+describe('vmDeployedForYouEmail', () => {
+  it('names the machine, its size, the quota effect and the admin lock, escaping names', () => {
+    const m = vmDeployedForYouEmail({
+      displayName: 'Tess <t>',
+      vmName: 'web-<1>',
+      kind: 'vm',
+      cpu: 2,
+      ram: 3072,
+      storage: 20,
+      quotaExempt: true,
+      adminName: 'Ada',
+      vmUrl: 'https://pm.example/vms/v1',
+    });
+    expect(m.subject).toBe('[ProxMate] A new virtual machine was set up for you: web-<1>');
+    expect(m.text).toContain('2 vCPU · 3 GB RAM · 20 GB storage. It does not count toward your quota.');
+    expect(m.text).toContain('only an admin can resize or rebuild it');
+    expect(m.html).toContain('web-&lt;1&gt;');
+    expect(m.html).not.toContain('web-<1>');
+    expect(m.html).toContain('href="https://pm.example/vms/v1"');
+  });
+});
+
+describe('vmSharedEmail', () => {
+  it('describes what the level allows', () => {
+    expect(vmSharedEmail({ vmName: 'a', role: 'operator' }).text).toContain('power it on and off, and open its console');
+  });
+
+  it('treats a re-share at the same level as a plain share, not a change', () => {
+    expect(vmSharedEmail({ vmName: 'a', role: 'viewer', previousRole: 'viewer' }).subject).toBe('[ProxMate] "a" was shared with you');
+  });
+});
+
+describe('usageDigestEmail', () => {
+  it('tabulates each machine, labels deleted ones, and shows quota with and without limits', () => {
+    const m = usageDigestEmail(DIGEST_ARGS);
+    expect(m.subject).toBe('[ProxMate] Your weekly usage: 2026-10-19 – 2026-10-26');
+    expect(m.text).toContain('- web-1: 24 h running, avg CPU 13%, avg RAM 1.5 GB');
+    expect(m.text).toContain('- Deleted machine: 2 h running');
+    expect(m.text).toContain('- vCPU: 2 of 8');
+    expect(m.text).toContain('- Memory: 2 GB (no limit set)');
+    expect(m.text).toContain('Total running time: 26 h');
+    expect(m.text).toContain('turn it off');
+  });
+
+  it('says so when there were no machines', () => {
+    expect(usageDigestEmail({ ...DIGEST_ARGS, vms: [] }).text).toContain('No machines this week.');
   });
 });
 

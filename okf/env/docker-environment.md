@@ -69,6 +69,7 @@ sources:
 | `RESTORE_UPLOAD_MAX_GB` | `${…:-}` | no | An empty value falls back to the built-in 50. |
 | `MATESTATE_CRON` / `ACCESS_EXPIRY_CRON` | `${…:-}` | no | Schedule overrides. Empty means the defaults. |
 | `APPDB_BACKUP_CRON` / `BALANCER_CRON` / `TEMPLATE_REFRESH_CRON` | `${…:-}` | no | Schedule overrides for app-DB snapshots, the balancer and template refresh. Empty or invalid means the defaults. |
+| `USAGE_DIGEST_CRON` | `${…:-}` | no | Schedule override for the weekly usage digest (default Mondays 08:00). |
 | `PROXMATE_MODULES` | `${…:-}` | no | Comma-separated optional modules; empty enables none. |
 | `LOG_LEVEL` | `info` | no | pino log level. |
 | `GITHUB_TOKEN` | `${…:-}` | no | Optional token for the release check. |
