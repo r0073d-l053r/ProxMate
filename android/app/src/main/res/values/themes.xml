@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Always dark, matching the ProxMate web app's dark theme. -->
+    <style name="Theme.ProxMate" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/pm_primary</item>
+        <item name="colorOnPrimary">@color/pm_primary_foreground</item>
+        <item name="colorPrimaryContainer">@color/pm_muted</item>
+        <item name="colorOnPrimaryContainer">@color/pm_foreground</item>
+        <item name="colorSecondary">@color/pm_muted_foreground</item>
+        <item name="colorOnSecondary">@color/pm_background</item>
+        <item name="colorSecondaryContainer">@color/pm_muted</item>
+        <item name="colorOnSecondaryContainer">@color/pm_foreground</item>
+        <item name="colorError">@color/pm_destructive</item>
+        <item name="colorOnError">@color/pm_background</item>
+        <item name="android:colorBackground">@color/pm_background</item>
+        <item name="colorOnBackground">@color/pm_foreground</item>
+        <item name="colorSurface">@color/pm_background</item>
+        <item name="colorOnSurface">@color/pm_foreground</item>
+        <item name="colorSurfaceVariant">@color/pm_muted</item>
+        <item name="colorOnSurfaceVariant">@color/pm_muted_foreground</item>
+        <item name="colorSurfaceContainerLow">@color/pm_sidebar</item>
+        <item name="colorSurfaceContainer">@color/pm_card</item>
+        <item name="colorSurfaceContainerHigh">@color/pm_card</item>
+        <item name="colorSurfaceContainerHighest">@color/pm_muted</item>
+        <item name="colorOutline">@color/pm_ring</item>
+        <item name="android:windowBackground">@color/pm_background</item>
+        <item name="android:statusBarColor">@color/pm_sidebar</item>
+        <item name="android:navigationBarColor">@color/pm_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
