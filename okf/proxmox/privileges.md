@@ -185,15 +185,24 @@ What changes with a pool-scoped token:
   will not start it on its own), then is deleted — the task that created it finished at a VMID only
   it could have created, without `force`. If the delete is still refused, every refused key the API
   can remove goes, pending changes are reverted, every NIC gets `link_down=1`, and the row is held;
-  the tenant is told the backup contains settings ProxMate won't restore. The late-task follower
-  does the same before it would tag the guest. An in-place MateState restore of a container gets the
-  check with snapshots allowed (each snapshot's config is checked) and, on failure, the same
-  neutralising without the delete, then a hold. The archive's guest firewall (rules, IP sets,
-  aliases, `radv`/log options) is cleared before isolation is applied. An admin's adopt runs the
-  same check (approved PCI devices excepted) before it tags a guest or lifts a hold. Uploaded configs
+  the tenant is told the backup contains settings ProxMate won't restore. `onboot`, `startup` and
+  `protection` are removed right after the restore task, before the check, on every restore path.
+  The late-task follower runs the same check (and removal) once the task finishes OK, whether or
+  not the row is still there, and drops the row when the guest is removed; a restart ends the
+  follower and the row stays held. When a later step fails after the check passed, the guest is
+  neutralised without the delete (an over-quota failure excepted). An in-place MateState restore of
+  a container gets the check with snapshots allowed (each snapshot's config is checked) and, on
+  failure, the same neutralising without the delete, then a hold. The archive's guest firewall
+  (rules, IP sets, aliases, `radv`/log options, and with isolation off also `enable` and the
+  policies) is cleared before isolation is applied. An admin's adopt checks a machine restored from
+  an uploaded backup, or an untagged guest, against the upload-archive allowlist, and any other
+  machine against the rollback policy (no host-level key, no foreign volume, no pending change —
+  a template's `rng0`, spice `usbN`, `audio0` or `watchdog` are fine), approved PCI devices excepted,
+  in its config and every snapshot. For a restored or untagged guest it also removes autostart and
+  the archive firewall before isolation, and it brings NICs a hold took down back up. Uploaded configs
   are checked section by section (snapshots, `[special:cloudinit]`), a `[PENDING]` section is
-  refused up front, a disk line's volume is read from its `file=`/`volume=` item or bare first item,
-  and a line ProxMate can't read refuses the archive.
+  refused up front, a disk line's volume (and a snapshot's `vmstate`) is read from its
+  `file=`/`volume=` item or bare first item, and a line ProxMate can't read refuses the archive.
 - Every `unusedN` on the freshly restored guest is treated as foreign, since the pre-restore volume
   listing cannot see volumes of a VMID outside the pool. Uploads ProxMate wrote carry a
   `.proxmate-uploaded.<name>` marker noting the VMID being restored; a startup sweep removes marked
