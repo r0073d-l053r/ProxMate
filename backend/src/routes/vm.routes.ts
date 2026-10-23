@@ -1314,10 +1314,9 @@ router.post('/:id/files', guestFileLimiter, async (req: Request, res: Response) 
   const detail =
     `${vm.name} · ${dest.path} · ${file.size} bytes · sha256 ${sha256} · mode ${mode}` +
     (owner ? ` · owner ${owner}` : '');
+  let result: Awaited<ReturnType<typeof pushGuestFile>>;
   try {
-    const result = await pushGuestFile(vm, { path: dest.path, content: file.buffer, mode, owner, createParents });
-    await recordAudit({ action: 'vm.file_push', actor: user, targetType: 'vm', targetId: vm.id, detail, req });
-    res.json(result);
+    result = await pushGuestFile(vm, { path: dest.path, content: file.buffer, mode, owner, createParents });
   } catch (err) {
     const message = err instanceof GuestFileError || err instanceof GuestErroredError || err instanceof GuestIdentityError
       ? err.message
@@ -1332,7 +1331,12 @@ router.post('/:id/files', guestFileLimiter, async (req: Request, res: Response) 
       return;
     }
     res.status(502).json({ error: message });
+    return;
   }
+  // The file is in the guest: an audit hiccup must not turn that into a failure.
+  await recordAudit({ action: 'vm.file_push', actor: user, targetType: 'vm', targetId: vm.id, detail, req })
+    .catch(() => undefined);
+  res.json(result);
 });
 
 // ─── POST /api/vms/:id/rescue + /rescue/exit ──────────────────
