@@ -2855,6 +2855,18 @@ export async function listSnapshots(
     .sort((a, b) => (b.snaptime ?? 0) - (a.snaptime ?? 0));
 }
 
+/**
+ * Whether Proxmox can snapshot this VM as it is configured now — false when one
+ * of its disks sits on storage without snapshot support (plain LVM, raw files).
+ */
+export async function canSnapshot(node: string, vmid: number, client?: AxiosInstance): Promise<boolean> {
+  const c = client ?? (await getClient());
+  const res = await c.get<{ data: { hasFeature?: number | boolean } }>(
+    `/nodes/${node}/qemu/${vmid}/feature?feature=snapshot`,
+  );
+  return !!res.data.data?.hasFeature;
+}
+
 /** Create a snapshot (optionally capturing RAM state). Returns the task UPID. */
 export async function createSnapshot(
   node: string,

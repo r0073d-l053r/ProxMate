@@ -18,7 +18,7 @@ import { logger } from './lib/logger.js';
 import { loadModules } from './modules/registry.js';
 import { handleConsoleUpgrade } from './routes/console.routes.js';
 import { handleIdeUpgrade } from './services/ide-proxy.service.js';
-import { startScheduler } from './services/scheduler.service.js';
+import { startScheduler, reconcileTick } from './services/scheduler.service.js';
 import { reconcileInterruptedPassthroughApplies } from './services/passthrough-request.service.js';
 import { runGuestMarkerBackfill } from './services/vm.service.js';
 import { envNumber } from './lib/env-number.js';
@@ -70,6 +70,9 @@ server.listen(PORT, BIND_ADDR, () => {
   void reconcileInterruptedPassthroughApplies().catch((err) =>
     logger.error({ err }, 'passthrough startup reconcile failed'),
   );
+  // Settle creates, restores, rebuilds and backups the last stop cut short (rows
+  // left `creating`/`restoring`). The scheduler repeats this every 5 minutes.
+  void reconcileTick();
   // Tag guests created before ProxMate's ownership tag existed (idempotent; only
   // unambiguous matches are tagged, the rest are listed for an admin). The
   // scheduler repeats this until a pass completes without a Proxmox error.

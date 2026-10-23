@@ -231,7 +231,10 @@ describe('rebuildVm — template / cloud-init redeploy', () => {
 
     const roomy = { id: 'u1', role: 'user', maxCpu: 8, maxRam: 16384, maxStorage: 40 } as never;
     await rebuildVm(roomy, held, { kind: 'iso', os: 'debian.iso' });
-    expect(update).toHaveBeenCalledWith({ where: { id: 'vm-1' }, data: { status: 'stopped', holdReason: null } });
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'vm-1' },
+      data: { status: 'stopped', holdReason: null, opKind: null, opStartedAt: null, opUpid: null },
+    });
   });
 
   it('rejects (and does NOT tear down) when a larger template disk exceeds quota', async () => {

@@ -10,6 +10,7 @@ import { runAccessExpiryTick } from './access-sweep.service.js';
 import { getConfig, setConfig } from './config.service.js';
 import { runGuestMarkerBackfill } from './vm.service.js';
 import { advanceDeployingVms } from './deploy-lock.service.js';
+import { reconcileStuckOperations } from './task-reconcile.service.js';
 
 /** SystemConfig key: ISO timestamp of the last successful weekly backup run. */
 const LAST_RUN_KEY = 'matestate_last_run';
@@ -35,6 +36,7 @@ let markerRunning = false;
 let running = false;
 let powerRunning = false;
 let deployLockRunning = false;
+let reconcileRunning = false;
 let backupRunning = false;
 let historyRunning = false;
 let balancerRunning = false;
@@ -142,9 +144,33 @@ export async function deployLockTick(): Promise<void> {
   }
 }
 
+/**
+ * One interrupted-operation reconcile tick (every 5 min; also run once at boot
+ * from index.ts). Settles rows a restart left `creating`/`restoring` — see
+ * task-reconcile.service.ts. Exported for tests.
+ */
+export async function reconcileTick(): Promise<void> {
+  if (reconcileRunning) return;
+  reconcileRunning = true;
+  try {
+    const r = await reconcileStuckOperations();
+    if (r.completed || r.held || r.dropped || r.failed) {
+      console.log(
+        `[scheduler] interrupted operations: ${r.completed} completed, ${r.held} held, ` +
+          `${r.dropped} removed (no guest), ${r.failed} backup(s) marked failed`,
+      );
+    }
+  } catch (err) {
+    console.error('[scheduler] reconcile tick failed:', err);
+  } finally {
+    reconcileRunning = false;
+  }
+}
+
 export function startScheduler(): void {
   if (task) return; // already started
   markerTask = cron.schedule('*/15 * * * *', () => void guestMarkerBackfillTick());
+  cron.schedule('*/5 * * * *', () => void reconcileTick());
   const expr = resolveSchedule();
 
   task = cron.schedule(expr, () => void runWeeklyBackups('scheduled'));

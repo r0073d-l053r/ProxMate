@@ -21,6 +21,7 @@ import {
 } from './vm.service.js';
 import { parseGuestConfigText, pciLines, foreignVolumeKeys } from '../lib/guest-config.js';
 import { IDE_GUEST_PORT } from './ide-provision.service.js';
+import { beginInFlight } from '../lib/in-flight.js';
 
 /** Rolling retention: only this many MateStates are kept per VM. */
 export const MATESTATE_RETENTION = 2;
@@ -124,6 +125,7 @@ export async function createMateState(
       kind,
     },
   });
+  const done = beginInFlight(placeholder.id);
 
   let upid: string | undefined;
   let unidentified = false;
@@ -132,6 +134,8 @@ export async function createMateState(
       { node: vm.proxmoxNode, vmid: vm.proxmoxVmId, storage, mode: 'snapshot' },
       client,
     );
+    // Kept so a restart mid-backup can still settle this row from the task.
+    await recordMateStateTask(placeholder.id, upid);
     // vzdump can take a while on real workloads — give it up to 30 minutes.
     await pve.waitForTask(vm.proxmoxNode, upid, client, 30 * 60 * 1000);
 
@@ -153,7 +157,7 @@ export async function createMateState(
 
     const updated = await prisma.mateState.update({
       where: { id: placeholder.id },
-      data: { volid: fresh.volid, size: BigInt(Math.trunc(fresh.size ?? 0)), status: 'ready' },
+      data: { volid: fresh.volid, size: BigInt(Math.trunc(fresh.size ?? 0)), status: 'ready', upid: null },
     });
 
     await pruneOldMateStates(vm.id, vm.backupKeep ?? MATESTATE_RETENTION);
@@ -167,7 +171,14 @@ export async function createMateState(
       await removeTaskArchive(vm.proxmoxNode, upid, storage, vm.proxmoxVmId, client);
     }
     throw err;
+  } finally {
+    done();
   }
+}
+
+/** Best-effort: note the Proxmox task now driving a MateState row (backup or restore). */
+async function recordMateStateTask(id: string, upid: string): Promise<void> {
+  await (async () => prisma.mateState.update({ where: { id }, data: { upid } }))().catch(() => undefined);
 }
 
 /**
@@ -249,6 +260,15 @@ export async function reapplyIsolation(
 export async function restoreFromMateState(vm: VirtualMachine, mateState: MateState): Promise<void> {
   if (mateState.vmId !== vm.id) throw new Error('MateState does not belong to this VM');
   if (mateState.status !== 'ready') throw new Error('MateState is not ready');
+  const done = beginInFlight(vm.id, mateState.id);
+  try {
+    await restoreFromMateStateTracked(vm, mateState);
+  } finally {
+    done();
+  }
+}
+
+async function restoreFromMateStateTracked(vm: VirtualMachine, mateState: MateState): Promise<void> {
 
   const client = await pve.getClient();
   const kind: pve.GuestKind = vm.type === 'lxc' ? 'lxc' : 'qemu';
@@ -316,8 +336,9 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
       kind,
     );
     taskStarted = true;
+    await recordMateStateTask(mateState.id, upid);
     await pve.waitForTask(vm.proxmoxNode, upid, client, 30 * 60 * 1000);
-    await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'ready' } });
+    await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'ready', upid: null } });
     vm = await settleRestoredGuest(vm, approvedPci, client);
     // Powering on is what every start path gates on the owner's compute-access
     // window; a restore by a share-holder must not revive a suspended owner's
@@ -329,7 +350,7 @@ export async function restoreFromMateState(vm: VirtualMachine, mateState: MateSt
       data: { status: ownerActive ? 'running' : 'stopped', holdReason: null },
     });
   } catch (err) {
-    await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'ready' } });
+    await prisma.mateState.update({ where: { id: mateState.id }, data: { status: 'ready', upid: null } });
     await afterFailedRestore(vm, reservation, taskStarted, err);
     throw err;
   }

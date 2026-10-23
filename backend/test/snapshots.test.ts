@@ -4,6 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('../src/lib/prisma.js', () => ({ prisma: {} }));
 
 import {
+  canSnapshot,
   listSnapshots,
   createSnapshot,
   deleteSnapshot,
@@ -11,6 +12,17 @@ import {
   restoreNewGuest,
 } from '../src/services/proxmox.service.js';
 import { fakeClient, asClient, bodyOf } from './helpers.js';
+
+describe('canSnapshot', () => {
+  it('asks Proxmox whether the VM as configured supports snapshots', async () => {
+    const c = fakeClient();
+    c.get.mockResolvedValueOnce({ data: { data: { hasFeature: 1, nodes: [] } } });
+    expect(await canSnapshot('pve-1', 101, asClient(c))).toBe(true);
+    expect(c.get.mock.calls[0]![0]).toBe('/nodes/pve-1/qemu/101/feature?feature=snapshot');
+    c.get.mockResolvedValueOnce({ data: { data: { hasFeature: 0 } } });
+    expect(await canSnapshot('pve-1', 101, asClient(c))).toBe(false);
+  });
+});
 
 describe('listSnapshots', () => {
   it('drops the synthetic "current" entry and sorts newest first', async () => {

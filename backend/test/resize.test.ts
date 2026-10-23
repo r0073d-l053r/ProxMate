@@ -10,10 +10,15 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/services/proxmox.service.js')>();
   return { ...actual, getClient: vi.fn() };
 });
+// The automatic pre-change snapshot has its own tests (auto-snapshot.test.ts).
+vi.mock('../src/services/auto-snapshot.service.js', () => ({
+  autoSnapshotBefore: vi.fn(async () => ({ taken: null, skipped: 'disabled' })),
+}));
 
 import { prisma } from '../src/lib/prisma.js';
 import * as pve from '../src/services/proxmox.service.js';
 import { resizeVm as resizeVmService, QuotaError, ResizeError } from '../src/services/vm.service.js';
+import { autoSnapshotBefore } from '../src/services/auto-snapshot.service.js';
 import { bodyOf } from './helpers.js';
 
 const findMany = vi.mocked(prisma.virtualMachine.findMany);
@@ -91,6 +96,24 @@ describe('resizeVm', () => {
     expect(bodyOf(resizePut!)).toEqual({ disk: 'scsi0', size: '20G' });
     expect(update).toHaveBeenCalledWith({ where: { id: 'db-1' }, data: { storage: { increment: 10 } } });
     expect(result).toMatchObject({ storage: 20 });
+  });
+
+  it('takes the automatic snapshot first, and changes nothing when it cannot be taken', async () => {
+    const client = fakePve();
+    getClient.mockResolvedValue(client as never);
+    vi.mocked(autoSnapshotBefore).mockRejectedValueOnce(new Error("Couldn't take the automatic snapshot"));
+
+    await expect(resizeVm(user(), vm(), { cpu: 4, storage: 20 })).rejects.toThrow(/automatic snapshot/);
+    expect(autoSnapshotBefore).toHaveBeenCalledWith(expect.objectContaining({ id: 'db-1' }), 'resize', client);
+    expect(client.put).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('reports the automatic snapshot it took with the resized row', async () => {
+    getClient.mockResolvedValue(fakePve() as never);
+    vi.mocked(autoSnapshotBefore).mockResolvedValueOnce({ taken: 'pm-auto-resize-20261023-120000' });
+    const result = await resizeVm(user(), vm(), { cpu: 2 });
+    expect(result.autoSnapshot).toEqual({ taken: 'pm-auto-resize-20261023-120000' });
   });
 
   it('refuses to shrink a disk and touches neither Proxmox nor the DB', async () => {

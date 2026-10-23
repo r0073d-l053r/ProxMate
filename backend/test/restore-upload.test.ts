@@ -33,6 +33,8 @@ vi.mock('../src/services/vm.service.js', () => ({
   settleFailedCreate: vi.fn(async () => ({ following: false })),
   syncRestoredGuest: vi.fn(async () => ({})),
   assertOwnVolumes: vi.fn(async () => undefined),
+  recordOpTask: vi.fn(async () => undefined),
+  OP_SETTLED: { opKind: null, opStartedAt: null, opUpid: null },
 }));
 
 import { prisma } from '../src/lib/prisma.js';

@@ -2,6 +2,7 @@ import type { VirtualMachine, User } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import * as pve from './proxmox.service.js';
 import { QuotaError, withQuotaLock, requireOurGuest, ourGuestOrNull, liftQuotaHoldIfFits } from './vm.service.js';
+import { autoSnapshotBefore, type AutoSnapshotResult } from './auto-snapshot.service.js';
 
 /**
  * Extra-data-disk management. A VM's `storage` column tracks **total** provisioned
@@ -115,11 +116,11 @@ async function addDataDiskLocked(row: VirtualMachine, sizeGb: number): Promise<V
 }
 
 /** Grow a data disk to `sizeGb` (grow-only). Cannot target the root disk. Quota-checked (under the owner's lock). */
-export function resizeDataDisk(vm: VirtualMachine, slot: string, sizeGb: number): Promise<void> {
+export function resizeDataDisk(vm: VirtualMachine, slot: string, sizeGb: number): Promise<AutoSnapshotResult> {
   return withQuotaLock(vm.userId, () => resizeDataDiskLocked(vm, slot, sizeGb));
 }
 
-async function resizeDataDiskLocked(row: VirtualMachine, slot: string, sizeGb: number): Promise<void> {
+async function resizeDataDiskLocked(row: VirtualMachine, slot: string, sizeGb: number): Promise<AutoSnapshotResult> {
   const vm = await requireOurGuest(row);
   const config = await pve.getVmConfig(vm.proxmoxNode, vm.proxmoxVmId);
   if (!(slot in config)) throw new Error('Disk not found.');
@@ -128,8 +129,11 @@ async function resizeDataDiskLocked(row: VirtualMachine, slot: string, sizeGb: n
   if (sizeGb <= current) throw new Error(`A disk can only grow (currently ${current} GB).`);
 
   await assertStorageDelta(await ownerOf(vm), sizeGb - current);
+  // A way back before the disk grows; if it can't be taken, nothing is changed.
+  const autoSnapshot = await autoSnapshotBefore(vm, 'disk-resize', await pve.getClient());
   await pve.resizeDisk(vm.proxmoxNode, vm.proxmoxVmId, slot, sizeGb);
   await prisma.virtualMachine.update({ where: { id: vm.id }, data: { storage: { increment: sizeGb - current } } });
+  return autoSnapshot;
 }
 
 /** Detach + destroy a data disk. Refuses the root disk. Frees the quota it used (under the owner's lock). */

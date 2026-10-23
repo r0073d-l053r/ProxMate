@@ -12,7 +12,11 @@ import {
   settleFailedCreate,
   syncRestoredGuest,
   assertOwnVolumes,
+  recordOpTask,
+  OP_SETTLED,
+  type VmOpKind,
 } from './vm.service.js';
+import { beginInFlight } from '../lib/in-flight.js';
 import { parseGuestConfigText, guestConfigSizes } from '../lib/guest-config.js';
 import * as pve from './proxmox.service.js';
 
@@ -373,9 +377,12 @@ async function restoreFromUploadLocked(
         storage: cfg.diskGb,
         os: 'Restored backup',
         status: 'creating',
+        opKind: 'restore-upload' satisfies VmOpKind,
+        opStartedAt: new Date(),
       },
     });
     release(); // usage now includes this row
+    const done = beginInFlight(vm.id);
 
     let created = false;
     let restoreTask:
@@ -388,6 +395,7 @@ async function restoreFromUploadLocked(
       // must not end up attached to the restored guest; see assertOwnVolumes.
       const leftovers = await pve.listGuestVolumes(node, vmid, client);
       const upid = await pve.restoreNewGuest({ node, vmid, volid, storage: defaultStorage }, client, kind);
+      await recordOpTask(vm.id, upid);
       restoreTask = {
         node,
         upid,
@@ -432,7 +440,7 @@ async function restoreFromUploadLocked(
       // guest, and the row's sizes come from the guest itself.
       await syncRestoredGuest(vm, { approvedPci: [], client });
 
-      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped' } });
+      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped', ...OP_SETTLED } });
       const startUpid = await pve.startVm(node, vmid, client, kind);
       await pve.waitForTask(node, startUpid, client);
       const done = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
@@ -445,6 +453,8 @@ async function restoreFromUploadLocked(
       const { following } = await settleFailedCreate(vm, err, created, { task: restoreTask });
       if (following) archiveHandedOff = true;
       throw err;
+    } finally {
+      done();
     }
   } catch (err) {
     // Any pre-restore failure (quota, placement, extract) — drop the archive so
