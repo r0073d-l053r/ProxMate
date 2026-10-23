@@ -150,6 +150,16 @@ describe('rebuildVm — guest identity', () => {
     expect(client.delete).not.toHaveBeenCalled();
     expect(client.post).not.toHaveBeenCalled();
   });
+
+  it('refuses a row still in `creating` (an operation the restart reconciler may be settling)', async () => {
+    const client = fakePve();
+    getClientMock.mockResolvedValue(client as never);
+    await expect(rebuildVm(admin, { ...VM, status: 'creating' } as never, { kind: 'iso', os: 'debian.iso' })).rejects.toThrow(
+      /still being created/,
+    );
+    expect(client.delete).not.toHaveBeenCalled();
+    expect(client.post).not.toHaveBeenCalled();
+  });
 });
 
 describe('rebuildVm — failure after teardown', () => {
@@ -233,7 +243,7 @@ describe('rebuildVm — template / cloud-init redeploy', () => {
     await rebuildVm(roomy, held, { kind: 'iso', os: 'debian.iso' });
     expect(update).toHaveBeenCalledWith({
       where: { id: 'vm-1' },
-      data: { status: 'stopped', holdReason: null, opKind: null, opStartedAt: null, opUpid: null },
+      data: { status: 'stopped', holdReason: null, opKind: null, opStartedAt: null, opUpid: null, opSourceId: null, opArchive: null },
     });
   });
 

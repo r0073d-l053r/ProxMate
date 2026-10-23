@@ -208,7 +208,7 @@ export function ownCicustom(value: string): boolean {
 }
 
 /** Remove the keys a restore must not keep (STRIPPED_AFTER_RESTORE) from a restored guest. */
-async function stripRestoreFlags(
+export async function stripRestoreFlags(
   node: string,
   vmid: number,
   client: Awaited<ReturnType<typeof pve.getClient>>,
@@ -266,6 +266,17 @@ async function rebuildRestoredGuestConfig(
   if (cfg['cicustom'] !== undefined && !ownCicustom(cfg['cicustom'])) strip.push('cicustom');
   if (strip.length > 0) params.set('delete', strip.join(','));
   if ([...params.keys()].length > 0) await client.put(`/nodes/${node}/${kind}/${vmid}/config`, params);
+}
+
+/**
+ * Best-effort removal of an uploaded archive known only by its volid (as a
+ * `restore-upload` row records it in `opArchive`), for the restart reconciler.
+ */
+export async function cleanupUploadedArchive(volid: string, node: string | null): Promise<void> {
+  const storage = volid.split(':')[0] ?? '';
+  const filename = path.basename(volid.slice(volid.indexOf(':') + 1));
+  if (!storage || !VZDUMP_UPLOAD_RE.test(filename)) return;
+  await cleanupArchive(filename, node, storage, volid);
 }
 
 /** Best-effort removal of the uploaded archive (Proxmox API first, then the mount). */
@@ -380,6 +391,8 @@ async function restoreFromUploadLocked(
         status: 'creating',
         opKind: 'restore-upload' satisfies VmOpKind,
         opStartedAt: new Date(),
+        // So an interrupted restore's archive can still be removed after a restart.
+        opArchive: volid,
       },
     });
     release(); // usage now includes this row
@@ -448,9 +461,9 @@ async function restoreFromUploadLocked(
       await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped', ...OP_SETTLED } });
       const startUpid = await pve.startVm(node, vmid, client, kind);
       await pve.waitForTask(node, startUpid, client);
-      const done = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
+      const running = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
       await cleanupArchive(filename, node, storage, volid);
-      return done;
+      return running;
     } catch (err) {
       // Any failure once the restore has landed leaves the row in `error`, which
       // nothing may start. A restore task still running when the wait gave up keeps

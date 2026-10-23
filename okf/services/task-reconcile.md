@@ -30,26 +30,33 @@ A row is left for a later pass when any of these hold:[^svc] [^inflight]
 
 - its operation is registered in flight in this process (`lib/in-flight.ts`: every create path registers the row id right after inserting it; a [bulk deploy](/services/bulk-deploy.md) registers every reserved copy at reservation, so a copy still queued for its turn is never touched; rebuild, [guest import](/services/guest-import.md), MateState restore and backup register for their whole run);
 - it is younger than `RECONCILE_STUCK_MINUTES` (default 15), measured from `opStartedAt` (VM rows), `updatedAt` (restores) or `createdAt` (backups);
-- its recorded Proxmox task (`opUpid` / `MateState.upid`) is still `running`, or the guest config at its VMID has a `lock`;
+- its recorded Proxmox task (`opUpid` / `MateState.upid`) is still `running`, or can't be read right now (a failed status query is never taken as a failed task), or the guest config at its VMID has a `lock`. A lock that lasts over a day is reported to admins once;
 - the cluster-wide lookup (`syncVmNodeChecked`) or the guest config can't be read.
+
+The in-flight check is repeated right before every write, and every write is conditional (`updateMany`/`deleteMany` on id, `status: 'creating'` and the `opStartedAt` read), so a row deleted, retried or picked up meanwhile is left as it is.
+
+# Claiming a guest
+
+A guest is the row's only when it carries the row's tag. A task that finished OK proves nothing about what is at the VMID now: it may have been deleted and the VMID given to someone else's guest. So the reconciler tags an untagged guest only for a clone, duplicate or template rebuild whose task finished OK, and only when no other row references the VMID, the guest carries no ProxMate tag except its source's (`opSourceId`: the template's, or a duplicate's source machine's), it isn't a template, and its name is the row's. ISO VM, LXC and ISO-rebuild creates tag the guest as they make it, so an untagged guest is never theirs.
 
 # Resolution
 
 | Row | Proxmox shows | Result |
 |---|---|---|
-| `creating`, `opKind` `create`/`create-lxc`/`rebuild-iso` | task OK, guest carries this row's tag | Completed: isolation firewall applied (via `requireOurGuest`), row `stopped`; an ISO rebuild also clears its hold and old-disk state. Never started. |
-| `creating`, `import` | guest carries this row's tag | Held with the import-failed hold (an admin's adopt re-applies isolation). |
-| `creating`, `import` | guest not tagged yet | Row dropped; nothing on the guest changed, so it stays importable. The guest is never removed. |
-| `creating`, rebuild | anything else | `settleFailedRebuild` (held when a guest of ours or backups exist; else the row is dropped; owner emailed). |
-| `creating`, `restore-upload` | task OK | Held with `PROVISION_FAILED_MESSAGE`, guest left untagged: the volume/NIC/isolation checks never ran, so only admin adoption (which runs them) can clear it. |
-| `creating`, no `opKind` (older row) with backups | anything | Held. |
-| `creating`, a create (or an older row without backups) | no guest at the VMID, task not OK | Row dropped and admins notified, as a failed create with an empty VMID is; this is also what happens to a bulk-deploy copy that never got its turn before a restart. Its quota is free again. |
-| `creating`, any other | anything | `settleFailedCreate` with the recorded task: a finished clone is tagged and held; no guest → row dropped and admins notified, as a failed create is. |
+| `create`/`create-lxc`/`rebuild-iso` | task OK, guest carries this row's tag | Completed: isolation firewall applied, row `stopped` (never started); an ISO rebuild also clears its hold and old-disk state. |
+| `import` | guest carries this row's tag | Completed: the tag is written last, after isolation, so only the final status write was missing. |
+| `import` | guest not tagged | Row dropped; the guest stays importable and is never touched. |
+| any | no guest at the VMID | Row dropped (quota freed, admins notified), unless it is a rebuild or an older row with backups, which is held. A bulk-deploy copy that never got its turn ends here. |
+| any but import | guest carries this row's tag, part-way | Held with `PROVISION_FAILED_MESSAGE`; an upload restore is also kept from booting (below). |
+| `clone`/`duplicate`/`rebuild-template` | untagged guest passing the claim checks | Tagged as the row's and held, so a full clone is never orphaned. |
+| `restore-upload` | task OK, no other row has the VMID | Held untagged (admin adoption runs the checks), `onboot`/`startup`/`protection` removed and NICs set `link_down=1`. |
+| any | another machine's tag, or another row has the VMID | Nothing written to the guest; row dropped (held instead for a rebuild or older row with backups). |
+| any other | | Held, guest untouched. |
 | MateState `restoring` | not running | MateState back to `ready`; the VM's own guest stopped if running; row held with `RESTORE_FAILED_MESSAGE` unless it already has a hold. |
 | MateState `creating` | task OK and its log names an archive listed for the VMID | Recorded `ready` with volid and size. |
-| MateState `creating` | otherwise | `error`; nothing deleted; `backup.failed` notified. |
+| MateState `creating` | task failed, or none recorded and no backup lock | `error`; nothing deleted; `backup.failed` notified. |
 
-Holds notify admins with `vm.error` (through `markVmError` / the settle paths) and each resolution is audited as `vm.reconcile` or `matestate.reconcile`.[^svc] [^vm]
+An upload restore's archive (`opArchive`) is removed whenever its row is settled. Each settled row notifies admins once (`vm.error`; a rebuild also emails the owner) and is audited as `vm.reconcile` or `matestate.reconcile`.[^svc] [^vm]
 
 # Key functions
 
@@ -61,8 +68,9 @@ Holds notify admins with `vm.error` (through `markVmError` / the settle paths) a
 
 # Gotchas
 
-- Template clones can't be completed: the cloud-init credentials are never stored, so the reconciler holds them. Upload restores likewise, and their uploaded archive stays on the backup storage (nothing is deleted here).
-- A held, untagged restore keeps whatever `onboot`/`protection` its archive had until an admin adopts or removes it: changing an untagged guest would break the rule that only `requireOurGuest`-checked guests are changed.
+- Template clones can't be completed: the cloud-init credentials are never stored, so the reconciler holds them. Upload restores likewise.
+- `requireOurGuest` refuses rows in `creating`; the reconciler alone passes `settlingInterrupted`, so rebuild, restore and every other action stay refused on such rows.
+- The in-flight registry is per process; the backend logs a warning at start that it assumes it is the only backend on its database.
 - A completed create is left `stopped` rather than started; the owner starts it.
 - Privileges: the reconciler needs nothing beyond the role's existing privileges (task status and logs, guest config/status, stop, firewall, snapshots, backup listing), all covered by the `--pool` ACL split of `deploy/proxmox-token.sh`. Under a pool-scoped token Proxmox answers 403 for any VMID outside the pool, an empty one included; the reconciler then asks `/cluster/nextid?vmid=` (open to every user) and treats the VMID as empty only when Proxmox would hand it out next. A VMID held by a guest the token can't see is left alone.
 

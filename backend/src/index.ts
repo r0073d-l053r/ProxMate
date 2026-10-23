@@ -72,6 +72,11 @@ server.listen(PORT, BIND_ADDR, () => {
   );
   // Settle creates, restores, rebuilds and backups the last stop cut short (rows
   // left `creating`/`restoring`). The scheduler repeats this every 5 minutes.
+  // What is in flight is known per process only (lib/in-flight), so a second
+  // backend on the same database would settle the other's live operations.
+  logger.warn(
+    'interrupted-operation reconciler on: it assumes this is the only backend process on this database',
+  );
   void reconcileTick();
   // Tag guests created before ProxMate's ownership tag existed (idempotent; only
   // unambiguous matches are tagged, the rest are listed for an admin). The

@@ -177,7 +177,8 @@ async function deletableAutoSnapshots(vm: VirtualMachine, snaps: pve.PveSnapshot
       continue;
     }
     if (!r.name.startsWith(AUTO_SNAPSHOT_PREFIX)) continue;
-    if (r.snaptime !== null && s.snaptime !== undefined && s.snaptime !== r.snaptime) continue;
+    // Without a recorded snaptime nothing proves the live snapshot is the one taken.
+    if (r.snaptime === null || s.snaptime === undefined || s.snaptime !== r.snaptime) continue;
     out.push(r);
   }
   return out.sort((a, b) => (b.snaptime ?? 0) - (a.snaptime ?? 0) || b.createdAt.getTime() - a.createdAt.getTime());

@@ -31,7 +31,7 @@ ProxMate otherwise only manages guests it created (each carries its row's `proxm
 - Isolation is applied before the tag is written, while the row is `creating` (which every tenant action refuses): a failure part-way never leaves a tagged guest without its firewall. If isolation or the tag write fails, the row is dropped and the error says the guest is still unmanaged (with its network possibly part-changed).[^imp]
 - Import turns on the ProxMate isolation firewall (inbound dropped by default, `firewall=1` on every NIC); the guest's own firewall rules are kept below ProxMate's, so inbound services may need rules added.[^imp]
 - The guest's NICs move to the configured default bridge, so its network changes on import.[^imp]
-- The import records `opKind: import` and counts as in flight while it runs. If a restart cuts it short, the [restart reconciler](/services/task-reconcile.md) holds the row when the guest already carries its tag, and otherwise drops the row (the guest stays importable); it never removes the guest.
+- The import records `opKind: import` and counts as in flight while it runs. If a restart cuts it short, the [restart reconciler](/services/task-reconcile.md) completes it when the guest already carries its tag (the last step), and otherwise drops the row so the guest stays importable; it never changes or removes the guest.
 
 # Relationships
 

@@ -97,7 +97,7 @@ describe('assertOwnVolumes (audit round 2, blocker 2)', () => {
     expect(c.delete).not.toHaveBeenCalled();
     expect(prisma.virtualMachine.update).toHaveBeenCalledWith({
       where: { id: 'rowa' },
-      data: { status: 'error', holdReason: FOREIGN_VOLUME_MESSAGE },
+      data: { status: 'error', holdReason: FOREIGN_VOLUME_MESSAGE, opKind: null, opStartedAt: null, opUpid: null, opSourceId: null, opArchive: null },
     });
     expect(prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'vm.foreign_volume', targetId: 'rowa' }) });
   });

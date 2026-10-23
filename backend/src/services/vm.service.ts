@@ -37,7 +37,7 @@ export async function markVmError(vmId: string, name: string, err: unknown): Pro
 }
 
 /** Clears the record of a `creating` row's operation once the row has settled. */
-export const OP_SETTLED = { opKind: null, opStartedAt: null, opUpid: null } as const;
+export const OP_SETTLED = { opKind: null, opStartedAt: null, opUpid: null, opSourceId: null, opArchive: null } as const;
 
 /** The operations that leave a row in `creating` (stored on `opKind`). */
 export type VmOpKind =
@@ -78,7 +78,7 @@ export function guestMarker(vmId: string): string {
   return `${MARKER_PREFIX}${vmId.toLowerCase()}`;
 }
 
-function parsePveTags(raw: string | undefined): string[] {
+export function parsePveTags(raw: string | undefined): string[] {
   return (raw ?? '').split(/[;,\s]+/).map((t) => t.trim().toLowerCase()).filter(Boolean);
 }
 
@@ -1615,6 +1615,7 @@ function templateDeployRow(
     status: 'creating',
     opKind: 'clone' satisfies VmOpKind,
     opStartedAt: new Date(),
+    opSourceId: template.id,
     quotaExempt: input.quotaExempt ?? false,
     adminManaged: input.adminManaged ?? false,
   };
@@ -1943,6 +1944,8 @@ async function duplicateVmLocked(
       status: 'creating',
       opKind: 'duplicate' satisfies VmOpKind,
       opStartedAt: new Date(),
+      // A copy carries the source's tag until it is tagged as its own.
+      opSourceId: current.id,
     },
   });
   release(); // usage now includes this row
@@ -2392,7 +2395,7 @@ export const RESTORE_FAILED_MESSAGE =
  * repair path has re-checked it (see requireOurGuest).
  */
 export async function holdErroredRow(vm: VirtualMachine, message: string): Promise<void> {
-  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'error', holdReason: message } });
+  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'error', holdReason: message, ...OP_SETTLED } });
 }
 
 /**
@@ -3006,6 +3009,7 @@ async function rebuildVmLocked(
       opKind: (source.kind === 'iso' ? 'rebuild-iso' : 'rebuild-template') satisfies VmOpKind,
       opStartedAt: new Date(),
       opUpid: null,
+      opSourceId: source.kind === 'template' ? source.template.id : null,
     },
   });
   await (async () => prisma.autoSnapshot.deleteMany({ where: { vmId: current.id } }))().catch(() => undefined);
@@ -3124,7 +3128,7 @@ export async function settleFailedRebuild(vm: VirtualMachine, err: unknown, gues
   );
 }
 
-async function notifyOwnerOfFailedRebuild(vm: VirtualMachine, kept: boolean, err: unknown): Promise<void> {
+export async function notifyOwnerOfFailedRebuild(vm: VirtualMachine, kept: boolean, err: unknown): Promise<void> {
   if (!(await isMailConfigured())) return;
   const owner = await prisma.user.findUnique({ where: { id: vm.userId } });
   if (!owner?.email) return;

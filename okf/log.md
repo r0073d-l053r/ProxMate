@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-23
+* **Update**: [Restart reconciler](/services/task-reconcile.md): guests are claimed only with the row's tag or the clone checks (never on a task result alone), writes are conditional on the row read, unreadable tasks are retried, upload restores are kept from booting and their archive removed; new `opSourceId`/`opArchive` on [VirtualMachine](/database/virtual-machine.md).
 * **Update**: Numeric form fields use a shared `NumberInput` (frontend/src/components/ui/number-input.tsx) that keeps the typed text and applies min/max on blur, so a field can be emptied and retyped.
 * **Update**: Roadmap corrected against the source: the reconciler gap is a backend restart mid-operation, the admin-managed explainer and the `ENCRYPTION_KEY` reminder are partly built, and two restore/delete ownership checks still need a live-cluster run.
 * **Creation**: Documented Projects: the [project router](/api/project.md) and [project service](/services/project.md), and the `project:` tag on [VirtualMachine](/database/virtual-machine.md).

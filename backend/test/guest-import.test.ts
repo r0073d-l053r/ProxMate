@@ -5,6 +5,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // kept), the isolation firewall a new guest gets, and a row counted toward quota.
 
 const rows: Array<Record<string, unknown>> = [];
+/** A row matching a where clause of plain values (Dates compared by time). */
+const sameRow = (r: Record<string, unknown>, where: Record<string, unknown>) =>
+  Object.entries(where).every(([k, v]) =>
+    v instanceof Date ? r[k] instanceof Date && (r[k] as Date).getTime() === v.getTime() : r[k] === v,
+  );
 const templates: Array<{ proxmoxVmId: number }> = [];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -33,6 +38,18 @@ vi.mock('../src/lib/prisma.js', () => ({
       }),
       delete: vi.fn(async ({ where }: { where: { id: string } }) => {
         rows.splice(rows.findIndex((r) => r['id'] === where.id), 1);
+      }),
+      // The restart reconciler's conditional writes (by id + status + opStartedAt).
+      updateMany: vi.fn(async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        const hit = rows.filter((r) => sameRow(r, where));
+        for (const r of hit) Object.assign(r, data);
+        return { count: hit.length };
+      }),
+      deleteMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
+        const i = rows.findIndex((r) => sameRow(r, where));
+        if (i < 0) return { count: 0 };
+        rows.splice(i, 1);
+        return { count: 1 };
       }),
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) => rows.find((r) => r['id'] === where.id) ?? null),
     },

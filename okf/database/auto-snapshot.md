@@ -26,7 +26,7 @@ One row per automatic snapshot (`pm-auto-<op>-<timestamp>`) of a QEMU VM. Retent
 | Field | Type | Attributes | Description |
 |---|---|---|---|
 | id | String | `@id @default(cuid())` | Primary key. |
-| vmId | String | FK, `@@index` | [VirtualMachine](/database/virtual-machine.md) the snapshot is of. |
+| vmId | String | FK | [VirtualMachine](/database/virtual-machine.md) the snapshot is of. |
 | name | String | | Proxmox snapshot name, e.g. `pm-auto-resize-20261023-153000`. |
 | op | String | | `resize`, `disk-resize` or `rescue`. |
 | snaptime | Int? | | Proxmox's `snaptime` (epoch seconds) read back after the snapshot was taken. |
@@ -42,7 +42,7 @@ Added by migration `20261023130000_reliability_reconcile_autosnapshot`.[^schema]
 # Invariants
 
 - A row is written only after the snapshot exists on Proxmox. A snapshot whose task outlived the wait is never recorded, so retention never deletes it.[^svc]
-- Retention deletes a snapshot only when a row names it AND the live snapshot's `snaptime` matches the row's: a user snapshot that reuses a recorded name is left alone. Rows whose snapshot is gone are dropped.[^svc]
+- Retention deletes a snapshot only when a row names it AND the live snapshot's `snaptime` matches the row's: a user snapshot that reuses a recorded name is left alone, and a row without a recorded `snaptime` never makes its snapshot deletable. Rows whose snapshot is gone are dropped.[^svc]
 - A rebuild deletes the VM's rows: deleting the guest deleted its snapshots.[^svc]
 
 [^schema]: backend/prisma/schema.prisma

@@ -154,6 +154,19 @@ describe('autoSnapshotBefore', () => {
 });
 
 describe('retention never deletes a user snapshot', () => {
+  it('never deletes a recorded snapshot whose snaptime was not recorded', async () => {
+    const { c } = pveWith([
+      { name: 'pm-auto-resize-20260101-000000', snaptime: 1 },
+      { name: 'pm-auto-resize-20260201-000000', snaptime: 2 },
+    ]);
+    records.push(
+      { id: 'n', vmId: 'vm1', name: 'pm-auto-resize-20260101-000000', op: 'resize', snaptime: null, createdAt: new Date(1) },
+      { id: 'm', vmId: 'vm1', name: 'pm-auto-resize-20260201-000000', op: 'resize', snaptime: 2, createdAt: new Date(2) },
+    );
+    expect(await pruneAutoSnapshots(vm(), 0, asClient(c))).toBe(1);
+    expect(deletedNames(c)).toEqual(['pm-auto-resize-20260201-000000']);
+  });
+
   it('keeps the newest N recorded automatic snapshots and nothing else is a candidate', async () => {
     const live: Snap[] = [
       { name: 'my-old-snapshot', snaptime: 1 }, // user's, older than everything

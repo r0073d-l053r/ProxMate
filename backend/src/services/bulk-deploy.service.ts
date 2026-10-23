@@ -154,31 +154,40 @@ export async function startTemplateBatch(
   }));
   const reservation = await reserveTemplateBatch(template, items);
 
-  pruneFinishedBatches();
-  const batch: DeployBatch = {
-    id: crypto.randomUUID(),
-    actorId: actor.id,
-    templateId: template.id,
-    templateName: template.name,
-    createdAt: new Date().toISOString(),
-    finishedAt: null,
-    items: reservation.items.map(({ vm }, index) => ({
-      index,
-      name: vm.name,
-      userId: vm.userId,
-      vmId: vm.id,
-      proxmoxVmId: vm.proxmoxVmId,
-      node: vm.proxmoxNode,
-      status: 'queued',
-    })),
-  };
-  await recordAudit({
-    action: 'template.deploy_bulk',
-    actor,
-    targetType: 'template',
-    targetId: template.id,
-    detail: `${batch.items.length} × ${template.name} (batch ${batch.id})`,
-  });
+  // Every copy is registered in flight from here until its provision settles. If
+  // the batch can't be started after all, let go of them so the restart
+  // reconciler settles the (guestless) rows instead of leaving them to a restart.
+  let batch: DeployBatch;
+  try {
+    pruneFinishedBatches();
+    batch = {
+      id: crypto.randomUUID(),
+      actorId: actor.id,
+      templateId: template.id,
+      templateName: template.name,
+      createdAt: new Date().toISOString(),
+      finishedAt: null,
+      items: reservation.items.map(({ vm }, index) => ({
+        index,
+        name: vm.name,
+        userId: vm.userId,
+        vmId: vm.id,
+        proxmoxVmId: vm.proxmoxVmId,
+        node: vm.proxmoxNode,
+        status: 'queued',
+      })),
+    };
+    await recordAudit({
+      action: 'template.deploy_bulk',
+      actor,
+      targetType: 'template',
+      targetId: template.id,
+      detail: `${batch.items.length} × ${template.name} (batch ${batch.id})`,
+    });
+  } catch (err) {
+    for (const item of reservation.items) item.done?.();
+    throw err;
+  }
 
   const done = runPool(reservation.items, BULK_DEPLOY_CONCURRENCY, async (item, i) => {
     const entry = batch.items[i]!;

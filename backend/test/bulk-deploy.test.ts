@@ -6,6 +6,11 @@ import { AxiosError } from 'axios';
 // deploy path, and every copy's outcome is reported on its own.
 
 const rows: Array<Record<string, unknown>> = [];
+/** A row matching a where clause of plain values (Dates compared by time). */
+const sameRow = (r: Record<string, unknown>, where: Record<string, unknown>) =>
+  Object.entries(where).every(([k, v]) =>
+    v instanceof Date ? r[k] instanceof Date && (r[k] as Date).getTime() === v.getTime() : r[k] === v,
+  );
 const USERS: Record<string, Record<string, unknown>> = {
   u1: { id: 'u1', email: 'u1@example.com', role: 'user', maxCpu: 8, maxRam: 16384, maxStorage: 200 },
   u2: { id: 'u2', email: 'u2@example.com', role: 'user', maxCpu: 8, maxRam: 16384, maxStorage: 200 },
@@ -32,6 +37,18 @@ vi.mock('../src/lib/prisma.js', () => ({
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) => rows.find((r) => r['id'] === where.id) ?? null),
       delete: vi.fn(async ({ where }: { where: { id: string } }) => {
         rows.splice(rows.findIndex((r) => r['id'] === where.id), 1);
+      }),
+      // The restart reconciler's conditional writes (by id + status + opStartedAt).
+      updateMany: vi.fn(async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        const hit = rows.filter((r) => sameRow(r, where));
+        for (const r of hit) Object.assign(r, data);
+        return { count: hit.length };
+      }),
+      deleteMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
+        const i = rows.findIndex((r) => sameRow(r, where));
+        if (i < 0) return { count: 0 };
+        rows.splice(i, 1);
+        return { count: 1 };
       }),
     },
     template: { findMany: vi.fn(async () => []) },
@@ -316,6 +333,15 @@ describe('VMID reservations', () => {
 });
 
 describe('bulk deploys and the restart reconciler', () => {
+  it('lets go of every copy\'s in-flight registration when the batch can\'t be started after reserving', async () => {
+    cluster();
+    vi.mocked(recordAudit).mockRejectedValueOnce(new Error('audit store unavailable'));
+    const copies = await planBatch(tenant, { namePattern: 'web-{n}', count: 2 });
+    await expect(startTemplateBatch(tenant, template, copies, input)).rejects.toThrow(/audit store/);
+    expect(rows).toHaveLength(2);
+    expect(rows.some((r) => isInFlight(r['id'] as string))).toBe(false);
+  });
+
   it('keeps every reserved copy in flight from reservation until its provision settles', async () => {
     const c = cluster();
     // Clone tasks don't finish until released, so later copies sit queued.

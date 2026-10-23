@@ -49,7 +49,7 @@ model User {
   // Community Edition: opted out of admin broadcast (announcement) emails.
   // Transactional / security / notification emails are unaffected. The EDU
   // edition deliberately has no opt-out (instructors must reach every student).
-  broadcastOptOut Boolean @default(false)
+  broadcastOptOut     Boolean @default(false)
   // Opted out of activity emails about their own machines: a VM an admin set up
   // in their account, or a VM shared with them / a change to their share level.
   // Security, account and alert emails are unaffected.
@@ -288,6 +288,8 @@ model VirtualMachine {
   opKind      String? // create | create-lxc | clone | duplicate | restore-upload | rebuild-iso | rebuild-template | import
   opStartedAt DateTime?
   opUpid      String?
+  opSourceId  String? // a duplicate's source machine, or a template deploy's / rebuild's template
+  opArchive   String? // an upload restore's archive volid, removed once the row settles
 
   // The guest's Tailscale address (100.64.0.0/10), when Tailscale runs inside it —
   // read from the same interface listing as ipAddress and kept separate so the
@@ -657,5 +659,4 @@ model AutoSnapshot {
   vm VirtualMachine @relation(fields: [vmId], references: [id], onDelete: Cascade)
 
   @@unique([vmId, name])
-  @@index([vmId])
 }
