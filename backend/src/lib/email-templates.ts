@@ -566,17 +566,20 @@ export function vmSharedEmail(opts: {
   role: string;
   previousRole?: string | null;
   sharedBy?: string | null;
+  /** The sharer's address, shown beside the display name (which is free text). */
+  sharedByEmail?: string | null;
   vmUrl?: string;
 }): RenderedEmail {
-  const { vmName, role, previousRole, sharedBy, vmUrl } = opts;
+  const { vmName, role, previousRole, sharedBy, sharedByEmail, vmUrl } = opts;
   const level = shareLevelLabel(role);
   const changed = !!previousRole && previousRole !== role;
-  const who = sharedBy ?? 'Someone';
+  const who =
+    sharedBy && sharedByEmail ? `${sharedBy} (${sharedByEmail})` : (sharedByEmail ?? sharedBy ?? 'Someone');
   const subject = changed
     ? `[ProxMate] Your access to "${vmName}" changed to ${level}`
     : `[ProxMate] "${vmName}" was shared with you`;
   const lead = changed
-    ? `Your access to "${vmName}" changed from ${shareLevelLabel(previousRole ?? '')} to ${level}.`
+    ? `${who} changed your access to "${vmName}" from ${shareLevelLabel(previousRole ?? '')} to ${level}.`
     : `${who} shared "${vmName}" with you as ${level}.`;
   const can = `As ${level} you can ${shareLevelSummary(role)}.`;
 
@@ -584,7 +587,7 @@ export function vmSharedEmail(opts: {
 
   const strong = (s: string) => `<strong style="color:${INK};">${escapeHtml(s)}</strong>`;
   const leadHtml = changed
-    ? `Your access to ${strong(vmName)} changed from ${escapeHtml(shareLevelLabel(previousRole ?? ''))} to ${strong(level)}.`
+    ? `${escapeHtml(who)} changed your access to ${strong(vmName)} from ${escapeHtml(shareLevelLabel(previousRole ?? ''))} to ${strong(level)}.`
     : `${escapeHtml(who)} shared ${strong(vmName)} with you as ${strong(level)}.`;
 
   const bodyRows =

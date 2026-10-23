@@ -9,14 +9,28 @@ vi.mock('../src/services/mail.service.js', () => ({ getMailConfig: vi.fn(), send
 
 import { prisma } from '../src/lib/prisma.js';
 import { getMailConfig, sendMail } from '../src/services/mail.service.js';
-import { sendDeployedForTenantEmail, sendShareEmail, sendLater } from '../src/services/activity-mail.service.js';
+import {
+  sendDeployedForTenantEmail,
+  sendShareEmail,
+  sendLater,
+  resetShareNoticeWindow,
+  SHARE_NOTICE_WINDOW_MS,
+} from '../src/services/activity-mail.service.js';
 
 const vm = { id: 'vm1', userId: 'tenant', name: 'web-01', type: 'qemu', cpu: 2, ram: 2048, storage: 20, quotaExempt: true };
 const admin = { id: 'admin', displayName: 'Ada Admin' };
-const tenant = { email: 'tenant@example.com', displayName: 'Tess', activityEmailOptOut: false };
+const tenant = {
+  email: 'tenant@example.com',
+  displayName: 'Tess',
+  activityEmailOptOut: false,
+  role: 'user',
+  accessExpiresAt: null as Date | null,
+  accessSuspendedAt: null as Date | null,
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetShareNoticeWindow();
   vi.mocked(getMailConfig).mockResolvedValue({ host: 'smtp' } as never);
   vi.mocked(prisma.user.findUnique).mockResolvedValue(tenant as never);
 });
@@ -55,6 +69,14 @@ describe('sendDeployedForTenantEmail', () => {
     expect(sendMail).not.toHaveBeenCalled();
   });
 
+  it('sends nothing to an account whose access has ended or is suspended', async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValueOnce({ ...tenant, accessExpiresAt: new Date(Date.now() - 1000) } as never);
+    expect(await sendDeployedForTenantEmail(vm, admin)).toBe(false);
+    vi.mocked(prisma.user.findUnique).mockResolvedValueOnce({ ...tenant, accessSuspendedAt: new Date() } as never);
+    expect(await sendDeployedForTenantEmail(vm, admin)).toBe(false);
+    expect(sendMail).not.toHaveBeenCalled();
+  });
+
   it('calls a container a container', async () => {
     await sendDeployedForTenantEmail({ ...vm, type: 'lxc' }, admin);
     expect(vi.mocked(sendMail).mock.calls[0]![0].subject).toContain('container');
@@ -65,17 +87,37 @@ describe('sendShareEmail', () => {
   const notice = { userId: 'u2', vmId: 'vm1', vmName: 'web-01', role: 'operator' as const, previousRole: null };
 
   it('tells the recipient a VM was shared with them, at which level', async () => {
-    expect(await sendShareEmail(notice, { displayName: 'Owen Owner' })).toBe(true);
+    expect(await sendShareEmail(notice, { displayName: 'Owen Owner', email: 'owen@example.com' })).toBe(true);
     const mail = vi.mocked(sendMail).mock.calls[0]![0];
     expect(mail.subject).toBe('[ProxMate] "web-01" was shared with you');
-    expect(mail.text).toContain('Owen Owner shared "web-01" with you as Operator.');
+    // The free-text display name never stands alone: the sharer's address is shown with it.
+    expect(mail.text).toContain('Owen Owner (owen@example.com) shared "web-01" with you as Operator.');
+    expect(mail.html).toContain('Owen Owner (owen@example.com)');
+  });
+
+  it('sends at most one email per recipient and VM per window', async () => {
+    const t0 = 1_000_000;
+    expect(await sendShareEmail(notice, { email: 'o@example.com' }, t0)).toBe(true);
+    expect(await sendShareEmail({ ...notice, role: 'manager', previousRole: 'operator' }, {}, t0 + 60_000)).toBe(false);
+    // Another VM, or another recipient, has its own window.
+    expect(await sendShareEmail({ ...notice, vmId: 'vm2' }, {}, t0 + 60_000)).toBe(true);
+    expect(await sendShareEmail({ ...notice, userId: 'u3' }, {}, t0 + 60_000)).toBe(true);
+    // Once the window has passed, the pair is notified again.
+    expect(await sendShareEmail(notice, {}, t0 + SHARE_NOTICE_WINDOW_MS)).toBe(true);
+    expect(sendMail).toHaveBeenCalledTimes(4);
+  });
+
+  it('sends nothing to a recipient whose access has ended, without using up the window', async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValueOnce({ ...tenant, accessSuspendedAt: new Date() } as never);
+    expect(await sendShareEmail(notice, {})).toBe(false);
+    expect(await sendShareEmail(notice, {})).toBe(true);
   });
 
   it('tells the recipient their level changed', async () => {
-    await sendShareEmail({ ...notice, role: 'manager', previousRole: 'viewer' }, { displayName: 'Owen' });
+    await sendShareEmail({ ...notice, role: 'manager', previousRole: 'viewer' }, { displayName: 'Owen', email: 'owen@example.com' });
     const mail = vi.mocked(sendMail).mock.calls[0]![0];
     expect(mail.subject).toContain('changed to Manager');
-    expect(mail.text).toContain('from Viewer to Manager');
+    expect(mail.text).toContain('Owen (owen@example.com) changed your access to "web-01" from Viewer to Manager');
   });
 
   it('respects an opt-out and a missing SMTP config', async () => {

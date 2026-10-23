@@ -333,7 +333,7 @@ A few things worth knowing day-to-day:
   URLs and tokens are stored encrypted and only ever shown masked; **Send test** reports each
   channel separately.
 - **Weekly usage digest** (**Admin → Settings → Notifications**) — users who opt in (Security →
-  Email preferences; off by default) get a Monday 08:00 email with their own machines, running
+  Email preferences; off by default) get a Monday 08:00 (server time, UTC in Docker) email with their own machines, running
   hours, average CPU and memory over the week, and quota in use. Turn it off for everyone with the
   card's switch, or **Send me a preview** to see your own. Override the time with
   `USAGE_DIGEST_CRON`.
