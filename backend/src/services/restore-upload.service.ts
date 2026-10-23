@@ -175,24 +175,121 @@ function valueProblem(key: string, value: string): string | null {
   return null;
 }
 
+/** Keys only a snapshot section carries (`[name]`), on top of the guest's own. */
+const SNAPSHOT_SECTION_KEYS = new Set(['snaptime', 'vmstate', 'runningmachine', 'runningcpu', 'snapstate']);
+/** `[PENDING]`, `[special:cloudinit]` or a snapshot name, as Proxmox's config parser accepts them. */
+const SECTION_RE = /^\[(PENDING|special:cloudinit|[a-z][a-z0-9_-]*)\]$/;
+
+/** Why one config key is refused for a guest of `kind`, or null. */
+function keyProblem(key: string, value: string, kind: pve.GuestKind, extra: ReadonlySet<string> = new Set()): string | null {
+  const [keys, patterns] = kind === 'lxc' ? [LXC_KEYS, LXC_KEY_PATTERNS] : [QEMU_KEYS, QEMU_KEY_PATTERNS];
+  const allowed = COMMON_KEYS.has(key) || keys.has(key) || extra.has(key) || patterns.some((re) => re.test(key));
+  if (!allowed) return `"${key}"`;
+  const problem = valueProblem(key, value);
+  return problem ? `"${key}" (${problem})` : null;
+}
+
 /**
  * Refuse an archive whose config reaches past the guest itself (see the allowlist
- * above). Throws RestoreUploadError naming the first offending key.
+ * above). Throws RestoreUploadError naming the first offending key. Every section
+ * is checked — the guest's own, `[PENDING]`, `[special:cloudinit]` and each
+ * snapshot — and a line ProxMate cannot read refuses the archive, so nothing can
+ * sit where this check does not look. This is an early estimate only: Proxmox may
+ * apply settings the archive carries elsewhere (a container's rootfs can hold its
+ * own `etc/vzdump/pct.conf`), so the restored guest is checked again
+ * (assertRestoredGuestConfig).
  */
 export function assertRestorableConfig(text: string, kind: pve.GuestKind): void {
-  const cfg = parseGuestConfigText(text);
-  const [keys, patterns] = kind === 'lxc' ? [LXC_KEYS, LXC_KEY_PATTERNS] : [QEMU_KEYS, QEMU_KEY_PATTERNS];
-  for (const [key, value] of Object.entries(cfg)) {
-    const allowed = COMMON_KEYS.has(key) || keys.has(key) || patterns.some((re) => re.test(key));
-    const problem = allowed ? valueProblem(key, value) : null;
-    if (!allowed || problem) {
-      throw new RestoreUploadError(
-        `This backup can't be restored here: its configuration sets "${key}"${problem ? ` (${problem})` : ''}, which an uploaded backup may not carry.`,
-      );
+  const refuse = (what: string) =>
+    new RestoreUploadError(`This backup can't be restored here: its configuration sets ${what}, which an uploaded backup may not carry.`);
+  let extra: ReadonlySet<string> = new Set();
+  let inMain = true;
+  let unprivileged: string | undefined;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (line === '' || line.startsWith('#')) continue;
+    if (line.startsWith('[')) {
+      const m = SECTION_RE.exec(line);
+      if (!m) throw new RestoreUploadError("This backup can't be restored here: its configuration has a section ProxMate can't read.");
+      inMain = false;
+      extra = m[1] === 'PENDING' ? new Set(['delete']) : SNAPSHOT_SECTION_KEYS;
+      continue;
     }
+    const m = /^([a-z][a-z0-9_.-]*):\s*(.*)$/.exec(line);
+    if (!m) throw new RestoreUploadError("This backup can't be restored here: its configuration has a line ProxMate can't read.");
+    const problem = keyProblem(m[1]!, m[2]!, kind, extra);
+    if (problem) throw refuse(problem);
+    if (inMain && m[1] === 'unprivileged') unprivileged = m[2]!.trim();
   }
-  if (kind === 'lxc' && cfg['unprivileged']?.trim() !== '1') {
+  if (kind === 'lxc' && unprivileged !== '1') {
     throw new RestoreUploadError("This backup can't be restored here: it is a privileged container.");
+  }
+}
+
+/** Thrown when a restored guest's own config carries something ProxMate does not restore. */
+export class RestoredConfigError extends RestoreUploadError {
+  constructor(public readonly problem: string) {
+    super(`The backup contains settings ProxMate won't restore (${problem}).`);
+    this.name = 'RestoredConfigError';
+  }
+}
+
+/**
+ * Check a restored guest's config as Proxmox now holds it, before the guest is
+ * used. The archive pre-check cannot be authoritative: a container restore applies
+ * the `etc/vzdump/pct.conf` found in the extracted rootfs (the last one wins), and
+ * Proxmox's own reading of an archive may differ from ours. So the live config,
+ * every pending change and (unless `allowSnapshots`) the absence of snapshots —
+ * vzdump carries none — are checked with the same allowlist as the archive.
+ * Throws RestoredConfigError; a read failure throws too (fail closed).
+ */
+export async function assertRestoredGuestConfig(
+  node: string,
+  vmid: number,
+  kind: pve.GuestKind,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+  opts: { allowSnapshots?: boolean } = {},
+): Promise<void> {
+  const base = `/nodes/${node}/${kind}/${vmid}`;
+  const [cfgRes, pendingRes, snapRes] = await Promise.all([
+    client.get<{ data: Record<string, unknown> }>(`${base}/config`),
+    client.get<{ data: Array<{ key: string; value?: unknown; pending?: unknown; delete?: number }> }>(`${base}/pending`),
+    opts.allowSnapshots
+      ? Promise.resolve({ data: { data: [] as Array<{ name: string }> } })
+      : client.get<{ data: Array<{ name: string }> }>(`${base}/snapshot`),
+  ]);
+  const cfg = cfgRes.data.data ?? {};
+  for (const [key, value] of Object.entries(cfg)) {
+    const text = typeof value === 'string' ? value : typeof value === 'number' ? String(value) : null;
+    // Anything but a plain value (e.g. raw `lxc` entries, returned as a list) is refused.
+    const problem = text === null ? `"${key}"` : keyProblem(key, text, kind);
+    if (problem) throw new RestoredConfigError(problem);
+  }
+  if (kind === 'lxc' && String(cfg['unprivileged'] ?? '') !== '1') throw new RestoredConfigError('a privileged container');
+  const pending = (pendingRes.data.data ?? []).filter((e) => e.pending !== undefined || e.delete);
+  if (pending.length > 0) throw new RestoredConfigError(`pending changes to ${pending.map((e) => `"${e.key}"`).join(', ')}`);
+  const snapshots = (snapRes.data.data ?? []).filter((x) => x.name !== 'current');
+  if (snapshots.length > 0) throw new RestoredConfigError('snapshots');
+}
+
+/**
+ * Remove a guest a restore task of ours just created. Only called when the task
+ * finished OK: a restore without `force` fails on an existing VMID, so the guest
+ * at that VMID can only be the one this task created, and it was never started.
+ * Returns whether the guest is gone.
+ */
+async function destroyRestoredGuest(
+  node: string,
+  vmid: number,
+  kind: pve.GuestKind,
+  client: Awaited<ReturnType<typeof pve.getClient>>,
+): Promise<boolean> {
+  try {
+    const upid = await pve.deleteVm(node, vmid, client, kind);
+    await pve.waitForTask(node, upid, client, 10 * 60 * 1000);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -301,6 +398,38 @@ export async function markUploaded(filename: string): Promise<void> {
 }
 
 /**
+ * Record in the marker the VMID a restore of this upload is creating, so the sweep
+ * can tell an archive a restore may still be reading (its machine row is still
+ * `creating`) from one left behind. The archive name's own VMID is the tenant's
+ * original one outside pool mode, so it cannot serve as that key.
+ */
+async function noteRestoreTarget(filename: string, vmid: number): Promise<void> {
+  const marker = markerPath(filename);
+  if (marker) await fsp.writeFile(marker, String(vmid)).catch(() => undefined);
+}
+
+/**
+ * Move a finished upload from its temp name to its vzdump name (both already
+ * resolved under the upload directory) without ever replacing a file: a hard link
+ * takes the new name, then the temp name goes. False when the name is taken.
+ */
+export async function promoteUpload(tempPath: string, finalPath: string): Promise<boolean> {
+  try {
+    await fsp.link(tempPath, finalPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw err;
+  }
+  try {
+    await fsp.unlink(tempPath);
+  } catch (err) {
+    await fsp.unlink(finalPath).catch(() => undefined);
+    throw err;
+  }
+  return true;
+}
+
+/**
  * Give an uploaded archive the VMID it is about to be restored to, in place on the
  * share: `vzdump-qemu-<old>-<rest>` becomes `vzdump-qemu-<vmid>-<rest>`. Proxmox
  * treats a backup as belonging to the VMID in its name, and lets a restore read
@@ -329,7 +458,13 @@ export async function renameArchiveForVmid(filename: string, vmid: number): Prom
     }
     throw err;
   }
-  await fsp.unlink(from);
+  try {
+    await fsp.unlink(from);
+  } catch (err) {
+    // Never leave the archive under both names.
+    await fsp.unlink(to).catch(() => undefined);
+    throw err;
+  }
   const [oldMarker, newMarker] = [markerPath(filename), markerPath(renamed)];
   if (oldMarker && newMarker) await fsp.rename(oldMarker, newMarker).catch(() => undefined);
   return renamed;
@@ -355,9 +490,9 @@ async function cleanupArchive(filename: string, node: string | null, storage: st
  * Remove uploads ProxMate wrote and no restore is using: marked archives (and
  * their markers) and unfinished `.proxmate-upload-*.part` files untouched for
  * `olderThanMs`. A marked archive is kept while a machine row still `creating`
- * names its VMID or records it as its archive (`opArchive` — without a pool the
- * archive keeps its original VMID); the restart reconciler removes it when it
- * settles that row. Run at startup; returns how many files were removed.
+ * records it as its archive (`opArchive`) or has the VMID noted in its marker; the
+ * restart reconciler removes it when it settles that row. Run at startup; returns
+ * how many files were removed.
  */
 export async function sweepStaleUploads(olderThanMs = 6 * 60 * 60 * 1000): Promise<number> {
   const dir = uploadDir();
@@ -386,10 +521,12 @@ export async function sweepStaleUploads(olderThanMs = 6 * 60 * 60 * 1000): Promi
     const marker = resolveUnderUploadDir(name, UPLOAD_MARKER_RE);
     if (!marker || (await old(marker)) >= cutoff) continue;
     const archive = name.slice(MARKER_PREFIX.length);
-    const vmid = Number(/^vzdump-(?:qemu|lxc)-(\d+)-/.exec(archive)?.[1]);
     if (inUse.has(archive)) continue;
-    const inFlight = await prisma.virtualMachine.count({ where: { proxmoxVmId: vmid, status: 'creating' } });
-    if (inFlight > 0) continue;
+    const noted = (await fsp.readFile(marker, 'utf8').catch(() => '')).trim();
+    if (/^\d+$/.test(noted)) {
+      const inFlight = await prisma.virtualMachine.count({ where: { proxmoxVmId: Number(noted), status: 'creating' } });
+      if (inFlight > 0) continue;
+    }
     const file = resolveUnderUploadDir(archive, VZDUMP_UPLOAD_RE);
     if (file && (await fsp.unlink(file).then(() => true, () => false))) removed += 1;
     await fsp.unlink(marker).catch(() => undefined);
@@ -482,6 +619,7 @@ async function restoreFromUploadLocked(
       // so that VMID is reserved first and held until the restore has finished.
       [presetVmid] = await reserveVmIds(1, client);
       filename = await renameArchiveForVmid(filename, presetVmid!);
+      await noteRestoreTarget(filename, presetVmid!);
       volid = `${storage}:backup/${filename}`;
       ({ nodes, rawCfg } = await inspectArchiveLocally(filename, storage, client));
     } else {
@@ -530,6 +668,7 @@ async function restoreFromUploadLocked(
       'amd64',
     );
     const vmid = presetVmid ?? (await nextVmId(client));
+    if (presetVmid === undefined) await noteRestoreTarget(filename, vmid);
 
     const vm = await prisma.virtualMachine.create({
       data: {
@@ -576,6 +715,8 @@ async function restoreFromUploadLocked(
         // as one that finished in time before it is ever tied to the row (the row
         // stays held either way).
         beforeTag: async () => {
+          // A late guest with settings ProxMate won't restore is never tagged; the row stays held.
+          await assertRestoredGuestConfig(node, vmid, kind, client);
           await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
           await stripRestoreFlags(node, vmid, client, kind);
           await assertOwnVolumes(vm, client, leftovers, { unusedAreForeign: !!pool });
@@ -587,6 +728,17 @@ async function restoreFromUploadLocked(
       };
       await pve.waitForTask(node, upid, client, 30 * 60 * 1000);
       created = true;
+      // What Proxmox actually restored decides, not the archive pre-check: a guest
+      // carrying settings ProxMate won't restore is removed before anything uses it.
+      try {
+        await assertRestoredGuestConfig(node, vmid, kind, client);
+      } catch (err) {
+        if (err instanceof RestoredConfigError && (await destroyRestoredGuest(node, vmid, kind, client))) {
+          created = false;
+          restoreTask = undefined; // the task's guest is gone; settle on what is at the VMID (nothing)
+        }
+        throw err;
+      }
       // The archive's config carries the OLD guest's tags; tie the guest to this row.
       await markClonedGuest(vm, client);
       // Drop the archive's protection/autostart first: a protected guest couldn't

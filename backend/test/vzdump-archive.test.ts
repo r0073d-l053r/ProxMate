@@ -57,17 +57,69 @@ describe('readArchiveConfig', () => {
   });
 
   it('refuses a VMA without a qemu-server.conf', async () => {
-    const vma = buildVma({ 'other.conf': 'x' });
+    const vma = buildVma({ 'qemu-server.fw': 'x' });
     await expect(readArchiveConfig(await file('vzdump-qemu-1-nocfg.vma', vma))).rejects.toThrow(/no qemu-server\.conf/);
   });
 
-  it('refuses a tar without a guest config', async () => {
-    const tar = buildTar([['./bin/sh', 'x']]);
-    await expect(readArchiveConfig(await file('vzdump-lxc-1-nocfg.tar', tar))).rejects.toThrow(/No guest configuration/);
+  describe('VMA config blobs are read as Proxmox reads them, or refused', () => {
+    it('cuts a name at its first NUL, so a second "qemu-server.conf\\0x" is a duplicate', async () => {
+      const vma = buildVma([['qemu-server.conf', 'cores: 1\n'], ['qemu-server.conf\0x', 'hostpci0: 01:00.0\n']]);
+      await expect(readArchiveConfig(await file('vzdump-qemu-1-dup.vma', vma))).rejects.toThrow(/twice/);
+    });
+
+    it('refuses a config blob vzdump never writes', async () => {
+      const vma = buildVma({ 'qemu-server.conf': QEMU_CFG, 'other.conf': 'x' });
+      await expect(readArchiveConfig(await file('vzdump-qemu-1-other.vma', vma))).rejects.toThrow(/unexpected config "other\.conf"/);
+    });
+
+    it('refuses a pointer outside the blob buffer', async () => {
+      const vma = buildVma({ 'qemu-server.conf': QEMU_CFG }, { dataPointer: 60000 });
+      await expect(readArchiveConfig(await file('vzdump-qemu-1-range.vma', vma))).rejects.toThrow(/malformed config entry/);
+    });
+  });
+
+  describe('a container tar must start with exactly ./etc/vzdump/pct.conf', () => {
+    const evil = 'unprivileged: 1\ndev0: /dev/sda\n';
+    const benign = 'unprivileged: 1\nhostname: ok\n';
+    it.each([
+      ['a GNU header whose atime field looks like a prefix', [['pct.conf', benign, { magic: 'ustar  \0', at345: './etc/vzdump' }], ['./etc/vzdump/pct.conf', evil]]],
+      ['the name without ./', [['etc/vzdump/pct.conf', benign], ['./etc/vzdump/pct.conf', evil]]],
+      ['a pax header first', [['pax', '30 path=./etc/vzdump/pct.conf\n', { type: 'x' }], ['./etc/vzdump/pct.conf', evil]]],
+      ['a GNU long name first', [['././@LongLink', './etc/vzdump/pct.conf', { type: 'L' }], ['x', benign]]],
+      ['a directory entry', [['./etc/vzdump/pct.conf', benign, { type: '5' }]]],
+      ['a POSIX prefix', [['pct.conf', benign, { at345: './etc/vzdump' }]]],
+      ['a bad header checksum', [['./etc/vzdump/pct.conf', benign, { badChecksum: true }]]],
+      ['an OpenVZ vps.conf', [['./etc/vzdump/vps.conf', benign]]],
+      ['an unknown magic', [['./etc/vzdump/pct.conf', benign, { magic: 'xxxxxxxx' }]]],
+    ] as Array<[string, Parameters<typeof buildTar>[0]]>)('refuses %s', async (label, entries) => {
+      await expect(readArchiveConfig(await file(`vzdump-lxc-1-${label.replace(/\W+/g, '_')}.tar`, buildTar(entries)))).rejects.toThrow(
+        ArchiveConfigError,
+      );
+    });
+
+    it('accepts the GNU header vzdump writes', async () => {
+      const tar = buildTar([['./etc/vzdump/pct.conf', PCT_CFG, { magic: 'ustar  \0', at345: '14507000000\0' }]]);
+      expect(await readArchiveConfig(await file('vzdump-lxc-1-gnu.tar', tar))).toBe(PCT_CFG);
+    });
+
+    it('refuses an old-format QEMU tar', async () => {
+      const tar = buildTar([['qemu-server.conf', QEMU_CFG]]);
+      await expect(readArchiveConfig(await file('vzdump-qemu-1-old.tar', tar))).rejects.toThrow(/Old-format QEMU tar/);
+    });
   });
 
   it('refuses LZO, which it cannot decode', async () => {
     await expect(readArchiveConfig(await file('vzdump-qemu-1-x.vma.lzo', Buffer.alloc(10)))).rejects.toThrow(/LZO/);
+  });
+
+  it('stops after the first 4 MiB of decompressed data', async () => {
+    const huge = Buffer.concat([Buffer.alloc(12288 * 0), Buffer.alloc(5 * 1024 * 1024, 0x41)]);
+    huge.write('VMA\0', 0, 'latin1');
+    huge.writeUInt32BE(1, 4);
+    huge.writeUInt32BE(12288, 48);
+    huge.writeUInt32BE(16, 52);
+    huge.writeUInt32BE(5 * 1024 * 1024, 56); // a header claiming 5 MiB
+    await expect(readArchiveConfig(await file('vzdump-qemu-1-huge.vma.gz', zlib.gzipSync(huge)))).rejects.toThrow(ArchiveConfigError);
   });
 
   it('turns a broken compressed stream into a clear error', async () => {

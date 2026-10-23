@@ -56,7 +56,7 @@ function fakePve(live: Record<string, string>, archive: Record<string, string>) 
     return ok(null);
   });
   c.post.mockImplementation((url: string) => {
-    if (url === '/nodes/pve1/qemu') state.cfg = { ...archive };
+    if (url === '/nodes/pve1/qemu' || url === '/nodes/pve1/lxc') state.cfg = { ...archive };
     if (/status\/start$/.test(url)) state.status = 'running';
     return ok('UPID:fake');
   });
@@ -311,5 +311,25 @@ describe('restore with a Proxmox pool configured', () => {
     } finally {
       vi.mocked(getConfig).mockImplementation(base);
     }
+  });
+});
+
+describe('container restore: the restored config is checked as Proxmox holds it', () => {
+  const CT = { arch: 'amd64', hostname: 'ct', unprivileged: '1', cores: '1', memory: '1024', tags: marker, rootfs: 'local-lvm:subvol-100-disk-0,size=32G' };
+  const ctRow = () => row({ type: 'lxc' });
+
+  it('refuses a restore that brought back a host device (a pct.conf inside the rootfs), and never starts it', async () => {
+    vi.mocked(prisma.virtualMachine.findUnique).mockResolvedValue(ctRow());
+    const { c } = fakePve(CT, { ...CT, dev0: '/dev/sda' });
+    await expect(restoreFromMateState(ctRow(), ms)).rejects.toThrow(/settings ProxMate won't restore \("dev0"\)/);
+    expect(c.post.mock.calls.some((x) => /status\/start$/.test(String(x[0])))).toBe(false);
+    expect(prisma.virtualMachine.update).toHaveBeenCalledWith({ where: { id: 'rowa' }, data: expect.objectContaining({ status: 'error' }) });
+  });
+
+  it('accepts a clean container restore', async () => {
+    vi.mocked(prisma.virtualMachine.findUnique).mockResolvedValue(ctRow());
+    const { c } = fakePve(CT, { ...CT });
+    await restoreFromMateState(ctRow(), ms);
+    expect(c.post.mock.calls.some((x) => /lxc\/100\/status\/start$/.test(String(x[0])))).toBe(true);
   });
 });

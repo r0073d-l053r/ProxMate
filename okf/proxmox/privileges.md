@@ -171,12 +171,27 @@ What changes with a pool-scoped token:
   answer with `Datastore.Allocate` on the whole backup storage (they have no guest to compare the
   VMID to), so in pool mode ProxMate does them itself: a stat on the share, the nodes where the
   (shared) backup storage is available, and the guest config read from the archive
-  (`lib/vzdump-archive.ts`: the VMA header's `qemu-server.conf` blob, or `etc/vzdump/pct.conf` /
-  `qemu-server.conf` from the first tar entries; `.zst` and `.gz` decompressed in-process, `.lzo`
-  refused). Every `unusedN` on the freshly restored guest is treated as foreign, since the
-  pre-restore volume listing cannot see volumes of a VMID outside the pool. Uploads ProxMate wrote
-  carry a `.proxmate-uploaded.<name>` marker; a startup sweep removes marked archives (and stalled
-  `.part` files) older than six hours that no restoring machine references.
+  (`lib/vzdump-archive.ts`). That read is strict — the VMA header's blobs cut at the first NUL,
+  only `qemu-server.conf`/`qemu-server.fw`, no duplicates or out-of-range pointers; a container tar
+  must start with a checksummed regular-file header named exactly `./etc/vzdump/pct.conf` — and
+  capped at 4 MiB decompressed (zstd window capped too), and it is only an estimate for the quota
+  check and early refusals.
+- **What Proxmox restored is what counts.** A container restore applies the `etc/vzdump/pct.conf`
+  it finds in the extracted rootfs (the last one wins), so no archive pre-check can be
+  authoritative. Right after the restore task — in both modes, and before the guest is tagged,
+  re-networked or started — ProxMate reads the guest's config, its pending changes and its
+  snapshots back from Proxmox and applies the same allowlist. A guest that fails is removed (the
+  task that created it finished at a VMID it alone could have created) and the tenant is told the
+  backup contains settings ProxMate won't restore; if it cannot be removed, the row is held. An
+  in-place MateState restore of a container gets the same check and is held on failure. Uploaded
+  configs are also checked section by section (`[PENDING]`, `[special:cloudinit]`, snapshots), and
+  a line ProxMate can't read refuses the archive.
+- Every `unusedN` on the freshly restored guest is treated as foreign, since the pre-restore volume
+  listing cannot see volumes of a VMID outside the pool. Uploads ProxMate wrote carry a
+  `.proxmate-uploaded.<name>` marker noting the VMID being restored; a startup sweep removes marked
+  archives (and stalled `.part` files) older than six hours unless that VMID's machine is still
+  being created. Uploads are moved into place with a hard link, so an existing file is never
+  replaced.
 - **Backups of a guest that is gone** are not reachable through the pool: the token cannot list
   them, read their config or delete them. A machine whose rebuild failed after its guest was
   destroyed is in that state; restore one of its backups as root, or rebuild the machine first (its
