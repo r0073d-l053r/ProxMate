@@ -19,9 +19,11 @@ Capability model (owner decision 2026-07-11): a share stores a preset name in `V
 
 | Preset | Capabilities |
 |---|---|
-| `viewer` | `view` |
-| `operator` | `view`, `power`, `console` |
-| `manager` | `view`, `power`, `console`, `configure`, `backups`, `ide` |
+| `viewer` | `view`, `console_view` |
+| `operator` | `view`, `console_view`, `power`, `console` |
+| `manager` | `view`, `console_view`, `power`, `console`, `configure`, `backups`, `ide` |
+
+`console_view` is the view-only console; `console` implies it.[^share]
 
 Owners and admins hold `ALL_CAPS` (= manager set).[^share] The `ide` capability alone does not open, provision, relocate or mint tokens for the ProxMate IDE; those are limited to the VM's owner (see [ide-proxy](/services/ide-proxy.md)).
 
@@ -31,6 +33,7 @@ Owners and admins hold `ALL_CAPS` (= manager set).[^share] The `ide` capability 
 |---|---|---|
 | `normalizeShareRole` | `(role) => ShareRole` | Known presets pass; legacy `co-owner` → `manager`; anything else (incl. legacy `read-only`) → `viewer`. |
 | `capsForShareRole` | `(role) => Set<VmCap>` | Capability set for a stored role. |
+| `consoleModeFor` | `(caps) => 'interactive' \| 'view' \| null` | `console` gives `interactive`, `console_view` alone `view`, neither `null`. The console ticket mints and the console WebSocket upgrade both use it. |
 | `listShares` | `(vmId) => ShareView[]` | Live and pending shares, oldest first, in the same shape `{ id, email, role, createdAt }` — no account id, display name or pending flag. |
 | `addShare` | `(vm, email, role) => ShareView` | An address with no account gets a [PendingVmShare](/database/pending-vm-share.md) (the route answers exactly as for a live share); the owner's own address is a 400; upsert on `(vmId, userId)` so re-sharing updates the preset; at most `MAX_SHARES_PER_VM` (100) per VM, checked before the account lookup (409). |
 | `claimPendingShares` | `(user) => number` | Turns pending shares for a new account's address into live ones, only when `user.emailBound`. Called after registration and SSO sign-up. |

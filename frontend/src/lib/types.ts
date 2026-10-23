@@ -63,7 +63,7 @@ export interface EnrollmentResponse {
 export type VmAccess = "owner" | "admin" | "viewer" | "operator" | "manager";
 
 /** A per-VM capability the API grants; the UI gates buttons/tabs on these. */
-export type VmCap = "view" | "power" | "console" | "configure" | "backups" | "ide";
+export type VmCap = "view" | "console_view" | "power" | "console" | "configure" | "backups" | "ide";
 
 export interface VirtualMachine {
   id: string;

@@ -13,6 +13,7 @@ import {
   Copy,
   Cpu,
   Disc,
+  Eye,
   HardDrive,
   Hash,
   Lightbulb,
@@ -520,6 +521,9 @@ export default function VmDetailPage() {
   const caps = new Set(vm.caps ?? []);
   const canPower = caps.has("power");
   const canConsole = caps.has("console");
+  // A Viewer share may watch the console but not type into it (the relay drops
+  // its input); it gets a "View console" menu instead of the full one.
+  const canViewConsole = !canConsole && caps.has("console_view");
   const canConfigure = caps.has("configure");
   // An admin-provisioned VM (deploy-for-tenant) is sized by the admin — the owning
   // tenant may operate it but not resize it (backend 403s too). Admins always can.
@@ -617,8 +621,45 @@ export default function VmDetailPage() {
           </div>
         </div>
 
-        {(canConsole || canPower || canConfigure) && (
+        {(canConsole || canViewConsole || canPower || canConfigure) && (
           <div className="flex items-center gap-2">
+            {canViewConsole && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button variant="outline" disabled={!running || held}>
+                    <Eye />
+                    View console
+                    <ChevronDown className="size-3.5 text-muted-foreground" />
+                  </Button>
+                }
+              />
+              <DropdownMenuContent align="end" className="min-w-56">
+                <DropdownMenuItem onClick={() => router.push(`/vms/${vm.id}/console`)}>
+                  <Terminal />
+                  Graphical (view only)
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => router.push(`/vms/${vm.id}/console?mode=text`)}>
+                  <SquareTerminal />
+                  Text (view only)
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() =>
+                    window.open(
+                      `/console-popout/${vm.id}`,
+                      `proxmate-console-${vm.id}`,
+                      "popup,width=960,height=540",
+                    )
+                  }
+                >
+                  <PictureInPicture2 />
+                  Pop out text console
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            )}
+
             {canConsole && (
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -792,7 +833,7 @@ export default function VmDetailPage() {
         <Card className="mb-6 border-amber-500/40 bg-amber-500/5">
           <CardContent className="py-3 text-sm text-muted-foreground">
             You have <span className="font-medium text-foreground">viewer</span> access to this VM,
-            shared by its owner. You can view its details and activity, but not operate or change it.
+            shared by its owner. You can view its details and activity and watch its console, but not operate or change it.
           </CardContent>
         </Card>
       )}

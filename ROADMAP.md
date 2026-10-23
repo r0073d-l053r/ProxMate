@@ -61,8 +61,6 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 - **Surface admin-managed / quota-exempt to the owner** — partly built: the disks panel already says
   the VM was set up by an admin and its disks can't be changed here. Still open: a page-level badge
   and one-line explainer on the VM detail, since resize and rebuild are otherwise just hidden.
-- **Read-only console (input-blocked viewing)** — a Viewer share gets no console today; the noted
-  follow-up is a view-only, input-blocked console stream.
 
 ### IDE follow-ups
 
@@ -139,6 +137,11 @@ Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
   project, with start/stop/restart for the whole project through the existing bulk route. Set a
   project on the VM page or with **Move to project…** on the VM list (owner/admin only). VMs shared
   with you are listed apart, without their owner's tags; admins see every owner's projects.
+- **View-only console for Viewer shares.** A Viewer share can watch a VM's graphical and text
+  consoles. The relay enforces it: it parses the browser's RFB and termproxy streams and drops
+  every keyboard, mouse, clipboard, resize-desktop and power message before Proxmox sees it, and
+  forces a shared VNC session so a viewer never disconnects anyone else. Console opens are audited
+  (`vm.console_open`, marked "view only" for viewers).
 
 ### Released
 
