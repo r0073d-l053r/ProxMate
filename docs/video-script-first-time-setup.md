@@ -1,667 +1,283 @@
-# ProxMate from zero: install, set up, and hand out your first VM
+# ProxMate setup, start to finish (yt-script output)
 
-**Video script, step-by-step tutorial. Written for ProxMate 1.2 on Proxmox VE 9.**
+Working title the hook confirms: **Self-service VMs on Proxmox: full ProxMate setup, and the token mistake that breaks it**
+(run `/yt-package` on it before you publish; this run only wrote the script).
 
-Target length: 20 to 25 minutes. Spoken lines are plain text. Stage directions are in
-brackets. Terminal commands and exact UI labels are in code so you can read them off
-the screen as you go.
+Narration runtime at 150 wpm: **13.2 minutes** (1974 spoken words). Screen time for the installer prompts, the build and the template import is on top of that; the timers on screen set the real cut.
 
----
-
-## Before you hit record
-
-Have these ready so the video flows without dead air:
-
-- A clean Linux VM or box for ProxMate (Debian or Ubuntu is easiest), with sudo, about
-  4 GB RAM and 5 GB free disk. It must reach your Proxmox host on port 8006.
-- A Proxmox VE 8 or 9 node or cluster you can log into as root.
-- Two browser windows: one normal (you, the admin), one private or incognito (the
-  tenant you are about to invite).
-- An SSH public key on your clipboard, or a saved one ready to paste.
-- The Proxmox web UI already open on the Datacenter view.
-- Optional: run the install once beforehand on a throwaway box so you know how long
-  the Docker build takes on your hardware, then wipe it. A six-minute build is fine to
-  time-lapse, but you want to know it is six and not sixteen.
-
-Things that will bite you on camera:
-
-- Do the API token step **before** the installer finishes. The wizard needs it and
-  Proxmox only shows the secret once.
-- Blur or regenerate the token secret before publishing. Same for the ENCRYPTION_KEY
-  if it ends up on screen.
-- Pick the HTTP "trial" mode for the video. It skips the reverse proxy and TLS, which
-  is a separate video.
+Voice: provisional profile at `~/.claude/youtube/voice.md`, inferred from this session. Replace with transcripts.
 
 ---
 
-## 0. Cold open (0:00 to 0:45)
+## HOOK (0:00 to 0:10, 24 words)
 
-[ON SCREEN: the ProxMate dashboard with a few VMs, then cut to you.]
+[ON SCREEN: cold open on the Proxmox "Add API Token" dialog, cursor hovering over the Privilege Separation checkbox. No intro card.]
 
-So here's a problem I kept running into. I've got a Proxmox cluster. Friends, family,
-a couple of people from work, they all want a VM on it. And every time, I'd end up
-either making them a Proxmox account, which gives them way too much, or doing it all
-by hand, which means I'm tech support forever.
+You're probably making the one Proxmox API token mistake that leaves it with zero permissions, and Proxmox never tells you why until something 403s.
 
-ProxMate fixes that. It's a self-hosted web dashboard that sits on top of Proxmox and
-gives people a DigitalOcean-style experience. You send someone an invite link with a
-quota baked in, they sign up, they click "new VM", and about a minute later they're
-SSH'd into a fresh Debian box. They never see your Proxmox panel. They can't reach
-your LAN. And you can see everything they're doing.
+## THE TURN (0:10 to 0:32, 56 words)
 
-In this video I'm going to take a totally fresh machine, install ProxMate, connect it
-to Proxmox, lock it down, invite a user, and create a VM as that user. Start to
-finish. No skipping the annoying parts, because the annoying parts are where everyone
-gets stuck.
+[ON SCREEN: cut to the finished ProxMate dashboard, then a tenant's VM page with the console open. Hold two seconds on each.]
 
-[ON SCREEN: title card.]
+I'm going to fix that in about ninety seconds, and then take a blank Linux box all the way to a friend logged into their own VM on your Proxmox, through a web dashboard where they never see your Proxmox panel and can't reach your LAN. Every click is on screen. Let's start with the checkbox.
 
----
+## BEAT 1: The checkbox, and why Proxmox is quiet about it (0:32 to 2:10, 245 words)
 
-## 1. What you need (0:45 to 1:45)
+[ON SCREEN: Proxmox web UI. Datacenter selected in the left tree.]
 
-[ON SCREEN: a simple diagram. Your laptop, arrow to "ProxMate box", arrow to
-"Proxmox :8006". Tenant VMs hanging off Proxmox.]
+In Proxmox, go to `Datacenter`, `Permissions`, `API Tokens`, and click `Add`.
 
-Quick checklist before we touch anything.
+[ON SCREEN: the Add dialog. Fill User = root@pam, Token ID = proxmate.]
 
-First, you need a Proxmox VE node or cluster. Version 8 works, version 9 is what the
-project tests against. I'm on 9.2.
+User, `root@pam`. Token ID, `proxmate`. Now look at `Privilege Separation`. It's checked by default.
 
-Second, you need a separate Linux machine to run ProxMate on. It doesn't have to be big.
-Four gigs of RAM, five gigs of disk, and it needs to be able to reach your Proxmox
-host on port 8006. I'm using a small Debian VM, which, yes, is itself running on the
-same Proxmox cluster. That's fine. ProxMate talks to Proxmox over the API like any
-other client.
+[ON SCREEN: zoom in on the checkbox. Freeze.]
 
-Third, you need sudo on that machine, because the installer will offer to install
-Docker if it's missing.
+Here's the payoff of the hook. That checkbox means the token does not inherit root's permissions. It becomes its own thing, with its own permission list, and that list starts empty. Nothing in this dialog says that. You click Add, Proxmox hands you a secret, and it looks exactly like a working token. It will even authenticate. It just can't do anything.
 
-That's it. No domain name today. No certificates. We're going to do the local HTTP
-trial mode, which is perfect for a homelab on a trusted network, and I'll tell you at
-the end what changes when you want to put this on a real domain.
+And the reason Proxmox never tells you: in its model, `root@pam!proxmate` is not the same principal as `root@pam`. It's a different name. Permissions in Proxmox come from access control lists that name a principal, and nobody wrote an ACL naming this token. From Proxmox's point of view there's nothing wrong. From yours, the first real call comes back 403.
 
----
+[ON SCREEN: uncheck the box. Click Add. The secret dialog appears, blurred.]
 
-## 2. Create the Proxmox API token (1:45 to 4:30)
+Uncheck it. Click `Add`. Copy the secret now, because Proxmox shows it exactly once. The token ID you'll type into ProxMate is the whole string, `root@pam!proxmate`.
 
-[ON SCREEN: Proxmox web UI, Datacenter selected.]
+[ON SCREEN: lower third: "Token ID: root@pam!proxmate".]
 
-We're going to do the Proxmox side first, because the ProxMate installer stops at a
-point where it's going to ask you for this, and you don't want to be scrambling.
+One honest caveat. Privilege separation off on a root token means ProxMate holds a key that's root on your cluster. For a homelab trial, fine, that's what we're doing. The repo ships a script, `deploy/proxmox-token.sh`, that creates a dedicated user and a role with only what ProxMate uses. The release notes say it was run end to end on a seven-node Proxmox 9.2 cluster. Link in the description. Today, root token, keep moving.
 
-ProxMate needs an API token. Not a password. A token. Here's how.
+## BEAT 2: What you need (2:10 to 2:53, 107 words)
 
-[ACTION: click through Datacenter → Permissions → API Tokens → Add.]
+[ON SCREEN: simple diagram. Laptop, arrow to "ProxMate box", arrow to "Proxmox :8006". Tenant VMs under Proxmox.]
 
-In the Proxmox UI, go to `Datacenter`, then `Permissions`, then `API Tokens`, and hit
-`Add`.
+Quick checklist. A Proxmox VE 8 or 9 node or cluster. The project tests on 9.2 and that's what I'm on. A separate Linux machine for ProxMate itself. The README asks for roughly four gigs of RAM and five gigs of disk, and it needs to reach Proxmox on port 8006. Mine is a small Debian VM sitting on the same cluster, which is fine, it's just another API client. And sudo on that machine, because the installer offers to install Docker.
 
-For `User`, pick `root@pam`. For `Token ID`, type `proxmate`.
+No domain and no certificates today. We're using the local HTTP trial mode. I'll tell you what changes for a real domain at the end.
 
-Now. Stop. Look at this checkbox. `Privilege Separation`.
+## BEAT 3: Install (2:53 to 4:29, 240 words)
 
-[ON SCREEN: zoom on the Privilege Separation checkbox.]
+[ON SCREEN: terminal on the ProxMate box. Three commands typed one at a time.]
 
-This is the number one thing that breaks ProxMate installs, and it's not ProxMate's
-fault, it's just a Proxmox default that surprises everybody. Privilege separation means
-the token does **not** inherit the user's permissions. It gets its own, which start at
-nothing. So you can make a token for root, it will authenticate perfectly, and it will
-have zero rights. The connection test will pass. And then storage lists come back
-empty and every VM create fails with a 403. People lose hours on this.
+Three lines.
 
-So: **uncheck Privilege Separation.** Then click `Add`.
-
-[ACTION: uncheck, click Add. Proxmox shows the token secret dialog.]
-
-Proxmox shows you the secret exactly once. Copy it somewhere safe right now. I'm going
-to paste mine into a notes file off screen. If you lose it, you delete the token and
-make a new one, no big deal, but don't lose it in the next ten minutes.
-
-The token ID you'll be typing into ProxMate is the full thing: `root@pam!proxmate`.
-User, exclamation mark, token name.
-
-[ON SCREEN: lower-third text: "Token ID: root@pam!proxmate".]
-
-One honest caveat. A privsep-off root token is effectively root on your cluster.
-That's fine for a homelab trial, and it's what we're doing today. If this is going to
-be a real deployment with people you don't fully trust, the repo ships a script,
-`deploy/proxmox-token.sh`, that creates a dedicated `proxmate@pve` user and a role
-with only the privileges ProxMate actually uses. It was tested end to end on a
-seven-node cluster. I'll link it in the description. Today, root token, keep moving.
-
----
-
-## 3. Install ProxMate (4:30 to 9:00)
-
-[ON SCREEN: terminal on the ProxMate box.]
-
-Over to the machine that's going to run ProxMate. Fresh Debian, nothing on it.
-
-The install is three lines, and I want to talk about the middle one.
-
-```bash
+```
 curl -fsSLO https://raw.githubusercontent.com/r0073d-l053r/ProxMate/main/install.sh
 less install.sh
 bash install.sh
 ```
 
-[ACTION: run the curl line.]
+The middle one isn't decoration. This is deliberately not a curl-pipe-bash one-liner, and the comment at the top of the script says why: this software ends up holding a token that's root on your cluster, so piping an unread script into a root shell is the wrong habit for exactly this. Read it. It's commented like a person wrote it.
 
-First line downloads the installer. Second line opens it in a pager so you can read
-it. The project is really deliberate about this. It is not a `curl | sudo bash`
-one-liner, on purpose, and the comment at the top of the script says why: this
-software is going to end up holding a token that's root on your cluster. Piping an
-unread script into a root shell is exactly the wrong habit for that. So read it. It's
-long, but it's commented like a human wrote it for another human.
+[ON SCREEN: `less install.sh`, scroll the header comment for five seconds, quit.]
 
-[ACTION: open `less install.sh`, scroll the header comment for a few seconds, quit.]
+[ON SCREEN: `bash install.sh` running. First prompt.]
 
-Quick skim of what it does: checks what's missing, generates an encryption key, writes
-a correct `.env`, builds the containers, and then stops at the browser wizard. The
-Proxmox token is entered in the browser, not on the command line, so it never lands
-in your shell history.
-
-Okay. Run it.
-
-[ACTION: `bash install.sh`.]
-
-First thing it does is look for Docker, Compose v2, git, curl and openssl. On this
-box Docker's missing, so it tells me what it needs and why each thing is needed, and
-asks:
+First thing it does is check for Docker, Compose, git, curl and openssl, and on a fresh box it tells you what's missing, why each one is needed, and asks:
 
 ```
 Install them now? [y/N]:
 ```
 
-Yes. It'll ask for my sudo password here, that's expected. If you say no, it stops
-and changes nothing on the machine, which I appreciate.
+Yes. Sudo will ask for your password here. If you say no, it stops and changes nothing, which I like.
 
-[ACTION: type y, enter password. Time-lapse the Docker install.]
+[ON SCREEN: time-lapse the Docker install, ten seconds max.]
 
-[B-ROLL: speed up the package install, ~10 seconds on screen.]
-
-Next question:
+Second prompt:
 
 ```
 How will you reach ProxMate?
   1) HTTP on this machine's address — quick trial on a trusted network
   2) HTTPS on a domain, behind your reverse proxy — real deployment
-  choice [1/2]:
 ```
 
-One. Trial mode. It figures out this machine's LAN IP by itself, so the address I'll
-open later is `http://` whatever-my-IP-is `:3000`.
+One. It works out this machine's LAN address by itself.
 
-[ACTION: type 1.]
+[ON SCREEN: the build starting. Timer in the corner.]
 
-Now it clones the repo at the newest release tag, writes the `.env` file with a fresh
-64-character `ENCRYPTION_KEY`, and starts the build.
+Now it clones the newest release, writes a `.env` with a fresh encryption key, and builds. The README says about six minutes from a clean machine to the wizard. Put a timer on screen and let it run.
 
-```
-==> Building and starting (the first build takes a few minutes)
-```
+While it builds, the one thing to know. That `ENCRYPTION_KEY` it just generated protects every secret ProxMate stores, your Proxmox token included, and ProxMate's own nightly database backups are useless without it. We'll back it up in a minute. The dashboard is going to nag us anyway.
 
-[B-ROLL: time-lapse the build. Put a timer in the corner. Mine took about six minutes.]
-
-While that runs, two things worth knowing.
-
-One: that `ENCRYPTION_KEY` it just generated is the most important string on this
-machine. Every secret ProxMate stores, the Proxmox token, SMTP password, 2FA secrets,
-is encrypted with it. ProxMate also backs up its own database nightly, and those
-backups are useless without the key. We'll deal with backing it up in a minute, the
-dashboard is going to nag us about it anyway.
-
-Two: the installer refuses to generate a new key if it finds an old ProxMate database
-volume on the box. That's a safety feature. A new key can't read an old database, and
-you'd end up with a half-dead install. If you ever see that error, it's telling you to
-go find your original key.
-
-[ACTION: build finishes.]
+[ON SCREEN: build finishes. The "ProxMate is up" block and the URL.]
 
 ```
-==> Waiting for the API to become healthy
-  the backend applies database migrations on boot, so this is not instant
-  + backend is healthy
 ==> ProxMate is up
-
   Open http://192.168.1.50:3000 and complete the setup wizard.
 ```
 
-And then there's a warning I want you to actually read:
+And read the warning under it: until you finish the wizard, anyone who can reach that address can claim the admin account. Don't go make a coffee. Do the wizard now.
 
-[ON SCREEN: zoom on the warning text.]
+## BEAT 4: The setup wizard (4:29 to 6:20, 279 words)
 
-Until you finish the wizard, anyone who can reach that address can claim the admin
-account. The ports are open on all interfaces. So don't go make a coffee. Do the
-wizard now.
+[ON SCREEN: browser. The "ProxMate Setup" page with four steps across the top: Admin, Proxmox, Defaults, Finish.]
 
-It also prints a reminder about the token and privilege separation, and a line that
-says "Before inviting anyone: enable the Proxmox cluster firewall." Remember that
-one. We'll do it.
+Four steps.
 
----
+[ON SCREEN: Step 1 form being filled.]
 
-## 4. The setup wizard (9:00 to 13:00)
+Step one, `Admin`. Display name, email, a password of at least eight characters. This is the owner account. `Continue`.
 
-[ON SCREEN: browser, open http://<ip>:3000.]
+[ON SCREEN: Step 2, "Connect to Proxmox" card.]
 
-Open the address in your browser. You land on `ProxMate Setup`, four steps across the
-top: `Admin`, `Proxmox`, `Defaults`, `Finish`.
+Step two, `Connect to Proxmox`. `Proxmox host URL` is the full URL with the port, `https://` your host `:8006`. `API token ID` is `root@pam!proxmate`. The placeholder in that field shows a different example format, don't copy it, type yours. `API token secret`, paste it. `Verify TLS certificate`, leave it unchecked if Proxmox still has its self-signed cert, which is most home setups. `Proxmox pool`, leave empty.
 
-### Step 1: Admin
+Click `Test connection`.
 
-[ACTION: fill the form.]
-
-`Welcome to ProxMate. Create the administrator account.` Display name, email, a
-password of at least 8 characters, confirm it. This is the owner account. Use a real
-password manager entry for it.
-
-`Continue`.
-
-### Step 2: Connect to Proxmox
-
-[ON SCREEN: the Connect to Proxmox card.]
-
-This is where the token goes.
-
-`Proxmox host URL`: the full URL with the port. `https://192.168.1.10:8006`. Include
-the `https://`, include the `:8006`. It'll tell you if you forget.
-
-`API token ID`: `root@pam!proxmate`. The whole thing.
-
-[ASIDE, casual:] Heads up, the placeholder in this field says `proxmate@pam!dashboard`,
-which is just an example format. Don't copy it. Yours is whatever you made in Proxmox.
-
-`API token secret`: paste the secret you copied earlier.
-
-`Verify TLS certificate`: leave this **unchecked** if your Proxmox uses the
-self-signed certificate it ships with, which is nearly everyone on a home network.
-If you've put a real cert on Proxmox, check it.
-
-`Proxmox pool (optional)`: leave empty. That's for the least-privilege pool-scoped
-token setup, not today.
-
-Now click `Test connection`.
-
-[ACTION: click. A green toast appears.]
+[ON SCREEN: the green toast.]
 
 ```
 Connected to Proxmox VE 9.2 (3 nodes, 4 storages)
 ```
 
-That's what you want to see. Version, node count, storage count.
+Version, node count, storage count. That's what you want.
 
-[ON SCREEN: if you can reproduce it, show a yellow warning toast.]
+[ON SCREEN: cut to a second take with a privsep token. The red error toast.]
 
-If you get yellow warning toasts here, read them. Each one names a specific privilege
-the token is missing and what will fail without it. This is the connection test
-catching the privsep problem at setup instead of three screens later with an empty
-dropdown. If you get a hard red error about no privileges at all, that's privilege
-separation. Go back to Proxmox, fix the token, come back.
+And here's what the hook was about. If you'd left privilege separation on, this is what you get instead: a red error saying the token authenticates but holds no permissions, naming privilege separation as the cause, with the exact command to fix it. ProxMate catches it here, at the test. Proxmox never would have. If you get yellow warnings instead, each one names a single privilege and what breaks without it. Read them.
 
-The button now says `Connection verified`. `Continue`.
+[ON SCREEN: the button now reads "Connection verified". Click Continue.]
 
-### Step 3: Choose defaults
+[ON SCREEN: Step 3, "Choose defaults", dropdowns populated.]
 
-[ON SCREEN: the defaults card loading, then populated.]
+Step three, `Choose defaults`. `Default storage pool` is where VM disks go. It only offers storages that can hold disk images. `Default network` is the bridge every new VM gets plugged into, usually `vmbr0`. If yours isn't listed there's a type-a-name option. `ISO storage` is where your installers live, usually `local`.
 
-`Fetching Proxmox resources…` and then three dropdowns. These are the defaults every
-new VM gets.
+Under that, `Installed on every cloud-init VM`. These get installed on every cloud-image VM anyone creates. The defaults are fail2ban, unattended-upgrades and btop. Leave them. `Continue`.
 
-`Default storage pool`: where VM disks go. It only lists storages that can hold disk
-images. I'm picking `local-lvm`. If you have Ceph or ZFS, pick that.
+[ON SCREEN: Step 4, "Review & finish" summary.]
 
-`Default network`: the bridge new VMs get plugged into. Almost always `vmbr0`. It
-lists Linux bridges, Open vSwitch bridges, and SDN VNets if you have them. If your
-bridge isn't listed, there's a "type a name" option.
+Step four. Check the host and the token ID. `Finish setup`.
 
-`ISO storage`: where your install ISOs live. Usually `local`. This also becomes where
-ProxMate keeps its cloud-init snippets.
+[ON SCREEN: toast "Setup complete — welcome to ProxMate!" then the dashboard.]
 
-Below that: `Installed on every cloud-init VM`. These are packages ProxMate will
-install on every cloud-image VM anyone creates. The defaults are fail2ban,
-unattended-upgrades, and btop. That's a sensible baseline. I'm leaving it. You can
-change it later in the Template Store.
+We're in. Two housekeeping steps before anyone else touches this, and the project is right to insist on both.
 
-`Continue`.
+## BEAT 5: Back up the key (6:20 to 6:59, 97 words)
 
-### Step 4: Review and finish
+[ON SCREEN: the amber banner on the dashboard: "Back up ENCRYPTION_KEY."]
 
-[ON SCREEN: the summary card.]
+That amber banner stays on every admin page until someone confirms the key is backed up. Let's actually do it.
 
-A summary of what you entered. Admin, Proxmox host, token ID, cluster version and
-node count, storage, network, ISO storage. Check the host and token look right.
+[ON SCREEN: terminal. The grep, value blurred.]
 
-`Finish setup`.
-
-[ACTION: click. Toast: "Setup complete — welcome to ProxMate!" Dashboard appears.]
-
-And we're in. That's the whole wizard. Before anything else, two housekeeping steps
-that the project is quite insistent about, and they're right.
-
----
-
-## 5. Back up the encryption key (13:00 to 14:15)
-
-[ON SCREEN: dashboard with the amber banner at the top.]
-
-See this amber banner? `Back up ENCRYPTION_KEY.` It's going to sit on every admin
-page until someone confirms it's done. Let's actually do it instead of dismissing it.
-
-The key is in the `.env` file in the install directory. The installer defaults to a
-folder called `proxmate` wherever you ran it from.
-
-[ACTION: switch to terminal.]
-
-```bash
+```
 grep ENCRYPTION_KEY ~/proxmate/.env
 ```
 
-[ON SCREEN: blur the value.]
+Copy that line into your password manager. Not a note on the same machine. The scenario it protects against is this box dying: you restore the nightly database backup, give it this key, and every setting and secret comes back. Without the key the backup is encrypted noise.
 
-Copy that line into your password manager. Not a sticky note, not a text file on the
-same machine. Somewhere that survives this box dying. The whole point is that if this
-machine catches fire, you restore the nightly database backup, give it this key, and
-every setting and secret comes back. Without the key, the backup is encrypted noise.
+[ON SCREEN: click "Confirm backup" in the banner. Banner clears.]
 
-[ACTION: back to browser, click `Confirm backup` in the banner.]
+Click `Confirm backup`. ProxMate records who confirmed and when, tied to a fingerprint of the key, so if the key ever changes the banner comes back on its own.
 
-Back in the dashboard, hit `Confirm backup`. ProxMate records who confirmed it and
-when, tied to a fingerprint of the key, so if the key ever changes the banner comes
-back. Nice touch.
+## BEAT 6: Turn on the cluster firewall (6:59 to 8:04, 163 words)
 
----
+[ON SCREEN: sidebar, admin section, Settings. The Proxmox tab.]
 
-## 6. Turn on tenant isolation (14:15 to 16:30)
+Second step. `Settings`, `Proxmox` tab.
 
-[ON SCREEN: Admin → Settings → Proxmox tab.]
+Here's the deal. ProxMate writes a firewall onto every VM it creates. Inbound dropped. Outbound to your private address ranges dropped. Internet and DNS allowed. That's how a tenant's VM can't see your NAS, your other VMs, or the Proxmox host.
 
-Second housekeeping step, and this one's security-relevant. Go to `Settings` in the
-admin section of the sidebar, and open the `Proxmox` tab.
+But those per-VM rules do nothing until the cluster firewall is switched on at the datacenter level, and Proxmox ships with it off.
 
-Here's the deal. ProxMate puts a firewall on every VM it creates: inbound drop,
-outbound drop to all your private ranges, so a tenant VM can't see your LAN, your
-other VMs, or the Proxmox host itself. Internet and DNS are allowed. That's how your
-friend's Minecraft box doesn't end up poking at your NAS.
+[ON SCREEN: the "Proxmox cluster firewall" card reading "Not enforced yet." Click Enable.]
 
-But Proxmox has a master switch. Per-VM firewall rules do absolutely nothing until the
-**cluster** firewall is enabled at the datacenter level. And that's off by default.
+This card says `Not enforced yet.` Click `Enable`.
 
-[ON SCREEN: the "Proxmox cluster firewall" card showing "Not enforced yet."]
+[ON SCREEN: the dialog "Enable the Proxmox cluster firewall?" with the management subnet field.]
 
-So this card says `Not enforced yet.` Click `Enable`.
+It asks for your management subnet and suggests one from the bridge you picked. Check it's the network you administer from, because ProxMate adds allow rules for the Proxmox web UI on 8006 and SSH on 22 from that subnet before it flips the firewall on. That ordering is what keeps you from locking yourself out of your own cluster.
 
-[ACTION: click Enable. Dialog appears.]
+[ON SCREEN: confirm. Toast "Cluster firewall enabled — tenant isolation is now enforced." Card reads "Isolation is enforced."]
 
-`Enable the Proxmox cluster firewall?` It asks for your management subnet, and
-suggests one based on the bridge you picked, something like `192.168.1.0/24`. Check
-it matches the network you administer from. This matters. ProxMate adds allow rules
-for the Proxmox web UI on 8006 and SSH on 22 from this subnet **before** it flips the
-firewall on, specifically so you don't lock yourself out of your own cluster.
+Open Proxmox in another tab to prove you still can. Good. The installer tells you to do this before you invite anyone, and this is why.
 
-[ACTION: confirm.]
+## BEAT 7: Add a cloud image (8:04 to 9:11, 166 words)
 
-```
-Cluster firewall enabled — tenant isolation is now enforced.
-```
+[ON SCREEN: sidebar, Template Store. "Manage templates (admin)".]
 
-Card now says `Isolation is enforced.` Go check you can still load the Proxmox UI in
-another tab. You can. Good.
+Right now the only way to make a VM is from an ISO, which means a full OS install through the console. We want the one-click version. `Template Store`, then `Manage templates (admin)`.
 
-[ASIDE:] The installer and the docs both say do this before you invite anyone, and
-I'd listen. A VM created while this is off still gets the rules written, they just
-aren't enforced until the switch is on. Turn it on now and you never have to think
-about it.
+[ON SCREEN: "Choose a cloud image" picker, scrolling the curated list.]
 
----
+`Choose a cloud image`. The README lists twenty curated images: Debian 11 through 13, Ubuntu 20.04 through 24.04, Fedora, Alma, Rocky, CentOS Stream, Oracle, openSUSE, Arch, and four ARM64 builds. Or paste your own qcow2 URL. I'm taking `Debian 12 (Bookworm)`. `Store name`, `Debian 12`. `Add to store`.
 
-## 7. Add a cloud image to the Template Store (16:30 to 18:30)
+[ON SCREEN: "Downloading & importing — this can take a few minutes." Time-lapse.]
 
-[ON SCREEN: sidebar → Template Store.]
+ProxMate has Proxmox download the official image, import it as a disk, attach a cloud-init drive and convert it to a template, all through the API. Nothing on the host. Leave the tab open.
 
-Now the fun part. Right now the only way to make a VM is from an ISO, which means a
-full OS install through the console. That works, but we want the one-click
-experience. For that we add a cloud image.
+[ON SCREEN: the template card with the Cloud-init badge.]
 
-Open `Template Store` in the sidebar. As admin you'll see `Manage templates (admin)`.
+That `Cloud-init` badge is the whole point. It's what lets someone paste an SSH key and get a working box instead of an installer.
 
-[ACTION: open the add-image flow.]
+[ON SCREEN: the cloud-init extras section. Tick Docker and Tailscale.]
 
-`Choose a cloud image`. There's a curated list, about twenty of them. Debian 11, 12
-and 13, Ubuntu 20.04 through 24.04, Fedora, Alma, Rocky, CentOS Stream, Oracle,
-openSUSE, Arch, and a few ARM64 builds if you've got ARM nodes. Or you can paste your
-own `.qcow2` or `.img` URL.
+While we're here, the extras. These become checkboxes people see when they deploy. I'm offering Docker and Tailscale. Tailscale especially, and you'll see why in a minute.
 
-I'm picking `Debian 12 (Bookworm)`. Give it a `Store name`, I'll just call it
-`Debian 12`. `Add to store`.
+## BEAT 8: Invite someone (9:11 to 10:03, 130 words)
 
-[ACTION: click.]
+[ON SCREEN: admin sidebar, Invites. "Create an invite" form.]
 
-```
-Downloading & importing — this can take a few minutes.
-```
+`Invites`, `Create an invite`.
 
-[B-ROLL: time-lapse. Explain over it.]
+[ON SCREEN: fill the form while talking.]
 
-What's happening: ProxMate tells Proxmox to download the official cloud image, imports
-it as a disk, attaches a cloud-init drive, and converts the whole thing into a
-Proxmox template. All through the API, nothing on the host. The download is a few
-hundred meg so it depends on your internet. Leave the tab open.
+`Label` is for you. `Max vCPU`, `Max RAM (GB)`, `Max storage (GB)` are the person's total across all their VMs, not per VM, and the form says it: `The new user inherits the quota you set here.` You can change it later.
 
-[ACTION: template card appears with a Cloud-init badge.]
+`Invite link expires in` is the link's clock. `Compute access` is the person's clock: how long they can use the cluster after they sign up. A fixed term or never. When it lapses, ProxMate stops their VMs and refuses sign-in, and deletes nothing. Extend it and it all comes back.
 
-There it is. Notice the `Cloud-init` badge. That badge is what lets tenants paste an
-SSH key and get a ready box in about a minute, instead of sitting through an installer.
+There's a checkbox to require two-step authentication before they can do anything. For people you don't know well, tick it. `Email invite to` needs SMTP, which we haven't set up, so `Copy invite link`.
 
-One optional thing while we're here: there's a pencil icon to add `login notes` that
-get shown to users, like a default username. And there's a section for cloud-init
-extras, things like Docker, Tailscale, Cockpit, Netdata, that you can offer as
-checkboxes when someone deploys. I'm turning on Docker and Tailscale. Tailscale
-especially, because, remember, we just firewalled these VMs off the LAN. Tailscale is
-how people are going to SSH in. It's outbound only, so it works through the isolation.
+## BEAT 9: Be the tenant (10:03 to 12:10, 317 words)
 
----
+[ON SCREEN: private browser window. Paste the link. "Create your account" form.]
 
-## 8. Invite a user (18:30 to 20:00)
+Now I'm the friend. Private window, paste the link, `Create your account`. Same dashboard, no admin section, a quota card at zero.
 
-[ON SCREEN: Admin → Invites.]
+[ON SCREEN: Virtual Machines, new VM. The "Create a virtual machine" wizard.]
 
-Time to give someone access. `Invites` in the admin sidebar, `Create an invite`.
+`Virtual Machines`, new. `Source`, `Template Store`, and there's `Debian 12`.
 
-[ACTION: fill the form while talking.]
+[ON SCREEN: click a size preset. Fields fill.]
 
-`Label`: just for you, so you remember who this is. `Dev team member`, or in my case,
-`Mike`.
+`Size` has presets, `Small` through `X-Large`. Pick one and `vCPU cores`, `Memory` and `Disk size (GB)` fill in. You can edit any of them, and it won't let you past your quota.
 
-Quotas. `Max vCPU`, `Max RAM (GB)`, `Max storage (GB)`. This is the total that person
-can use across all their VMs, not per VM. I'm giving Mike 4 cores, 8 gigs, 80 gigs of
-disk. The form reminds you: `The new user inherits the quota you set here.` You can
-change it later per user.
+[ON SCREEN: Username field, SSH key field.]
 
-`Invite link expires in`: how long the link itself stays valid before someone redeems
-it. Seven days is the default.
+`Username`, the Linux user it creates. `SSH public key`, paste it. This key is how you get in. There's an optional password too, and once you've pasted a key you can save it for next time.
 
-`Compute access`: this is different. It's how long the person gets to use the cluster
-**after** they sign up. You can say never expires, or give them a fixed term, like a
-semester. When it runs out, ProxMate stops their VMs and refuses sign-in, but deletes
-nothing. You extend it and everything comes back. Great for classrooms.
+[ON SCREEN: the extras checkboxes. Tick Tailscale.]
 
-There's also a checkbox to require two-step authentication, which forces them to set
-up an authenticator app or a passkey before they can do anything. If these are people
-you don't know well, turn it on.
+The extras we offered. Tick `Tailscale`.
 
-`Email invite to` is optional and needs SMTP configured, which we haven't done. So I'm
-just going to generate the link and `Copy invite link`.
+[ON SCREEN: pan across the form. No node field visible.]
 
-[ACTION: copy the link.]
-
----
-
-## 9. Sign up and create a VM as the tenant (20:00 to 23:30)
-
-[ON SCREEN: private browser window. Paste the invite link.]
-
-Now I'm Mike. Private window, paste the link.
-
-`Create your account`. Display name, email, password, confirm. Done, and Mike lands on
-his own dashboard. It's the same app, but no admin section in the sidebar, and a
-quota card showing 0 of 4 cores used.
-
-[ACTION: Virtual Machines → New.]
-
-Go to `Virtual Machines`, create a new one. The wizard says it right there:
-`Build from scratch with an ISO, or clone a ready-made template — autoscaled to the
-size you pick.`
-
-`Source`: pick `Template Store`, and there's our `Debian 12`.
-
-`Size`: there are presets, `Small`, `Medium`, `Large`, `X-Large`. Pick one and it
-fills in `vCPU cores`, `Memory`, and `Disk size (GB)`, and you can tweak any of them.
-The wizard won't let Mike go past his quota.
-
-`Username`: the Linux user to create. `mike`.
-
-`SSH public key`: paste it. This is the important one. This key is what gets you in.
-There's also a `Password (optional)` field, and once you've pasted a key once you can
-save it to your profile and use `Use a saved key` next time.
-
-Then the cloud-init extras we enabled. Mike ticks `Tailscale`.
-
-Notice what's **not** here: there's no node picker. Tenants never choose a node.
-ProxMate puts the VM on whichever node has the most free capacity and can actually
-see the template. Admins get an `Auto-select (recommended)` node field with an
-override, tenants don't see it at all.
+Notice what isn't on this page: a node picker. Tenants never choose a node. ProxMate places the VM on whichever node has the most free capacity and can see the template. Only admins get a node field, and it defaults to auto.
 
 Create.
 
-[ACTION: click create. Cut to the VM page.]
+[ON SCREEN: the VM page. Status moving from creating to running. Timer in the corner.]
 
-[B-ROLL: VM page with status going from creating to running. Timer in the corner.]
+In the background it clones the template, sets the size, writes a cloud-init config with the user, the key and the extras, puts the NIC on the default bridge with the isolation firewall on, tags the VM in Proxmox as this machine's, and boots it. The README says about a minute for a cloud image. Your timer will tell you the truth for your hardware.
 
-So what's happening in the background: ProxMate clones the template, sets the cores and
-RAM, grows the disk to what Mike asked for, writes a cloud-init config with his user
-and key and the extras, plugs the NIC into the default bridge with the isolation
-firewall on, tags the VM in Proxmox as belonging to this machine, and boots it. The
-status shows `deploying` until cloud-init reports done.
+[ON SCREEN: open the text console. Login prompt.]
 
-[ACTION: VM shows running.]
+Open the console. There's a graphical one and a text one. The text one has real copy and paste and scrollback. There's the login prompt.
 
-About a minute. Let's open the console.
+[ON SCREEN: cut to the friend's laptop. An SSH attempt to the VM's LAN address hanging. Then cut back.]
 
-[ACTION: open the console. Show both graphical and text if you have time.]
+Can the friend SSH to this from their laptop on your LAN? No. The isolation firewall drops it, on purpose. What they do instead is log in on the console once and run `sudo tailscale up --ssh`. After that they SSH in from anywhere on their tailnet, with no port forwarding and no holes in your network. The `Help & Docs` page in the sidebar has that guide and one for publishing a website with a Cloudflare tunnel.
 
-There's a graphical noVNC console and a text console. The text one is the nice one,
-it has real copy and paste, scrollback, and you can control-click links. Here's the
-login prompt. And there's the login banner telling Mike how to get in from outside.
+## PAYOFF (12:10 to 12:58, 120 words)
 
-[ON SCREEN: text console with the login prompt.]
+[ON SCREEN: split screen. Left, the Privilege Separation checkbox. Right, the tenant's console logged in.]
 
-Now, can Mike SSH to this from his laptop on the LAN? No. And that's the point. The
-isolation firewall drops that. What he does instead, and the docs walk him through it,
-is log in on the console once, run `sudo tailscale up --ssh`, and then he can SSH in
-from anywhere on his tailnet, with no port forwarding and no holes in your network.
-There's a `Help & Docs` page in the sidebar with the Tailscale guide and a Cloudflare
-Tunnel guide for people who want to host a public website from their VM.
+That's the whole promise delivered. The checkbox was `Privilege Separation`, the reason Proxmox stays quiet is that a token is its own principal with no ACL, and ProxMate's connection test is where it gets caught now. And from that checkbox you've gone to a friend inside their own VM, isolated from your network, through a dashboard they can't escalate out of.
 
----
+[ON SCREEN: three-line list.]
 
-## 10. The quick admin tour (23:30 to 25:00)
+Three things before real people use this. A real domain and HTTPS, which passkeys and SSO need. Re-run the installer with `--domain` and put Caddy or a Cloudflare tunnel in front; the repo includes a Caddyfile and a full runbook. SMTP under Settings, so invites and password resets can be emailed. And the least-privilege token script instead of root.
 
-[ON SCREEN: back in the admin window.]
+## CLOSE (12:58 to 13:10, 30 words)
 
-Back as admin, a thirty-second tour of what you've got now, because we only scratched
-the surface.
+[ON SCREEN: you, then end card.]
 
-[ACTION: click through each quickly.]
-
-`Monitor`: live CPU, memory and network sparklines for every VM, grouped by owner,
-with power controls. There's a kiosk mode for a wall display too.
-
-`Users`: everyone, their quotas, their access windows. You can edit quotas here, and
-tenants can request more from their side.
-
-`Audit Log`: who did what. Every create, delete, start, sign-in.
-
-Back on Mike's VM page, as admin you can `Migrate` it live to another node, `Resize`
-it, take snapshots, and there are `MateStates`, which are scheduled vzdump backups
-with rolling retention and one-click restore. Weekly by default, per-VM schedule if
-you want.
-
-`Projects` lets people group their VMs with a tag and see totals per project.
-
-And under `Settings` you'll find SMTP, which you want for password resets and emails,
-SSO if you have Keycloak or Authentik, notifications to Discord or Slack or ntfy or
-Telegram, the ProxMate IDE, which is a browser VS Code inside the tenant's own VM, and
-a maintenance tab with database backups and in-app updates.
-
----
-
-## 11. What to do next, and wrap-up (25:00 to 26:00)
-
-[ON SCREEN: you, with a short on-screen list.]
-
-Three things before you let real people onto this.
-
-One. If you want this reachable from outside your network, or you want passkeys and
-SSO to work at all, you need a real domain and HTTPS. Re-run the installer with
-`--domain yourname.example.com`, put Caddy or nginx or a Cloudflare Tunnel in front,
-and the repo has a ready-made Caddyfile. There's a full production runbook called
-`DEPLOYMENT.md`. That's its own video.
-
-Two. Set up SMTP under Settings. Without it, invites can't be emailed and forgotten
-passwords land in a queue for you to handle by hand.
-
-Three. Consider the least-privilege token script instead of the root token, especially
-if you went the pool route. The connection test will tell you exactly which privilege
-is missing if you get it wrong.
-
-That's ProxMate. Fresh box to a tenant SSH'ing into their own VM, in one sitting. Links
-to everything are in the description. If this saved you from the privilege separation
-rabbit hole, you know what to do. See you in the next one.
-
-[ON SCREEN: end card.]
-
----
-
-## YouTube description (paste and edit)
-
-```
-Install ProxMate from scratch and hand out your first VM. ProxMate is a self-hosted,
-invite-only cloud dashboard on top of Proxmox VE: users get a DigitalOcean-style web
-UI and quota-limited VMs, you keep your Proxmox panel to yourself.
-
-Chapters
-0:00 Why ProxMate
-0:45 What you need
-1:45 Create the Proxmox API token (and the #1 pitfall)
-4:30 Install with install.sh
-9:00 The setup wizard
-13:00 Back up the encryption key
-14:15 Turn on tenant isolation (cluster firewall)
-16:30 Add a cloud image to the Template Store
-18:30 Invite a user
-20:00 Create a VM as the tenant
-23:30 Quick admin tour
-25:00 What to do next
-
-Links
-GitHub: https://github.com/r0073d-l053r/ProxMate
-Installer: https://raw.githubusercontent.com/r0073d-l053r/ProxMate/main/install.sh
-Admin guide: docs/admin-guide.md
-Production runbook: DEPLOYMENT.md
-Security guide and least-privilege token: SECURITY.md, deploy/proxmox-token.sh
-Tailscale for SSH into your VM: docs/tailscale-ssh.md
-
-Versions in this video: ProxMate 1.2, Proxmox VE 9.2.
-```
-
-## Pinned comment (optional)
-
-```
-The one thing to get right: when you create the API token in Proxmox, UNCHECK
-"Privilege Separation". A privsep token for root has zero permissions. The connection
-test passes, then everything 403s. If you already made one, either recreate it with
-privsep off, or run on a Proxmox node:
-  pveum acl modify / --tokens 'root@pam!proxmate' --roles Administrator
-```
+If you want the HTTPS and domain setup as the next video, say so in the comments, because that's what decides whether I make it. Links are in the description.
