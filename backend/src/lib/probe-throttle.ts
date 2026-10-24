@@ -3,7 +3,7 @@
  * a page polls every few seconds. At most one probe per key per `intervalMs`:
  * callers while one is running share it, and callers inside the interval after it
  * get `idle` without probing. In memory, like lib/in-flight — the API is a single
- * Node process.
+ * Node process. The interval runs from the end of the last probe.
  */
 export interface ProbeThrottle<T> {
   run(key: string, idle: T, probe: () => Promise<T>): Promise<T>;
@@ -22,13 +22,14 @@ export function probeThrottle<T>(intervalMs: number): ProbeThrottle<T> {
       if (shared) return shared;
       const last = lastProbeAt.get(key);
       if (last !== undefined && Date.now() - last < intervalMs) return Promise.resolve(idle);
-      if (lastProbeAt.size > 1000) lastProbeAt.clear();
-      lastProbeAt.set(key, Date.now());
       const p = (async () => {
         try {
           return await probe();
         } finally {
           running.delete(key);
+          // Timed from the end, so a slow probe still leaves a full interval before the next.
+          if (lastProbeAt.size > 1000) lastProbeAt.clear();
+          lastProbeAt.set(key, Date.now());
         }
       })();
       running.set(key, p);

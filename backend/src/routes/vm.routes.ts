@@ -102,6 +102,8 @@ import { isValidPublicKey } from '../services/ssh-key.service.js';
 import { projectOf, tagsForAccess, withProject } from '../services/project.service.js';
 import { isIdeInstalling, advanceIdeState } from '../services/ide-provision.service.js';
 import { isDeploying, refreshDeployState } from '../services/deploy-lock.service.js';
+import { isInFlight } from '../lib/in-flight.js';
+import { createFailureFor } from '../lib/create-failures.js';
 import { getLiveStats } from '../services/live-stats.service.js';
 import { getConfig } from '../services/config.service.js';
 import { ALERT_METRICS, MAX_ALERT_RULES_PER_VM } from '../services/alert.service.js';
@@ -128,11 +130,17 @@ router.use(requireAuth);
 // Users whose admin required 2FA can't touch VMs until they've enrolled a method.
 router.use(enforceMfaSetup);
 
-// A machine still being created (a create, import or rebuild in flight) can be viewed
-// or deleted, nothing else: a clear 409 here,
-// and requireOurGuest refuses it again for every path that reaches its guest.
+// A machine still being created (a create, import or rebuild in flight) can only be
+// viewed: a clear 409 here, and requireOurGuest refuses it again for every path that
+// reaches its guest. It can be deleted once that operation has finished or failed,
+// or when nothing in this process is running it any more (a restart cut it short).
 router.use('/:id', async (req: Request, res: Response, next: () => void) => {
-  if (req.method === 'GET' || req.method === 'HEAD' || (req.method === 'DELETE' && req.path === '/')) {
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    next();
+    return;
+  }
+  const isDelete = req.method === 'DELETE' && req.path === '/';
+  if (isDelete && !isInFlight(req.params['id'] as string)) {
     next();
     return;
   }
@@ -568,18 +576,29 @@ router.post('/bulk', async (req: Request, res: Response) => {
 
 router.get('/:id', async (req: Request, res: Response) => {
   const user = (req as AuthRequest).user;
-  const resolved = await resolveVmAccess(req.params['id'] as string, user);
-  if (!resolved) { res.status(404).json({ error: 'VM not found' }); return; }
+  const vmId = req.params['id'] as string;
+  const resolved = await resolveVmAccess(vmId, user);
+  if (!resolved) {
+    // A create that failed after answering removed its row; its owner (or an admin)
+    // is told why. Anyone else sees the same 404 as for any missing VM.
+    const failure = createFailureFor(vmId, user);
+    if (failure) res.status(404).json({ error: failure, code: 'create_failed' });
+    else res.status(404).json({ error: 'VM not found' });
+    return;
+  }
 
   const withStatus = await getVmWithLiveStatus(resolved.vm);
   // Advance the cloud-init deploy lock: probes `cloud-init status` via the guest
   // agent and flips 'deploying' → 'ready' once it settles (or the timeout lapses),
   // so the lock clears on its own as the tenant watches the VM come up. No-op
   // unless the VM is mid-deploy. Reflect the fresh value in this response.
-  const deployState = await refreshDeployState(resolved.vm);
   // Likewise the IDE install lock: 'installing' → 'ready' once the guest serves it
   // (or 'failed' after its timeout), whether or not an IDE status poll is running.
-  const ideState = isIdeInstalling(resolved.vm) ? await advanceIdeState(resolved.vm) : resolved.vm.ideState;
+  // Both probe the guest, so they run side by side.
+  const [deployState, ideState] = await Promise.all([
+    refreshDeployState(resolved.vm),
+    isIdeInstalling(resolved.vm) ? advanceIdeState(resolved.vm) : Promise.resolve(resolved.vm.ideState),
+  ]);
   // Whether the admin has designated a rescue ISO — lets the UI explain the
   // Rescue card's disabled state instead of failing on click.
   const rescueAvailable = kindOf(resolved.vm) !== 'lxc' && !!(await getConfig('rescue_iso'));

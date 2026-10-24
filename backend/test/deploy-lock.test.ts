@@ -171,6 +171,26 @@ describe('refreshDeployState probe throttling', () => {
     }
   });
 
+  it('times the interval from the end of a slow probe', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-24T10:00:00Z') });
+    try {
+      let answer!: (ok: boolean) => void;
+      ping.mockReturnValueOnce(new Promise<boolean>((r) => (answer = r)));
+      cloudInitStatus('running');
+      const deploying = vm({ deployStateAt: new Date() });
+      const slow = refreshDeployState(deploying);
+      await vi.advanceTimersByTimeAsync(12_000); // the probe takes longer than the interval
+      answer(true);
+      expect(await slow).toBe('deploying');
+      ping.mockResolvedValue(true);
+      // Right after it finished: no new probe yet.
+      expect(await refreshDeployState(deploying)).toBe('deploying');
+      expect(ping).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('throttles each VM on its own', async () => {
     ping.mockResolvedValue(true);
     cloudInitStatus('running');

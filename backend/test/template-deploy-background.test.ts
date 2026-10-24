@@ -45,6 +45,7 @@ import { prisma } from '../src/lib/prisma.js';
 import * as pve from '../src/services/proxmox.service.js';
 import { notify } from '../src/services/notify.service.js';
 import { isInFlight, resetInFlight } from '../src/lib/in-flight.js';
+import { createFailureFor, resetCreateFailures } from '../src/lib/create-failures.js';
 import { fakeClient, asClient } from './helpers.js';
 
 const VMID = 101;
@@ -111,6 +112,7 @@ const updates = () => vmRow.update.mock.calls.map((c) => (c[0] as { data: Record
 beforeEach(() => {
   vi.clearAllMocks();
   resetInFlight();
+  resetCreateFailures();
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   vi.spyOn(console, 'log').mockImplementation(() => undefined);
   guestConfig = { scsi0: 'local-lvm:vm-101-disk-0,size=5G', net0: 'virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0' };
@@ -162,6 +164,8 @@ describe('POST /templates/deploy', () => {
     await settle();
     expect(prisma.$transaction).toHaveBeenCalled(); // deleteVmRow
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ event: 'vm.error', title: 'app-01' }));
+    // The request has answered, so the reason is kept for the owner's next fetch.
+    expect(createFailureFor('vm1', { id: 'u1', role: 'user' })).toBe(pve.pveMessage(new pve.TaskFailedError('clone failed')));
     expect(updates().some((d) => d['status'] === 'running')).toBe(false);
     expect(isInFlight('vm1')).toBe(false);
   });

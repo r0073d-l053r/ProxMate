@@ -110,8 +110,11 @@ curl -H "$AUTH" -H 'content-type: application/json' -X POST \
 - **Creating a machine** (`POST /vms`, `POST /vms/containers`, `POST /templates/deploy`,
   `POST /vms/restore-upload`) answers **201** `{ vm, status: "creating" }` as soon as the
   machine is recorded; it is built and started in the background. Poll `GET /vms/:id` until
-  `status` is `running` (or `error`); a create that left no guest removes the machine, which
-  then answers **404**. Every action but delete answers **409** until it has finished. Validation
+  `status` is `running` (or `error`). A create that left no guest removes the machine; for
+  an hour after, `GET /vms/:id` answers its owner (or an admin) **404**
+  `{ error, code: "create_failed" }` with the reason, and anyone else a plain **404**. While
+  the machine is being created every action answers **409**, delete included; it can be
+  deleted once the create has finished or failed. Validation
   (**400**) and quota (**403** with `details`) errors come back on the request itself.
 - **Migration targets** (`GET /vms/:id/migrate-targets`) answers
   `{ current, targets, blockers, localDisks }`: `targets` are the online nodes Proxmox

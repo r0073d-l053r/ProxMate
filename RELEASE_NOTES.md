@@ -1,6 +1,6 @@
 ProxMate 1.3.3 fixes creating a machine behind a reverse proxy or a Cloudflare Tunnel, and the setup banners that stayed up until the page was reloaded. No configuration changes are needed to upgrade from 1.3.x.
 
-- **Creating a machine answers at once.** Deploying from a template, installing from an ISO, creating a container and restoring an uploaded backup answer as soon as the machine is recorded, so the wizard opens its page right away, even behind a proxy or tunnel that cuts requests off after about 100 seconds. The page shows **Creating** until the machine is running. Quota, validation and placement errors still show in the wizard. The tenant email and the audit entry follow once the machine is running.
+- **Creating a machine answers at once.** Deploying from a template, installing from an ISO, creating a container and restoring an uploaded backup answer as soon as the machine is recorded, so the wizard opens its page right away, even behind a proxy or tunnel that cuts requests off after about 100 seconds. The page shows **Creating** until the machine is running, or why it couldn't be created. Quota, validation and placement errors still show in the wizard. The tenant email and the audit entry follow once the machine is running.
 - **Setup banners clear on their own.** "Finishing setup on this VM…" and "Installing the ProxMate IDE…" clear without a reload: a VM page request that takes longer than 15 seconds is dropped and retried, and opening a VM also picks up a finished IDE install.
 
 ## 1.3.2

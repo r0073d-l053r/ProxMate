@@ -14,6 +14,7 @@ import { diskSizeGb } from './disk.service.js';
 import { guestConfigSizes, pciLines, foreignVolumeKeys, hostLevelKeys } from '../lib/guest-config.js';
 import { recordAudit } from './audit.service.js';
 import { beginInFlight, isInFlight, runInFlight } from '../lib/in-flight.js';
+import { recordCreateFailure } from '../lib/create-failures.js';
 import { autoSnapshotBefore, type AutoSnapshotResult } from './auto-snapshot.service.js';
 import { tagsForAccess } from './project.service.js';
 import { ALL_CAPS, CAPS_BY_ROLE, normalizeShareRole, type ShareRole, type VmCap } from './vm-share.service.js';
@@ -272,7 +273,8 @@ export async function requireOurGuest(
 }
 
 /** Why an action on a row in `creating` is refused. */
-export const STILL_CREATING_MESSAGE = "This machine is still being created — wait until it's ready (or delete it).";
+export const STILL_CREATING_MESSAGE =
+  'This machine is still being created. It can be changed, or deleted, once it has finished or failed.';
 
 /** holdReason of a row whose create, clone, upload restore or rebuild didn't finish. */
 export const PROVISION_FAILED_MESSAGE =
@@ -752,6 +754,9 @@ export async function settleFailedCreate(
     return { following };
   }
   await deleteVmRow(vm.id).catch(() => undefined);
+  // The create's request has already answered, so the owner reads the reason from
+  // the VM page's next fetch of the (now missing) row.
+  recordCreateFailure(vm.id, vm.userId, pve.pveMessage(err));
   await notify({
     event: 'vm.error',
     title: vm.name,

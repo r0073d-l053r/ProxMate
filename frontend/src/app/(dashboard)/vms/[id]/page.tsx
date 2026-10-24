@@ -44,6 +44,7 @@ import { copyText } from "@/lib/clipboard";
 import { openPopup, pollUntil } from "@/lib/ide-launch";
 import { POLL_REQUEST_TIMEOUT_MS, startPoll } from "@/lib/poll";
 import { useIdeInstallFlag } from "@/lib/use-ide-install";
+import { missingVmMessage } from "@/lib/vm-missing";
 import { formatRam, formatBytes, formatUptime, formatDate } from "@/lib/format";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
 import { HoldBanner, isVmHeld } from "@/components/vm/hold-banner";
@@ -370,7 +371,7 @@ export default function VmDetailPage() {
     return () => clearInterval(iv);
   }, [transition]);
 
-  // Last status seen, so a create that failed (its row is then removed) reads as such.
+  // Last status seen, so a machine that disappears while creating isn't shown as a bad link.
   const lastStatus = useRef<string | null>(null);
 
   const fetchVm = useCallback(async (signal?: AbortSignal) => {
@@ -389,11 +390,11 @@ export default function VmDetailPage() {
       if (!mounted.current) return;
       // A slow request that was abandoned is retried by the next poll.
       if (axios.isCancel(err) || (err instanceof AxiosError && err.code === "ECONNABORTED")) return;
-      if (lastStatus.current === "creating" && err instanceof AxiosError && err.response?.status === 404) {
-        setError("This machine couldn't be created, so it was removed. Check the notifications for why.");
-        return;
-      }
-      setError(apiError(err));
+      const missing =
+        err instanceof AxiosError && err.response?.status === 404
+          ? missingVmMessage(err.response.data as { error?: string; code?: string } | undefined, lastStatus.current)
+          : null;
+      setError(missing ?? apiError(err));
     }
   }, [id, setTrans]);
   // Callers (and the panels' change callbacks) refresh without a signal of their own.
