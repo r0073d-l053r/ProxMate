@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-10-24
+* **Update**: Version 1.3.0: backend and frontend package versions (the Android app takes its version from the backend); roadmap Unreleased moved under Released.
+
 ## 2026-10-23
 * **Update**: [Restart reconciler](/services/task-reconcile.md): `Sys.Audit` is checked per node with `/access/permissions?path=`, every node's task log must reach back to the restore's start (a rebuilt or idle node causes a hold), a task list whose total changes between pages is no proof, and a pass holds each row in flight while it settles it so an adopt meanwhile is refused.
 * **Update**: [Restart reconciler](/services/task-reconcile.md): the task-list proof now needs `Sys.Audit` on every node (see [privileges](/proxmox/privileges.md); without it the reconciler always holds), reads each list in full page by page, needs the restore's own task in its node's list, allows 60 s of clock difference, and counts any task type not known to be harmless against it; adopt holds the row in flight while it runs; an upload restore never removes an archive another row still restores from.

@@ -22,6 +22,14 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 - **Guest owner check on delete.** Delete confirms the guest carries the machine's own ownership tag;
   covered by tests, not yet exercised on a live cluster. Both checks refuse when in doubt.
 
+- **Pool-scoped token end to end.** `deploy/proxmox-token.sh --pool` on PVE 8.0, 8.1 and 8.2+ and
+  PVE 9: confirm Proxmox refuses the token on a guest outside the pool while every feature works inside
+  it, and that the restart reconciler can read every node's task list with that token.
+- **v1.3.0 features on real hardware.** Android consoles over a pinned self-signed certificate,
+  view-only consoles (no input reaches the guest), file push on Debian and Alpine guests, upload
+  restore in pool mode, backend restarts mid-create and mid-restore, and automatic snapshots on
+  LVM-thin and ZFS.
+
 ### Placement & reliability
 
 - **First-class Postgres support.** The Prisma schema is portable but the shipped migration history
@@ -47,9 +55,9 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
 
 ### Mobile
 
-- **Android app.** A native app: enter the server's web address, sign in (including 2FA; SSO and
-  passkeys through the web login), then the full ProxMate UI with the session carried over. Built
-  on GitHub Actions so the APK can be downloaded from each run.
+- **Android release signing and store listing.** The app ships in v1.3.0 as a debug build from CI; a
+  signed release APK is built on version tags once the four `ANDROID_*` signing secrets are set.
+  Still open: set those secrets, and decide on a Play Store or F-Droid listing.
 
 ### Deferred pending hardware
 
@@ -89,74 +97,17 @@ Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
 
 ### Unreleased
 
-- **Pool-scoped Proxmox token (optional) — needs live verification.** A `proxmox_pool` setting
-  (setup wizard and Admin → Settings) places every guest ProxMate creates, clones, restores or
-  imports in that resource pool. `deploy/proxmox-token.sh --pool <name>` creates the pool and
-  grants the guest privileges on `/pool/<name>` only, with `Sys.Audit`/`Sys.AccessNetwork` on
-  `/nodes`, `Datastore.*` without `Datastore.Allocate` on `/storage` (that one only on a storage
-  named for it), `SDN.*` on `/sdn/zones`, and `Sys.Audit` on `/` alone (`Sys.Modify` opt-in with
-  `--with-cluster-firewall`). Uploaded backups are renamed to their reserved VMID and read on the
-  share, so Proxmox never has to expose the backup storage. The connection test checks the pool exists, the guest privileges on it,
-  guest privileges still on `/`, what still reaches past the pool, and managed guests outside the
-  pool (with a one-click, per-guest move for guests carrying a ProxMate ownership tag). Still to
-  do: run it end to end on a PVE 9 cluster and confirm Proxmox refuses the token on a guest outside
-  the pool while every feature works inside it.
-- **Number fields can be cleared and retyped.** Emptying a numeric field no longer leaves a stuck
-  `0` that turns the next digit into "02"; min/max apply when the field loses focus.
-- **Projects (tag rollups).** A **Projects** page groups a tenant's VMs by a `project:<name>` tag:
-  VM and running counts, allocated vCPU/RAM/disk and average CPU/RAM use from the usage samples per
-  project, with start/stop/restart for the whole project through the existing bulk route. Set a
-  project on the VM page or with **Move to project…** on the VM list (owner/admin only). VMs shared
-  with you are listed apart, without their owner's tags; admins see every owner's projects.
-- **View-only console for Viewer shares.** A Viewer share can watch a VM's graphical and text
-  consoles. The relay enforces it: it parses the browser's RFB and termproxy streams and drops
-  every keyboard, mouse, clipboard, resize-desktop and power message before Proxmox sees it, and
-  forces a shared VNC session so a viewer never disconnects anyone else. Console opens are audited
-  (`vm.console_open`, or `vm.console_view_open` for a view-only session).
-- **View the IDE install log.** While the IDE installs, or after it failed, the VM's owner (or an
-  admin) opens **View install log**: the tail of `/var/log/pmide-provision.log` read through the
-  guest agent with a fixed command, cleaned of terminal control codes, with refresh and download.
-- **Push a file into a VM.** Owner, admin or Manager share (the `configure` capability, like SSH-key
-  add) uploads a small file (1 MiB default, up to 8 MiB via `GUEST_FILE_PUSH_MAX_BYTES`) to a strictly
-  validated path with a chosen mode and owner, through the guest agent; audited with path, size and
-  SHA-256, rate-limited per user. QEMU only.
-- **Tenant notifications.** A tenant is emailed when an admin sets a VM up in their account, and
-  when a VM is shared with them or their level changes (an address with no account gets nothing,
-  and the owner sees the same answer either way). Users can turn these activity emails off under
-  Security → Email preferences.
-- **Admin-managed badge.** A VM an admin set up shows a badge and "Set up by your admin — only an
-  admin can resize or rebuild it." to its tenant instead of silently missing controls.
-- **ntfy and Telegram channels** for admin event notifications, alongside the webhook and email,
-  with secrets encrypted and shown masked and a per-channel **Send test**.
-- **Weekly usage digest.** Opt-in per user (off by default) with an admin switch: their machines,
-  running hours, average CPU and memory, and quota in use, Mondays 08:00 (`USAGE_DIGEST_CRON`).
-- **Import an existing Proxmox guest (admin).** Settings → Maintenance → Import existing guests lists
-  QEMU and LXC guests ProxMate doesn't manage; importing one for an owner tags it, applies the default
-  bridge and isolation firewall, and counts it toward their quota (or as a grant). Guests with another
-  guest's disks, host devices or a privileged container are refused. _CE._
-- **Bulk deploy from a template.** Deploy up to 20 copies (admins 50) from a `web-{n}` name pattern,
-  or — admin — one copy into each chosen user's account. The whole batch is checked against quota
-  before anything is cloned; copies deploy a few at a time, each placed and isolated like a single
-  deploy, with per-copy results. _CE primitive._
-
-- **Interrupted operations are settled.** At startup and every 5 minutes, rows a backend restart left
-  `creating` (a create, clone, upload restore or rebuild) or with a MateState `creating`/`restoring`
-  are resolved from Proxmox: never one whose operation is still running in this process, is younger
-  than `RECONCILE_STUCK_MINUTES` (15), or whose Proxmox task or guest lock is still active. A finished
-  ISO/LXC create or ISO rebuild is completed (left stopped); anything part-way is held with the
-  existing provisioning/restore hold and admins are notified; a create that produced no guest is
-  dropped as a failed create is; interrupted backups are recorded or marked failed. Nothing deletes a
-  guest or a backup.
-- **Automatic snapshots before risky changes (VMs).** Before a resize, a data-disk grow or a rescue
-  boot, a `pm-auto-<op>-<timestamp>` snapshot is taken; a failed snapshot refuses the change. The
-  newest N (default 3) per VM are kept, and retention only deletes snapshots ProxMate recorded
-  itself. On by default; Admin → Settings → Maintenance. A rebuild is not covered: deleting the guest
-  deletes its snapshots, so the rebuild dialog says to take a backup.
-- **`ENCRYPTION_KEY` backup confirmation.** Admins see a warning on every page until one confirms
-  the key is backed up off the host; who and when is stored and audited, and a changed key brings the
-  warning back. The key is never shown.
+_Nothing yet._
 
 ### Released
+
+- **v1.3.0 — projects, Android, notifications and reliability.** Projects with per-project usage and
+  power actions; a native Android app; view-only consoles for Viewer shares; the IDE install log and
+  file push through the guest agent; tenant emails, ntfy/Telegram and a weekly usage digest; importing
+  existing Proxmox guests and bulk deploys from a template; restored backups checked before use;
+  interrupted operations settled after a restart; automatic snapshots before risky changes; an
+  `ENCRYPTION_KEY` backup reminder; and an optional pool-scoped Proxmox token (not yet verified on a
+  live cluster).
 
 - **v1.2.0 — sharing, placement and least privilege.** Share a VM with someone before they sign
   up (pending shares, claimed only by a confirmed address); template deploys on shared storage
