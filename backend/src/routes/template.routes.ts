@@ -7,7 +7,7 @@ import { enforceMfaSetup } from '../middleware/mfa.js';
 import { pveMessage } from '../services/proxmox.service.js';
 import { assertPublicHttpUrlShape } from '../lib/url-safety.js';
 import {
-  deployFromTemplate,
+  startDeployFromTemplate,
   QuotaError,
   CreateOptionError,
   resolveCreateTarget,
@@ -57,7 +57,8 @@ router.get('/cloud-init-status', async (_req: Request, res: Response) => {
 });
 
 // ─── POST /api/templates/deploy ───────────────────────────────
-// Deploy a new VM from a template (clone + autoscale).
+// Deploy a new VM from a template (clone + autoscale). Answers 201 with the
+// `creating` row as soon as it exists; the clone runs in the background.
 
 const DeployFields = {
   templateId: z.string().min(1),
@@ -112,10 +113,18 @@ router.post('/deploy', async (req: Request, res: Response) => {
     // The guest's OWNER (the acting user, or the admin's chosen tenant) — quota
     // applies to them; forUserId/quotaExempt are admin-only options.
     const owner = await resolveCreateTarget(actor, parsed.data);
-    const vm = await deployFromTemplate(owner, template, { ...parsed.data, adminManaged: owner.id !== actor.id });
+    // Answers with the `creating` row; the clone, configuration and start carry on
+    // in the background and the VM page follows the row to `running`.
+    const { vm, finished } = await startDeployFromTemplate(owner, template, {
+      ...parsed.data,
+      adminManaged: owner.id !== actor.id,
+    });
     res.status(201).json({ vm, status: vm.status });
-    // An admin deploying into a tenant's account: tell the tenant (no-op otherwise).
-    sendLater('deploy-for-tenant', () => sendDeployedForTenantEmail(vm, actor));
+    finished.then(
+      // An admin deploying into a tenant's account: tell the tenant (no-op otherwise).
+      (ready) => sendLater('deploy-for-tenant', () => sendDeployedForTenantEmail(ready, actor)),
+      (err: unknown) => console.warn(`[templates] deploy of "${vm.name}" failed: ${pveMessage(err)}`),
+    );
   } catch (err) {
     if (err instanceof CreateOptionError) {
       res.status(err.status).json({ error: err.message });

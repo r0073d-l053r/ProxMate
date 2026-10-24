@@ -107,6 +107,12 @@ curl -H "$AUTH" -H 'content-type: application/json' -X POST \
   task Proxmox reports as failed answers **502** with its message. A graceful stop or
   restart the guest ignores answers **502** with an error asking you to wait or stop it
   forcibly (`?force=true`).
+- **Creating a machine** (`POST /vms`, `POST /vms/containers`, `POST /templates/deploy`,
+  `POST /vms/restore-upload`) answers **201** `{ vm, status: "creating" }` as soon as the
+  machine is recorded; it is built and started in the background. Poll `GET /vms/:id` until
+  `status` is `running` (or `error`); a create that left no guest removes the machine, which
+  then answers **404**. Every action but delete answers **409** until it has finished. Validation
+  (**400**) and quota (**403** with `details`) errors come back on the request itself.
 - **Migration targets** (`GET /vms/:id/migrate-targets`) answers
   `{ current, targets, blockers, localDisks }`: `targets` are the online nodes Proxmox
   allows, `blockers` is a list of `{ node, reason }` for the nodes it can't move to (`node`

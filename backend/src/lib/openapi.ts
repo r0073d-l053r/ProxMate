@@ -76,7 +76,7 @@ export const openApiSpec = {
         summary: 'Create a VM from an ISO',
         security: bearer,
         requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/VmCreate' } } } },
-        responses: { 201: { description: 'Created' }, 403: { description: 'Quota exceeded' } },
+        responses: { 201: { description: 'Recorded as creating; built and started in the background' }, 403: { description: 'Quota exceeded' } },
       },
     },
     '/vms/{id}': {
@@ -91,7 +91,7 @@ export const openApiSpec = {
     '/projects': { get: { summary: "The caller's VMs grouped by project tag, with allocation and usage rollups (?days=1..90)", security: bearer, responses: { 200: { description: 'OK' } } } },
     '/projects/assign': { post: { summary: 'Move owned VMs into a project ({ ids, project }) or out of one (project: null)', security: bearer, responses: { 200: { description: 'Per-VM results' }, 400: { description: 'Invalid project name' } } } },
     '/templates': { get: { summary: 'List published templates', security: bearer, responses: { 200: { description: 'OK' } } } },
-    '/templates/deploy': { post: { summary: 'Deploy a VM from a template', security: bearer, responses: { 201: { description: 'Created' } } } },
+    '/templates/deploy': { post: { summary: 'Deploy a VM from a template', security: bearer, responses: { 201: { description: 'Recorded as creating; cloned and started in the background' }, 403: { description: 'Quota exceeded' } } } },
     '/proxmox/isos': { get: { summary: 'List installable ISOs', security: bearer, responses: { 200: { description: 'OK' } } } },
   },
 } as const;

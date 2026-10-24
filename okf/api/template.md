@@ -29,7 +29,7 @@ The Template Store: tenants list published templates and deploy VMs from them (c
 |---|---|---|---|
 | GET | `/api/templates` | user | Published templates (`listPublished`). In OpenAPI doc. |
 | GET | `/api/templates/cloud-init-status` | user | Which ProxMate extras snippets exist on each node. |
-| POST | `/api/templates/deploy` | user (`forUserId`/`quotaExempt` admin-only) | Deploy a VM from a published template; 201 `{ vm, status }`. An admin deploying for a tenant (`forUserId`) emails the tenant after the response ([activity-mail](/services/activity-mail.md)). In OpenAPI doc. |
+| POST | `/api/templates/deploy` | user (`forUserId`/`quotaExempt` admin-only) | Deploy a VM from a published template; 201 `{ vm, status }` with the `creating` row as soon as it exists, while the clone, configuration and start run in the background (validation 400, quota 403 with `details`, and placement or VMID errors 502 still come back on the request). An admin deploying for a tenant (`forUserId`) emails the tenant once the VM is running ([activity-mail](/services/activity-mail.md)). In OpenAPI doc. |
 | GET | `/api/templates/all` | admin | All templates including unpublished. |
 | GET | `/api/templates/cloud-images` | admin | Curated cloud images with arch (`curatedImagesWithArch`). |
 | GET | `/api/templates/cloud-init-extras` | admin | Docker/Tailscale extras status and snippet bundles. |
@@ -56,7 +56,7 @@ The Template Store: tenants list published templates and deploy VMs from them (c
 # Relationships
 
 - Data: [Template](/database/template.md), [VirtualMachine](/database/virtual-machine.md), [SystemConfig](/database/system-config.md) ([cloud-init config](/config/cloud-init.md), [template refresh](/config/template-refresh.md)).
-- Services: [template](/services/template.md), [vm](/services/vm.md) (`deployFromTemplate`, `resolveCreateTarget`), [audit](/services/audit.md).
+- Services: [template](/services/template.md), [vm](/services/vm.md) (`startDeployFromTemplate`, `resolveCreateTarget`), [audit](/services/audit.md).
 - Converting a VM to a template is `POST /api/vms/:id/convert-template` in the [VM router](/api/vm.md); rebuild-from-template is `POST /api/vms/:id/rebuild`.
 
 [^routes]: backend/src/routes/template.routes.ts

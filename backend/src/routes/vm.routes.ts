@@ -52,8 +52,8 @@ import {
   ResizeError,
   CreateOptionError,
   resolveCreateTarget,
-  createVm,
-  createContainer,
+  startCreateVm,
+  startCreateContainer,
   kindOf,
   resizeVm,
   rebuildVm,
@@ -100,7 +100,7 @@ import {
 } from '../services/guest-file.service.js';
 import { isValidPublicKey } from '../services/ssh-key.service.js';
 import { projectOf, tagsForAccess, withProject } from '../services/project.service.js';
-import { isIdeInstalling } from '../services/ide-provision.service.js';
+import { isIdeInstalling, advanceIdeState } from '../services/ide-provision.service.js';
 import { isDeploying, refreshDeployState } from '../services/deploy-lock.service.js';
 import { getLiveStats } from '../services/live-stats.service.js';
 import { getConfig } from '../services/config.service.js';
@@ -110,7 +110,7 @@ import {
   restoreUploadsEnabled,
   markUploaded,
   promoteUpload,
-  restoreFromUpload,
+  startRestoreFromUpload,
   resolveUnderUploadDir,
   uploadDir,
   VZDUMP_UPLOAD_RE,
@@ -257,20 +257,26 @@ router.post('/', async (req: Request, res: Response) => {
     // The guest's OWNER (the acting user, or the admin's chosen tenant) — quota
     // applies to them; node/forUserId/quotaExempt are admin-only options.
     const owner = await resolveCreateTarget(actor, parsed.data);
-    const vm = await createVm(owner, { ...parsed.data, adminManaged: owner.id !== actor.id });
-    const forNote = owner.id !== actor.id ? ` for ${owner.email}` : '';
-    const exemptNote = vm.quotaExempt ? ', quota-exempt' : '';
-    await recordAudit({
-      action: 'vm.create',
-      actor,
-      targetType: 'vm',
-      targetId: vm.id,
-      detail: `${vm.name}${forNote} (vmid ${vm.proxmoxVmId} on ${vm.proxmoxNode}, ${vm.cpu}c/${vm.ram}MB/${vm.storage}GB${exemptNote})`,
-      req,
-    });
+    // Answers with the `creating` row; the create and start run in the background.
+    const { vm, finished } = await startCreateVm(owner, { ...parsed.data, adminManaged: owner.id !== actor.id });
     res.status(201).json({ vm, status: vm.status });
-    // An admin deploying into a tenant's account: tell the tenant (no-op otherwise).
-    sendLater('deploy-for-tenant', () => sendDeployedForTenantEmail(vm, actor));
+    const forNote = owner.id !== actor.id ? ` for ${owner.email}` : '';
+    finished.then(
+      async (ready) => {
+        const exemptNote = ready.quotaExempt ? ', quota-exempt' : '';
+        await recordAudit({
+          action: 'vm.create',
+          actor,
+          targetType: 'vm',
+          targetId: ready.id,
+          detail: `${ready.name}${forNote} (vmid ${ready.proxmoxVmId} on ${ready.proxmoxNode}, ${ready.cpu}c/${ready.ram}MB/${ready.storage}GB${exemptNote})`,
+          req,
+        });
+        // An admin deploying into a tenant's account: tell the tenant (no-op otherwise).
+        sendLater('deploy-for-tenant', () => sendDeployedForTenantEmail(ready, actor));
+      },
+      (err: unknown) => console.warn(`[vms] create of "${vm.name}" failed: ${pveMessage(err)}`),
+    ).catch((err: unknown) => console.warn('[vms] create audit failed:', err));
   } catch (err) {
     if (err instanceof CreateOptionError) {
       res.status(err.status).json({ error: err.message });
@@ -400,16 +406,21 @@ router.post('/restore-upload', async (req: Request, res: Response) => {
   try {
     // Marks it as an upload ProxMate wrote, so a sweep may remove it if it is left behind.
     await markUploaded(filename);
-    const vm = await restoreFromUpload(user, { filename, name: parsed.data.name });
-    await recordAudit({
-      action: 'vm.restore_upload',
-      actor: user,
-      targetType: 'vm',
-      targetId: vm.id,
-      detail: `${vm.name} restored from uploaded ${filename} (vmid ${vm.proxmoxVmId} on ${vm.proxmoxNode})`,
-      req,
-    });
+    // Answers with the `creating` row; the restore and start run in the background.
+    const { vm, finished } = await startRestoreFromUpload(user, { filename, name: parsed.data.name });
     res.status(201).json({ vm, status: vm.status });
+    finished.then(
+      (ready) =>
+        recordAudit({
+          action: 'vm.restore_upload',
+          actor: user,
+          targetType: 'vm',
+          targetId: ready.id,
+          detail: `${ready.name} restored from uploaded ${filename} (vmid ${ready.proxmoxVmId} on ${ready.proxmoxNode})`,
+          req,
+        }),
+      (err: unknown) => console.warn(`[vms] restore of "${vm.name}" failed: ${pveMessage(err)}`),
+    ).catch((err: unknown) => console.warn('[vms] restore audit failed:', err));
   } catch (err) {
     await dropTemp();
     if (err instanceof QuotaError) {
@@ -469,20 +480,26 @@ router.post('/containers', async (req: Request, res: Response) => {
   const actor = (req as AuthRequest).user;
   try {
     const owner = await resolveCreateTarget(actor, parsed.data);
-    const vm = await createContainer(owner, { ...parsed.data, adminManaged: owner.id !== actor.id });
-    const forNote = owner.id !== actor.id ? ` for ${owner.email}` : '';
-    const exemptNote = vm.quotaExempt ? ', quota-exempt' : '';
-    await recordAudit({
-      action: 'vm.create',
-      actor,
-      targetType: 'vm',
-      targetId: vm.id,
-      detail: `${vm.name}${forNote} (LXC, vmid ${vm.proxmoxVmId} on ${vm.proxmoxNode}, ${vm.cpu}c/${vm.ram}MB/${vm.storage}GB${exemptNote})`,
-      req,
-    });
+    // Answers with the `creating` row; the create and start run in the background.
+    const { vm, finished } = await startCreateContainer(owner, { ...parsed.data, adminManaged: owner.id !== actor.id });
     res.status(201).json({ vm, status: vm.status });
-    // An admin deploying into a tenant's account: tell the tenant (no-op otherwise).
-    sendLater('deploy-for-tenant', () => sendDeployedForTenantEmail(vm, actor));
+    const forNote = owner.id !== actor.id ? ` for ${owner.email}` : '';
+    finished.then(
+      async (ready) => {
+        const exemptNote = ready.quotaExempt ? ', quota-exempt' : '';
+        await recordAudit({
+          action: 'vm.create',
+          actor,
+          targetType: 'vm',
+          targetId: ready.id,
+          detail: `${ready.name}${forNote} (LXC, vmid ${ready.proxmoxVmId} on ${ready.proxmoxNode}, ${ready.cpu}c/${ready.ram}MB/${ready.storage}GB${exemptNote})`,
+          req,
+        });
+        // An admin deploying into a tenant's account: tell the tenant (no-op otherwise).
+        sendLater('deploy-for-tenant', () => sendDeployedForTenantEmail(ready, actor));
+      },
+      (err: unknown) => console.warn(`[vms] create of container "${vm.name}" failed: ${pveMessage(err)}`),
+    ).catch((err: unknown) => console.warn('[vms] create audit failed:', err));
   } catch (err) {
     if (err instanceof CreateOptionError) {
       res.status(err.status).json({ error: err.message });
@@ -560,6 +577,9 @@ router.get('/:id', async (req: Request, res: Response) => {
   // so the lock clears on its own as the tenant watches the VM come up. No-op
   // unless the VM is mid-deploy. Reflect the fresh value in this response.
   const deployState = await refreshDeployState(resolved.vm);
+  // Likewise the IDE install lock: 'installing' → 'ready' once the guest serves it
+  // (or 'failed' after its timeout), whether or not an IDE status poll is running.
+  const ideState = isIdeInstalling(resolved.vm) ? await advanceIdeState(resolved.vm) : resolved.vm.ideState;
   // Whether the admin has designated a rescue ISO — lets the UI explain the
   // Rescue card's disabled state instead of failing on click.
   const rescueAvailable = kindOf(resolved.vm) !== 'lxc' && !!(await getConfig('rescue_iso'));
@@ -571,6 +591,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     ...withStatus,
     tags: tagsForAccess(withStatus.tags, resolved.access),
     deployState,
+    ideState,
     access: resolved.access,
     caps: [...resolved.caps],
     rescueAvailable,

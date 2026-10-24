@@ -101,6 +101,8 @@ _Nothing yet._
 
 ### Released
 
+- **v1.3.3 — creates behind a proxy, setup banners.** Creating a machine answers once it is recorded
+  and finishes in the background; the cloud-init and IDE banners clear without a reload.
 - **v1.3.2 — edition split.** Bulk deploys from a template moved to ProxMate Pro / EDU.
 - **v1.3.1 — version fix.** Same as v1.3.0, with the version numbers the v1.3.0 tag missed.
 - **v1.3.0 — projects, Android, notifications and reliability.** Projects with per-project usage and

@@ -647,7 +647,7 @@ export default function NewVmWizard() {
                         </div>
                         {uploadPct === 100 && (
                           <p className="mt-1 text-xs text-muted-foreground">
-                            Upload complete — restoring on the cluster (this can take a few minutes)…
+                            Upload complete — checking the backup before it is restored…
                           </p>
                         )}
                       </div>
