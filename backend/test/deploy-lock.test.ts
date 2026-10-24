@@ -20,7 +20,7 @@ import { prisma } from '../src/lib/prisma.js';
 import { notify } from '../src/services/notify.service.js';
 import { guestAgentPing, guestExecOutput, getVmConfig } from '../src/services/proxmox.service.js';
 import { guestMarker } from '../src/services/vm.service.js';
-import { deployStateOf, isDeploying, refreshDeployState } from '../src/services/deploy-lock.service.js';
+import { deployStateOf, isDeploying, refreshDeployState, resetDeployProbes } from '../src/services/deploy-lock.service.js';
 import type { VirtualMachine } from '@prisma/client';
 
 const update = vi.mocked(prisma.virtualMachine.update);
@@ -47,6 +47,7 @@ function cloudInitStatus(status: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetDeployProbes();
   update.mockResolvedValue({} as never);
   updateMany.mockResolvedValue({ count: 1 } as never);
   // The guest at the VMID is this row's own unless a test says otherwise.
@@ -145,6 +146,81 @@ describe('refreshDeployState', () => {
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ deployState: 'ready' }) }),
     );
+  });
+});
+
+describe('refreshDeployState probe throttling', () => {
+  it('probes the guest at most once per 10 s per VM', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-24T10:00:00Z') });
+    try {
+      ping.mockResolvedValue(true);
+      cloudInitStatus('running');
+      const deploying = vm({ deployStateAt: new Date() });
+      expect(await refreshDeployState(deploying)).toBe('deploying');
+      expect(await refreshDeployState(deploying)).toBe('deploying');
+      vi.advanceTimersByTime(9_000);
+      expect(await refreshDeployState(deploying)).toBe('deploying');
+      expect(ping).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(1_500);
+      cloudInitStatus('done');
+      expect(await refreshDeployState(deploying)).toBe('ready');
+      expect(ping).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('times the interval from the end of a slow probe', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-24T10:00:00Z') });
+    try {
+      let answer!: (ok: boolean) => void;
+      ping.mockReturnValueOnce(new Promise<boolean>((r) => (answer = r)));
+      cloudInitStatus('running');
+      const deploying = vm({ deployStateAt: new Date() });
+      const slow = refreshDeployState(deploying);
+      await vi.advanceTimersByTimeAsync(12_000); // the probe takes longer than the interval
+      answer(true);
+      expect(await slow).toBe('deploying');
+      ping.mockResolvedValue(true);
+      // Right after it finished: no new probe yet.
+      expect(await refreshDeployState(deploying)).toBe('deploying');
+      expect(ping).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('throttles each VM on its own', async () => {
+    ping.mockResolvedValue(true);
+    cloudInitStatus('running');
+    await refreshDeployState(vm({ id: 'vm-1' }));
+    await refreshDeployState(vm({ id: 'vm-2' }));
+    await refreshDeployState(vm({ id: 'vm-1' }));
+    // Each VM's probe starts by reading its guest's identity.
+    expect(getVmConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares one probe between concurrent requests for the same VM', async () => {
+    let answer!: (ok: boolean) => void;
+    ping.mockReturnValue(new Promise<boolean>((r) => (answer = r)));
+    cloudInitStatus('done');
+    const a = refreshDeployState(vm());
+    const b = refreshDeployState(vm());
+    await vi.waitFor(() => expect(ping).toHaveBeenCalledTimes(1));
+    answer(true);
+    expect(await Promise.all([a, b])).toEqual(['ready', 'ready']);
+    expect(ping).toHaveBeenCalledTimes(1);
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it('still applies the deploy timeout inside the throttle window', async () => {
+    ping.mockResolvedValue(true);
+    cloudInitStatus('running');
+    expect(await refreshDeployState(vm())).toBe('deploying');
+    const stale = new Date(Date.now() - 9 * 60 * 1000);
+    expect(await refreshDeployState(vm({ deployStateAt: stale }))).toBe('ready');
+    expect(ping).toHaveBeenCalledTimes(1);
   });
 });
 

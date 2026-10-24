@@ -29,10 +29,12 @@ import { stripRestoreFlags, cleanupUploadedArchive, checkRestoredOrRemove } from
 // ─── Interrupted background operations ────────────────────────
 //
 // Creates, clones, upload restores, rebuilds, imports, MateState backups and
-// in-place restores run inside the request (or scheduler tick) that started them.
-// When the backend restarts mid-way, that continuation is gone: the row stays
-// `creating` (or its MateState `creating`/`restoring`) for good, and the
-// live-status sync deliberately leaves `creating` rows alone. This pass, run at
+// in-place restores run in this process: inside the request (or scheduler tick)
+// that started them, or — for creates, which answer as soon as their row exists —
+// in the background after it. When the backend restarts mid-way, that
+// continuation is gone: the row stays `creating` (or its MateState
+// `creating`/`restoring`) for good, and the live-status sync deliberately leaves
+// `creating` rows alone. This pass, run at
 // startup and then on the scheduler, settles such rows from what Proxmox shows:
 //
 // - never a row whose operation is running in this process (lib/in-flight), nor

@@ -21,9 +21,9 @@ vi.mock('../src/services/vm.service.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/services/vm.service.js')>();
   return {
     ...actual,
-    createVm: vi.fn(),
-    createContainer: vi.fn(),
-    deployFromTemplate: vi.fn(),
+    startCreateVm: vi.fn(),
+    startCreateContainer: vi.fn(),
+    startDeployFromTemplate: vi.fn(),
     resolveCreateTarget: vi.fn(),
     getVmWithCap: vi.fn(async () => null),
   };
@@ -58,7 +58,7 @@ describe('RAM floor', () => {
     const res = await post('/vms', { name: 'x', cpu: 1, ram: 1, storage: 10, os: 'debian.iso' });
     expect(res.status).toBe(400);
     expect(await ramError(res)).toMatch(/at least 64 MB/);
-    expect(vmService.createVm).not.toHaveBeenCalled();
+    expect(vmService.startCreateVm).not.toHaveBeenCalled();
   });
 
   it('refuses a container create below the floor', async () => {
@@ -67,14 +67,14 @@ describe('RAM floor', () => {
     });
     expect(res.status).toBe(400);
     expect(await ramError(res)).toMatch(/at least 64 MB/);
-    expect(vmService.createContainer).not.toHaveBeenCalled();
+    expect(vmService.startCreateContainer).not.toHaveBeenCalled();
   });
 
   it('refuses a template deploy below the floor', async () => {
     const res = await post('/templates/deploy', { templateId: 't1', name: 'x', cpu: 1, ram: 16, storage: 10 });
     expect(res.status).toBe(400);
     expect(await ramError(res)).toMatch(/at least 64 MB/);
-    expect(vmService.deployFromTemplate).not.toHaveBeenCalled();
+    expect(vmService.startDeployFromTemplate).not.toHaveBeenCalled();
   });
 
   it('refuses a resize below the floor', async () => {

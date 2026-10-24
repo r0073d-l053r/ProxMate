@@ -13,7 +13,8 @@ import { isValidPublicKey } from './ssh-key.service.js';
 import { diskSizeGb } from './disk.service.js';
 import { guestConfigSizes, pciLines, foreignVolumeKeys, hostLevelKeys } from '../lib/guest-config.js';
 import { recordAudit } from './audit.service.js';
-import { beginInFlight, isInFlight } from '../lib/in-flight.js';
+import { beginInFlight, isInFlight, runInFlight } from '../lib/in-flight.js';
+import { recordCreateFailure } from '../lib/create-failures.js';
 import { autoSnapshotBefore, type AutoSnapshotResult } from './auto-snapshot.service.js';
 import { tagsForAccess } from './project.service.js';
 import { ALL_CAPS, CAPS_BY_ROLE, normalizeShareRole, type ShareRole, type VmCap } from './vm-share.service.js';
@@ -272,7 +273,8 @@ export async function requireOurGuest(
 }
 
 /** Why an action on a row in `creating` is refused. */
-export const STILL_CREATING_MESSAGE = "This machine is still being created — wait until it's ready (or delete it).";
+export const STILL_CREATING_MESSAGE =
+  'This machine is still being created. It can be changed, or deleted, once it has finished or failed.';
 
 /** holdReason of a row whose create, clone, upload restore or rebuild didn't finish. */
 export const PROVISION_FAILED_MESSAGE =
@@ -752,6 +754,9 @@ export async function settleFailedCreate(
     return { following };
   }
   await deleteVmRow(vm.id).catch(() => undefined);
+  // The create's request has already answered, so the owner reads the reason from
+  // the VM page's next fetch of the (now missing) row.
+  recordCreateFailure(vm.id, vm.userId, pve.pveMessage(err));
   await notify({
     event: 'vm.error',
     title: vm.name,
@@ -969,6 +974,25 @@ export async function withQuotaLock<T>(ownerId: string, fn: () => Promise<T>): P
   }
 }
 
+// ─── Background provisioning ──────────────────────────────────
+//
+// A create answers as soon as its `creating` row exists; the Proxmox half (create
+// or clone task, configuration, start) carries on without the request, which a
+// reverse proxy or tunnel would otherwise cut off long before a clone finishes.
+// The page then follows the row to `running` (or `error`). The row stays
+// registered in flight (lib/in-flight runInFlight) until that run settles, so the
+// restart reconciler leaves it alone while this process is still on it.
+
+/** A create whose row exists: `vm` is the `creating` row, `finished` its outcome. */
+export interface StartedCreate {
+  vm: VirtualMachine;
+  /**
+   * Resolves to the provisioned guest's row, or rejects once the failure has been
+   * settled (settleFailedCreate) — the row is then held in `error` or dropped.
+   */
+  finished: Promise<VirtualMachine>;
+}
+
 // ─── VMID reservation ─────────────────────────────────────────
 //
 // /cluster/nextid answers with the lowest VMID no guest uses yet. A create asks for
@@ -1107,6 +1131,15 @@ export async function resolveCreateTarget(
  * create on Proxmox → start → reflect final status.
  */
 export async function createVm(user: User, input: CreateVmInput): Promise<VirtualMachine> {
+  return (await startCreateVm(user, input)).finished;
+}
+
+/**
+ * createVm up to the `creating` row; the Proxmox half runs in the background (see
+ * runInFlight). Errors before the row exists (quota, placement, VMID)
+ * are thrown from here.
+ */
+export async function startCreateVm(user: User, input: CreateVmInput): Promise<StartedCreate> {
   // Quota check -> row insert runs under the owner's lock (see acquireQuotaLock);
   // the lock is released as soon as the row exists, before the slow Proxmox work.
   const release = await acquireQuotaLock(user.id);
@@ -1117,7 +1150,7 @@ export async function createVm(user: User, input: CreateVmInput): Promise<Virtua
   }
 }
 
-async function createVmLocked(user: User, input: CreateVmInput, release: () => void): Promise<VirtualMachine> {
+async function createVmLocked(user: User, input: CreateVmInput, release: () => void): Promise<StartedCreate> {
   await assertWithinQuota(user, input);
 
   const client = await pve.getClient();
@@ -1185,50 +1218,50 @@ async function createVmLocked(user: User, input: CreateVmInput, release: () => v
     },
   });
   release(); // usage now includes this row
-  const done = beginInFlight(vm.id);
 
-  let created = false;
-  try {
-    // Wait for the create task so a real Proxmox failure (e.g. unusable storage)
-    // surfaces as an error here instead of a false "created" with a broken VM.
-    const createUpid = await pve.createVm(
-      {
-        node,
-        vmid,
-        name: input.name,
-        cores: input.cpu,
-        memory: input.ram,
-        diskGb: input.storage,
-        storage,
-        bridge,
-        isoStorage,
-        iso: input.os,
-        tags: guestMarker(vm.id),
-        pool: await pve.getGuestPool(),
-      },
-      client,
-    );
-    await recordOpTask(vm.id, createUpid);
-    await pve.waitForTask(node, createUpid, client);
-    created = true;
+  const finished = runInFlight(vm.id, async () => {
+    let created = false;
+    try {
+      // Wait for the create task so a real Proxmox failure (e.g. unusable storage)
+      // surfaces as an error here instead of a false "created" with a broken VM.
+      const createUpid = await pve.createVm(
+        {
+          node,
+          vmid,
+          name: input.name,
+          cores: input.cpu,
+          memory: input.ram,
+          diskGb: input.storage,
+          storage,
+          bridge,
+          isoStorage,
+          iso: input.os,
+          tags: guestMarker(vm.id),
+          pool: await pve.getGuestPool(),
+        },
+        client,
+      );
+      await recordOpTask(vm.id, createUpid);
+      await pve.waitForTask(node, createUpid, client);
+      created = true;
 
-    // Lock the VM's firewall down for tenant isolation before it ever boots.
-    if (isolate) {
-      await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client);
+      // Lock the VM's firewall down for tenant isolation before it ever boots.
+      if (isolate) {
+        await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client);
+      }
+
+      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped', ...OP_SETTLED } });
+
+      // Wait for the start task too, so "running" means it actually started.
+      const startUpid = await pve.startVm(node, vmid, client);
+      await pve.waitForTask(node, startUpid, client);
+      return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
+    } catch (err) {
+      await settleFailedCreate(vm, err, created);
+      throw err;
     }
-
-    await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped', ...OP_SETTLED } });
-
-    // Wait for the start task too, so "running" means it actually started.
-    const startUpid = await pve.startVm(node, vmid, client);
-    await pve.waitForTask(node, startUpid, client);
-    return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
-  } catch (err) {
-    await settleFailedCreate(vm, err, created);
-    throw err;
-  } finally {
-    done();
-  }
+  });
+  return { vm, finished };
 }
 
 export interface CreateContainerInput {
@@ -1260,6 +1293,11 @@ function archFromTemplate(volid: string): pve.Arch | undefined {
  * create on Proxmox → lock the firewall down for tenant isolation → start.
  */
 export async function createContainer(user: User, input: CreateContainerInput): Promise<VirtualMachine> {
+  return (await startCreateContainer(user, input)).finished;
+}
+
+/** createContainer up to the `creating` row; the Proxmox half runs in the background. */
+export async function startCreateContainer(user: User, input: CreateContainerInput): Promise<StartedCreate> {
   // Quota check -> row insert runs under the owner's lock (see acquireQuotaLock);
   // the lock is released as soon as the row exists, before the slow Proxmox work.
   const release = await acquireQuotaLock(user.id);
@@ -1274,7 +1312,7 @@ async function createContainerLocked(
   user: User,
   input: CreateContainerInput,
   release: () => void,
-): Promise<VirtualMachine> {
+): Promise<StartedCreate> {
   await assertWithinQuota(user, {
     name: input.name,
     cpu: input.cpu,
@@ -1346,48 +1384,48 @@ async function createContainerLocked(
     },
   });
   release(); // usage now includes this row
-  const done = beginInFlight(vm.id);
 
-  let created = false;
-  try {
-    const createUpid = await pve.createLxc(
-      {
-        node,
-        vmid,
-        hostname: input.name,
-        cores: input.cpu,
-        memory: input.ram,
-        diskGb: input.storage,
-        storage,
-        bridge,
-        ostemplate: input.template,
-        password: input.password,
-        sshPublicKeys: input.sshKey,
-        tags: guestMarker(vm.id),
-        pool: await pve.getGuestPool(),
-      },
-      client,
-    );
-    await recordOpTask(vm.id, createUpid);
-    await pve.waitForTask(node, createUpid, client);
-    created = true;
+  const finished = runInFlight(vm.id, async () => {
+    let created = false;
+    try {
+      const createUpid = await pve.createLxc(
+        {
+          node,
+          vmid,
+          hostname: input.name,
+          cores: input.cpu,
+          memory: input.ram,
+          diskGb: input.storage,
+          storage,
+          bridge,
+          ostemplate: input.template,
+          password: input.password,
+          sshPublicKeys: input.sshKey,
+          tags: guestMarker(vm.id),
+          pool: await pve.getGuestPool(),
+        },
+        client,
+      );
+      await recordOpTask(vm.id, createUpid);
+      await pve.waitForTask(node, createUpid, client);
+      created = true;
 
-    // Lock the container's firewall down for tenant isolation before it boots.
-    if (isolate) {
-      await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, 'lxc');
+      // Lock the container's firewall down for tenant isolation before it boots.
+      if (isolate) {
+        await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, 'lxc');
+      }
+
+      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped', ...OP_SETTLED } });
+
+      const startUpid = await pve.startVm(node, vmid, client, 'lxc');
+      await pve.waitForTask(node, startUpid, client);
+      return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
+    } catch (err) {
+      await settleFailedCreate(vm, err, created);
+      throw err;
     }
-
-    await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped', ...OP_SETTLED } });
-
-    const startUpid = await pve.startVm(node, vmid, client, 'lxc');
-    await pve.waitForTask(node, startUpid, client);
-    return prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
-  } catch (err) {
-    await settleFailedCreate(vm, err, created);
-    throw err;
-  } finally {
-    done();
-  }
+  });
+  return { vm, finished };
 }
 
 export interface DeployTemplateInput {
@@ -1715,13 +1753,26 @@ async function pickTemplateDeployNode(
 /**
  * Deploy a new VM from a published template: quota check → clone the template
  * (onto the best node when its storage allows) → autoscale (cores/memory + grow
- * disk) → isolate → start.
+ * disk) → isolate → start. Resolves once the guest is running.
  */
 export async function deployFromTemplate(
   user: User,
   template: Template,
   input: DeployTemplateInput,
 ): Promise<VirtualMachine> {
+  return (await startDeployFromTemplate(user, template, input)).finished;
+}
+
+/**
+ * deployFromTemplate up to the `creating` row; the clone and everything after it
+ * run in the background (see StartedCreate). Errors before the row exists
+ * (quota, placement, VMID) are thrown from here.
+ */
+export async function startDeployFromTemplate(
+  user: User,
+  template: Template,
+  input: DeployTemplateInput,
+): Promise<StartedCreate> {
   // Quota check -> row insert runs under the owner's lock (see acquireQuotaLock);
   // the lock is released as soon as the row exists, before the slow Proxmox work.
   const release = await acquireQuotaLock(user.id);
@@ -1737,7 +1788,7 @@ async function deployFromTemplateLocked(
   template: Template,
   input: DeployTemplateInput,
   release: () => void,
-): Promise<VirtualMachine> {
+): Promise<StartedCreate> {
   // Can't deploy a disk smaller than the template's base image.
   const diskGb = templateDiskGb(template, input);
   await assertWithinQuota(user, {
@@ -1768,12 +1819,7 @@ async function deployFromTemplateLocked(
     data: templateDeployRow(user, template, input, { vmid, node, diskGb }),
   });
   release(); // usage now includes this row
-  const done = beginInFlight(vm.id);
-  try {
-    return await provisionTemplateDeploy(vm, template, input, plan, client);
-  } finally {
-    done();
-  }
+  return { vm, finished: runInFlight(vm.id, () => provisionTemplateDeploy(vm, template, input, plan, client)) };
 }
 
 /** A template deploy's disk size: what was asked for, never below the template's base image. */
@@ -1811,8 +1857,8 @@ function templateDeployRow(
  * The Proxmox half of a template deploy, for a row that already exists (written
  * under the owner's quota lock): clone onto the row's node and VMID → tag →
  * autoscale + cloud-init + isolation → start. A failure is settled like any
- * failed create (settleFailedCreate) and rethrown. The caller keeps the row
- * registered in flight (lib/in-flight) for the whole run.
+ * failed create (settleFailedCreate) and rethrown. The caller runs it through
+ * runInFlight, which keeps the row registered in flight (lib/in-flight) for the whole run.
  */
 async function provisionTemplateDeploy(
   vm: VirtualMachine,

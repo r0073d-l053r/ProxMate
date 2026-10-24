@@ -18,8 +18,9 @@ import {
   nextVmId,
   reserveVmIds,
   releaseVmId,
+  type StartedCreate,
 } from './vm.service.js';
-import { beginInFlight } from '../lib/in-flight.js';
+import { runInFlight } from '../lib/in-flight.js';
 import { parseGuestConfigText, guestConfigSizes } from '../lib/guest-config.js';
 import { readArchiveConfig, ArchiveConfigError } from '../lib/vzdump-archive.js';
 import * as pve from './proxmox.service.js';
@@ -706,6 +707,18 @@ export async function restoreFromUpload(
   user: User,
   input: { filename: string; name: string },
 ): Promise<VirtualMachine> {
+  return (await startRestoreFromUpload(user, input)).finished;
+}
+
+/**
+ * restoreFromUpload up to the `creating` row; the restore task and everything
+ * after it run in the background (vm.service StartedCreate). Errors before
+ * the row exists (the archive, quota, placement) are thrown from here.
+ */
+export async function startRestoreFromUpload(
+  user: User,
+  input: { filename: string; name: string },
+): Promise<StartedCreate> {
   // Quota check -> row insert runs under the owner's quota lock (vm.service
   // acquireQuotaLock), released as soon as the row exists.
   const release = await acquireQuotaLock(user.id);
@@ -720,7 +733,7 @@ async function restoreFromUploadLocked(
   user: User,
   input: { filename: string; name: string },
   release: () => void,
-): Promise<VirtualMachine> {
+): Promise<StartedCreate> {
   let filename = path.basename(input.filename);
   if (filename !== input.filename || !VZDUMP_UPLOAD_RE.test(filename)) {
     throw new RestoreUploadError('That file is not a vzdump backup archive.');
@@ -730,6 +743,8 @@ async function restoreFromUploadLocked(
   // From here on the archive is removed on any failure, unless a restore task that
   // outlived our wait has taken it over.
   let archiveHandedOff = false;
+  // Once the row exists, the background restore owns the archive and the reserved VMID.
+  let inBackground = false;
   let storage = '';
   let volid = '';
   let cleanupNode: string | null = null;
@@ -819,114 +834,125 @@ async function restoreFromUploadLocked(
     });
     release(); // usage now includes this row
     ownRowId = vm.id;
-    const done = beginInFlight(vm.id);
+    inBackground = true;
 
-    let created = false;
-    let restoreTask:
-      | { node: string; upid: string; verify: () => Promise<void>; beforeTag: () => Promise<void>; afterTask: () => Promise<void> }
-      | undefined;
-    try {
-      // Remap all volumes onto our default pool: cross-cluster archives name
-      // storages this cluster may not have. unique=1 → fresh MACs.
-      // Volumes already listed for this VMID (left by an earlier guest that had it)
-      // must not end up attached to the restored guest; see assertOwnVolumes.
-      const leftovers = await pve.listGuestVolumes(node, vmid, client);
-      const upid = await pve.restoreNewGuest(
-        { node, vmid, volid, storage: defaultStorage, pool },
-        client,
-        kind,
-      );
-      await recordOpTask(vm.id, upid);
-      restoreTask = {
-        node,
-        upid,
-        // A restore that finishes after we stopped waiting gets the same treatment
-        // as one that finished in time before it is ever tied to the row (the row
-        // stays held either way).
-        // A late guest gets the on-time treatment: no autostart, the check (and
-        // removal if it fails), whether or not the row is still there.
-        verify: async () => {
+    const finished = runInFlight(vm.id, async () => {
+      try {
+        let created = false;
+        let restoreTask:
+          | { node: string; upid: string; verify: () => Promise<void>; beforeTag: () => Promise<void>; afterTask: () => Promise<void> }
+          | undefined;
+        try {
+          // Remap all volumes onto our default pool: cross-cluster archives name
+          // storages this cluster may not have. unique=1 → fresh MACs.
+          // Volumes already listed for this VMID (left by an earlier guest that had it)
+          // must not end up attached to the restored guest; see assertOwnVolumes.
+          const leftovers = await pve.listGuestVolumes(node, vmid, client);
+          const upid = await pve.restoreNewGuest(
+            { node, vmid, volid, storage: defaultStorage, pool },
+            client,
+            kind,
+          );
+          await recordOpTask(vm.id, upid);
+          restoreTask = {
+            node,
+            upid,
+            // A restore that finishes after we stopped waiting gets the same treatment
+            // as one that finished in time before it is ever tied to the row (the row
+            // stays held either way).
+            // A late guest gets the on-time treatment: no autostart, the check (and
+            // removal if it fails), whether or not the row is still there.
+            verify: async () => {
+              await stripRestoreFlags(node, vmid, client, kind).catch(() => undefined);
+              await checkRestoredOrRemove(node, vmid, kind, client);
+            },
+            beforeTag: async () => {
+              try {
+                await pve.resetRestoredFirewall(node, vmid, client, kind);
+                await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
+                await assertOwnVolumes(vm, client, leftovers, { unusedAreForeign: !!pool });
+                await rebuildRestoredGuestConfig(node, vmid, isolate, client, kind);
+                if (isolate) await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, kind);
+                await syncRestoredGuest(vm, { approvedPci: [], client });
+              } catch (err) {
+                await neutraliseAfterFailure(node, vmid, kind, client, err);
+                throw err;
+              }
+            },
+            afterTask: async () => {
+              if (!(await archiveClaimedByOther(volid, vm.id))) await cleanupArchive(filename, node, storage, volid);
+            },
+          };
+          await pve.waitForTask(node, upid, client, 30 * 60 * 1000);
+          created = true;
+          // Nothing may start it on its own, and a protected guest couldn't be removed:
+          // the archive's autostart and protection go before anything else.
           await stripRestoreFlags(node, vmid, client, kind).catch(() => undefined);
-          await checkRestoredOrRemove(node, vmid, kind, client);
-        },
-        beforeTag: async () => {
+          // What Proxmox actually restored decides, not the archive pre-check: a guest
+          // carrying settings ProxMate won't restore is removed before anything uses it.
           try {
-            await pve.resetRestoredFirewall(node, vmid, client, kind);
-            await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
-            await assertOwnVolumes(vm, client, leftovers, { unusedAreForeign: !!pool });
-            await rebuildRestoredGuestConfig(node, vmid, isolate, client, kind);
-            if (isolate) await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, kind);
-            await syncRestoredGuest(vm, { approvedPci: [], client });
+            await checkRestoredOrRemove(node, vmid, kind, client);
           } catch (err) {
-            await neutraliseAfterFailure(node, vmid, kind, client, err);
+            if ((err as { guestRemoved?: boolean }).guestRemoved) {
+              created = false;
+              restoreTask = undefined; // the task's guest is gone; settle on what is at the VMID (nothing)
+            }
             throw err;
           }
-        },
-        afterTask: async () => {
+          // The archive's own guest firewall (rules, IP sets, aliases) is not kept:
+          // isolation below writes ProxMate's.
+          await pve.resetRestoredFirewall(node, vmid, client, kind);
+          // The archive's config carries the OLD guest's tags; tie the guest to this row.
+          await markClonedGuest(vm, client);
+          // Every volume the restored config references must be this guest's own.
+          await assertOwnVolumes(vm, client, leftovers, { unusedAreForeign: !!pool });
+
+          // Before anything else may happen to the guest: its name, network placement
+          // and isolation are ours, not the archive's.
+          // The restored config carries the OLD guest's name — apply the chosen one.
+          await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
+
+          // ...and the OLD guest's NICs, whose bridge may not exist on this cluster at
+          // all. `storage` above remaps the volumes; this is the network half of the same job.
+          await rebuildRestoredGuestConfig(node, vmid, isolate, client, kind);
+
+          // Tenant isolation BEFORE first boot, built from the regenerated MACs.
+          if (isolate) {
+            await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, kind);
+          }
+
+          // Read back what was actually restored: no PCI device is approved for a new
+          // guest, and the row's sizes come from the guest itself.
+          await syncRestoredGuest(vm, { approvedPci: [], client });
+
+          await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped', ...OP_SETTLED } });
+          const startUpid = await pve.startVm(node, vmid, client, kind);
+          await pve.waitForTask(node, startUpid, client);
+          const running = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
+          // Another row restoring from the same archive (or following its task) still needs it.
           if (!(await archiveClaimedByOther(volid, vm.id))) await cleanupArchive(filename, node, storage, volid);
-        },
-      };
-      await pve.waitForTask(node, upid, client, 30 * 60 * 1000);
-      created = true;
-      // Nothing may start it on its own, and a protected guest couldn't be removed:
-      // the archive's autostart and protection go before anything else.
-      await stripRestoreFlags(node, vmid, client, kind).catch(() => undefined);
-      // What Proxmox actually restored decides, not the archive pre-check: a guest
-      // carrying settings ProxMate won't restore is removed before anything uses it.
-      try {
-        await checkRestoredOrRemove(node, vmid, kind, client);
+          return running;
+        } catch (err) {
+          // Any failure once the restore has landed leaves the row in `error`, which
+          // nothing may start. A restore task still running when the wait gave up keeps
+          // reading the archive; its follower removes the archive once it ends (or, if
+          // that follower is lost, the restart reconciler does: task-reconcile.service.ts).
+          if (created) await neutraliseAfterFailure(node, vmid, kind, client, err);
+          const { following } = await settleFailedCreate(vm, err, created, { task: restoreTask });
+          if (following) archiveHandedOff = true;
+          throw err;
+        }
       } catch (err) {
-        if ((err as { guestRemoved?: boolean }).guestRemoved) {
-          created = false;
-          restoreTask = undefined; // the task's guest is gone; settle on what is at the VMID (nothing)
+        // The archive goes with a failed restore too, on the same terms.
+        if (!archiveHandedOff && !(await archiveClaimedByOther(volid, vm.id))) {
+          await cleanupArchive(filename, cleanupNode, storage, volid);
         }
         throw err;
+      } finally {
+        if (presetVmid !== undefined) releaseVmId(presetVmid);
       }
-      // The archive's own guest firewall (rules, IP sets, aliases) is not kept:
-      // isolation below writes ProxMate's.
-      await pve.resetRestoredFirewall(node, vmid, client, kind);
-      // The archive's config carries the OLD guest's tags; tie the guest to this row.
-      await markClonedGuest(vm, client);
-      // Every volume the restored config references must be this guest's own.
-      await assertOwnVolumes(vm, client, leftovers, { unusedAreForeign: !!pool });
-
-      // Before anything else may happen to the guest: its name, network placement
-      // and isolation are ours, not the archive's.
-      // The restored config carries the OLD guest's name — apply the chosen one.
-      await pve.setVmName(node, vmid, input.name, client, kind).catch(() => undefined);
-
-      // ...and the OLD guest's NICs, whose bridge may not exist on this cluster at
-      // all. `storage` above remaps the volumes; this is the network half of the same job.
-      await rebuildRestoredGuestConfig(node, vmid, isolate, client, kind);
-
-      // Tenant isolation BEFORE first boot, built from the regenerated MACs.
-      if (isolate) {
-        await pve.configureVmIsolation(node, vmid, await pve.readIsolationOptions(), client, kind);
-      }
-
-      // Read back what was actually restored: no PCI device is approved for a new
-      // guest, and the row's sizes come from the guest itself.
-      await syncRestoredGuest(vm, { approvedPci: [], client });
-
-      await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'stopped', ...OP_SETTLED } });
-      const startUpid = await pve.startVm(node, vmid, client, kind);
-      await pve.waitForTask(node, startUpid, client);
-      const running = await prisma.virtualMachine.update({ where: { id: vm.id }, data: { status: 'running' } });
-      // Another row restoring from the same archive (or following its task) still needs it.
-      if (!(await archiveClaimedByOther(volid, vm.id))) await cleanupArchive(filename, node, storage, volid);
-      return running;
-    } catch (err) {
-      // Any failure once the restore has landed leaves the row in `error`, which
-      // nothing may start. A restore task still running when the wait gave up keeps
-      // reading the archive; its follower removes the archive once it ends (or, if
-      // that follower is lost, the restart reconciler does: task-reconcile.service.ts).
-      if (created) await neutraliseAfterFailure(node, vmid, kind, client, err);
-      const { following } = await settleFailedCreate(vm, err, created, { task: restoreTask });
-      if (following) archiveHandedOff = true;
-      throw err;
-    } finally {
-      done();
-    }
+    });
+    return { vm, finished };
   } catch (err) {
     // Any pre-restore failure (reservation, rename, quota, placement, reading the
     // archive) drops the archive, so a rejected upload never lingers on the share,
@@ -936,6 +962,6 @@ async function restoreFromUploadLocked(
     }
     throw err;
   } finally {
-    if (presetVmid !== undefined) releaseVmId(presetVmid);
+    if (!inBackground && presetVmid !== undefined) releaseVmId(presetVmid);
   }
 }

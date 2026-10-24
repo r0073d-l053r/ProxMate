@@ -77,7 +77,7 @@ vi.mock('../src/services/proxmox.service.js', async (importOriginal) => {
 
 import * as pve from '../src/services/proxmox.service.js';
 import { notify } from '../src/services/notify.service.js';
-import { beginInFlight, resetInFlight, isInFlight } from '../src/lib/in-flight.js';
+import { beginInFlight, resetInFlight, isInFlight, runInFlight } from '../src/lib/in-flight.js';
 import {
   reconcileCreatingVm,
   reconcileFollowedRow,
@@ -190,6 +190,22 @@ describe('operations still going are never touched', () => {
     expect(c.get).not.toHaveBeenCalled();
     expect(r['status']).toBe('creating');
     done();
+  });
+
+  it('leaves a create provisioning in the background, and settles it once a restart has cut it short', async () => {
+    const c = pveWith({ guest: null, task: { status: 'stopped', exitstatus: 'clone failed' } });
+    const r = row({ opKind: 'clone' });
+    // A deploy answered with its row and is still cloning in this process.
+    let finish!: () => void;
+    const provision = runInFlight('rowa', () => new Promise<void>((resolve) => (finish = resolve)));
+    expect(await reconcileCreatingVm(r as never, asClient(c), NOW)).toBe('in-flight');
+    expect(r['status']).toBe('creating');
+    // A restart drops that run along with the process's in-flight registry.
+    resetInFlight();
+    expect(await reconcileCreatingVm(r as never, asClient(c), NOW)).toBe('dropped');
+    expect(rows).toHaveLength(0);
+    finish();
+    await provision;
   });
 
   it('leaves a row younger than the threshold', async () => {

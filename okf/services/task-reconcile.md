@@ -22,13 +22,13 @@ sources:
 
 # Purpose
 
-Creates, clones, duplicates, upload restores, rebuilds, MateState backups and in-place restores run inside the request (or tick) that started them. A restart mid-way loses that continuation: the VM row stays `creating` (or the MateState `creating`/`restoring`) and the live-status sync never touches `creating` rows. `reconcileStuckOperations` settles them; `reconcileTick` in the [scheduler](/services/scheduler.md) runs it every 5 minutes, and index.ts once at boot.[^svc] [^sch]
+Creates, clones, duplicates, upload restores, rebuilds, MateState backups and in-place restores run in this process: inside the request (or tick) that started them, or, for the ISO, LXC, template and upload-restore creates, in the background after the request has answered with the `creating` row. A restart mid-way loses that continuation: the VM row stays `creating` (or the MateState `creating`/`restoring`) and the live-status sync never touches `creating` rows. `reconcileStuckOperations` settles them; `reconcileTick` in the [scheduler](/services/scheduler.md) runs it every 5 minutes, and index.ts once at boot.[^svc] [^sch]
 
 # What is never touched
 
 A row is left for a later pass when any of these hold:[^svc] [^inflight]
 
-- its operation is registered in flight in this process (`lib/in-flight.ts`: every create path registers the row id right after inserting it; rebuild, [guest import](/services/guest-import.md), MateState restore and backup register for their whole run);
+- its operation is registered in flight in this process (`lib/in-flight.ts`: every create path registers the row id right after inserting it and keeps it registered until its background run settles; rebuild, [guest import](/services/guest-import.md), MateState restore and backup register for their whole run);
 - it is younger than `RECONCILE_STUCK_MINUTES` (default 15), measured from `opStartedAt` (VM rows), `updatedAt` (restores) or `createdAt` (backups);
 - its recorded Proxmox task (`opUpid` / `MateState.upid`) is still `running`, or can't be read right now (a failed status query is never taken as a failed task), or the guest config at its VMID has a `lock`. A lock that lasts over a day is reported to admins once;
 - the cluster-wide lookup (`syncVmNodeChecked`) or the guest config can't be read.

@@ -32,6 +32,7 @@ import {
   IDE_AUTOSTART_EXTENSION_JS,
 } from './ide-assets.generated.js';
 import { envNumber } from '../lib/env-number.js';
+import { probeThrottle } from '../lib/probe-throttle.js';
 
 /**
  * ProxMate IDE — lazy in-guest provisioning. On first "Open IDE", ProxMate installs
@@ -369,6 +370,23 @@ export async function refreshIdeState(vm: VirtualMachine): Promise<IdeState> {
     return 'ready';
   }
   return 'installing';
+}
+
+// The VM-detail fetch advances the install too, so the lock clears even when no
+// IDE status poll is running (the page was reloaded, or the poll was dropped). It
+// runs every few seconds, so it probes the guest at most once per 10 s per VM.
+const ideProbes = probeThrottle<IdeState>(10_000);
+
+/** {@link refreshIdeState} for the VM-detail fetch: throttled per VM, shared while running. */
+export function advanceIdeState(vm: VirtualMachine): Promise<IdeState> {
+  const state = ideStateOf(vm);
+  if (state !== 'installing') return Promise.resolve(state);
+  return ideProbes.run(vm.id, 'installing', () => refreshIdeState(vm));
+}
+
+/** Test hook: forget when each VM's install was last probed. */
+export function resetIdeProbes(): void {
+  ideProbes.reset();
 }
 
 // ─── Relocate to an AVX-capable node (the 'node_no_avx' escape hatch) ─────────

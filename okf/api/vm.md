@@ -38,13 +38,13 @@ The core tenant API for guests (QEMU VMs and LXC containers; `kindOf(vm)` distin
 |---|---|---|---|
 | GET | `/api/vms` | user | Caller's VMs with refreshed IPs, annotated with access. |
 | GET | `/api/vms/live-usage` | user | Aggregate live usage of caller's running VMs. |
-| POST | `/api/vms` | user | Create a QEMU VM from an ISO. 201 `{ vm, status }`. Audited `vm.create`. An admin creating it for a tenant (`forUserId`) emails the tenant after the response ([activity-mail](/services/activity-mail.md)); same for containers and template deploys. |
+| POST | `/api/vms` | user | Create a QEMU VM from an ISO. 201 `{ vm, status }` with the `creating` row; the create and start run in the background. Audited `vm.create` once it is running. An admin creating it for a tenant (`forUserId`) emails the tenant once it is running ([activity-mail](/services/activity-mail.md)); same for containers and template deploys. |
 | GET | `/api/vms/lxc-templates` | user | LXC vztmpl templates on the cluster. |
 | GET | `/api/vms/restore-capability` | user | `{ enabled }` for restore-from-upload. |
-| POST | `/api/vms/restore-upload` | user | multipart `file` (vzdump archive) + `name`; restore as a new guest; 201 `{ vm, status }`. Audited `vm.restore_upload`. |
-| POST | `/api/vms/containers` | user | Create an LXC container from a vztmpl volid; 201 `{ vm, status }`. Audited `vm.create`. |
+| POST | `/api/vms/restore-upload` | user | multipart `file` (vzdump archive) + `name`; restore as a new guest; 201 `{ vm, status }` with the `creating` row once the archive is checked; the restore runs in the background. Audited `vm.restore_upload` once it is running. |
+| POST | `/api/vms/containers` | user | Create an LXC container from a vztmpl volid; 201 `{ vm, status }` with the `creating` row; the create runs in the background. Audited `vm.create` once it is running. |
 | POST | `/api/vms/bulk` | user (`getOwnedVm` per id) + not locked (except start) | `{ action: start/stop/restart/delete, ids (1..50) }`; per-VM results; a locked VM is a per-item failure. Start, stop and restart run side by side (each waits for its guest's task); deletes run one at a time. Audited `vm.bulk_<action>`. |
-| GET | `/api/vms/:id` | any access | Detail + live status, `deployState`, `access`, `caps`, `rescueAvailable`, `filePushMaxBytes`. |
+| GET | `/api/vms/:id` | any access | Detail + live status, `deployState` and `ideState` (each advanced here, side by side, see [deploy-lock](/services/deploy-lock.md) and [ide-provision](/services/ide-provision.md)), `access`, `caps`, `rescueAvailable`, `filePushMaxBytes`. A missing row whose create failed in the last hour answers its owner or an admin 404 `{ error, code: 'create_failed' }` with the reason. |
 | GET | `/api/vms/:id/metrics` | viewable | RRD history `?timeframe=hour/day/week/month/year` (default hour). |
 | GET | `/api/vms/:id/passthrough` | viewable | Attached `hostpciN` devices (empty for LXC). |
 | GET | `/api/vms/:id/activity` | viewable | Last 20 audit entries for the VM (no IPs/actor ids; non-admins do not see admin actions except by the owner). |

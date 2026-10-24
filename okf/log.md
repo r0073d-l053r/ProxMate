@@ -1,6 +1,8 @@
 # Bundle Update Log
 
 ## 2026-10-24
+* **Update**: [VM API](/api/vm.md) and [vm service](/services/vm.md): a create that fails after answering keeps its reason for an hour (`lib/create-failures.ts`), returned by `GET /api/vms/:id` as 404 `code: 'create_failed'` to the owner or an admin; delete of a row still `creating` answers 409 while its operation is in flight; the [deploy-lock](/services/deploy-lock.md) probe interval runs from the end of the last probe.
+* **Update**: Version 1.3.3: the ISO, LXC, template and upload-restore creates answer 201 with the `creating` row and finish in the background (`start*` forms and `StartedCreate` in the [vm service](/services/vm.md), `runInFlight` in `lib/in-flight.ts`; [VM](/api/vm.md) and [template](/api/template.md) APIs, [restart reconciler](/services/task-reconcile.md)); `refreshDeployState` probes at most once per 10 s per VM ([deploy-lock](/services/deploy-lock.md)); `GET /api/vms/:id` advances `ideState` through `advanceIdeState` ([ide-provision](/services/ide-provision.md)).
 * **Update**: Version 1.3.2: bulk deploys from a template removed from the Community Edition (bulk-deploy service, `/api/templates/deploy-bulk`, the wizard's Copies and one-per-user options and their docs).
 * **Update**: Version 1.3.1: same as 1.3.0 with corrected version numbers (the v1.3.0 tag predates the version bump).
 * **Update**: Version 1.3.0: backend and frontend package versions (the Android app takes its version from the backend); roadmap Unreleased moved under Released.

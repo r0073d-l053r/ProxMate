@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
+import axios, { AxiosError } from "axios";
 import {
   ArrowLeft,
   ArrowLeftRight,
@@ -41,6 +42,9 @@ import type { IdeCapability, IdeStatus, VmDetail } from "@/lib/types";
 import { openReadyIde } from "@/lib/ide-open";
 import { copyText } from "@/lib/clipboard";
 import { openPopup, pollUntil } from "@/lib/ide-launch";
+import { POLL_REQUEST_TIMEOUT_MS, startPoll } from "@/lib/poll";
+import { useIdeInstallFlag } from "@/lib/use-ide-install";
+import { missingVmMessage } from "@/lib/vm-missing";
 import { formatRam, formatBytes, formatUptime, formatDate } from "@/lib/format";
 import { VmStatusBadge } from "@/components/vm/vm-status-badge";
 import { HoldBanner, isVmHeld } from "@/components/vm/hold-banner";
@@ -179,8 +183,9 @@ export default function VmDetailPage() {
 
   // ProxMate IDE — lazy install on first "Open IDE". While installing, the VM is
   // locked (the backend rejects console/stop/delete) and we show a loading state,
-  // then open the editor once the guest is serving.
-  const [ideInstalling, setIdeInstalling] = useState(false);
+  // then open the editor once the guest is serving. The local flag also clears as
+  // soon as the polled VM shows the install finished.
+  const [ideInstalling, setIdeInstalling] = useIdeInstallFlag(vm?.ideState);
   // The install / relocate waits run for minutes; they stop once the page is left.
   const pageAlive = useRef(true);
   useEffect(() => {
@@ -231,7 +236,7 @@ export default function VmDetailPage() {
       const r = await pollUntil({
         fetch: () =>
           api
-            .get<IdeStatus>(`/ide/${vmId}/status`)
+            .get<IdeStatus>(`/ide/${vmId}/status`, { timeout: POLL_REQUEST_TIMEOUT_MS })
             .then((res) => res.data.state)
             .catch(() => "installing" as const),
         done: (state) => state === "ready" || state === "failed",
@@ -284,7 +289,9 @@ export default function VmDetailPage() {
       const poll = await pollUntil<{ state: "none" | "running" | "done" | "failed"; error?: string }>({
         fetch: () =>
           api
-            .get<{ state: "none" | "running" | "done" | "failed"; error?: string }>(`/ide/${vmId}/relocate-status`)
+            .get<{ state: "none" | "running" | "done" | "failed"; error?: string }>(`/ide/${vmId}/relocate-status`, {
+              timeout: POLL_REQUEST_TIMEOUT_MS,
+            })
             .then((x) => x.data)
             .catch(() => ({ state: "running" as const })),
         done: (st) => st.state !== "running",
@@ -321,6 +328,10 @@ export default function VmDetailPage() {
   // Cloud-init is still provisioning a freshly-deployed VM — the backend locks
   // destructive actions (409) until it settles; we mirror that in the UI.
   const deploying = vm?.deployState === "deploying";
+  // A create answers as soon as its row exists; the machine is built and started
+  // in the background, and the poll below follows it to running. Actions on it are
+  // refused (409) until then.
+  const creating = vm?.status === "creating";
 
   // Active tab, deep-linkable via ?tab= (e.g. /vms/abc?tab=backups). Kept in the
   // URL with replaceState so switching tabs never adds history entries.
@@ -340,7 +351,6 @@ export default function VmDetailPage() {
   const transitionRef = useRef<Transition>(null);
   const startRef = useRef(0);
   const mounted = useRef(true);
-  const inFlight = useRef(false);
   const safety = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Set the optimistic transition + a safety timeout so it can never get stuck.
@@ -361,10 +371,14 @@ export default function VmDetailPage() {
     return () => clearInterval(iv);
   }, [transition]);
 
-  const load = useCallback(async () => {
+  // Last status seen, so a machine that disappears while creating isn't shown as a bad link.
+  const lastStatus = useRef<string | null>(null);
+
+  const fetchVm = useCallback(async (signal?: AbortSignal) => {
     try {
-      const res = await api.get<VmDetail>(`/vms/${id}`);
+      const res = await api.get<VmDetail>(`/vms/${id}`, { signal, timeout: POLL_REQUEST_TIMEOUT_MS });
       if (!mounted.current) return;
+      lastStatus.current = res.data.status;
       setVm(res.data);
       setError(null);
       // Clear the optimistic transition once the real status reaches its target.
@@ -373,31 +387,36 @@ export default function VmDetailPage() {
       if (t === "starting" && s === "running") setTrans(null);
       else if (t === "stopping" && (s === "stopped" || s === "error")) setTrans(null);
     } catch (err) {
-      if (mounted.current) setError(apiError(err));
+      if (!mounted.current) return;
+      // A slow request that was abandoned is retried by the next poll.
+      if (axios.isCancel(err) || (err instanceof AxiosError && err.code === "ECONNABORTED")) return;
+      const missing =
+        err instanceof AxiosError && err.response?.status === 404
+          ? missingVmMessage(err.response.data as { error?: string; code?: string } | undefined, lastStatus.current)
+          : null;
+      setError(missing ?? apiError(err));
     }
   }, [id, setTrans]);
+  // Callers (and the panels' change callbacks) refresh without a signal of their own.
+  const load = useCallback(() => fetchVm(), [fetchVm]);
 
   // Live refresh: poll the VM so status, IP, uptime, and console-readiness update
-  // on their own — no manual page refresh. Paused when the tab isn't visible.
+  // on their own — no manual page refresh. Paused when the tab isn't visible. A
+  // request slower than POLL_REQUEST_TIMEOUT_MS is abandoned, so it never holds
+  // back the polls after it.
   useEffect(() => {
     mounted.current = true;
-    const tick = async () => {
-      if (document.visibilityState !== "visible" || inFlight.current) return;
-      inFlight.current = true;
-      try {
-        await load();
-      } finally {
-        inFlight.current = false;
-      }
-    };
-    tick();
-    const iv = setInterval(tick, 2500);
+    const stop = startPoll({
+      run: (signal) => fetchVm(signal),
+      intervalMs: 2500,
+      active: () => document.visibilityState === "visible",
+    });
     return () => {
       mounted.current = false;
-      clearInterval(iv);
+      stop();
       if (safety.current) clearTimeout(safety.current);
     };
-  }, [load]);
+  }, [fetchVm]);
 
   async function action(kind: "start" | "stop" | "restart", path: string) {
     setTrans(kind === "start" ? "starting" : kind === "stop" ? "stopping" : "restarting");
@@ -517,7 +536,7 @@ export default function VmDetailPage() {
   // While the VM is locked (IDE installing or cloud-init still deploying) the
   // backend rejects power/delete/migrate — disable those controls so the lock is
   // visible, not just a surprise 409 after a click.
-  const busy = acting || ideBusy || deploying || (pending !== null && pending !== "delete-failed");
+  const busy = acting || ideBusy || deploying || creating || (pending !== null && pending !== "delete-failed");
   const running = vm.status === "running";
   const stopped = vm.status === "stopped" || vm.status === "error";
   // A held or errored machine can only be repaired or deleted: the backend refuses
@@ -560,6 +579,21 @@ export default function VmDetailPage() {
       <Button variant="ghost" render={<Link href="/vms" />} className="mb-4">
         <ArrowLeft /> Back to VMs
       </Button>
+
+      {/* A machine still being built: the create runs in the background and this
+          page follows it to running on its own. */}
+      {creating && (
+        <div className="mb-4 flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-4 text-sm">
+          <Loader2 className="size-5 shrink-0 animate-spin text-primary" />
+          <div>
+            <p className="font-medium">Creating this VM…</p>
+            <p className="text-muted-foreground">
+              ProxMate is building the machine and starting it. This page updates on its own when
+              it&rsquo;s running — you can safely navigate away and come back.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* IDE install lock: while the IDE is provisioning, the VM's console / power /
           delete are blocked (backend-enforced) so nothing corrupts mid-install. */}

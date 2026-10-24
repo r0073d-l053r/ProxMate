@@ -56,7 +56,7 @@ import {
   loadIdeGuestSecret,
   proveIdeGuestTarget,
 } from '../src/services/ide-guest-auth.service.js';
-import { startIdeProvision, refreshIdeState } from '../src/services/ide-provision.service.js';
+import { startIdeProvision, refreshIdeState, advanceIdeState, resetIdeProbes } from '../src/services/ide-provision.service.js';
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 
@@ -170,6 +170,35 @@ describe('refreshIdeState — ready only once the guest proves the secret', () =
     vi.mocked(proveIdeGuestTarget).mockResolvedValue('http://10.0.0.5:8080');
     expect(await refreshIdeState(installing())).toBe('ready');
     expect(vi.mocked(proveIdeGuestTarget)).toHaveBeenCalledWith(expect.objectContaining({ id: 'vm-1' }), 's');
+  });
+});
+
+describe('advanceIdeState — the VM-detail fetch advances the install', () => {
+  beforeEach(() => resetIdeProbes());
+  const installing = () => vm({ ideState: 'installing', ideStateAt: new Date() });
+
+  it('marks a finished install ready, probing the guest at most once per interval', async () => {
+    vi.mocked(loadIdeGuestSecret).mockResolvedValue('s');
+    vi.mocked(proveIdeGuestTarget).mockResolvedValue(null);
+    expect(await advanceIdeState(installing())).toBe('installing');
+    vi.mocked(proveIdeGuestTarget).mockResolvedValue('http://10.0.0.5:8080');
+    // Inside the interval the last answer stands, without dialling the guest again.
+    expect(await advanceIdeState(installing())).toBe('installing');
+    expect(vi.mocked(proveIdeGuestTarget)).toHaveBeenCalledTimes(1);
+  });
+
+  it('records ready when the guest proves the secret', async () => {
+    vi.mocked(loadIdeGuestSecret).mockResolvedValue('s');
+    vi.mocked(proveIdeGuestTarget).mockResolvedValue('http://10.0.0.5:8080');
+    expect(await advanceIdeState(installing())).toBe('ready');
+    expect(vi.mocked(prisma.virtualMachine.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ ideState: 'ready' }) }),
+    );
+  });
+
+  it('never probes a VM that is not installing', async () => {
+    expect(await advanceIdeState(vm({ ideState: 'ready' }))).toBe('ready');
+    expect(vi.mocked(proveIdeGuestTarget)).not.toHaveBeenCalled();
   });
 });
 
