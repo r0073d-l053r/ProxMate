@@ -232,15 +232,6 @@ The tenant is **emailed** that a machine was set up for them (needs SMTP), and o
 see an **Admin-managed** badge with "Set up by your admin — only an admin can resize or rebuild
 it." instead of the resize and rebuild controls.
 
-**Several machines at once.** For a Template Store source the wizard has a **Copies** field: with
-more than one copy the name becomes a pattern, and `{n}` is the copy number (`web-{n}` gives
-`web-1`, `web-2`, …). Tenants can deploy up to 20 copies at a time, admins up to 50. Admins can
-also tick **One machine for each of several users** and choose the users: each gets one copy in
-their own account (admin-managed, and quota-exempt if you untick **Count against their quota**).
-Quota is checked for the whole batch before anything is cloned — if it doesn't all fit, nothing is
-deployed. The copies then deploy a few at a time, each placed and isolated like a single deploy,
-and the wizard shows each copy's result; one failing doesn't stop the rest.
-
 ### 4.2 VM sharing levels (what tenants can grant each other)
 
 A VM's owner can share it from **VM ▸ Settings ▸ Shared access** at three levels: **Viewer**

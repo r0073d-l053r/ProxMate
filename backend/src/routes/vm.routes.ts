@@ -128,8 +128,8 @@ router.use(requireAuth);
 // Users whose admin required 2FA can't touch VMs until they've enrolled a method.
 router.use(enforceMfaSetup);
 
-// A machine still being created (a create, import or rebuild in flight, or a bulk-deploy
-// copy waiting for its turn) can be viewed or deleted, nothing else: a clear 409 here,
+// A machine still being created (a create, import or rebuild in flight) can be viewed
+// or deleted, nothing else: a clear 409 here,
 // and requireOurGuest refuses it again for every path that reaches its guest.
 router.use('/:id', async (req: Request, res: Response, next: () => void) => {
   if (req.method === 'GET' || req.method === 'HEAD' || (req.method === 'DELETE' && req.path === '/')) {

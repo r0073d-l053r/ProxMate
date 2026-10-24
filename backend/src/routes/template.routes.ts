@@ -9,18 +9,10 @@ import { assertPublicHttpUrlShape } from '../lib/url-safety.js';
 import {
   deployFromTemplate,
   QuotaError,
-  BatchQuotaError,
   CreateOptionError,
   resolveCreateTarget,
   MIN_RAM_MB,
 } from '../services/vm.service.js';
-import {
-  planBatch,
-  startTemplateBatch,
-  getBatch,
-  BulkDeployError,
-  BULK_DEPLOY_MAX_ADMIN,
-} from '../services/bulk-deploy.service.js';
 import {
   listPublished,
   listAll,
@@ -135,72 +127,6 @@ router.post('/deploy', async (req: Request, res: Response) => {
     }
     res.status(502).json({ error: pveMessage(err) });
   }
-});
-
-// ─── POST /api/templates/deploy-bulk ──────────────────────────
-// Deploy several copies of a template at once: `count` copies named from
-// `namePattern` (`{n}` = copy number), or — admin only — one copy into each of
-// `forUserIds`. Quota is checked for the whole batch before anything is cloned;
-// the copies then deploy in the background, a few at a time. 202 with the batch;
-// poll GET /api/templates/deploy-bulk/:id for per-copy results.
-
-const BulkDeploySchema = z.object({
-  ...DeployFields,
-  namePattern: z.string().min(1).max(60),
-  count: z.number().int().min(1).max(BULK_DEPLOY_MAX_ADMIN).optional(),
-  forUserIds: z.array(z.string().min(1).max(64)).min(1).max(BULK_DEPLOY_MAX_ADMIN).optional(),
-});
-
-router.post('/deploy-bulk', async (req: Request, res: Response) => {
-  const parsed = BulkDeploySchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: 'Validation failed', details: parsed.error.flatten() });
-    return;
-  }
-  const actor = (req as AuthRequest).user;
-  const { namePattern, count, forUserId, forUserIds, quotaExempt, templateId: _templateId, ...rest } = parsed.data;
-
-  const template = await prisma.template.findUnique({ where: { id: parsed.data.templateId } });
-  if (!template || !template.published) {
-    res.status(404).json({ error: 'Template not found' });
-    return;
-  }
-  if (template.cloudInit && !rest.sshKey && !rest.password) {
-    res.status(400).json({ error: 'This cloud image needs an SSH public key or a password to log in.' });
-    return;
-  }
-
-  try {
-    const copies = await planBatch(actor, { namePattern, count, forUserId, forUserIds, quotaExempt });
-    const batch = await startTemplateBatch(actor, template, copies, { ...rest, quotaExempt });
-    res.status(202).json(batch);
-  } catch (err) {
-    if (err instanceof CreateOptionError || err instanceof BulkDeployError) {
-      res.status(err.status).json({ error: err.message });
-      return;
-    }
-    if (err instanceof BatchQuotaError) {
-      const who = Object.keys(err.owners);
-      res.status(403).json({
-        error:
-          who.length === 1 && forUserIds === undefined
-            ? `Quota exceeded: the whole batch doesn't fit ${who[0]}'s remaining quota, so nothing was deployed.`
-            : `Quota exceeded for ${who.join(', ')}: nothing was deployed.`,
-        details: err.owners,
-      });
-      return;
-    }
-    res.status(502).json({ error: pveMessage(err) });
-  }
-});
-
-router.get('/deploy-bulk/:id', (req: Request, res: Response) => {
-  const batch = getBatch(req.params['id'] as string, (req as AuthRequest).user);
-  if (!batch) {
-    res.status(404).json({ error: 'Batch not found' });
-    return;
-  }
-  res.json(batch);
 });
 
 // ─── Admin: manage the store ──────────────────────────────────

@@ -28,7 +28,7 @@ Creates, clones, duplicates, upload restores, rebuilds, MateState backups and in
 
 A row is left for a later pass when any of these hold:[^svc] [^inflight]
 
-- its operation is registered in flight in this process (`lib/in-flight.ts`: every create path registers the row id right after inserting it; a [bulk deploy](/services/bulk-deploy.md) registers every reserved copy at reservation, so a copy still queued for its turn is never touched; rebuild, [guest import](/services/guest-import.md), MateState restore and backup register for their whole run);
+- its operation is registered in flight in this process (`lib/in-flight.ts`: every create path registers the row id right after inserting it; rebuild, [guest import](/services/guest-import.md), MateState restore and backup register for their whole run);
 - it is younger than `RECONCILE_STUCK_MINUTES` (default 15), measured from `opStartedAt` (VM rows), `updatedAt` (restores) or `createdAt` (backups);
 - its recorded Proxmox task (`opUpid` / `MateState.upid`) is still `running`, or can't be read right now (a failed status query is never taken as a failed task), or the guest config at its VMID has a `lock`. A lock that lasts over a day is reported to admins once;
 - the cluster-wide lookup (`syncVmNodeChecked`) or the guest config can't be read.
@@ -46,7 +46,7 @@ The rule: the reconciler never writes to a Proxmox guest without positive proof 
 | `create`/`create-lxc`/`rebuild-iso` | task OK, guest carries this row's tag | Completed: isolation firewall applied, row `stopped` (never started); an ISO rebuild also clears its hold and old-disk state. |
 | `import` | guest carries this row's tag | Completed: the tag is written last, after isolation, so only the final status write was missing. |
 | `import` | guest not tagged | Row dropped; the guest stays importable and is never touched. |
-| any | no guest at the VMID | Row dropped (quota freed, admins notified), unless it is a rebuild or an older row with backups, which is held. A bulk-deploy copy that never got its turn ends here. |
+| any | no guest at the VMID | Row dropped (quota freed, admins notified), unless it is a rebuild or an older row with backups, which is held. |
 | any but import | guest carries this row's tag, part-way | Held with `PROVISION_FAILED_MESSAGE`; an upload restore (its tag is proof) also loses `onboot`/`startup`/`protection` and gets its NICs set `link_down=1`. |
 | `clone`/`duplicate`/`rebuild-template` | untagged guest carrying the row nonce and passing the claim checks | Tagged as the row's and held, so a full clone is never orphaned. |
 | `restore-upload` | guest at the VMID not tagged as the row's | Held; nothing is written to the guest (it may be anything after an outage); admins are told to check guest <vmid> on <node>, adopt it if it is the restore (it may still have `onboot` set) or delete it. |

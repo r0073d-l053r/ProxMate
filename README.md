@@ -248,7 +248,7 @@ automatically when the backend container starts — never run them by hand:
 
 ```bash
 ./deploy/update.sh             # newest vX.Y.Z tag, rebuild + restart
-./deploy/update.sh v1.3.1      # or pin a specific tag
+./deploy/update.sh v1.3.2      # or pin a specific tag
 ```
 
 Keep local compose changes (extra mounts) in `docker-compose.override.yml`, not in

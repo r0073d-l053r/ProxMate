@@ -1,8 +1,12 @@
+ProxMate 1.3.2 removes bulk deploys from a template from the Community Edition: deploying several copies at once, or one copy into each of several users' accounts, is now part of ProxMate Pro and EDU. Nothing else changes, and machines already deployed in a batch are ordinary machines and keep working. No configuration changes are needed to upgrade from 1.3.0 or 1.3.1; the rest of these notes describe 1.3.0 and 1.3.1 without that feature.
+
+## 1.3.1
+
 ProxMate 1.3.1 is ProxMate 1.3.0 with its version numbers corrected. The v1.3.0 tag was cut just before the version bump, so an install from it reports itself as 1.2.0 and keeps offering an update. 1.3.1 has the same features and fixes as 1.3.0, described below. Upgrading from 1.3.0 needs no steps beyond the update itself; upgrading from 1.2.x follows the 1.3.0 notes.
 
 ## 1.3.0
 
-ProxMate 1.3.0 adds projects, a native Android app, view-only consoles for Viewer shares, tenant notifications, importing existing Proxmox guests and bulk deploys. It also settles operations a backend restart interrupted, takes a snapshot before risky changes, and checks every restored backup before it is used. An optional pool-scoped Proxmox token limits what ProxMate's token can reach.
+ProxMate 1.3.0 adds projects, a native Android app, view-only consoles for Viewer shares, tenant notifications and importing existing Proxmox guests. It also settles operations a backend restart interrupted, takes a snapshot before risky changes, and checks every restored backup before it is used. An optional pool-scoped Proxmox token limits what ProxMate's token can reach.
 
 ## New in 1.3.0
 
@@ -29,9 +33,6 @@ ProxMate 1.3.0 adds projects, a native Android app, view-only consoles for Viewe
 - **Import existing Proxmox guests (admin).** Settings → Maintenance → **Import existing guests** lists the QEMU and LXC guests ProxMate doesn't manage.
   - Importing one for an owner applies the default bridge and the isolation firewall, tags it as that owner's, and counts it against their quota or as a grant.
   - A guest is refused if it uses another guest's disks, host devices or host-level settings, or is a privileged container, including inside any of its snapshots.
-- **Bulk deploy from a template.** Deploy up to 20 copies (admins: 50) from a name pattern such as `web-{n}`, or, as an admin, one copy into each of several users' accounts.
-  - The whole batch is checked against quota first, and nothing is cloned if it doesn't fit.
-  - Copies deploy three at a time, each placed and isolated like a single deploy, with progress for each copy.
 - **Automatic snapshots before risky changes.** Before a resize, a data-disk resize or a rescue boot, ProxMate takes a disk-only `pm-auto-…` snapshot of the VM, and refuses the change if the snapshot fails.
   - It keeps the newest 3 per VM (1–10, Admin → Settings → Maintenance) and only ever deletes snapshots it took itself.
   - Containers and storage without snapshot support are skipped.

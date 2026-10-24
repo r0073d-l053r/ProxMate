@@ -38,16 +38,11 @@ vi.mock('../src/services/guest-import.service.js', async (importOriginal) => {
     importGuest: vi.fn(async () => ({ id: 'row1' })),
   };
 });
-vi.mock('../src/services/bulk-deploy.service.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/services/bulk-deploy.service.js')>();
-  return { ...actual, startTemplateBatch: vi.fn(async () => ({ id: 'b1', items: [] })) };
-});
 
 import adminRouter from '../src/routes/admin.routes.js';
 import templateRouter from '../src/routes/template.routes.js';
 import vmRouter from '../src/routes/vm.routes.js';
 import * as importService from '../src/services/guest-import.service.js';
-import * as bulk from '../src/services/bulk-deploy.service.js';
 import { QuotaError } from '../src/services/vm.service.js';
 
 let server: http.Server;
@@ -107,36 +102,6 @@ describe('guest import routes', () => {
     expect((await send('GET', '/admin/guests/importable')).status).toBe(403);
     expect((await send('POST', '/admin/guests/import', { vmid: 200, ownerId: 'u1' })).status).toBe(403);
     expect(importService.importGuest).not.toHaveBeenCalled();
-  });
-});
-
-describe('bulk deploy routes', () => {
-  const body = { templateId: 't1', cpu: 1, ram: 1024, storage: 10, namePattern: 'web-{n}', count: 3 };
-
-  it('starts a batch and returns 202', async () => {
-    role = 'user';
-    const res = await send('POST', '/templates/deploy-bulk', body);
-    expect(res.status).toBe(202);
-    expect(bulk.startTemplateBatch).toHaveBeenCalled();
-  });
-
-  it('refuses a tenant deploying into other users’ accounts', async () => {
-    role = 'user';
-    const res = await send('POST', '/templates/deploy-bulk', { ...body, count: undefined, forUserIds: ['u2'] });
-    expect(res.status).toBe(403);
-    expect(bulk.startTemplateBatch).not.toHaveBeenCalled();
-  });
-
-  it('refuses more copies than the cap', async () => {
-    role = 'user';
-    expect((await send('POST', '/templates/deploy-bulk', { ...body, count: 21 })).status).toBe(400);
-    role = 'admin';
-    expect((await send('POST', '/templates/deploy-bulk', { ...body, count: 51 })).status).toBe(400);
-    expect(bulk.startTemplateBatch).not.toHaveBeenCalled();
-  });
-
-  it('hides a batch from anyone but its starter and admins', async () => {
-    expect((await send('GET', '/templates/deploy-bulk/nope')).status).toBe(404);
   });
 });
 

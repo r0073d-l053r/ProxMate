@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-24
+* **Update**: Version 1.3.2: bulk deploys from a template removed from the Community Edition (bulk-deploy service, `/api/templates/deploy-bulk`, the wizard's Copies and one-per-user options and their docs).
 * **Update**: Version 1.3.1: same as 1.3.0 with corrected version numbers (the v1.3.0 tag predates the version bump).
 * **Update**: Version 1.3.0: backend and frontend package versions (the Android app takes its version from the backend); roadmap Unreleased moved under Released.
 
@@ -18,7 +19,7 @@
 * **Creation**: Documented the [guest-file service](/services/guest-file.md): pushing a file into a QEMU guest (`POST /api/vms/:id/files`) and reading the IDE install log (`GET /api/ide/:id/install-log`), their rate limits and the `VM.GuestAgent.FileWrite` privilege now always in the least-privilege role on PVE 9.
 * **Creation**: Documented the [activity-mail](/services/activity-mail.md) and [usage-digest](/services/usage-digest.md) services and the [usage digest setting](/config/usage-digest.md).
 * **Update**: Added the ntfy and Telegram channels to [notifications](/config/notifications.md) and the [notify service](/services/notify.md); new [User](/database/user.md) email preferences, `USAGE_DIGEST_CRON`, and the share and deploy-for-tenant emails in the [VM](/api/vm.md), [template](/api/template.md), [auth](/api/auth.md) and [admin](/api/admin.md) APIs.
-* **Creation**: Documented the [guest import](/services/guest-import.md) and [bulk deploy](/services/bulk-deploy.md) services and their routes in the [admin](/api/admin.md) and [template](/api/template.md) routers, and VMID reservations in the [vm service](/services/vm.md).
+* **Creation**: Documented the [guest import](/services/guest-import.md) service and their routes in the [admin](/api/admin.md) and [template](/api/template.md) routers, and VMID reservations in the [vm service](/services/vm.md).
 * **Creation**: Documented the [restart reconciler](/services/task-reconcile.md), [automatic snapshots](/services/auto-snapshot.md) with their [settings](/config/auto-snapshot.md) and [AutoSnapshot](/database/auto-snapshot.md) table, and the [ENCRYPTION_KEY backup confirmation](/services/key-backup.md).
 * **Update**: Added the operation fields on [VirtualMachine](/database/virtual-machine.md) and [MateState](/database/mate-state.md), `RECONCILE_STUCK_MINUTES` in [backend environment](/env/backend-environment.md), and the new admin and VM endpoints.
 * **Update**: Documented the view-only console: the `console_view` capability held by [Viewer shares](/database/vm-share.md), console ticket grants and the input filters in the [console relay](/api/console.md), and the `vm.console_open` / `vm.console_view_open` audit entries.

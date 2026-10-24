@@ -98,11 +98,6 @@ curl -H "$AUTH" "$BASE/projects?days=7"
 # Move VMs you own into a project (or out of one with "project": null)
 curl -H "$AUTH" -H 'content-type: application/json' -X POST \
   -d '{"ids":["<id>","<id>"],"project":"shop"}' "$BASE/projects/assign"
-# Deploy 5 copies of a template (web-1 … web-5), then poll the batch for per-copy results
-curl -H "$AUTH" -H 'content-type: application/json' -X POST \
-  -d '{"templateId":"<id>","namePattern":"web-{n}","count":5,"cpu":1,"ram":1024,"storage":10,"sshKey":"ssh-ed25519 AAAA…"}' \
-  "$BASE/templates/deploy-bulk"
-curl -H "$AUTH" "$BASE/templates/deploy-bulk/<batch id>"
 ```
 
 ## Responses worth knowing
@@ -138,12 +133,6 @@ curl -H "$AUTH" "$BASE/templates/deploy-bulk/<batch id>"
   a file over the limit (`GUEST_FILE_PUSH_MAX_BYTES`, 1 MiB by default, at most 8 MiB)
   answers **413**, a container or a guest whose agent doesn't answer **409**. Into a folder other users can write to (or reached through a symlink) the file is written as `owner`; without one that push answers **400**. Limited per
   signed-in user (30 per 10 minutes; `GUEST_FILE_RATE_LIMIT_MAX`, `_WINDOW_MS`).
-- **Bulk deploys** (`POST /templates/deploy-bulk`) take `count` copies (1–20, admins
-  1–50) named from `namePattern` (`{n}` is the copy number and is required for more than
-  one), or — admins — `forUserIds` for one copy in each of those accounts. Quota is checked
-  for the whole batch first: **403** naming the owner(s) and nothing is deployed. Otherwise
-  **202** with the batch; `GET /templates/deploy-bulk/:id` shows each copy as `queued`,
-  `deploying`, `done` or `failed` (with `error`), and `finishedAt` once all are settled.
 - **Sizes.** Creates, template deploys and resizes asking for less than 64 MB of RAM
   answer **400**. A resize grows the root disk by the difference between the requested
   total and the current total.

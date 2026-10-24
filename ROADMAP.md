@@ -101,11 +101,12 @@ _Nothing yet._
 
 ### Released
 
+- **v1.3.2 — edition split.** Bulk deploys from a template moved to ProxMate Pro / EDU.
 - **v1.3.1 — version fix.** Same as v1.3.0, with the version numbers the v1.3.0 tag missed.
 - **v1.3.0 — projects, Android, notifications and reliability.** Projects with per-project usage and
   power actions; a native Android app; view-only consoles for Viewer shares; the IDE install log and
   file push through the guest agent; tenant emails, ntfy/Telegram and a weekly usage digest; importing
-  existing Proxmox guests and bulk deploys from a template; restored backups checked before use;
+  existing Proxmox guests; restored backups checked before use;
   interrupted operations settled after a restart; automatic snapshots before risky changes; an
   `ENCRYPTION_KEY` backup reminder; and an optional pool-scoped Proxmox token (not yet verified on a
   live cluster).
