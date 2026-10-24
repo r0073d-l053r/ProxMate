@@ -101,6 +101,7 @@ _Nothing yet._
 
 ### Released
 
+- **v1.3.1 — version fix.** Same as v1.3.0, with the version numbers the v1.3.0 tag missed.
 - **v1.3.0 — projects, Android, notifications and reliability.** Projects with per-project usage and
   power actions; a native Android app; view-only consoles for Viewer shares; the IDE install log and
   file push through the guest agent; tenant emails, ntfy/Telegram and a weekly usage digest; importing

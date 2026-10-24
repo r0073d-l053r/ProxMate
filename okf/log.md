@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-24
+* **Update**: Version 1.3.1: same as 1.3.0 with corrected version numbers (the v1.3.0 tag predates the version bump).
 * **Update**: Version 1.3.0: backend and frontend package versions (the Android app takes its version from the backend); roadmap Unreleased moved under Released.
 
 ## 2026-10-23

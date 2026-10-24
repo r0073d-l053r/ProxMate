@@ -1,3 +1,7 @@
+ProxMate 1.3.1 is ProxMate 1.3.0 with its version numbers corrected. The v1.3.0 tag was cut just before the version bump, so an install from it reports itself as 1.2.0 and keeps offering an update. 1.3.1 has the same features and fixes as 1.3.0, described below. Upgrading from 1.3.0 needs no steps beyond the update itself; upgrading from 1.2.x follows the 1.3.0 notes.
+
+## 1.3.0
+
 ProxMate 1.3.0 adds projects, a native Android app, view-only consoles for Viewer shares, tenant notifications, importing existing Proxmox guests and bulk deploys. It also settles operations a backend restart interrupted, takes a snapshot before risky changes, and checks every restored backup before it is used. An optional pool-scoped Proxmox token limits what ProxMate's token can reach.
 
 ## New in 1.3.0

@@ -13,7 +13,7 @@
 #
 # Usage:
 #   ./deploy/update.sh                 # update to the newest vX.Y.Z tag
-#   ./deploy/update.sh v1.3.0          # update to a specific tag
+#   ./deploy/update.sh v1.3.1          # update to a specific tag
 #   ./deploy/update.sh --from-request  # consume a pending in-app request (systemd)
 #   ./deploy/update.sh --mark-failed   # systemd ExecStopPost: report a killed run
 #
