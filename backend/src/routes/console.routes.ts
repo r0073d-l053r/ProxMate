@@ -5,7 +5,7 @@ import { verifyToken } from '../services/auth.service.js';
 import { SESSION_COOKIE } from '../lib/cookies.js';
 import { resolveVmAccess, syncVmNode, kindOf } from '../services/vm.service.js';
 import { consoleModeFor } from '../services/vm-share.service.js';
-import { connectVncTarget, connectSerialTarget, relay, claimConsoleGrant } from '../services/vnc-proxy.service.js';
+import { connectVncTarget, connectSerialTarget, relay, claimConsoleGrant, holdBrowserMessages } from '../services/vnc-proxy.service.js';
 import { RfbViewOnlyFilter, TermViewOnlyFilter } from '../lib/console-view-filter.js';
 
 const CONSOLE_PATH = /^\/api\/vms\/([^/]+)\/console$/;
@@ -103,6 +103,8 @@ export function handleConsoleUpgrade(req: IncomingMessage, socket: Duplex, head:
 
     const baseVm = access.vm;
     wss.handleUpgrade(req, socket, head, async (browserWs) => {
+      // Hold what the browser sends while the target is set up (see holdBrowserMessages).
+      const held = holdBrowserMessages(browserWs);
       try {
         const activeVm = await syncVmNode(baseVm);
         const kind = kindOf(activeVm);
@@ -110,8 +112,9 @@ export function handleConsoleUpgrade(req: IncomingMessage, socket: Duplex, head:
           ? await connectSerialTarget(activeVm.proxmoxNode, activeVm.proxmoxVmId, port, vncticket, kind)
           : await connectVncTarget(activeVm.proxmoxNode, activeVm.proxmoxVmId, port, vncticket, kind);
         const filter = mode === 'view' ? (isSerial ? new TermViewOnlyFilter() : new RfbViewOnlyFilter()) : undefined;
-        relay(browserWs, target, filter);
+        relay(browserWs, target, filter, held.release());
       } catch {
+        held.release();
         browserWs.close(1011, 'Failed to reach Proxmox console');
       }
     });

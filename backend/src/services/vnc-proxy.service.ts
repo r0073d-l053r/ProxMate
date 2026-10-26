@@ -143,6 +143,31 @@ export function claimConsoleGrant(
   return consoleGrants.take(ticket);
 }
 
+export interface BrowserMessage {
+  data: RawData;
+  isBinary: boolean;
+}
+
+/**
+ * Start collecting the browser's messages right away, before anything is
+ * awaited. `ws` drops a message that arrives with no listener, and the text
+ * console's client speaks first (its `${user}:${ticket}` line, sent the moment
+ * the socket opens), so without this the line is lost while the target is
+ * looked up and Proxmox closes the session unauthenticated. Call `release` to
+ * stop collecting and get what arrived, then hand it to `relay`.
+ */
+export function holdBrowserMessages(browser: WebSocket): { release(): BrowserMessage[] } {
+  const held: BrowserMessage[] = [];
+  const hold = (data: RawData, isBinary: boolean) => held.push({ data, isBinary });
+  browser.on('message', hold);
+  return {
+    release() {
+      browser.off('message', hold);
+      return held;
+    },
+  };
+}
+
 /** Flatten a ws message payload to one Buffer. */
 function toBuffer(data: RawData): Buffer {
   if (Buffer.isBuffer(data)) return data;
@@ -154,10 +179,16 @@ function toBuffer(data: RawData): Buffer {
  * Pipe bytes bidirectionally between the browser and Proxmox sockets. With an
  * `inputFilter` (view-only sessions) every browser message passes through it
  * first; only what it returns is forwarded, and a message it can't frame closes
- * both sockets.
+ * both sockets. `early` is what the browser sent before the relay was attached
+ * (see `holdBrowserMessages`); it is handled first, exactly like live input.
  */
-export function relay(browser: WebSocket, target: WebSocket, inputFilter?: ConsoleInputFilter): void {
-  const pending: Array<{ data: RawData; isBinary: boolean }> = [];
+export function relay(
+  browser: WebSocket,
+  target: WebSocket,
+  inputFilter?: ConsoleInputFilter,
+  early: BrowserMessage[] = [],
+): void {
+  const pending: BrowserMessage[] = [];
 
   target.on('open', () => {
     for (const msg of pending) target.send(msg.data, { binary: msg.isBinary });
@@ -173,7 +204,7 @@ export function relay(browser: WebSocket, target: WebSocket, inputFilter?: Conso
     if (browser.readyState === WebSocket.OPEN) browser.send(data, { binary: isBinary });
   });
 
-  browser.on('message', (raw, isBinary) => {
+  const onBrowserMessage = (raw: RawData, isBinary: boolean) => {
     let data: RawData = raw;
     if (inputFilter) {
       let allowed: Buffer;
@@ -189,7 +220,8 @@ export function relay(browser: WebSocket, target: WebSocket, inputFilter?: Conso
     }
     if (target.readyState === WebSocket.OPEN) target.send(data, { binary: isBinary });
     else pending.push({ data, isBinary });
-  });
+  };
+  browser.on('message', onBrowserMessage);
 
   const closeBoth = () => {
     if (browser.readyState === WebSocket.OPEN) browser.close();
@@ -208,4 +240,8 @@ export function relay(browser: WebSocket, target: WebSocket, inputFilter?: Conso
     closeBoth();
   });
   browser.on('error', closeBoth);
+
+  for (const msg of early) onBrowserMessage(msg.data, msg.isBinary);
+  // The browser may have gone while the relay was being set up.
+  if (browser.readyState !== WebSocket.OPEN) closeBoth();
 }
