@@ -1,10 +1,11 @@
-ProxMate 1.3.4 closes a tenant-isolation gap on a Proxmox node that is also a Tailscale subnet router, and says when the ProxMate IDE installed but can't be reached. If one of your nodes is a subnet router, run the new guard on it (below); otherwise no configuration changes are needed to upgrade from 1.3.x.
+ProxMate 1.3.4 closes a tenant-isolation gap on a Proxmox node that is also a Tailscale subnet router, says when the ProxMate IDE installed but can't be reached, and fixes the text console. If one of your nodes is a subnet router, run the new guard on it (below); otherwise no configuration changes are needed to upgrade from 1.3.x.
 
 - **Security: the Tailscale subnet-router guard.** On a node that routes your tailnet to the LAN, Tailscale's own firewall rules accepted tailnet traffic to the guests on that node before the Proxmox firewall ran, so every port of those guests was reachable from the tailnet whatever ProxMate's isolation rules said. The same traffic was also masqueraded twice, so replies were lost and the IDE on those guests never opened. Guests on other nodes were not affected.
   - Run `deploy/proxmox-tailscale-guard.sh` as root on the subnet-router node. It installs a small service that clears Tailscale's mark on bridged traffic at boot, whenever `tailscaled` restarts, and every 2 minutes, so each guest's own firewall decides again.
   - `--check` reports whether a node needs it and whether it is in place; `--uninstall` removes it.
   - Afterwards, tailnet devices reach guests on that node only through ports their firewall allows, as on every other node. See SECURITY.md → *3c* and docs/proxmate-ide.md → *Tailscale subnet router on a Proxmox node*.
 - **"Installed, but ProxMate can't reach it."** When an IDE install times out after the install itself finished in the guest, the VM page now says the IDE installed but ProxMate can't reach it over the network, instead of "the last install didn't finish". The admin reachability test names the subnet-router case.
+- **The text console connects again.** Opening a VM's text console could end at once without a login prompt: the browser's sign-in to the console arrived while ProxMate was still looking up the VM's node and was dropped, so Proxmox closed the session. It happened more often the slower ProxMate's link to Proxmox is. ProxMate now keeps what the browser sends until the console is ready. The graphical console was not affected.
 
 ## 1.3.3
 
