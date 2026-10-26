@@ -5,12 +5,12 @@ installed ProxMate. Recorded on a real Ubuntu desktop: Chromium for the docs and
 GNOME Terminal for SSH and the installer.
 
 - **Working title:** ProxMate setup: give friends their own VMs on Proxmox (v1.3.3)
-- **Length:** 1,401 spoken words; the recorded video runs 10:55 with three real waits sped up
+- **Length:** 1,415 spoken words; the recorded video runs 10:29 with three real waits sped up, then a 7.5-second end card
 - **Voice:** Kokoro `af_heart` (ElevenLabs was not reachable from the recording sandbox)
 - **Written with:** the `script-writer` skill (tutorial template, casual-friendly tone) and
   `yt-script/hookscore.py` for the hook
 - **Follows:** the docs at https://proxmate.host/docs (Proxmox Integration, Setup Wizard,
-  Deployment, VMs)
+  Deployment, VMs), shown live from the public site in the recording
 
 ## Hooks (scored with `hookscore.py`)
 
