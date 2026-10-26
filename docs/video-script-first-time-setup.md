@@ -128,6 +128,7 @@ Nope! The token logs in, but it holds no permissions at all.
 And ProxMate tells you exactly why, and how to fix it. No guessing games.
 Now the good token. Same steps. Test connection.
 Yes! Connected to Proxmox VE. That's the moment.
+The note underneath just means this node has no VMs yet. That's expected.
 Leave Verify TLS unticked for now, since Proxmox ships with a self-signed certificate.
 Continue.
 
@@ -248,3 +249,9 @@ Your friends get their own servers. You keep the keys.
 The docs at proxmate.host go much deeper, with backups, single sign-on, and the API.
 Tell me in the comments what your friends are going to run first.
 Happy homelabbing!
+
+## End card · 7.5 seconds, no narration
+
+[ON SCREEN: the ProxMate logo badge settles in, then "ProxMate." rises beside it. The tagline
+"Your cluster *shared* safely" wipes in underneath, a thin rule grows, and "Visit proxmate.host
+to learn more" fades up. Dark ProxMate background, slow glow and grid drift, fade to black.]
