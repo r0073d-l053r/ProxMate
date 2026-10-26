@@ -118,6 +118,28 @@ than out-of-band via the Proxmox API. So:
   LAN; the **subnet-router node's LAN IP** when routed, because subnet routes SNAT to the router).
   Set `ide_ingress_cidr` to that address; it must be specific (`0.0.0.0/0` is rejected).
 
+### Tailscale subnet router on a Proxmox node
+
+If the subnet router is **one of your Proxmox nodes**, guests **on that node** need one more step.
+Tailscale marks the traffic it forwards, and that mark is still on the packet when it crosses the
+guest's firewall bridge. There, Tailscale's own rules run before the Proxmox firewall and:
+
+- **skip the guest's firewall.** Every port of every guest on that node is reachable from your
+  tailnet, whatever the isolation rules say. Guests on other nodes are not affected.
+- **masquerade the packet a second time**, to the node's tailnet address, so the guest's reply is
+  lost. The IDE installs, but ProxMate can't reach it, and the VM page says so.
+
+Run this once as root on the subnet-router node. It installs a small service that clears the mark
+on bridged traffic, at boot, whenever `tailscaled` restarts, and every 2 minutes:
+
+```bash
+./deploy/proxmox-tailscale-guard.sh            # install and apply now
+./deploy/proxmox-tailscale-guard.sh --check    # does this node need it, and is it in place?
+```
+
+Afterwards, tailnet devices reach guests on that node only through ports the guest's firewall
+allows, as they already do on every other node. `--uninstall` removes it.
+
 ---
 
 ## Security model
@@ -157,6 +179,7 @@ than out-of-band via the Proxmox API. So:
 | **"Unauthorized — missing session"** when the AI agent runs | The gateway base URL is `http://` and the edge 301-redirects to https, downgrading the POST to a GET. Ensure `TRUST_PROXY=1` and `BACKEND_PUBLIC_URL`/the origin are **https**. |
 | OpenCode crashes: **"CPU lacks AVX" / illegal instruction** | The VM's CPU masks AVX. ProxMate sets `cpu: host` at IDE-enable; **reboot the VM** and reopen so it takes effect. If the node's own silicon lacks AVX, ProxMate offers a **one-click move** to a capable node (stop → move → start → IDE opens). |
 | VM becomes **unresponsive right after Open IDE** | Undersized VM — the install OOMs. Give the VM **>= 8 GB RAM** (the `ide_min_ram_mb` floor) and retry. |
+| **"the IDE installed, but ProxMate can't reach it over the network"** | The install finished in the guest, but the backend never reached code-server on `:8080`. Use **test reachability** (admin). If only VMs on the node that is your Tailscale subnet router are affected, install the guard on that node (see *Tailscale subnet router on a Proxmox node*). Otherwise check `ide_ingress_cidr` and the route to the guest. Then open the IDE again. |
 | **The install failed** ("The IDE install didn't finish") | Open **View install log** on the VM page: the last lines usually name the step (a download that failed, a full disk, no network). Fix it and open the IDE again; the install re-runs. |
 | **"The QEMU guest agent is not responding"** | Install + start `qemu-guest-agent` in the VM (the IDE installs through it). |
 | AI agent can't reach a model / 403 | The model isn't shared to that tenant (check visibility), or BYO is disabled, or a BYO endpoint was blocked as private. |

@@ -3161,6 +3161,7 @@ async function rebuildVmLocked(
         status: 'running',
         ideState: null,
         ideStateAt: null,
+        ideFailReason: null,
         deployState: deploying ? 'deploying' : null,
         deployStateAt: deploying ? new Date() : null,
         // A rebuild re-runs cloud-init on a fresh disk, so the password has to be

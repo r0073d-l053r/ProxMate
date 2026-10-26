@@ -31,6 +31,7 @@ import {
   IDE_AUTOSTART_PACKAGE_JSON,
   IDE_AUTOSTART_EXTENSION_JS,
 } from './ide-assets.generated.js';
+import { IDE_LOG_PATH } from './guest-file.service.js';
 import { envNumber } from '../lib/env-number.js';
 import { probeThrottle } from '../lib/probe-throttle.js';
 
@@ -44,6 +45,17 @@ import { probeThrottle } from '../lib/probe-throttle.js';
  */
 
 export type IdeState = 'none' | 'installing' | 'ready' | 'failed';
+
+/**
+ * Why an install was marked 'failed', when ProxMate can tell (VirtualMachine.ideFailReason).
+ * 'unreachable': the bootstrap finished in the guest, but the backend never reached
+ * code-server — a routing / firewall problem between ProxMate and the guest, not an
+ * install problem.
+ */
+export type IdeFailReason = 'unreachable';
+
+/** Last line the bootstrap writes once code-server is installed and its service enabled. */
+const IDE_BOOTSTRAP_DONE = '[proxmate-ide] done';
 
 // Generous ceiling: the code-server + OpenCode installers pull a fair bit; if the
 // service still isn't up after this, mark it failed (retryable) so a stuck install
@@ -307,7 +319,10 @@ export async function startIdeProvision(
   // that proves this secret, so a previous install stays closed until the new
   // one is serving.
   await saveIdeGuestSecret(vm.id, guestSecret);
-  await prisma.virtualMachine.update({ where: { id: vm.id }, data: { ideState: 'installing', ideStateAt: new Date() } });
+  await prisma.virtualMachine.update({
+    where: { id: vm.id },
+    data: { ideState: 'installing', ideStateAt: new Date(), ideFailReason: null },
+  });
   logger.info({ vmId: vm.id, vmid: vm.proxmoxVmId }, 'ide install started');
   return 'installing';
 }
@@ -343,11 +358,26 @@ export async function probeIdeReachability(
     return { ok: false, target, error: 'The guest answered with an empty response.' };
   } catch (e) {
     const msg = e instanceof Error && e.name === 'TimeoutError'
-      ? 'Timed out — the isolation firewall or routing is likely blocking the backend from reaching the guest (check ide_ingress_cidr and the managed pinhole).'
+      ? 'Timed out — the isolation firewall or routing is likely blocking the backend from reaching the guest (check ide_ingress_cidr and the managed pinhole). ' +
+        'If only guests on the node that is your Tailscale subnet router time out, install the bridge guard on that node (docs/proxmate-ide.md → Tailscale subnet router on a Proxmox node).'
       : e instanceof Error
         ? e.message
         : 'Connection failed.';
     return { ok: false, target, error: msg };
+  }
+}
+
+/**
+ * Did the bootstrap run to its last line? Read through the guest agent with a
+ * fixed argv. Any failure to read counts as "can't tell", so the install is
+ * reported as a plain failure.
+ */
+async function bootstrapFinished(vm: VirtualMachine): Promise<boolean> {
+  try {
+    const r = await guestExecOutput(vm.proxmoxNode, vm.proxmoxVmId, ['tail', '-n', '5', IDE_LOG_PATH], undefined, 15_000);
+    return r.exitcode === 0 && r.stdout.split('\n').some((line) => line.trim() === IDE_BOOTSTRAP_DONE);
+  } catch {
+    return false;
   }
 }
 
@@ -361,11 +391,21 @@ export async function refreshIdeState(vm: VirtualMachine): Promise<IdeState> {
   if (state !== 'installing') return state;
 
   if (vm.ideStateAt && Date.now() - vm.ideStateAt.getTime() > INSTALL_TIMEOUT_MS) {
-    await prisma.virtualMachine.update({ where: { id: vm.id }, data: { ideState: 'failed', ideStateAt: new Date() } });
+    const ideFailReason: IdeFailReason | null = (await bootstrapFinished(vm)) ? 'unreachable' : null;
+    await prisma.virtualMachine.update({
+      where: { id: vm.id },
+      data: { ideState: 'failed', ideStateAt: new Date(), ideFailReason },
+    });
+    if (ideFailReason) {
+      logger.warn({ vmId: vm.id, ip: vm.ipAddress }, 'ide install finished in the guest but the backend never reached code-server');
+    }
     return 'failed';
   }
   if (await probeIdeUp(vm)) {
-    await prisma.virtualMachine.update({ where: { id: vm.id }, data: { ideState: 'ready', ideStateAt: new Date() } });
+    await prisma.virtualMachine.update({
+      where: { id: vm.id },
+      data: { ideState: 'ready', ideStateAt: new Date(), ideFailReason: null },
+    });
     logger.info({ vmId: vm.id }, 'ide install ready');
     return 'ready';
   }

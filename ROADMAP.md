@@ -101,6 +101,9 @@ _Nothing yet._
 
 ### Released
 
+- **v1.3.4 — Tailscale subnet-router guard.** Guests on a Proxmox node that is also a Tailscale subnet
+  router get their own firewall for tailnet traffic again (`deploy/proxmox-tailscale-guard.sh`), and
+  an IDE that installed but can't be reached says so.
 - **v1.3.3 — creates behind a proxy, setup banners.** Creating a machine answers once it is recorded
   and finishes in the background; the cloud-init and IDE banners clear without a reload.
 - **v1.3.2 — edition split.** Bulk deploys from a template moved to ProxMate Pro / EDU.

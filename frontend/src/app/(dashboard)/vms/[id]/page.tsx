@@ -914,9 +914,11 @@ export default function VmDetailPage() {
           <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm text-muted-foreground">
             <span>
               <span className="font-medium text-foreground">ProxMate IDE</span> —{" "}
-              {vm.ideState === "failed"
-                ? "the last install didn't finish. The install log usually says why."
-                : "installing. You can follow the install log while it runs."}
+              {vm.ideState !== "failed"
+                ? "installing. You can follow the install log while it runs."
+                : vm.ideFailReason === "unreachable"
+                  ? "the IDE installed, but ProxMate can't reach it over the network. An admin needs to check the route and firewall between ProxMate and this VM."
+                  : "the last install didn't finish. The install log usually says why."}
             </span>
             <Button variant="outline" size="sm" onClick={() => setIdeLogOpen(true)}>
               <ScrollText />

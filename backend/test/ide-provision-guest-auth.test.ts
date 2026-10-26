@@ -50,7 +50,7 @@ vi.mock('../src/services/ide-guest-auth.service.js', async (orig) => ({
 
 import type { VirtualMachine } from '@prisma/client';
 import { prisma } from '../src/lib/prisma.js';
-import { guestFileWrite, guestExec } from '../src/services/proxmox.service.js';
+import { guestFileWrite, guestExec, guestExecOutput } from '../src/services/proxmox.service.js';
 import {
   saveIdeGuestSecret,
   loadIdeGuestSecret,
@@ -170,6 +170,44 @@ describe('refreshIdeState — ready only once the guest proves the secret', () =
     vi.mocked(proveIdeGuestTarget).mockResolvedValue('http://10.0.0.5:8080');
     expect(await refreshIdeState(installing())).toBe('ready');
     expect(vi.mocked(proveIdeGuestTarget)).toHaveBeenCalledWith(expect.objectContaining({ id: 'vm-1' }), 's');
+    expect(vi.mocked(prisma.virtualMachine.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ ideState: 'ready', ideFailReason: null }) }),
+    );
+  });
+});
+
+describe('refreshIdeState — a timed-out install says whether it was unreachable', () => {
+  const timedOut = () => vm({ ideState: 'installing', ideStateAt: new Date(Date.now() - 11 * 60 * 1000) });
+  const failedWith = (ideFailReason: string | null) =>
+    expect(vi.mocked(prisma.virtualMachine.update)).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ ideState: 'failed', ideFailReason }) }),
+    );
+
+  it("records 'unreachable' when the bootstrap finished in the guest", async () => {
+    vi.mocked(guestExecOutput).mockResolvedValueOnce({
+      exitcode: 0,
+      stdout: 'Created symlink ...\n[proxmate-ide] done',
+      stderr: '',
+    } as never);
+    expect(await refreshIdeState(timedOut())).toBe('failed');
+    failedWith('unreachable');
+    expect(vi.mocked(guestExecOutput).mock.calls.at(-1)![2]).toEqual(['tail', '-n', '5', '/var/log/pmide-provision.log']);
+  });
+
+  it('records no reason when the bootstrap stopped part-way', async () => {
+    vi.mocked(guestExecOutput).mockResolvedValueOnce({
+      exitcode: 0,
+      stdout: '[proxmate-ide] installing OpenCode 1.17.18...\ncurl: (6) Could not resolve host',
+      stderr: '',
+    } as never);
+    expect(await refreshIdeState(timedOut())).toBe('failed');
+    failedWith(null);
+  });
+
+  it('records no reason when the log cannot be read', async () => {
+    vi.mocked(guestExecOutput).mockRejectedValueOnce(new Error('guest agent not running'));
+    expect(await refreshIdeState(timedOut())).toBe('failed');
+    failedWith(null);
   });
 });
 

@@ -1,3 +1,13 @@
+ProxMate 1.3.4 closes a tenant-isolation gap on a Proxmox node that is also a Tailscale subnet router, and says when the ProxMate IDE installed but can't be reached. If one of your nodes is a subnet router, run the new guard on it (below); otherwise no configuration changes are needed to upgrade from 1.3.x.
+
+- **Security: the Tailscale subnet-router guard.** On a node that routes your tailnet to the LAN, Tailscale's own firewall rules accepted tailnet traffic to the guests on that node before the Proxmox firewall ran, so every port of those guests was reachable from the tailnet whatever ProxMate's isolation rules said. The same traffic was also masqueraded twice, so replies were lost and the IDE on those guests never opened. Guests on other nodes were not affected.
+  - Run `deploy/proxmox-tailscale-guard.sh` as root on the subnet-router node. It installs a small service that clears Tailscale's mark on bridged traffic at boot, whenever `tailscaled` restarts, and every 2 minutes, so each guest's own firewall decides again.
+  - `--check` reports whether a node needs it and whether it is in place; `--uninstall` removes it.
+  - Afterwards, tailnet devices reach guests on that node only through ports their firewall allows, as on every other node. See SECURITY.md → *3c* and docs/proxmate-ide.md → *Tailscale subnet router on a Proxmox node*.
+- **"Installed, but ProxMate can't reach it."** When an IDE install times out after the install itself finished in the guest, the VM page now says the IDE installed but ProxMate can't reach it over the network, instead of "the last install didn't finish". The admin reachability test names the subnet-router case.
+
+## 1.3.3
+
 ProxMate 1.3.3 fixes creating a machine behind a reverse proxy or a Cloudflare Tunnel, and the setup banners that stayed up until the page was reloaded. No configuration changes are needed to upgrade from 1.3.x.
 
 - **Creating a machine answers at once.** Deploying from a template, installing from an ISO, creating a container and restoring an uploaded backup answer as soon as the machine is recorded, so the wizard opens its page right away, even behind a proxy or tunnel that cuts requests off after about 100 seconds. The page shows **Creating** until the machine is running, or why it couldn't be created. Quota, validation and placement errors still show in the wizard. The tenant email and the audit entry follow once the machine is running.

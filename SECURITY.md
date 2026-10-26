@@ -121,6 +121,23 @@ the cluster firewall is off. Enable it carefully:
 
 Once enabled, ProxMate's per-VM rules are enforced and the Settings page shows **Enforced**.
 
+### 3c. A Tailscale subnet router on a Proxmox node
+
+If one of your Proxmox nodes is a **Tailscale subnet router**, traffic from your tailnet to
+guests **on that node** skips their firewall: Tailscale marks the packets it forwards, and its
+`ts-forward` rule accepts marked packets before the Proxmox firewall runs, including on the
+second pass through the guest's firewall bridge. Guests on other nodes are not affected.
+
+Install the guard on that node (as root):
+
+```bash
+./deploy/proxmox-tailscale-guard.sh
+./deploy/proxmox-tailscale-guard.sh --check
+```
+
+It clears Tailscale's mark on bridged traffic, so each guest's own firewall decides again. See
+[docs/proxmate-ide.md](docs/proxmate-ide.md) → *Tailscale subnet router on a Proxmox node*.
+
 ### Gold-standard isolation
 
 Defense-in-depth beyond the firewall — put tenant VMs on a network that is isolated

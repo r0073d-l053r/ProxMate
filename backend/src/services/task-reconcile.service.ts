@@ -589,7 +589,7 @@ async function completeFirewallOnlyCreate(
     ...OP_SETTLED,
     // What a finished rebuild clears: its hold, and anything about the old disk.
     ...(kind === 'rebuild-iso'
-      ? { holdReason: null, ideState: null, ideStateAt: null, deployState: null, deployStateAt: null, pendingCiPassword: null }
+      ? { holdReason: null, ideState: null, ideStateAt: null, ideFailReason: null, deployState: null, deployStateAt: null, pendingCiPassword: null }
       : {}),
   }, HELD_BY_PASS);
 }
