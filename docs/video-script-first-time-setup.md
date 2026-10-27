@@ -5,7 +5,7 @@ installed ProxMate. Recorded on a real Ubuntu desktop: Chromium for the docs and
 GNOME Terminal for SSH and the installer.
 
 - **Working title:** ProxMate setup: give friends their own VMs on Proxmox (v1.3.3)
-- **Length:** 1,441 spoken words; the recorded video runs 10:46 with three real waits sped up, then a 7.5-second end card
+- **Length:** 1,441 spoken words; the recorded video runs 10:43 with three real waits sped up, then a 7.5-second end card
 - **Voices:** two versions of the same footage: Kokoro `af_heart` (female) and Kokoro `am_michael` (male),
   each line paced to the same slot (ElevenLabs was not reachable from the recording sandbox)
 - **Written with:** the `script-writer` skill (tutorial template, casual-friendly tone) and
