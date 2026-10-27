@@ -5,8 +5,9 @@ installed ProxMate. Recorded on a real Ubuntu desktop: Chromium for the docs and
 GNOME Terminal for SSH and the installer.
 
 - **Working title:** ProxMate setup: give friends their own VMs on Proxmox (v1.3.3)
-- **Length:** 1,415 spoken words; the recorded video runs 10:29 with three real waits sped up, then a 7.5-second end card
-- **Voice:** Kokoro `af_heart` (ElevenLabs was not reachable from the recording sandbox)
+- **Length:** 1,415 spoken words; the recorded video runs 10:40 with three real waits sped up, then a 7.5-second end card
+- **Voices:** two versions of the same footage: Kokoro `af_heart` (female) and Kokoro `am_michael` (male),
+  each line paced to the same slot (ElevenLabs was not reachable from the recording sandbox)
 - **Written with:** the `script-writer` skill (tutorial template, casual-friendly tone) and
   `yt-script/hookscore.py` for the hook
 - **Follows:** the docs at https://proxmate.host/docs (Proxmox Integration, Setup Wizard,
@@ -29,6 +30,7 @@ the opposite, then the cold open proves it with the finished result on screen.
 | Presenter's desktop | Ubuntu 24.04, user `alex`, host `alex-desktop` |
 | ProxMate box | Ubuntu 24.04 server `proxmate`, 192.168.1.50 |
 | Proxmox VE node | `pve1`, https://192.168.1.10:8006 |
+| Token scene (S03) | a real Proxmox VE 9.2.2 web UI (Proxmox Dark theme), opened in a second tab |
 | ProxMate version | v1.3.3 (whatever `install.sh` checks out) |
 | Friend | Mike (signs up in an incognito window) |
 | Cloud-init extra Mike ticks | Install Cockpit |
@@ -69,7 +71,7 @@ Let's start with that token, because that's where the trouble hides.
 
 ## S03 · The token, and the sneaky checkbox
 
-[ON SCREEN: docs, Proxmox Integration. Scroll to Creating an API Token, then the pitfall callout, then the token script section.]
+[ON SCREEN: start on the docs, Proxmox Integration. Open a new tab to the Proxmox web UI at https://192.168.1.10:8006, logged in as root@pam. Datacenter, Permissions, API Tokens, Add. User stays root@pam, type proxmate as the Token ID, point at Privilege Separation (ticked), untick it, Add. The Token Secret window appears: Copy Secret Value, close it, and the new token sits in the list with Privilege Separation No. Close the tab, back on the docs, scroll to the Least-privilege token script section.]
 
 In the Proxmox web UI, go to Datacenter, Permissions, API Tokens, and click Add.
 Pick a user. For a homelab, root@pam is fine. Then name the token proxmate.
