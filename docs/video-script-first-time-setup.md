@@ -5,7 +5,7 @@ installed ProxMate. Recorded on a real Ubuntu desktop: Chromium for the docs and
 GNOME Terminal for SSH and the installer.
 
 - **Working title:** ProxMate setup: give friends their own VMs on Proxmox (v1.3.3)
-- **Length:** 1,415 spoken words; the recorded video runs 10:40 with three real waits sped up, then a 7.5-second end card
+- **Length:** 1,427 spoken words; the recorded video runs 10:46 with three real waits sped up, then a 7.5-second end card
 - **Voices:** two versions of the same footage: Kokoro `af_heart` (female) and Kokoro `am_michael` (male),
   each line paced to the same slot (ElevenLabs was not reachable from the recording sandbox)
 - **Written with:** the `script-writer` skill (tutorial template, casual-friendly tone) and
@@ -73,6 +73,7 @@ Let's start with that token, because that's where the trouble hides.
 
 [ON SCREEN: start on the docs, Proxmox Integration. Open a new tab to the Proxmox web UI at https://192.168.1.10:8006, logged in as root@pam. Datacenter, Permissions, API Tokens, Add. User stays root@pam, type proxmate as the Token ID, point at Privilege Separation (ticked), untick it, Add. The Token Secret window appears: Copy Secret Value, close it, and the new token sits in the list with Privilege Separation No. Close the tab, back on the docs, scroll to the Least-privilege token script section.]
 
+Let's make one together. I'll open my Proxmox in a new tab.
 In the Proxmox web UI, go to Datacenter, Permissions, API Tokens, and click Add.
 Pick a user. For a homelab, root@pam is fine. Then name the token proxmate.
 Now, the sneaky checkbox.
