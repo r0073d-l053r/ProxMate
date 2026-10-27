@@ -73,7 +73,7 @@ Let's start with that token, because that's where the trouble hides.
 
 ## S03 · The token, and the sneaky checkbox
 
-[ON SCREEN: start on the docs, Proxmox Integration. Open a new tab to the Proxmox web UI at https://192.168.1.10:8006, logged in as root@pam. Datacenter, Permissions, API Tokens, Add. User stays root@pam, type proxmate as the Token ID, point at Privilege Separation (ticked), untick it, Add. The Token Secret window appears: Copy Secret Value, close it, and the new token sits in the list with Privilege Separation No. Close the tab, back on the docs, scroll to the Least-privilege token script section.]
+[ON SCREEN: start on the docs, Proxmox Integration. Open a new tab to the Proxmox web UI at https://192.168.1.10:8006, logged in as root@pam. Datacenter, Permissions, API Tokens: the list already holds the narrator's first token, root@pam!first-try, with Privilege Separation Yes. Add. User stays root@pam, type proxmate as the Token ID, point at Privilege Separation (ticked), untick it, Add. The Token Secret window appears: Copy Secret Value, close it, and the new token sits in the list with Privilege Separation No, right under first-try's Yes. Close the tab, back on the docs, scroll to the Least-privilege token script section.]
 
 Let's make one together. I'll open my Proxmox in a new tab.
 In the Proxmox web UI, go to Datacenter, Permissions, API Tokens, and click Add.
@@ -214,7 +214,7 @@ Send it however you like. Text, email, carrier pigeon.
 
 ## S13 · Be Mike
 
-[ON SCREEN: Ctrl+Shift+N for an incognito window, paste the link, the sign-up page with the quota, create the account, Mike's dashboard, New VM, Ubuntu 24.04, Medium, name, username, SSH key, password, tick Install Cockpit, Create. FF through the boot. VM shows Running.]
+[ON SCREEN: Ctrl+Shift+N for an incognito window, paste the link, the sign-up page with the quota, create the account, Mike's dashboard, New VM, Ubuntu 24.04, Medium, name, username, SSH key, password, tick Install Cockpit, Deploy. FF through the boot. VM shows Running.]
 
 To see what Mike sees, I'll open an incognito window and paste the link.
 His quota is right there on the sign-up page.
@@ -225,7 +225,7 @@ Virtual Machines, New VM.
 Source, Ubuntu 24.04. Size, Medium.
 Give it a name and a username, and paste an SSH key.
 I'll set a password too, so we can use the console in a second.
-And here are those extras. Mike wants Cockpit, a slick web dashboard for his server. Tick it, and Create!
+And here are those extras. Mike wants Cockpit, a slick web dashboard for his server. Tick it, and Deploy!
 ProxMate clones the template, boots it, and cloud-init does the rest.
 Let's skip the waiting again.
 [FF]
