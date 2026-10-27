@@ -6,8 +6,8 @@ GNOME Terminal for SSH and the installer.
 
 - **Working title:** ProxMate setup: give friends their own VMs on Proxmox (v1.3)
 - **Length:** 1,441 spoken words. Two cuts, each followed by a 7.5-second end card:
-  - **Plain cut:** 10:43, with three real waits sped up.
-  - **Polished cut:** 10:38, recorded again with a 32 px pointer, a ripple on each important click, occasional eased zooms, and four real waits sped up.
+  - **Plain cut:** 10:45, with three real waits sped up.
+  - **Polished cut:** 10:41, recorded again with a 32 px pointer, a ripple on each important click, occasional eased zooms, and four real waits sped up.
 - **Voices:** two versions of the same footage: Kokoro `af_heart` (female) and Kokoro `am_michael` (male),
   each line paced to the same slot (ElevenLabs was not reachable from the recording sandbox)
 - **Written with:** the `script-writer` skill (tutorial template, casual-friendly tone) and
