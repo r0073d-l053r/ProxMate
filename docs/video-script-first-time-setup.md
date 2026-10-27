@@ -4,8 +4,10 @@ A friendly, start-to-finish walkthrough for people who already run Proxmox VE an
 installed ProxMate. Recorded on a real Ubuntu desktop: Chromium for the docs and the dashboard,
 GNOME Terminal for SSH and the installer.
 
-- **Working title:** ProxMate setup: give friends their own VMs on Proxmox (v1.3.3)
-- **Length:** 1,441 spoken words; the recorded video runs 10:43 with three real waits sped up, then a 7.5-second end card
+- **Working title:** ProxMate setup: give friends their own VMs on Proxmox (v1.3)
+- **Length:** 1,441 spoken words. Two cuts, each followed by a 7.5-second end card:
+  - **Plain cut:** 10:43, with three real waits sped up.
+  - **Polished cut:** 10:38, recorded again with a 32 px pointer, a ripple on each important click, occasional eased zooms, and four real waits sped up.
 - **Voices:** two versions of the same footage: Kokoro `af_heart` (female) and Kokoro `am_michael` (male),
   each line paced to the same slot (ElevenLabs was not reachable from the recording sandbox)
 - **Written with:** the `script-writer` skill (tutorial template, casual-friendly tone) and
@@ -31,7 +33,7 @@ the opposite, then the cold open proves it with the finished result on screen.
 | ProxMate box | Ubuntu 24.04 server `proxmate`, 192.168.1.50 |
 | Proxmox VE node | `pve1`, https://192.168.1.10:8006 |
 | Token scene (S03) | a real Proxmox VE 9.2.2 web UI (Proxmox Dark theme), opened in a second tab |
-| ProxMate version | v1.3.3 (whatever `install.sh` checks out) |
+| ProxMate version | whatever `install.sh` checks out: v1.3.3 in the plain cut, v1.3.4 in the polished cut |
 | Friend | Mike (signs up in an incognito window) |
 | Cloud-init extra Mike ticks | Install Cockpit |
 
