@@ -7,7 +7,7 @@ tab of the VM page, and every console. The ProxMate IDE is left for its own vide
 Recorded on the same Ubuntu desktop as part one, against a real Proxmox VE node with real VMs.
 
 - **Working title:** ProxMate templates, cloud-init and consoles: every way to use your VMs (v1.3)
-- **Length:** about 1,900 spoken words, roughly 17 minutes with the real waits sped up
+- **Length:** about 1,760 spoken words; the final cut length is set once the recording is assembled
 - **Voices:** two versions of the same footage, Kokoro `af_heart` (female) and Kokoro `am_michael` (male)
 - **Written with:** the `script-writer` skill (tutorial template, casual-friendly tone) and
   `yt-script/hookscore.py` for the hook
@@ -70,12 +70,12 @@ Here's Ubuntu 24.04 from last time, ready to go.
 
 ## V03 · Add a cloud image
 
-[ON SCREEN: the Image list opens on the catalog. Pick Debian 13 (Trixie); Store name fills in. Point at the last option, Custom image URL. Add to store, the progress bar. FF through the build. The new Debian 13 card with its Cloud-init badge.]
+[ON SCREEN: the Image list opens on the catalog. Scroll to the last option, Custom image URL, then back up and pick Debian 13 (Trixie); Store name fills in. Add to store, the progress bar. FF through the build. The new Debian 13 card with its Cloud-init badge.]
 
 Let's add Debian 13.
 Open the list. These come straight from Debian, Ubuntu, Fedora, Rocky and friends.
-Pick Debian 13, and the store name fills itself in.
 Want something that isn't listed? The last option takes your own image link.
+Pick Debian 13, and the store name fills itself in.
 Add to store.
 Proxmox downloads the image, ProxMate boots it once to install the QEMU guest agent, and turns it into a template.
 That guest agent matters. It's how ProxMate finds the VM's IP address, sets passwords, and shuts it down cleanly.
@@ -126,6 +126,7 @@ Quick stop before we deploy.
 Save your SSH key once, and you never paste it again.
 Here's my public key. The public half is safe to share.
 Security, SSH keys. Name it laptop, paste, and Save key.
+From now on, it's one click in the deploy wizard.
 
 ## V08 · Deploy web-01
 
@@ -159,13 +160,15 @@ Setup's done. The banner is gone, and the IP address showed up, thanks to the gu
 
 ## V10 · ISO installs and containers
 
-[ON SCREEN: Virtual Machines, New VM. Source: Custom VM (install from ISO). Name debian-iso, Installation ISO debian-13.7.0-amd64-netinst.iso, Create VM. The VM page, Console, Graphical: the Debian installer menu. Then New VM, Source: Container (LXC), the debian-12-standard template, name debian-ct, a root password, Create. FF. The machine list with the LXC badge.]
+[ON SCREEN: Virtual Machines, New VM. Source: Custom VM (install from ISO). Name debian-iso, Installation ISO debian-13.7.0-amd64-netinst.iso, Create VM. The VM page, Console, Graphical: the Debian installer menu. The Text toggle: No text console, Switch to graphical console. Then New VM, Source: Container (LXC), the debian-12-standard template, name debian-ct, a root password, Create. FF. The machine list with the LXC badge.]
 
 Templates aren't the only way.
 New VM, and pick Custom VM, install from ISO.
 Name it, and pick an installer. ProxMate lists every ISO on your Proxmox storage.
 Create VM, and it boots straight into the installer.
 There it is, in the graphical console. From here it's a normal install.
+One heads-up. VMs installed from an ISO usually have no text console, because they have no serial port.
+ProxMate says so, and sends you back to the graphical one.
 For something lighter, there's Container, LXC.
 Containers share the host's kernel, so they're small and quick.
 Pick a container template, a name, and a root password. Create.
@@ -182,7 +185,7 @@ Up top: the status, the node, the VM ID and the OS. It refreshes itself every co
 Connection details has the IP address, with a copy button.
 Live status and Configuration show what it's doing, and what it has.
 Notes, projects and tags keep things tidy once you have a few.
-And Optimization tips flags anything missing, like the guest agent.
+And Optimization tips has advice, like how to reach it from outside ProxMate. More on that at the end.
 
 ## V12 · The graphical console
 
@@ -199,13 +202,13 @@ And this Actions menu adds Pause, Resume and Force stop, for when a VM stops ans
 
 ## V13 · The text console
 
-[ON SCREEN: the Graphical | Text toggle, Text. Log in as ubuntu. docker run hello-world, no sudo. Select a line to copy it, right-click to paste it. sudo tailscale up prints a sign-in link; Ctrl-click opens the Tailscale sign-in page in a new tab; close it, Ctrl+C. Then echo a line into notes.txt for later.]
+[ON SCREEN: the Graphical | Text toggle, Text. Log in as ubuntu. docker run hello-world, no sudo. Select a line, right-click, Copy; right-click at the prompt, Paste. sudo tailscale up prints a sign-in link; Ctrl-click opens the Tailscale sign-in page in a new tab; close it, Ctrl+C. Then echo a line into notes.txt for later.]
 
 Flip the toggle to Text. This one's my favourite.
 It's a real terminal. Scrollback, copy and paste, the lot.
 Let's try Docker. docker run hello-world.
 No sudo needed. Cloud-init added me to the docker group.
-Select text to copy it. Right-click to paste.
+Select some text, right-click, and Copy. Right-click again, and Paste.
 And links are clickable. sudo tailscale up prints a sign-in link.
 Ctrl-click, and there's the Tailscale sign-in page.
 I won't join my tailnet on camera, but that's all it takes to reach this box from anywhere.
@@ -213,21 +216,19 @@ Before we move on, I'll leave a little notes file here. Remember it.
 
 ## V14 · Pop out
 
-[ON SCREEN: Pop out: the text console in its own small window. Keep on top. Then debian-iso's console, Text: No text console, Switch to graphical console.]
+[ON SCREEN: web-01's text console, Pop out: the console opens in its own window. Drag it to the side. Type timeout 90 yes > /dev/null to keep the CPU busy.]
 
 Want a terminal next to your docs? Pop out.
-The console gets its own little window.
-Tick Keep on top, and it floats above everything else.
-One heads-up. VMs installed from an ISO usually have no text console, because they have no serial port.
-ProxMate says so, and sends you to the graphical one instead.
+The console gets its own window, so you can put it wherever you like.
+I'll use it to give this VM some work. This keeps one CPU busy for a minute and a half.
+And if you reach ProxMate over HTTPS, Chrome and Edge also get a Keep on top button, so it floats above everything.
 
 ## V15 · Insights and Activity
 
-[ON SCREEN: in web-01's text console, a CPU busy loop. The Insights tab: the live CPU chart climbs. Stop the loop. Day and Week. Then the Activity tab.]
+[ON SCREEN: back to the main window, web-01's page, the Insights tab: the live CPU chart climbs. Day and Week. Then the Activity tab.]
 
-Insights shows CPU and memory, live and over time.
-Let me give it some work.
-There it goes.
+Back on the VM page, Insights shows CPU and memory, live and over time.
+There's that busy CPU.
 Day and Week fill in as the VM runs.
 And Activity is the paper trail. Who created it, who opened a console, and when.
 
