@@ -225,11 +225,11 @@ And if you reach ProxMate over HTTPS, Chrome and Edge also get a Keep on top but
 
 ## V15 · Insights and Activity
 
-[ON SCREEN: back to the main window, web-01's page, the Insights tab: the live CPU chart climbs. Day and Week. Then the Activity tab.]
+[ON SCREEN: back to the main window, web-01's page, the Insights tab: the Live chart, then Day, where the busy CPU shows as a spike to 100%. Week. Then the Activity tab.]
 
 Back on the VM page, Insights shows CPU and memory, live and over time.
-There's that busy CPU.
 Day and Week fill in as the VM runs.
+There's that busy CPU.
 And Activity is the paper trail. Who created it, who opened a console, and when.
 
 ## V16 · The Actions menu
