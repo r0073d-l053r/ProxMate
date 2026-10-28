@@ -5,7 +5,7 @@ running in production — this roadmap is about **closing cloud-provider parity 
 hardening for scale**, not fixing breakage. Tiers are rough priority bands, not commitments. Have an
 idea? Open a [discussion](https://github.com/r0073d-l053r/ProxMate/discussions/categories/ideas).
 
-The detailed, dated log of everything already built lives in [`completed-tasks.md`](completed-tasks.md).
+The detailed notes for every release live in [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
 This file leads with **what's still open**, then **new ideas**, then a condensed **shipped** index.
 
 ---
@@ -36,6 +36,15 @@ This file leads with **what's still open**, then **new ideas**, then a condensed
   is SQLite-locked (`migration_lock.toml`), and the built-in app-DB backup uses SQLite's
   `VACUUM INTO`. Postgres today means `db push` + `pg_dump`; proper support wants a migration
   history and a backup path of its own. SQLite stays the default.
+
+- **Duplicate VM in the background.** Since v1.3.3, creating from an ISO, a template, an OS
+  template or an uploaded backup answers as soon as the machine is recorded and finishes in the
+  background. Duplicating a VM still runs inside the request, so a slow copy behind a reverse proxy
+  or tunnel can time out in the browser while it carries on.
+- **IDE firewall rule follows the ingress setting.** The rule that lets ProxMate reach a VM's IDE is
+  added once, from the IDE ingress CIDR at the time of the first install. Changing the setting later
+  doesn't update existing VMs; a reinstall should bring the rule up to date, and an install with no
+  ingress CIDR on a firewalled VM should say so up front instead of waiting for the install timeout.
 
 ### Production hardening & ops
 
@@ -93,7 +102,7 @@ Fresh proposals; none built yet. Each stays inside the API-only + tenant-isolati
 
 ## ✅ Shipped — condensed index
 
-Full detail + dates in [`completed-tasks.md`](completed-tasks.md).
+Full detail for each release in [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
 
 ### Unreleased
 
