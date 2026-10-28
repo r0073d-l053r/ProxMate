@@ -70,8 +70,9 @@ You do **not** need to:
 
 If you run the cluster, see [Admin guide — cluster + templates](./admin-guide.md)
 for first-time setup, the firewall-enforcement step, and how to ship a Linux
-template that has Tailscale and `cloudflared` pre-installed so tenants are one
-command away from secure remote access.
+template that has Tailscale and `cloudflared` pre-installed (or offer **Install
+Tailscale** as a first-boot install on cloud images) so tenants are one command
+away from secure remote access.
 
 ## For users (tenants)
 

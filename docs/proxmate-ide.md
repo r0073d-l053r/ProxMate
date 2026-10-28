@@ -42,7 +42,7 @@ flowchart LR
   gateway** with a **per-VM bearer token**. The gateway enforces the admin's model allow-list
   and forwards to the real upstream. The tenant never sees the upstream endpoint or key.
 
-The IDE is installed **lazily** — on the first "Open IDE", ProxMate installs code-server +
+The IDE is installed **lazily** — the first time it's opened, ProxMate installs code-server +
 OpenCode into the VM through the QEMU guest agent and opens the editor when it's ready. The VM
 is locked (no stop/delete/console) during the install.
 
@@ -60,7 +60,8 @@ upgrade, and takes about a minute.
 
 ## For tenants (using it)
 
-1. Open one of your VMs → **Console ▸ Open IDE** (desktop only; the IDE is a pop-out editor).
+1. Open one of your VMs → **Console ▸ ProxMate IDE** (the entry says *install & open* until the
+   IDE is installed, then *code + AI*; desktop only, the IDE is a pop-out editor).
 2. First time on a VM: it installs for ~a minute (you can navigate away and come back).
 3. You get VS Code in the browser, opened at the VM's root, with a terminal on the VM and the
    **OpenCode** AI agent already running.
@@ -88,19 +89,22 @@ people the VM is shared with can't. The VM must be running with its guest agent 
 
 ## For admins (enabling + controlling it)
 
-Admin **Settings ▸ ProxMate IDE**:
+Admin **Settings ▸ IDE ▸ ProxMate IDE**:
 
-- **Availability tier:** `off`, `admins only`, or `all tenants`.
-- **Model source:** add an **OpenAI-compatible endpoint** (a local Ollama, vLLM, OpenRouter, …).
-  Admins may point a source at a **LAN address** (e.g. `http://192.168.x:11434/v1`) — use **Test**
-  to confirm it reaches the endpoint and lists models.
-- **Shared models + visibility:** pick which of the source's models tenants see (`shared`),
-  which only admins see (`admin`), or neither (`none`).
+- **Availability:** **Off**, **Admins only**, or **Admins + tenants**.
+- **Model source:** save an **OpenAI-compatible endpoint** (a local Ollama, vLLM, OpenRouter, …)
+  under your own **Security ▸ AI keys**; it then appears as a source under **Local models** on the
+  IDE card. Admins may point a source at a **LAN address** (e.g. `http://192.168.x:11434/v1`) —
+  use **Test** to confirm it reaches the endpoint and lists models.
+- **Shared models + visibility:** pick which of the source's models tenants see (**Shared with
+  tenants**), which only admins see (**Admin only**), or neither (**None (hidden)**).
 - **Bring-your-own keys:** toggle whether tenants may add their own provider keys. Tenant keys are
   **held to public endpoints** (an SSRF guard blocks private/loopback/metadata addresses) and to the
   **fixed preset providers** — a free-form custom base URL is admin-only; admin keys are exempt so
   LAN sources work.
-- **`ide_ingress_cidr`:** the address ProxMate's traffic reaches the guest from (see Networking).
+- **IDE ingress source (CIDR)** (`ide_ingress_cidr`): the address ProxMate's traffic reaches the
+  guest from (see Networking). **Test reachability** dials a running VM's IDE port from the backend,
+  the same path the IDE proxy uses.
 
 ### Networking requirement (the one thing to get right)
 
@@ -129,12 +133,13 @@ guest's firewall bridge. There, Tailscale's own rules run before the Proxmox fir
 - **masquerade the packet a second time**, to the node's tailnet address, so the guest's reply is
   lost. The IDE installs, but ProxMate can't reach it, and the VM page says so.
 
-Run this once as root on the subnet-router node. It installs a small service that clears the mark
-on bridged traffic, at boot, whenever `tailscaled` restarts, and every 2 minutes:
+Copy `deploy/proxmox-tailscale-guard.sh` to the subnet-router node (each one, if you have several)
+and run it once as root. It installs a small service that clears the mark on bridged traffic, at
+boot, whenever `tailscaled` restarts, and every 2 minutes:
 
 ```bash
-./deploy/proxmox-tailscale-guard.sh            # install and apply now
-./deploy/proxmox-tailscale-guard.sh --check    # does this node need it, and is it in place?
+bash proxmox-tailscale-guard.sh            # install and apply now
+bash proxmox-tailscale-guard.sh --check    # does this node need it, and is it in place?
 ```
 
 Afterwards, tailnet devices reach guests on that node only through ports the guest's firewall
@@ -179,8 +184,8 @@ allows, as they already do on every other node. `--uninstall` removes it.
 | **"Unauthorized — missing session"** when the AI agent runs | The gateway base URL is `http://` and the edge 301-redirects to https, downgrading the POST to a GET. Ensure `TRUST_PROXY=1` and `BACKEND_PUBLIC_URL`/the origin are **https**. |
 | OpenCode crashes: **"CPU lacks AVX" / illegal instruction** | The VM's CPU masks AVX. ProxMate sets `cpu: host` at IDE-enable; **reboot the VM** and reopen so it takes effect. If the node's own silicon lacks AVX, ProxMate offers a **one-click move** to a capable node (stop → move → start → IDE opens). |
 | VM becomes **unresponsive right after Open IDE** | Undersized VM — the install OOMs. Give the VM **>= 8 GB RAM** (the `ide_min_ram_mb` floor) and retry. |
-| **"the IDE installed, but ProxMate can't reach it over the network"** | The install finished in the guest, but the backend never reached code-server on `:8080`. Use **test reachability** (admin). If only VMs on the node that is your Tailscale subnet router are affected, install the guard on that node (see *Tailscale subnet router on a Proxmox node*). Otherwise check `ide_ingress_cidr` and the route to the guest. Then open the IDE again. |
-| **The install failed** ("The IDE install didn't finish") | Open **View install log** on the VM page: the last lines usually name the step (a download that failed, a full disk, no network). Fix it and open the IDE again; the install re-runs. |
+| **"the IDE installed, but ProxMate can't reach it over the network"** | The install finished in the guest, but the backend never reached code-server on `:8080`. Use **Test reachability** on the IDE settings card (admin). If only VMs on the node that is your Tailscale subnet router are affected, install the guard on that node (see *Tailscale subnet router on a Proxmox node*). Otherwise check `ide_ingress_cidr` and the route to the guest. Then open the IDE again. |
+| **The install failed** ("The IDE install didn't finish", or "the last install didn't finish" on the VM page) | Open **View install log** on the VM page: the last lines usually name the step (a download that failed, a full disk, no network). Fix it and open the IDE again; the install re-runs. |
 | **"The QEMU guest agent is not responding"** | Install + start `qemu-guest-agent` in the VM (the IDE installs through it). |
 | AI agent can't reach a model / 403 | The model isn't shared to that tenant (check visibility), or BYO is disabled, or a BYO endpoint was blocked as private. |
 

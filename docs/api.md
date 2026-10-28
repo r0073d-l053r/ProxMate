@@ -34,7 +34,7 @@ account security — use the web app.`):
 | Passkeys | `POST /api/auth/passkeys/register/options`, `POST /api/auth/passkeys/register/verify`, `GET /api/auth/passkeys`, `DELETE /api/auth/passkeys/:id` |
 | API tokens | `GET /api/api-tokens`, `POST /api/api-tokens`, `DELETE /api/api-tokens/:id` |
 | Invites (admin) | `GET /api/invites`, `POST /api/invites`, `POST /api/invites/:id/send` |
-| Admin | `PUT /api/admin/settings/kiosk`, `PUT /api/admin/settings/sso`, `POST /api/admin/users/:id/reset-password` |
+| Admin | `PUT /api/admin/settings/kiosk`, `PUT /api/admin/settings/sso`, `POST /api/admin/users/:id/reset-password`, `POST /api/admin/encryption-key-backup/confirm` |
 
 Everything else an account can do — VMs, backups, snapshots, shares, templates,
 and the rest of the admin API — works with a token.
@@ -47,7 +47,7 @@ A machine-readable description is served at:
 GET /api/openapi.json
 ```
 
-It's an OpenAPI 3.1 document of the tenant-facing endpoints (VMs, templates, ISOs).
+It's an OpenAPI 3.1 document of the tenant-facing endpoints (VMs, projects, templates, ISOs).
 Point Swagger UI, `openapi-generator`, or an HTTP client at it to explore or generate a
 client.
 
@@ -129,13 +129,15 @@ curl -H "$AUTH" -H 'content-type: application/json' -X POST \
   `DELETE /vms/:id/shares/:shareId` revokes either kind. A VM holds at most 100 shares
   (a new address past that answers **409**).
 - **Projects.** A project is a `project:<name>` tag on the VM (names: letters, numbers,
-  `_` and `-`, up to 32, lowercased; one project per VM). Only a VM's owner (or an admin)
-  sets it; `POST /projects/assign` answers per VM `{ id, ok, error? }`, with VMs you don't own
-  reported as `not found`. `PATCH /vms/:id` `tags` edits the other labels and keeps the
+  `_` and `-`, up to 32, starting with a letter or number, lowercased; one project per VM;
+  an invalid name answers **400**). Only a VM's owner (or an admin) sets it; `POST
+  /projects/assign` takes up to 50 `ids` and answers `{ project, results }` with one
+  `{ id, ok, error? }` per VM, VMs you don't own reported as `not found`. `PATCH /vms/:id` `tags` edits the other labels and keeps the
   project. `GET /projects` answers `{ days, owners, shared }`: your VMs by project, each with
   `vmCount`, `running`, allocated `cpu`/`ram`/`storage` and `usage { samples, avgCpuPct,
-  avgMemBytes }` (averages from the usage samples taken while each VM ran), and VMs shared
-  with you as one `shared` group without their owner's tags. Admins get every owner.
+  avgMemBytes }` (averages from the usage samples taken while each VM ran; `?days=` 1 to 90,
+  default 7), and VMs shared with you as one `shared` group without their owner's tags.
+  Admins get every owner.
 - **File push.** `POST /vms/:id/files` (multipart) needs the `configure` capability (owner,
   admin or a Manager share) and answers `{ path, size, sha256, verified }`. The path must
   be absolute and normalized and not under `/proc`, `/sys` or `/dev` (**400** otherwise);
@@ -160,8 +162,8 @@ curl -H "$AUTH" -H 'content-type: application/json' -X POST \
 |---|---|
 | `GET /admin/vms/unmatched` | Machines whose VMID holds no guest carrying their ProxMate tag, with what Proxmox has at that VMID (`guest`), whether another machine shares the VMID (`sharedVmid`) and whether it's a Template Store VMID (`templateRow`). |
 | `POST /admin/vms/:id/adopt` | Tags the guest at the VMID as this machine's (and, for a held machine, re-applies isolation and re-reads its sizes before clearing the hold). **409** with the reason when the guest can't be adopted. |
-| `GET /admin/guests/importable` | Proxmox guests ProxMate doesn't manage (no machine references them, no ProxMate tag, not a template): `vmid`, `node`, `name`, `type`, `status`, `cpu`, `ramMb`, `diskGb`. |
-| `POST /admin/guests/import` | `{ vmid, ownerId, quotaExempt? }` — imports the guest as that user's machine (tagged, default bridge and isolation applied, counted toward their quota unless `quotaExempt`). **201** `{ vm }`; **409** with the reason when it can't be imported; **403** when it would exceed the owner's quota. |
+| `GET /admin/guests/importable` | Proxmox guests ProxMate doesn't manage (no machine references them, no ProxMate tag, not a template): `vmid`, `node`, `name`, `type`, `status`, `cpu`, `ramMb`, `diskGb`, `pool`. |
+| `POST /admin/guests/import` | `{ vmid, ownerId, quotaExempt?, movePool? }` — imports the guest as that user's machine (tagged, default bridge and isolation applied, counted toward their quota unless `quotaExempt`, and added to the configured Proxmox pool). **201** `{ vm, poolNote }`; **409** with the reason when it can't be imported (`code: "pool_move"` when the guest is in another Proxmox pool: resend with `movePool: true` to move it); **403** when it would exceed the owner's quota. |
 | `DELETE /vms/:id?rowOnly=true` | Removes only ProxMate's record and leaves the guest alone. Admin only (**403** otherwise); refused for a machine whose guest is confirmed as its own — delete it normally. |
 | `DELETE /users/:id` | Deletes the account and its machines with their guests. When any machine can't be deleted with its guest, answers **409**, keeps the account and lists those machines in `vms` (`id`, `name`, `proxmoxVmId`, `reason`). |
 

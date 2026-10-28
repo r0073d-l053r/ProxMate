@@ -21,7 +21,9 @@ In Proxmox: **Datacenter → Permissions → API Tokens → Add**.
 
 - **User:** `root@pam` (simplest). For least privilege, skip this dialog and run
   `deploy/proxmox-token.sh` on a node instead: it creates a `proxmate@pve` user, a
-  `ProxMate` role with only what ProxMate uses, and the token (see DEPLOYMENT.md §2.2)
+  `ProxMate` role with only what ProxMate uses, and the token (see DEPLOYMENT.md §2.2). With
+  `--pool <name>` it grants the guest privileges on that Proxmox resource pool only, instead of
+  the whole cluster (set the same pool in the wizard below)
 - **Token ID:** `proxmate`
 - **Privilege Separation:** **uncheck this box** — see below
 
@@ -49,8 +51,8 @@ Copy the secret that Proxmox shows you — **it's only shown once**.
 Open the ProxMate web UI. The wizard walks you through:
 
 1. **Admin account** — your owner login
-2. **Proxmox connection** — host URL (`https://your-host:8006`), token ID, secret. Leave "Verify TLS" off for a self-signed cert on a private network. Click **Test connection** — you should see "Connected to Proxmox VE X.Y (N nodes)".
-3. **Defaults** — pick the storage pool for VM disks (must support `images` — e.g. `local-lvm`, `local-zfs`, Ceph), the network for VMs (a Linux bridge such as `vmbr0`, an Open vSwitch bridge or an SDN VNet; or type its name if it isn't listed), and the ISO storage (typically `local`).
+2. **Proxmox connection** — host URL (`https://your-host:8006`), token ID, secret. Leave "Verify TLS certificate" off for a self-signed cert on a private network. **Proxmox pool (optional)** is only for a pool-scoped token: every guest ProxMate creates, clones, restores or imports is placed in it. Click **Test connection** — you should see "Connected to Proxmox VE X.Y (N nodes, M storages)", plus a warning for each privilege the token is missing.
+3. **Defaults** — pick the storage pool for VM disks (must support `images` — e.g. `local-lvm`, `local-zfs`, Ceph), the network for VMs (a Linux bridge such as `vmbr0`, an Open vSwitch bridge or an SDN VNet; or type its name if it isn't listed), the ISO storage (typically `local`), and what is installed on every cloud-init VM (see §3.0).
 4. **Finish** — you're signed in as the admin from step 1 (every step after it needs that session).
 
 ---
@@ -73,6 +75,10 @@ After this is on, every tenant VM gets:
 - outbound **ALLOW** to the public internet + DNS.
 
 Tenants can still install Tailscale and Cloudflare Tunnel inside their VMs because those are outbound-only.
+
+To tighten DNS, list your resolver IP(s) under **DNS servers (optional)** on the same card; by default DNS is allowed to any resolver.
+
+> **A Proxmox node that is a Tailscale subnet router** needs one more step, or tailnet traffic to the guests on that node skips their firewall. Copy `deploy/proxmox-tailscale-guard.sh` to that node and run it as root (`--check` reports whether the node needs it). See [SECURITY.md → 3c](../SECURITY.md#3c-a-tailscale-subnet-router-on-a-proxmox-node).
 
 > See [SECURITY.md](../SECURITY.md) for the full isolation model, including the "gold-standard" dedicated-VLAN setup.
 
@@ -99,7 +105,7 @@ Tenants can tick optional **first-boot installs** when deploying a cloud image �
 - **Options offered to tenants** — the checkboxes tenants see on the deploy wizard.
 - **Installed automatically on every VM** — an always-on base (a sensible starting set is fail2ban, unattended-upgrades, and btop) layered onto every cloud-init deploy on top of whatever the tenant picks.
 
-Both selections are also offered as a step in the first-time **setup wizard**, and a searchable snippet **picker** lets you inspect or copy the exact cloud-init code ProxMate writes.
+The always-on base is also offered in the **Defaults** step of the first-time setup wizard, and a searchable snippet **picker** lets you inspect or copy the exact cloud-init code ProxMate writes.
 
 **How the snippet gets onto the cluster** — the Proxmox API can't create cloud-init snippet files, so there are two modes:
 
@@ -108,7 +114,7 @@ Both selections are also offered as a step in the first-time **setup wizard**, a
 
 Snippets are delivered as cloud-init **vendor-data**, so the SSH-key / user injection still applies. Notes: Docker's installer covers Debian/Ubuntu/Fedora/RHEL-family (Arch/openSUSE just skip it); **Install Tailscale only installs the client** — the tenant then SSHes in and runs `sudo tailscale up --ssh` to connect (see the [Tailscale guide](./tailscale-ssh.md)); web-UI tools (Cockpit, Netdata, code-server) bind a port the tenant firewall blocks, so reach them over Tailscale or an SSH tunnel.
 
-> **Add a key to a running VM.** Beyond the deploy wizard, an admin/owner can add an SSH public key to an existing VM at any time from **VM → Settings → Recovery → Add an SSH key** — it's appended to the guest user's `authorized_keys` through the QEMU guest agent (no rebuild).
+> **Add a key to a running VM.** Beyond the deploy wizard, the owner, an admin or a Manager share can add an SSH public key to an existing VM at any time from **VM → Settings → Recovery → Add an SSH key** — it's appended to the guest user's `authorized_keys` through the QEMU guest agent (no rebuild). **Push a file** on the same card uploads a small file into the VM the same way (1 MiB by default, `GUEST_FILE_PUSH_MAX_BYTES`, at most 8 MiB), with the path, mode and owner you choose.
 
 The rest of this section is the **manual** route — build your own template from an ISO (useful if you want pre-baked tooling like Tailscale, or a non-cloud-init image).
 
@@ -165,8 +171,8 @@ sudo poweroff
 
 Once the VM is powered off:
 
-1. In Proxmox, **right-click the VM → Convert to Template** (or use **Save as template** on the VM's detail page in ProxMate).
-2. In ProxMate, go to **Template Store → Add from cluster** and **Publish** the template you just converted. In the same row you can add **login notes** (e.g. the default username/password) — these are shown to tenants in the store and again in the create wizard, so they know how to sign in once the VM boots. You can edit the notes anytime with the pencil on the published card.
+1. In Proxmox, **right-click the VM → Convert to Template**. (Or use **Save as template** on the VM's detail page in ProxMate: it stops the VM, converts it and publishes it to the store in one step, so you can skip step 2.)
+2. In ProxMate, go to **Template Store → Manage templates (admin) → Add from cluster** and **Publish** the template you just converted. In the same row you can add **login notes** (e.g. the default username/password) — these are shown to tenants in the store and again in the create wizard, so they know how to sign in once the VM boots. You can edit the notes anytime with the pencil on the published card.
 
 It now appears in the **Template Store** for everyone. When a tenant deploys it, ProxMate **linked-clones** it and autoscales (sets cores/RAM, grows the disk to the size the tenant picked, never below the template's base).
 
@@ -186,24 +192,26 @@ pveam download local debian-12-standard_12.7-1_amd64.tar.zst
 
 Or in the Proxmox UI: **node → your template storage (e.g. `local`) → CT Templates → Download**. Once present, a template appears in ProxMate's wizard under **Container (LXC)** on any node that holds it. Node-local template storage only keeps the file on the node it was downloaded to, so download it to each node (or use shared storage) if you want placement flexibility. ProxMate then auto-places the container on a node that has the chosen template.
 
-**What containers support:** create, start/stop/restart, in-browser console, tenant isolation, quotas, cpu/RAM/rootfs resize, and MateStates backups. **VM-only** (not on containers): rebuild, convert-to-template, extra data disks, snapshots, cloud-init extras, and **live migration** — so the [Cluster Balancer](#7-operating-the-cluster) treats containers as *pinned*, and a node drain lists them for you to stop or move by hand before powering the node off.
+**What containers support:** create, start/stop/restart, in-browser console, tenant isolation, quotas, cpu/RAM/rootfs resize, and MateStates backups. **VM-only** (not on containers): rebuild, convert-to-template, extra data disks, snapshots (including automatic ones), cloud-init extras, the ProxMate IDE, the guest-agent tools (SSH key, file push, password reset), rescue boot, and **live migration** — so the [Cluster Balancer](#7-operating-the-cluster) treats containers as *pinned*, and a node drain lists them for you to stop or move by hand before powering the node off.
 
 ---
 
 ## 4. Invite tenants
 
-**Admin → Invites → New invite:**
+**Admin → Invites → Create an invite:**
 
 - pick the resource quota for that user (CPU cores, RAM in GB, disk in GB),
 - optional label so you remember who it's for,
+- optional **Email invite to** address: ProxMate emails the link there (needs SMTP), and the link
+  can then only be registered with that address,
 - **Invite link expires in** — how long the link stays usable before someone redeems it
-  (1/7/30/90 days, default 7 days). This is the *link's* clock.
+  (1, 7, 30 or 90 days, default 7 days). This is the *link's* clock.
 - **Compute access** — how long the person may use the cluster **after** they sign up
   (a fixed term, or **never expires**). This is the *tenant's* clock, anchored at
   redemption, and you can change it per user later under Settings → Access. When it
   lapses the account is suspended and their VMs stop — nothing is deleted.
 
-Click **Generate** and share the invite link. The tenant signs up, picks a template (or builds from an ISO), and is bounded by their quota.
+Click **Generate invite** and share the invite link. The tenant signs up, picks a template (or builds from an ISO), and is bounded by their quota.
 
 ### 4.1 Deploy a VM for a tenant (admin)
 
@@ -266,16 +274,16 @@ either way.
 ProxMate provides robust security features to protect accounts and control how users authenticate, including Multi-Factor Authentication (MFA), passwordless Passkeys, OpenID Connect (OIDC) Single Sign-On (SSO), and secure email-based password recovery.
 
 ### 5.1 SMTP Settings & Password Recovery
-To enable self-service password reset links, configure your mail server in **Admin → Settings → Email (SMTP)**:
-- **Host / Port / Encryption**: Enter your SMTP server details (e.g., SMTP Host, Port, and select Secure TLS/SSL if required).
-- **Authentication**: Specify your SMTP Username and Password (encrypted at rest in the database).
-- **From Address**: The sender address for ProxMate emails.
-- Click **Test Configuration** to verify connection.
+To enable self-service password reset links, configure your mail server in **Admin → Settings → Notifications → Email (SMTP)**:
+- **Host / Port**: your SMTP server. Tick **Use TLS (port 465)** for implicit TLS; leave it off for STARTTLS on 587.
+- **Username / Password**: blank for an unauthenticated relay (the password is encrypted at rest in the database).
+- **From address**: The sender address for ProxMate emails.
+- Click **Save email settings**, then **Test** to verify the connection.
 
 If SMTP is **not configured**, ProxMate defaults to a secure fallback:
 - When a user clicks "Forgot password" on the login screen, they file a password reset request.
-- The request is saved in the database, and a banner appears in the admin panel (**Admin → Users → Reset Requests**).
-- You can manually generate a temporary password or reset their password directly from the user list.
+- The request is saved in the database, and a banner on **Admin → Users** lists the addresses that asked (each row is marked "reset requested").
+- Set or generate a new password with the key action on that user's row, then share it with them securely.
 
 ### 5.2 Multi-Factor Authentication (MFA / 2FA)
 Users can secure their accounts using two-step verification methods in their personal dashboard under the **Security** settings page:
@@ -285,27 +293,29 @@ Users can secure their accounts using two-step verification methods in their per
 #### Invite-Enforced 2FA
 Admins can enforce two-step authentication for new users:
 - When generating an invite link (**Admin → Invites → New invite**), check **"Require two-step authentication"**.
-- Upon registration, the invited user will be forced to enroll in either TOTP or a Passkey before accessing any dashboard or VM operations.
-- Until MFA is set up, they will be redirected to the Security page on every navigation, and all VM API requests will return a `403 MFA Setup Required` error.
+- Upon registration, the invited user goes straight to two-step setup and must enroll either TOTP or a Passkey. No session is issued until a factor exists, so the dashboard and VMs stay out of reach; a password sign-in before then returns to the same setup step.
+- As a server-side backstop, the VM, project, template, Proxmox, user, admin and passthrough APIs answer **403** with `code: "mfa_setup_required"` for such an account until it has a factor.
 - *Note:* Sign-ins through SSO are exempt from this requirement, since the Identity Provider handles authentication policy. A password login on an SSO-linked account still needs the second factor.
 
 ### 5.3 Bring-Your-Own SSO (OIDC)
-You can delegate authentication to an external OpenID Connect (OIDC) provider (e.g., Keycloak, Authentik, Google) in **Admin → Settings → Single Sign-On (OIDC)**:
-- **Enable SSO**: Toggles the login button on the sign-in screen.
+You can delegate authentication to an external OpenID Connect (OIDC) provider (e.g., Keycloak, Authentik, Google) in **Admin → Settings → Access → Single sign-on (OIDC)**. Save first, then use **Test**:
+- **Enable SSO**: Toggles the login button on the sign-in screen (its text is the **Login button label**).
 - **Client ID & Client Secret**: Registered credentials from your provider (secret is encrypted at rest).
 - **Issuer URL**: The discovery endpoint of your provider (e.g., `https://keycloak.example.com/realms/myrealm`).
-- **Callback URL**: Register `${BACKEND_PUBLIC_URL}/api/auth/sso/callback` as the permitted redirect URI in your identity provider.
-- **Group mapping**: Specify a "Groups Claim" (e.g., `groups` or `roles`) and the "Admin Group" name. Users with this group membership will be automatically promoted to Admin in ProxMate on login.
-- **JIT Provisioning**: When "Allow self-sign up via SSO (JIT)" is checked, new users can sign up automatically via SSO. If unchecked, only users already linked to SSO, or existing users whose email can be safely matched, can sign in. An existing local account is linked on its first SSO login only when the identity provider marks the email as verified (`email_verified: true`) and the account was registered through an invite emailed to that address (or is the setup admin); otherwise the user is told to sign in with their password.
+- **Redirect / callback URL**: Register `${BACKEND_PUBLIC_URL}/api/auth/sso/callback` (shown on the card with a copy button) as the permitted redirect URI in your identity provider.
+- **Group mapping**: Specify a "Groups claim" (e.g., `groups` or `roles`) and the "Admin group" name. Users with this group membership will be automatically promoted to Admin in ProxMate on login.
+- **JIT Provisioning**: When "Auto-create accounts for new SSO users" is checked, new users can sign up automatically via SSO. If unchecked, only users already linked to SSO, or existing users whose email can be safely matched, can sign in. An existing local account is linked on its first SSO login only when the identity provider marks the email as verified (`email_verified: true`) and the account was registered through an invite emailed to that address (or is the setup admin); otherwise the user is told to sign in with their password.
 
 ---
 
 ### 5.4 ProxMate IDE (optional — per-VM browser editor + AI agent)
 
 Give tenants a browser VS Code (code-server) inside their own VM, with an in-guest OpenCode AI
-agent wired to models you control. Enable and configure it in **admin Settings ▸ ProxMate IDE**:
-pick the availability tier, add an OpenAI-compatible **model source** (a LAN Ollama is fine for
-admins), choose which models tenants see, and set **`ide_ingress_cidr`**.
+agent wired to models you control. Enable and configure it in **Admin → Settings → IDE**:
+pick the availability (**Off**, **Admins only**, **Admins + tenants**), save an OpenAI-compatible
+endpoint under **Security → AI keys** (a LAN Ollama is fine for admins), then **Test** it on the IDE
+card to list its models and choose which ones tenants see, and set the **IDE ingress source (CIDR)**
+(`ide_ingress_cidr`). **Test reachability** checks the path from the backend to a running VM's IDE port.
 
 The IDE opens only for a VM's **owner**: admins and people the VM is shared with can't open it.
 An IDE installed by ProxMate 1.0.x is reinstalled once, automatically, the first time its owner
@@ -313,7 +323,9 @@ opens it after the upgrade (about a minute).
 
 Two things must be true for a deployment: the ProxMate host can reach tenant VM IPs on **:8080**
 (or `IDE_GUEST_PORT`; provide routing on a non-flat network), and IDE VMs run the **qemu-guest-agent** with **>= 8 GB
-RAM** and AVX (auto-handled via `cpu: host` + reboot). Full setup + security model:
+RAM** and AVX (auto-handled via `cpu: host` + reboot). If a VM page says the IDE installed but
+ProxMate can't reach it, the route or firewall between ProxMate and the guest is the cause (on a
+node that is a Tailscale subnet router, see the guard in §2). Full setup + security model:
 [`proxmate-ide.md`](proxmate-ide.md).
 
 ## 6. Hand them the user docs
@@ -333,9 +345,12 @@ The in-app **Help** page in ProxMate links to all of these.
 A few things worth knowing day-to-day:
 
 - **MateStates (backups)** run automatically every Sunday at 03:00 server time for every VM. We keep the 2 newest per VM and prune the rest (both the schedule and the retention count can be set per VM). Override the default schedule with `MATESTATE_CRON` (5-field cron) in the backend env.
-- **ProxMate backs up its own database too** — nightly, via `VACUUM INTO` (consistent on a live DB) with rolling retention, configured under **Settings → Maintenance → App-database backups**. The snapshots land in the host directory you set as `PROXMATE_BACKUP_DIR`; see [DEPLOYMENT.md](../DEPLOYMENT.md) §12. **Keep a copy of `ENCRYPTION_KEY` off the host** — every secret inside those snapshots is encrypted with it, so a backup without the key restores nothing usable.
+- **ProxMate backs up its own database too** — nightly, via `VACUUM INTO` (consistent on a live DB) with rolling retention, configured under **Settings → Maintenance → App-database backups**. The snapshots land in the host directory you set as `PROXMATE_BACKUP_DIR`; see [DEPLOYMENT.md](../DEPLOYMENT.md) §12. **Keep a copy of `ENCRYPTION_KEY` off the host** — every secret inside those snapshots is encrypted with it, so a backup without the key restores nothing usable. Admins see a **Back up ENCRYPTION_KEY** banner on every page until one of them ticks the box and clicks **Confirm backup**; it comes back if the key changes. The key itself is never shown.
+- **Automatic snapshots** (**Settings → Maintenance → Automatic snapshots**, on by default). Before a resize, a data-disk grow or a rescue boot, ProxMate takes a `pm-auto-…` snapshot of the VM and refuses the change if the snapshot fails (a VM whose storage can't snapshot goes ahead without one, and containers are skipped). It keeps the newest 3 per VM (1 to 10) and only ever deletes snapshots it took. A rebuild isn't covered, since it deletes the guest with its snapshots: take a backup first. On node-local storage a VM with snapshots may not live-migrate.
+- **Creating a machine** (ISO install, container, template deploy, restore from an upload) answers as soon as the machine is recorded: the wizard opens its page, which shows **Creating** until it is running, or says why it couldn't be created. A failed create is removed and its quota freed. The tenant email and the audit entry follow once the machine is running.
+- **Projects** group VMs by a `project:<name>` tag (**Projects** page; set one on the VM page or with **Move to project…** on the VM list). Each project shows its VM and running counts, allocated resources and average use, with Start all, Stop all and Restart all. Admins see every owner's projects.
 - **Compute access windows** — tenants can be given a fixed term of cluster access (or none at all). Expiry **suspends, never deletes**: their VMs stop and sign-in is refused, and extending the window under **Settings → Access** restores everything. Warning emails at 7 days and 1 day need SMTP; the sweep runs hourly at :20 (override with `ACCESS_EXPIRY_CRON`).
-- **Kiosk mode** — a full-screen, unattended wall-panel view at `/kiosk` for a rack-mounted display, reached from **Admin → Monitor → Kiosk mode** and configured in admin Settings. It is **monitoring only**: no VM power controls, no links off the panel, and no tenant identities on screen. Leaving kiosk mode requires a passkey, the admin-set exit PIN, or the account password, so a passer-by can look but not act.
+- **Kiosk mode** — a full-screen, unattended wall-panel view at `/kiosk` for a rack-mounted display, reached from **Admin → Monitor → Kiosk mode** and configured under **Admin → Settings → Access → Kiosk mode**. It is **monitoring only**: no VM power controls, no links off the panel, and no tenant identities on screen. Leaving kiosk mode requires a passkey, the admin-set exit PIN, or the account password, so a passer-by can look but not act.
 - **Restoring a tenant VM** rewrites its config — ProxMate re-asserts the per-NIC firewall flag automatically.
 - **Migrating a VM between nodes** (admin-only). On a VM's page, **Migrate** moves it to another node — **live, with no downtime** for a running guest, offline for a stopped one. Guests on node-local storage (`local-lvm` / ZFS) migrate live too (the disk is copied during the move; the target node must have a storage of the **same name**). The picker only lists nodes the guest can **actually reach** — a VM whose disks sit on a storage no other node has (e.g. a single-node ZFS pool) shows **"No eligible nodes"** rather than a target that would fail. Cross-architecture moves (x86↔ARM) are blocked. The VM's **owner is emailed a heads-up** whenever you move their VM.
 - **Cluster Balancer** (**Admin → Balancer**) evens out node **memory** load — the binding constraint — by live-migrating ProxMate-managed guests off the busiest node. Pick a mode: **Off**, **Recommend only** (review the plan and apply by hand), or **Auto-apply** (acts every ~15 min; override with `BALANCER_CRON`). Tune the imbalance tolerance, a per-run move cap, and a never-move list. Keep specific guests on separate nodes with the tag `aa:<group>` (anti-affinity), and pin a guest in place with the tag `pin` or `no-balance`. It never proposes a move a guest **can't make** — a guest pinned to node-local storage is skipped automatically — and if a migration does fail, the audit log records Proxmox's real reason. Routine balancing never emails tenants.
@@ -352,7 +367,7 @@ A few things worth knowing day-to-day:
   hours, average CPU and memory over the week, and quota in use. Turn it off for everyone with the
   card's switch, or **Send me a preview** to see your own. Override the time with
   `USAGE_DIGEST_CRON`.
-- **Broadcast emails** (**Admin → Settings → Broadcast email**) send an announcement to all users
+- **Broadcast emails** (**Admin → Settings → Notifications → Broadcast email**) send an announcement to all users
   (maintenance, downtime, all-clear). In the Community Edition users may **unsubscribe from
   broadcasts** — via the unsubscribe link in each broadcast or **Security → Email preferences** — and
   are then skipped (the send result shows how many). Transactional and security emails (password
@@ -361,11 +376,11 @@ A few things worth knowing day-to-day:
   digest** on the same page. _(The EDU edition has
   no opt-out — instructors must be able to reach every student.)_
 - **Unconfirmed machines** (**Settings → Maintenance → Unconfirmed machines**). ProxMate tags every guest it manages (`proxmate-<id>`) and only acts on a guest that carries its own machine's tag. The card lists machines whose VMID holds no guest with their tag — typically machines from before ownership tags that the automatic tagging couldn't match (left in `error` or `creating`, renamed so the Proxmox name differs, or sharing a VMID with another machine). Those machines can't be started, opened, backed up or deleted until you settle them: **Adopt** tags the guest at the VMID as that machine's and, for an `error` or held machine, re-applies network isolation and re-reads its sizes (as a restore does) before clearing that state, **Remove row** deletes only the ProxMate record and leaves the guest alone. Admins are notified once when the automatic tagging leaves machines unmatched.
-- **Import existing guests** (**Settings → Maintenance → Import existing guests**). Lists the Proxmox guests (VMs and containers) ProxMate doesn't manage: no machine references them, they carry no ProxMate tag, and they aren't templates. **Import** one and choose its owner: ProxMate records it as their machine from its current size, tags it (keeping its other tags), moves its network interfaces to the default bridge with the isolation firewall — exactly as for a new machine — and counts it toward the owner's quota. Untick **Count against their quota** to import it as a grant instead; an import that would exceed the quota is refused with the owner named. Guests that reference another guest's disks or host paths, have host devices (PCI, USB, serial, virtiofs), raw host settings or hook scripts, or are privileged containers are refused — and so is a guest with a snapshot holding any of those, since its owner could roll back to it (the message names the snapshots to delete). Remove those in Proxmox first (a GPU can then be attached through a passthrough request). Expect the guest's network to change: its interfaces move to the default bridge, and the ProxMate isolation firewall is switched on (inbound traffic dropped by default, `firewall=1` on every interface). The guest's own firewall rules are kept, below ProxMate's, so a service it offers inbound may need a rule added. While an import runs the machine shows as being created and can't be used.
-- **Machines that can't run.** A machine left in `error`, or held after a create, rebuild or restore that didn't finish (or a restore that left its owner over quota), can't be started and its console and IDE don't open; its page says why. It can be restored, rebuilt, adopted under **Unconfirmed machines**, or deleted. Bulk actions, migrations, the Balancer and node drains also skip a machine while its IDE installs or its cloud-init deploy finishes, and report it.
+- **Import existing guests** (**Settings → Maintenance → Import existing guests**). Lists the Proxmox guests (VMs and containers) ProxMate doesn't manage: no machine references them, they carry no ProxMate tag, and they aren't templates. **Import** one and choose its owner: ProxMate records it as their machine from its current size, tags it (keeping its other tags), moves its network interfaces to the default bridge with the isolation firewall — exactly as for a new machine — and counts it toward the owner's quota. Untick **Count against their quota** to import it as a grant instead; an import that would exceed the quota is refused with the owner named. Guests that reference another guest's disks or host paths, have host devices (PCI, USB, serial, virtiofs), raw host settings or hook scripts, or are privileged containers are refused — and so is a guest with a snapshot holding any of those, since its owner could roll back to it (the message names the snapshots to delete). Remove those in Proxmox first (a GPU can then be attached through a passthrough request). Expect the guest's network to change: its interfaces move to the default bridge, and the ProxMate isolation firewall is switched on (inbound traffic dropped by default, `firewall=1` on every interface). The guest's own firewall rules are kept, below ProxMate's, so a service it offers inbound may need a rule added. With a Proxmox pool configured the guest is also added to that pool; a guest already in another pool is moved only after you confirm. While an import runs the machine shows as being created and can't be used.
+- **Machines that can't run.** A machine left in `error`, or held after a create, rebuild or restore that didn't finish (or a restore that left its owner over quota), can't be started and its console and IDE don't open; its page says why. It can be restored, rebuilt, adopted under **Unconfirmed machines**, or deleted. Stop, restart and delete on several selected machines, migrations, the Balancer and node drains also skip a machine while its IDE installs or its cloud-init deploy finishes, and report it.
 - **Operations cut short by a restart.** If the backend stops while a machine is being created, cloned, restored from an upload, rebuilt or imported (or during a backup or restore), ProxMate settles it once it has sat untouched for `RECONCILE_STUCK_MINUTES` (15) and Proxmox is no longer working on it. It never touches an operation that is still running, and it only changes a guest it can prove came from that machine's own operation (the machine's tag, or for a clone the `proxmate-row:<id>` note it was created with). A create that left no guest is removed; one that got part-way is held, and you are notified with the VMID and node to check — adopt the guest under **Unconfirmed machines** if it is the machine's, or delete the machine. An interrupted upload restore's guest is never changed automatically: check it, since it may still have `onboot` set from the archive.
 - **Deleting a tenant** in **Admin → Users** also destroys their VMs on Proxmox. If any of their machines can't be deleted with its guest (an unconfirmed machine, or a guest that fails to delete), the account is kept and the machines are listed — settle them under **Unconfirmed machines**, then delete again.
-- **Re-configuring Proxmox** later (new host, rotated token) is in **Admin → Settings**; the existing token secret is kept if you leave the field blank.
+- **Re-configuring Proxmox** later (new host, rotated token, a Proxmox pool) is in **Admin → Settings → Proxmox → Proxmox connection**; the existing token secret is kept if you leave the field blank. After setting a pool, **Move managed guests into the pool** moves the machines ProxMate already manages (see DEPLOYMENT.md §2.2).
 
 ---
 
@@ -375,7 +390,7 @@ A few things worth knowing day-to-day:
 |---|---|
 | "Connection test" passes but storage lists are empty | Privilege Separation on the API token — see §1.1 |
 | A machine answers "This VM predates ProxMate's ownership tags — ask an admin", or can't be started | It isn't matched to a tagged guest (or is held after a failed create/restore) — check **Settings → Maintenance → Unconfirmed machines** (§7) |
-| Tenant VM creation fails with a 403 | Same as above |
+| Tenant VM creation fails with a 403 from Proxmox | The token lacks a privilege (Privilege Separation, or a narrower role): see §1.1; **Test connection** names each missing privilege. A 403 "Quota exceeded" is the tenant's quota |
 | Tenants can reach my LAN | The cluster firewall isn't enabled — see §2 |
 | `vzdump` fails for a tenant VM | The chosen storage doesn't support `content=backup` — enable it in Proxmox **Datacenter → Storage** |
 | Console (noVNC) won't connect | Browser blocked the WebSocket; check the ProxMate backend reverse-proxy forwards `Upgrade` headers |
