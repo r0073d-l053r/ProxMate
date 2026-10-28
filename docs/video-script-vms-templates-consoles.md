@@ -7,7 +7,7 @@ tab of the VM page, and every console. The ProxMate IDE is left for its own vide
 Recorded on the same Ubuntu desktop as part one, against a real Proxmox VE node with real VMs.
 
 - **Working title:** ProxMate templates, cloud-init and consoles: every way to use your VMs (v1.3)
-- **Length:** about 1,760 spoken words; the final cut length is set once the recording is assembled
+- **Length:** about 1,760 spoken words; both finished cuts run 14:02, end card included, with the real waits sped up
 - **Voices:** two versions of the same footage, Kokoro `af_heart` (female) and Kokoro `am_michael` (male)
 - **Written with:** the `script-writer` skill (tutorial template, casual-friendly tone) and
   `yt-script/hookscore.py` for the hook
