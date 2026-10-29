@@ -61,7 +61,7 @@ for i, (a, z, s) in enumerate(cues):
     cues[i] = (a, max(min(z, lim), min(lim, max(z + 0.3, a + len(s) / CPS))), s)
 def rows(s, width=42):
     """One row if it fits, otherwise two rows. The break goes near the middle, preferably after a comma,
-    and never leaves a small word (a, the, I, of...) hanging at the end of the first row."""
+    never leaves a small word (a, the, I, of...) hanging at the end of the first row, and doesn't split a name."""
     if len(s) <= width: return s
     mid, w = len(s) / 2, s.split(" ")
     weak = {"a", "an", "the", "i", "to", "of", "in", "on", "at", "for", "from", "with", "my", "your", "its", "and", "or", "but", "so", "as"}
@@ -69,6 +69,7 @@ def rows(s, width=42):
     for k in range(1, len(w)):
         cut = len(" ".join(w[:k])); top, bot = cut, len(s) - cut - 1
         score = abs(cut - mid) + 2 * max(0, max(top, bot) - width - 4) - (8 if w[k - 1].endswith(",") else 0) + (12 if w[k - 1].lower() in weak else 0)
+        if w[k - 1][:1].isupper() and w[k][:1].isupper() and not w[k - 1].endswith(","): score += 12  # don't split a name ("Set Up Your ProxMate", "Template Store")
         if best is None or score < best[0]: best = (score, cut)
     return s[:best[1]] + "\n" + s[best[1] + 1:]
 

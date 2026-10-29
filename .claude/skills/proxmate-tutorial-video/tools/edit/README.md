@@ -17,6 +17,11 @@ python3 $SK/tools/edit/qa_fx.py $PMV_WORK/rec/t2a $PMV_WORK/out/part2.mp4 $PMV_W
 
 ## Tools
 
+**teaser.sh**: a roughly 30 s social teaser. It takes a stretch of the finished video, fades it out over 0.5 s,
+appends the end card without re-encoding it (and fails unless the end card frames match), puts the finished mix
+under the stretch and silence under the card, and cuts the matching captions from the full `.srt`. Usage:
+`teaser.sh <full.mp4> <start s> <end s> <out.mp4> [full.srt]`. Leave 0.5 s of air after the last word.
+
 **assemble.py**: the assembler. `[FX=1] [VOICE_DIR=..] [ENDCARD=..] python3 assemble.py <take dir> <out.mp4> [chapter ids...]`.
 Per chapter it encodes each real-time span from the lossless capture (cached in `<take>/assemble`, reused until
 the capture or, with FX=1, that chapter's edits or fx.py change), lays the narration WAVs at their logged times,

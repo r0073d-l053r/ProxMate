@@ -49,7 +49,8 @@ Anywhere else, it's wherever the skill was unpacked (see `INSTALL.md`).
 - **Repo.** Commit and push only to the branch the session names, with no pull request unless asked. End
   commits with the attribution trailers from the session's instructions. Keep model identifiers out of files and
   commit bodies. Scripts live in `docs/video-script-<slug>.md`.
-- **Every video ships a YouTube description and tags**, ready to paste, alongside the video.
+- **Every video ships a YouTube description and tags**, ready to paste, alongside the video, plus a LinkedIn
+  teaser clip that ends on the same end card, with a short post to go with it.
 
 ## Production timeline
 
@@ -201,6 +202,12 @@ Done means:
   Check the limits with a one-liner: description under 5,000 characters with no `<` or `>`, tags under 500
   characters counting commas. Mark placeholders the creator must fill, such as the previous part's link. End with
   "Ship it, or change it?"
+- **LinkedIn teaser:** about 30 s made with `tools/edit/teaser.sh <full.mp4> <start> <end> <out.mp4>`. Pick about
+  23 s that open on a complete thought and end on a finished line (part two used its cold open, 0:00 to 0:23.6).
+  The script fades out, appends the end card unchanged (and checks it frame by frame), and cuts the captions.
+  LinkedIn autoplays muted, so the creator uploads the `.srt` with it.
+- **LinkedIn post:** a short post in the creator's voice, with the YouTube link going in the first comment
+  (`reference/examples/linkedin-post-part2.md`). Don't use "excited to share", and don't invent numbers.
 - **Production notes:** what is real on screen, the sped-up waits table, everything to disclose (stand-ins,
   ProxMate bugs, passwords seen on screen, sandbox-only accommodations), how the narration and captions were
   made and checked, and the lab clean-up. `reference/examples/production-notes-part2.md` is the model.
@@ -208,8 +215,8 @@ Done means:
   commit and push.
 
 ### 12. Deliver
-Send the video with SendUserFile (display `render`). Send the SRT, chapters, description and tags, production
-notes and script doc as attachments. Give the full path of the delivery folder. Say what the creator still has
+Send the video and the teaser with SendUserFile (display `render`). Send the SRTs, chapters, description and
+tags, LinkedIn post, production notes and script doc as attachments. Give the full path of the delivery folder. Say what the creator still has
 to decide: placeholders, the series name, anything left open, and any wording QA changed.
 
 **GATE:** Claude never publishes anything. The creator uploads.
