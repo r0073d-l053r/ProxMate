@@ -209,7 +209,9 @@ def main():
         if not d: continue
         if subs and subs[0][0] < d + 0.05: print(f"{cid}: no dissolve, its narration starts at {subs[0][0]:.2f}s"); continue
         pv, ptotal = built[i - 1][1], built[i - 1][3]
-        xv, mv, ma = f"{tmp}/{built[i - 1][0]}-x.mp4", f"{tmp}/{cid}-x.mp4", f"{tmp}/{cid}-x.wav"
+        # -xo: the chapter before, ending in the cross-fade; -xi: this chapter with the fade trimmed off its start.
+        # Separate names, so a chapter that dissolves in and out (two dissolves in a row) never reads its own output.
+        xv, mv, ma = f"{tmp}/{built[i - 1][0]}-xo.mp4", f"{tmp}/{cid}-xi.mp4", f"{tmp}/{cid}-xi.wav"
         run(["ffmpeg", "-y", "-loglevel", "error", "-i", pv, "-i", v, "-filter_complex",
              f"[0:v][1:v]xfade=transition=fade:duration={d}:offset={ptotal - d:.4f},trim=duration={ptotal:.4f}[o]", "-map", "[o]"] + COLOR + [xv])
         run(["ffmpeg", "-y", "-loglevel", "error", "-i", v, "-vf", f"trim=start={d},setpts=PTS-STARTPTS"] + COLOR + [mv])
