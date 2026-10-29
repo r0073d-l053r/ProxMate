@@ -1,0 +1,14 @@
+{
+ "_note": "Editor's decisions for the polished cut of tutorial 3 (take t3a), applied by tools/edit/assemble.py when FX=1. Times are chapter seconds of that take.",
+ "ripple_lead": 0.07,
+ "add_ff": {
+  "V01": [{"from": 13.9, "to": 18.8, "target": 2.0, "label": "a code from KeePassXC"}],
+  "V13": [{"from": 33.0, "to": 53.0, "target": 8.0, "label": "Sam's authenticator, as before"},
+          {"from": 65.0, "to": 80.9, "target": 5.0, "label": "signing in with a code"}],
+  "V14": [{"from": 16.0, "to": 35.6, "target": 8.0, "label": "the container form"}],
+  "V18": [{"from": 17.5, "to": 36.0, "target": 6.0, "label": "Sam signs in"}]
+ },
+ "fade_out": {"V01": 0.35, "V21": 0.5},
+ "fade_in": {"V02": 0.35},
+ "dissolve": {"V15": 0.3, "V17": 0.3, "V18": 0.3, "V19": 0.3, "V21": 0.3}
+}
