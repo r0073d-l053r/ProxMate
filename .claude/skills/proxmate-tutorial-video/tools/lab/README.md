@@ -196,6 +196,48 @@ or pass an auth key from an environment variable; never write it to a file), the
 the example and put `/root/.ssh/pve1-lab.pub` in pve1's `/root/.ssh/authorized_keys`. Check:
 `ssh -F $PMV_TS_DIR/ssh_config pve1-lab hostname`.
 
+## Preparing the real pve1 for a video (part two's sequence)
+
+Only what the creator approved in PLAN.md. `S` below is `$PMV_LAB`, `ts-lab` its Tailscale folder.
+
+1. **Token, written straight to a 0600 file and never printed.** Snippets go on `local`:
+
+   ```
+   umask 077; ssh -F $S/ts-lab/ssh_config pve1-lab 'pveum user token list root@pam --output-format json | grep -q "\"proxmate\"" && pveum user token remove root@pam proxmate; pveum user token add root@pam proxmate --privsep 0 --comment "ProxMate lab - delete after" --output-format json; pvesm set local --content iso,vztmpl,backup,import,snippets; mkdir -p /var/lib/vz/snippets' > $PMV_WORK/pve1-token.json
+   ```
+
+   Print only the token id and whether a secret was stored.
+2. **Point the lab address at pve1 and mount its snippets**, so the cloud-init files ProxMate writes reach pve1:
+
+   ```
+   bash pve-real.sh on
+   mkdir -p /mnt/pve-snippets && sshfs -o allow_other,reconnect,ServerAliveInterval=15,ssh_command="ssh -F $S/ts-lab/ssh_config" pve1-lab:/var/lib/vz/snippets /mnt/pve-snippets
+   ```
+
+   After a container restart, run both again.
+3. **Storage and write cache, if approved:** add `images,rootdir` to `local` and set ProxMate's default storage to
+   `local`. Cap the write cache with `sysctl -w vm.dirty_background_bytes=8388608 vm.dirty_bytes=33554432`, and write
+   the restore line into the CLEANUP file on pve1.
+4. **Reset ProxMate and set it up off camera**, through `pmapi.py` (cookie session, CSRF header, no proxy):
+   - Reset: `runuser -u alex -- ssh alex@proxmate 'cd ~/proxmate && docker compose down -v && docker compose up -d'`,
+     then wait for `/api/setup/status`.
+   - `POST /setup/admin` (Alex, alex@example.com, password from `PMV_ADMIN_PASSWORD`).
+   - `POST /setup/proxmox` with host `https://192.168.1.10:8006`, the token id and the secret read from the 0600
+     file, and `verifySsl false`. Then `POST /setup/proxmox/test` (a "no guests are visible" warning is expected
+     on an empty node) and `GET /setup/proxmox/resources`.
+   - `POST /setup/defaults` (storage, bridge `vmbr0`, ISO storage `local`), then `POST /setup/complete`.
+   - `PUT /templates/cloud-init-config` (offered extras and the base list, as the script shows them).
+   - `POST /admin/encryption-key-backup/confirm`.
+   - `POST /invites` for Mike (limits as the script needs), then `POST /auth/register` as mike@example.com.
+   - `PUT /admin/settings/defaults` (storage, bridge, ISO and backup storage) and `PUT /admin/settings/rescue`
+     (the rescue ISO).
+   - Then `build_ubuntu.py` for any template the script says already exists.
+5. **Rehearse** (`rehearse_deploy.py`, `rehearse_ops.py`). Delete the rehearsal guests and backups, then check the
+   starting state through the API.
+
+Clean-up reverses all of this: `cleanup_pve1.py`, then the CLEANUP list on pve1, the storage content and sysctl
+restore, deleting the token, `fusermount -u /mnt/pve-snippets` and `bash pve-real.sh off`.
+
 ## Bring-up order after a container restart
 
 1. Export the variables above (passwords from wherever you keep them, never from a file in the repo).

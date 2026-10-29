@@ -98,7 +98,7 @@ cutting-edge, groundbreaking, transformative, vibrant, journey, embark, navigate
 - Spell acronyms the way they're said: V M, I P, S S H, L X C, C P U. These are handled in the spoken form.
 - The voice reads at one speed (1.0) for the whole video. Lines are never sped up to fit. If a line doesn't
   fit its window, it gets shorter.
-- A line is a short paragraph of one to three related sentences, at least seven words and at most about 45
+- A line is a short paragraph of one to three related sentences, at least five words and at most about 45
   words. The voice is weak on very short calls, so never write a line like "Share." or "Let's go."
 - Don't tell the viewer something is easy: no "simply", "just click", "easy", "quick".
 - Budget: about 2.6 spoken words per second of the window the line has, counting the pause after it.

@@ -1,6 +1,7 @@
 # Mechanical checks for a narration file (the rules are in docs/narration-style-guide.md).
-# usage: lint.py narration.json [--beats beats.json] [--quiet]   (beats default $PMV_WORK/beats.json, from build_beats.py)
+# usage: lint.py narration.json [--beats beats.json | --no-fit] [--quiet]   (beats default $PMV_WORK/beats.json, from build_beats.py)
 # narration.json: [{"id", "chapter", "at", "text"}], `at` = seconds from the chapter's start in the finished video.
+# --no-fit: before there is a cut (no beats, no `at`), check the wording only, in file order.
 # Prints one line per problem; exit code 1 if there is any ERROR. Fit here is an estimate: the render and fit.py decide.
 import argparse, json, os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE); sys.path.insert(0, os.path.dirname(HERE))
@@ -8,7 +9,7 @@ import pmv_env
 from sayform import say, oov
 
 def load_beats(path): return {b["chapter"]: b for b in json.load(open(path))}
-BEATS = None  # chapter -> beat; set BEATS = load_beats(path) before calling check()
+BEATS = None  # chapter -> beat; set BEATS = load_beats(path) before calling check(); None skips the fit checks
 RATE = 3.25          # af_heart at speed 1.0, words per second of speech
 BANNED = ("delve tapestry testament landscape realm crucial pivotal vital robust seamless seamlessly streamline leverage harness utilize "
           "enhance elevate empower unlock unleash foster garner showcase intricate nuanced multifaceted interplay meticulous comprehensive "
@@ -31,14 +32,14 @@ def check(lines, quiet=False):
     bych = {}
     for ln in lines: bych.setdefault(ln["chapter"], []).append(ln)
     for cid, ls in bych.items():
-        ls.sort(key=lambda l: l["at"]); end = BEATS[cid]["chapter_seconds"]
+        fit = BEATS is not None
+        if fit: ls.sort(key=lambda l: l["at"]); end = BEATS[cid]["chapter_seconds"]
         for i, ln in enumerate(ls):
-            t, tag = ln["text"], f"{ln['id']} @{ln['at']:.1f}"
-            win = (ls[i + 1]["at"] if i + 1 < len(ls) else end) - ln["at"]
+            t, tag = ln["text"], (f"{ln['id']} @{ln['at']:.1f}" if fit else ln["id"])
             words = len(t.split()); ss = sentences(t)
-            est = words / RATE + 0.25 * (len(ss) - 1) + 0.2
-            if win <= 0: out.append(f"ERROR {tag}: starts at or after the next line"); err += 1
-            elif est > win - 0.25: out.append(f"WARN  {tag}: about {est:.1f}s of speech in a {win:.1f}s window ({words} words); check it with a render and fit.py")
+            if not fit: pass
+            elif (win := (ls[i + 1]["at"] if i + 1 < len(ls) else end) - ln["at"]) <= 0: out.append(f"ERROR {tag}: starts at or after the next line"); err += 1
+            elif (est := words / RATE + 0.25 * (len(ss) - 1) + 0.2) > win - 0.25: out.append(f"WARN  {tag}: about {est:.1f}s of speech in a {win:.1f}s window ({words} words); check it with a render and fit.py")
             if words < 5: out.append(f"ERROR {tag}: only {words} words; merge it into a neighbouring line"); err += 1
             if words > 48: out.append(f"WARN  {tag}: {words} words in one line; split it");
             for c in BADCHARS:
@@ -74,6 +75,7 @@ def check(lines, quiet=False):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Mechanical checks for a narration file.")
     ap.add_argument("narration"); ap.add_argument("--beats", default=os.path.join(pmv_env.WORK, "beats.json")); ap.add_argument("--quiet", action="store_true")
-    a = ap.parse_args(); BEATS = load_beats(a.beats)
+    ap.add_argument("--no-fit", action="store_true", help="wording checks only (no beats or at times yet)")
+    a = ap.parse_args(); BEATS = None if a.no_fit else load_beats(a.beats)
     err, _ = check(json.load(open(a.narration)), a.quiet)
     sys.exit(1 if err else 0)

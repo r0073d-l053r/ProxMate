@@ -108,7 +108,7 @@ Everything on screen is a real program, driven by real X11 mouse and keyboard ev
 
 ## Lab clean-up
 
-Done right after delivery, first through ProxMate (so its records and Proxmox stayed in step), then on pve1:
+Done right after delivery (next time: once the creator accepts the final cut, SKILL.md step 13), first through ProxMate (so its records and Proxmox stayed in step), then on pve1:
 
 - **Deleted through ProxMate:** web-01's MateState backup, the VMs web-01 (102) and debian-iso (103), the
   container debian-ct (104), and the Template Store templates Ubuntu 24.04 (100), Debian 13 (101) and

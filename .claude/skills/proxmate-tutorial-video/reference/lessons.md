@@ -81,7 +81,11 @@ Every entry here cost a retake, a rejected cut or a lost hour. Read the section 
 - Wait for results on screen, not for time: the cold open moved on before "Hello from Docker!" appeared.
   Use `termText` or a DevTools read and hold the zoom on the result.
 - `pkill -f` and `pgrep -f` match their own shell (exit 144 or 255) and kill the tool call. Kill by PID, anchor
-  the pattern (`^node record2.cjs`), use `pgrep -x`, or check `/proc/<pid>/cmdline`.
+  the pattern (`^node record-part2.cjs`), use `pgrep -x`, or check `/proc/<pid>/cmdline`.
+- Locators fail on guesses. Read labels, roles and ids from the frontend source first. Deploy is an
+  `<a role=button>`, not a link. The `#name` hint is help text, not a placeholder. Console toggles, Day and Week,
+  and the VM tabs are `role=tab`. Card titles carry a leading space (`[data-slot=card-title]` with `^\s*title\s*$`).
+- Check a recorder with `node --check`, never `require()` it: requiring one starts a take.
 - The harness refuses foreground `sleep N`. Wait with Monitor until-loops or background tasks.
 
 ## Lab and Proxmox
@@ -106,7 +110,9 @@ Every entry here cost a retake, a rejected cut or a lost hour. Read the section 
 - Keep the world honest for the camera. If something exists off camera before its scene (a template published
   before the scene that publishes it), hide it first (part two flipped `published` with Prisma) and restore it
   afterwards.
-- Clean up pve1 only after final QA, so retakes stay possible. Dry-run first, delete through ProxMate first
+- Clean up pve1 only once the creator accepts the final cut (or asks), so retakes stay possible. Part two
+  wiped pve1 right after the first delivery, then the creator rejected the narration; only the voice had to
+  change, so it worked out. Dry-run first, delete through ProxMate first
   (so its records follow), then remove leftovers on pve1 and restore its settings.
 
 ## ProxMate itself (v1.3.4)
@@ -143,8 +149,9 @@ Every entry here cost a retake, a rejected cut or a lost hour. Read the section 
 - Egress goes through an agent proxy. Hugging Face and jsdelivr are blocked; models come from the sherpa-onnx
   GitHub releases. proxmate.host and `*.tailscale.com` had to be added to the environment's allowed domains by
   the creator.
-- After a container restart, files survive and processes don't. `tools/lab/bring-up.sh` restores the lab, then
-  start the desktop and `ts-lab/start.sh` before using pve1.
+- After a container restart, files survive and processes don't. `tools/lab/bring-up.sh` restores the lab and the
+  desktop (don't also run start-desktop.sh: it would tear that desktop down). For pve1, run `pve-real.sh on` and
+  mount its snippets again.
 - Secrets were printed twice in part one (`cat` of a token file, a debug log of a console ticket). Read secrets
   programmatically only, write new tokens straight to a 0600 file, and never log auth frames.
 - QA workflows run two agents at a time on this 4-CPU machine. Prepare deliverables while they run, and tell the

@@ -64,7 +64,7 @@ scroll the element into view with the real wheel, then act with xin.cjs; `w.go(u
 starts a narration line once the previous one has finished (actions run while it plays), `during(frac)` waits to a
 point in the current line, `quiet()` waits for it to end, `zoom(rect)`/`unzoom()` ask the edit for an eased zoom,
 `ffStart(label, target)`/`ffEnd()` mark a real wait to speed up, `end()` stops and writes the timeline. Also
-`waitPrompt` (terminal prompt stamps from alex's PROMPT_COMMAND) and `waitInput` (a process blocked reading its tty).
+`waitPrompt` (terminal prompt stamps from alex's PROMPT_COMMAND, installed in ../../reference/setup.md section 2) and `waitInput` (a process blocked reading its tty).
 
 **tzpin.cjs**: keeps every Chromium page on the desktop clock's UTC offset (DevTools time-zone override), so
 times ProxMate shows agree with the top bar. Run in the background for the whole take: `node tzpin.cjs &`

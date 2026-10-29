@@ -22,7 +22,8 @@ const OUT = `${WORK}/rec/${TAKE}`; fs.mkdirSync(OUT, { recursive: true });
 const MAN = loadNarration(process.env.VOICE_DIR || `${WORK}/narr/voice`);
 const STATE_F = `${OUT}/state.json`;
 const S = fs.existsSync(STATE_F) ? JSON.parse(fs.readFileSync(STATE_F, 'utf8')) : {};
-const save = () => fs.writeFileSync(STATE_F, JSON.stringify(S, null, 1));
+// state.json can hold a lab password (the reset guest password in V18), so it stays private to root
+const save = () => { fs.writeFileSync(STATE_F, JSON.stringify(S, null, 1), { mode: 0o600 }); fs.chmodSync(STATE_F, 0o600); };
 const APP = (process.env.PROXMATE_URL || 'http://192.168.1.50:3000').replace(/\/$/, '');
 const APP_HOST = APP.replace(/^https?:\/\//, ''); // what is typed in the address bar
 const API = (process.env.PROXMATE_API || 'http://192.168.1.50:4000/api').replace(/\/$/, '');

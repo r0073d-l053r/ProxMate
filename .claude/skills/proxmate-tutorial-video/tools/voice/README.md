@@ -4,8 +4,8 @@ Narration for the tutorials: Kokoro `af_heart` at speed 1.0 through sherpa-onnx,
 mechanical checks for the script, and caption timing found from the audio. Paths come from
 `../pmv_env.py`: `PMV_MODELS` (default `~/pmv/models`), `PMV_LEXICON` (default
 `$PMV_MODELS/lexicon-us-en-lab.txt`) and `PMV_WORK` (the video's working folder, default `~/pmv/work`).
-Scripts that load a model (render2, align, and asr in `../qa`) run with the venv python, `~/pmv/venv/bin/python3`;
-the others run with the venv or the system python3. Narration files are JSON lists of
+Scripts that load a model (render2, align, and asr in `../qa`) run with the venv python, `~/pmv/venv/bin/python3`.
+build_beats.py (and `../qa/sheets.py`) need Pillow, which only the system python3 has; the rest run with either. Narration files are JSON lists of
 `{"id": "V03-01", "chapter": "V03", "at": 1.2, "text": "..."}`, with `at` in seconds from the chapter's start in the
 finished video.
 
@@ -45,7 +45,8 @@ chapter. Usage: `build_beats.py <cut.mp4> <take dir> <script.md> [out dir] [--en
 
 **lint.py** checks a narration file against `docs/narration-style-guide.md`: banned words and AI-tell phrases,
 forbidden characters, fragment and long sentences, rhythm, words the voice cannot say, and an estimated fit.
-Exit code 1 on any ERROR. Usage: `lint.py narration.json [--beats beats.json] [--quiet]`.
+Exit code 1 on any ERROR. Before there is a cut, `--no-fit` checks the wording only. Usage:
+`lint.py narration.json [--beats beats.json | --no-fit] [--quiet]`.
 
 **render2.py** voices each line as one paragraph from lexicon phonemes (so commas and sentence pauses come out
 natural) and writes `<id>.wav` plus `manifest.json` with each line's length and estimated sentence starts. A line
@@ -72,3 +73,7 @@ and each line with its start time. Usage: `to_markdown.py narration.json header.
 **to_recorder.py** converts a render2 voice folder into the narration folder the recorder and the assembler read
 (the older `segments`/`items` manifest), hard-linking the WAVs, so the recorder paces each chapter with the same
 clips the final narration uses. Usage: `to_recorder.py <render2 voice dir> <out dir> [titles.json]`.
+
+**script_to_narration.py** turns the script document into the narration file (`at` 0 until there is a cut) and,
+optionally, the chapter titles for `to_recorder.py`. Run `lint.py --no-fit` on the result before recording.
+Usage: `script_to_narration.py <script.md> <narration.json> [titles.json]`.

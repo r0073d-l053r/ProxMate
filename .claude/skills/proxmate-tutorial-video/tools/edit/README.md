@@ -9,10 +9,10 @@ the DejaVu fonts).
 A typical polished cut (part two's chapter order; a new video passes its own ids, cold open first):
 
 ```
-cd $PMV_WORK/rec/t2a
-FX=1 VOICE_DIR=$PMV_WORK/narr/voice ENDCARD=<skill>/tools/edit/endcard/endcard.mp4 \
-  python3 <skill>/tools/edit/assemble.py . $PMV_WORK/out/part2.mp4 V01 V02 V03 ... V20
-python3 <skill>/tools/edit/qa_fx.py . $PMV_WORK/out/part2.mp4 $PMV_WORK/qa/fx
+SK=$(git rev-parse --show-toplevel)/.claude/skills/proxmate-tutorial-video; mkdir -p $PMV_WORK/out
+FX=1 VOICE_DIR=$PMV_WORK/narr/voice ENDCARD=$SK/tools/edit/endcard/endcard.mp4 \
+  python3 $SK/tools/edit/assemble.py $PMV_WORK/rec/t2a $PMV_WORK/out/part2.mp4 V01 V02 V03 ... V20
+python3 $SK/tools/edit/qa_fx.py $PMV_WORK/rec/t2a $PMV_WORK/out/part2.mp4 $PMV_WORK/qa/fx
 ```
 
 ## Tools

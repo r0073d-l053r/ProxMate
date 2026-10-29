@@ -15,6 +15,11 @@ beyond what Proxmox/ProxMate show normally; the API token secret lives only in a
 - hand-made template for "Add from cluster"
 - VMs / templates ProxMate builds (VMIDs >= 100), their backups in local:backup (dump/)
 - ProxMate tags/pool if any
+- added during preparation, and listed here up front next time: `images,rootdir` on `local` so VM disks avoid the
+  slow LVM thin pool (restore: iso,vztmpl,backup,import), a runtime write-cache cap
+  (`sysctl -w vm.dirty_background_bytes=8388608 vm.dirty_bytes=33554432`; restore: `sysctl -w vm.dirty_ratio=20
+  vm.dirty_background_ratio=10`), the working folder `/root/proxmate-lab` with its CLEANUP file, and the VMs'
+  addresses on the creator's home LAN
 
 ## Network honesty
 Isolation (part 1) drops inbound LAN traffic to tenant VMs, so the video does not SSH from the desktop.

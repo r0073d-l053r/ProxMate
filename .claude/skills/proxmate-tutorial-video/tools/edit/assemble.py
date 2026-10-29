@@ -198,7 +198,8 @@ def srt_time(t):
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 def main():
-    take, out = sys.argv[1], sys.argv[2]
+    # absolute paths: ffmpeg's concat lists resolve relative entries against the list file's own folder
+    take, out = os.path.abspath(sys.argv[1]), sys.argv[2]
     ids = sys.argv[3:] or ["S01"] + [f"S{i:02d}" for i in range(2, 16)]
     tmp = f"{take}/assemble"; os.makedirs(tmp, exist_ok=True)
     built = [[cid, *chapter(take, cid, tmp)] for cid in ids]  # cid, video, audio, length, subtitles
@@ -220,7 +221,7 @@ def main():
         vids.append(v); wavs.append(a); chapters.append((off, cid))
         srt += [(off + s, off + e, t) for s, e, t in subs]; off += total
     # Optional animated end card (already encoded with the same settings): appended with silence.
-    end = os.environ.get("ENDCARD")
+    end = os.environ.get("ENDCARD"); end = os.path.abspath(end) if end else None
     if end:
         edur = probe_dur(end); n = int(round(edur * SR))
         ewav = f"{tmp}/endcard.wav"

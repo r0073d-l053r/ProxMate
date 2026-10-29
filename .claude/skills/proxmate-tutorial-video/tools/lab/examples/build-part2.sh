@@ -2,7 +2,7 @@
 # Part two, polished cut in both voices: male narration paced to the recording, then assemble with the
 # editor's decisions (rec/<take>/fx-edits.json), chapters, and review frames.
 # usage: build-part2.sh   (env PMV_WORK = part two's working folder, e.g. ~/pmv/work/part2; TAKE default t2a;
-#        SKIP_NARR=1, ONLY_MALE=1, ONLY_FEMALE=1, SKIP_QA=1 skip steps; TITLES default ../../docs/examples/titles-part2.json)
+#        SKIP_NARR=1, ONLY_MALE=1, SKIP_QA=1 skip steps; WITH_MALE=1 adds the male cut; TITLES default ../../docs/examples/titles-part2.json)
 #   The male render used render_matched.py, not packaged (../../voice/render2.py and to_recorder.py replace it):
 #   set RENDER_MATCHED to its path to run that step, otherwise it is skipped.
 set -u
@@ -19,7 +19,7 @@ build() { # voice voicedir
   tail -1 $OUT/$1/assemble.log
 }
 [ "${ONLY_MALE:-}" ] || build female $T/narr/voice2
-[ "${ONLY_FEMALE:-}" ] || build male $T/narr/voice-am_michael
+[ -z "${WITH_MALE:-}" ] || build male $T/narr/voice-am_michael  # the creator wants the female cut only; WITH_MALE=1 to build the old male cut
 python3 $TOOLS/docs/ytchapters.py ${TITLES:-$TOOLS/docs/examples/titles-part2.json} $OUT/*/*.chapters.json > $OUT/chapters.log 2>&1; tail -1 $OUT/chapters.log
 [ "${SKIP_QA:-}" ] || { step "review frames"; rm -rf $T/qa/fx1
 python3 $TOOLS/edit/qa_fx.py $T/rec/$TAKE $OUT/female/proxmate-vms-templates-consoles-female.mp4 $T/qa/fx1 2>&1 | tail -4; }

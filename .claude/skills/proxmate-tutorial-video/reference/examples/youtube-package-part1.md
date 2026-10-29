@@ -1,5 +1,10 @@
 # ProxMate setup tutorial: YouTube package
 
+> **Superseded.** Written for an earlier, rejected cut of part one (ProxMate 1.2, a 12-minute chapter list). Its
+> chapters and versions don't match the published part one (10:41), so don't reuse its description. It is kept only
+> as an example of yt-package and yt-shorts output: titles scored with title.py, a thumbnail brief, and Shorts.
+> Part one still needs a current description and tags.
+
 Generated from the shipped script with the yt-package, yt-chapters, yt-seo and yt-shorts skills.
 Every figure below comes from the ProxMate README, release notes or the narration manifest. Nothing is invented.
 
