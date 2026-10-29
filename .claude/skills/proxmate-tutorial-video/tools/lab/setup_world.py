@@ -39,7 +39,7 @@ pm.call("POST", "/admin/encryption-key-backup/confirm")
 print("setup complete; encryption-key backup confirmed")
 
 if a.mike:  # part one's friend, a plain account (no two-step sign-in)
-    inv = pm.call("POST", "/invites", {"maxCpu": 4, "maxRam": 8, "maxStorage": 80, "label": "Mike"})
+    inv = pm.call("POST", "/invites", {"maxCpu": 4, "maxRam": 8192, "maxStorage": 80, "label": "Mike"})  # maxRam is in MB
     PM().call("POST", "/auth/register", {"email": "mike@example.com", "password": env("PMV_FRIEND_PASSWORD"),
                                          "displayName": "Mike", "inviteToken": inv["token"]})
     print("Mike registered (4 vCPU, 8 GB RAM, 80 GB disk)")
