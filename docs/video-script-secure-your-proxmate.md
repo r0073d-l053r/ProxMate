@@ -323,8 +323,6 @@ Saving it lifts the suspension right away.
 
 The container doesn't start back up by itself, so Sam signs in and starts it from the Actions menu.
 
-If you ever delete a user instead, also revoke their old invite on the Invites page. In this version, deleting a user makes that invite link work again.
-
 ## V19 · The Audit Log
 
 [ON SCREEN: Admin, Audit Log, Refresh. Columns When, Actor, Action, Details, IP. Scroll the rows: invite.create Sam, auth.register, auth.2fa_enabled, auth.login 2fa, apitoken.create and apitoken.revoke, admin.reset_password, auth.login_blocked compute access expired, vm.stop, admin.access_suspended, admin.update_access (suspension lifted).]
