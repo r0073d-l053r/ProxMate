@@ -66,11 +66,13 @@ the manifest in place. Hand measurements for the few spots it gets wrong go in a
 untouched video stream, and writes the `.srt` (comma pieces under 1.4 s rejoined, captions held up to 17 characters a
 second, two rows at most). Usage: `place.py <voice dir> <picture.mp4> <out.mp4>`; needs `<picture>.chapters.json`.
 
-**nudge_srt.py** moves caption boundaries where back-to-back speech reads faster than 20 characters a second:
-each `[n, dt]` in the nudges file moves the end of caption n and the start of caption n+1 by dt seconds, toward
-the neighbour with room (keep dt within about 0.35 s). It reports what still breaks the rules. Run it on
-place.py's `.srt` after every placement; caption numbers change when lines are added or split. Usage:
-`nudge_srt.py in.srt nudges.json out.srt`.
+**nudge_srt.py** fixes captions after placement. `nudges` (`[n, dt]`) moves the end of caption n and the start of
+caption n+1 by dt seconds, toward the neighbour with room (keep dt within about 0.35 s), where back-to-back speech
+reads faster than 20 characters a second. `set` (`[n, start, end]`, null keeps a time) puts exact times on a caption,
+for a switch that QA measured landing inside a word; take them from the measured pause, not by nudging further.
+`rebalance: true` re-breaks two-row captions with a row over 50 characters. It reports what still breaks the rules.
+Run it on place.py's `.srt` (renamed `.placed.srt`) after every placement; caption numbers change when lines are
+added or split. Usage: `nudge_srt.py in.srt fixes.json out.srt`.
 
 **to_markdown.py** turns a narration file into a readable script: one section per chapter with its ON SCREEN note
 and each line with its start time. Usage: `to_markdown.py narration.json header.md out.md --chapters chapters.json

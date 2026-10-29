@@ -234,9 +234,11 @@ def main():
     with open(f"{tmp}/v.txt", "w") as f: f.writelines(f"file '{v}'\n" for v in vids)
     with open(f"{tmp}/a.txt", "w") as f: f.writelines(f"file '{a}'\n" for a in wavs)
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", f"{tmp}/a.txt", "-c", "copy", f"{tmp}/all.wav"])
+    # apad + -shortest: the picture decides the length, so the end card keeps every frame even when the joined
+    # audio comes out a frame or two short
     run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", f"{tmp}/v.txt", "-i", f"{tmp}/all.wav",
          "-map", "0:v", "-map", "1:a", "-c:v", "copy",
-         "-af", "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+         "-af", "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,apad", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
          "-movflags", "+faststart", "-shortest", out])
     with open(os.path.splitext(out)[0] + ".srt", "w") as f:
         for i, (s, e, t) in enumerate(srt, 1): f.write(f"{i}\n{srt_time(s)} --> {srt_time(e)}\n{t}\n\n")
