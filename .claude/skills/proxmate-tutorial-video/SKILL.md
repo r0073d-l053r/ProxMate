@@ -11,14 +11,17 @@ This is how the "Set Up Your ProxMate" series is made. Part one (first-time setu
 
 Start by reading these:
 - `reference/voice.md`: how the creator talks. It overrides everything else about wording.
-- `docs/narration-style-guide.md` (repo root): the narration rules.
+- `reference/narration-style-guide.md`: the narration rules. It's a copy of the repo's
+  `docs/narration-style-guide.md`, so keep the two in sync.
 - `reference/lessons.md`: what went wrong before and the fix for each.
 
-In commands, `$SK` is this skill's absolute path:
+In commands, `$SK` is the absolute path of this skill's folder. In the ProxMate repo:
 
 ```
 SK=$(git rev-parse --show-toplevel)/.claude/skills/proxmate-tutorial-video
 ```
+
+Anywhere else, it's wherever the skill was unpacked (see `INSTALL.md`).
 
 `$PMV_WORK` is the video's working folder (default `~/pmv/work`).
 
@@ -111,7 +114,8 @@ deleted afterwards. Nothing else on pve1 is in scope.
 Go only when every action works.
 
 ### 5. Write the script
-- Use the format of `docs/video-script-vms-templates-consoles.md`: a header, the lab table, then
+- Use the format of part two's script (`docs/video-script-vms-templates-consoles.md` in the repo, copied to
+  `reference/examples/video-script-part2.md`): a header, the lab table, then
   `## Vnn · title` sections, each with an `[ON SCREEN: ...]` note and the narration lines.
 - Write in the creator's voice, a little shorter than each chapter's action needs.
 - Turn it into `$PMV_WORK/narration.json` with `voice/script_to_narration.py`.

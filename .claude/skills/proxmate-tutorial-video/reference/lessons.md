@@ -12,7 +12,7 @@ Every entry here cost a retake, a rejected cut or a lost hour. Read the section 
   sterile"). Causes: clipped fragments, colon labels, counted teasers, three-item recaps, praise with no reason,
   about 7 words a sentence, and the installed script-writer skill's "short, punchy" default (stop using it). What
   worked: the creator's own rewrite of V01 to V03 as the model voice, `reference/voice.md` and
-  `docs/narration-style-guide.md`.
+  `reference/narration-style-guide.md`.
 - **A voice they dislike.** Piper's ryan voice was "horrible". Kokoro `af_heart` (female) is the voice from part
   two on; the creator found it more legible than the male `am_michael`. One cut only, female.
 - **Describing what isn't on screen.** "Red!" and "Green!" over a dark grey toast; "flags issues" for a static

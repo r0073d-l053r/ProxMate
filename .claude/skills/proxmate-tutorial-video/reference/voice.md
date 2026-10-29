@@ -43,7 +43,7 @@ What that shows:
 
 Hype and filler: game-changer, insane, unlock, dive in, let's get into it, ultimate, powerful, revolutionary,
 seamless, robust, leverage, delve. No "hey guys", no "smash that like button", no subscribe pitch before the
-payoff. None of the scripted-sounding patterns in `docs/narration-style-guide.md`: fragments for drama
+payoff. None of the scripted-sounding patterns in `narration-style-guide.md` (next to this file): fragments for drama
 ("Gone."), colon labels ("Quick note:"), not-X-but-Y, questions I answer myself, "Here's the thing/deal",
 three-item recaps, praise with no reason.
 

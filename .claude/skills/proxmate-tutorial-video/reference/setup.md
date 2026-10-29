@@ -7,7 +7,7 @@ only restarted, files are still there and processes are not: skip to "After a re
 Run everything as root. Two paths are used throughout:
 
 ```
-SK=$(git -C /home/user/ProxMate rev-parse --show-toplevel)/.claude/skills/proxmate-tutorial-video   # absolute
+SK=$(git -C /home/user/ProxMate rev-parse --show-toplevel)/.claude/skills/proxmate-tutorial-video   # absolute; outside the repo, the unpacked skill folder
 export PMV_WORK=~/pmv/work PMV_LAB=~/pmv/work/lab
 ```
 
