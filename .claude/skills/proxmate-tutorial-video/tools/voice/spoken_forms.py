@@ -27,10 +27,17 @@ PART1 = [
     (r"\bhomelab\b", "home lab"), (r"\bSuperfile\b", "Super file"), (r"\bTailscale\b", "Tail scale"), (r"\bspf\b", "S P F"), (r"\bSNIPPET_DIR\b", "snippet dir"), (r"\bSNIPPET_STORAGE\b", "snippet storage"),
 ]
 
+# part three (tutorial 3: secure your ProxMate)
+PART3 = [
+    (r"\bKeePassXC\b", "Keepass X C"), (r"\b2FA\b", "two F A"), (r"\bTOTP\b", "T O T P"), (r"\bQR\b", "Q R"),
+    (r"\b1Password\b", "one Password"), (r"\bntfy\b", "notify"), (r"\bKeycloak\b", "Key cloak"), (r"\bwebhook\b", "web hook"),
+    (r"\bURL\b", "U R L"), (r"\b1\.3\.4\b", "one point three point four"), (r"\bhomelabs\b", "home labs"), (r"\bsign-ins\b", "sign ins"),
+]
+
 # new episodes: (regex, spoken form) pairs for words this episode adds
 EPISODE = []
 
-SPOKEN = EPISODE + PART2 + PART1
+SPOKEN = EPISODE + PART3 + PART2 + PART1
 
 
 def spoken(t):
