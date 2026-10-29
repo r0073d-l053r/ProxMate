@@ -1,4 +1,4 @@
-# Lessons from parts one and two
+# Lessons from parts one, two and three
 
 Every entry here cost a retake, a rejected cut or a lost hour. Read the section for the step you are on.
 
@@ -87,6 +87,21 @@ Every entry here cost a retake, a rejected cut or a lost hour. Read the section 
   and the VM tabs are `role=tab`. Card titles carry a leading space (`[data-slot=card-title]` with `^\s*title\s*$`).
 - Check a recorder with `node --check`, never `require()` it: requiring one starts a take.
 - The harness refuses foreground `sleep N`. Wait with Monitor until-loops or background tasks.
+- KeePassXC (Qt) has no DevTools. Put its window at a fixed spot first (`kpOpen` in record-part3.cjs: client area
+  800x560 at 1120,470) and measure the menu offsets once from screenshots. Qt menus open whichever submenu the
+  pointer crosses, so slide in straight lines; near the screen's right edge the TOTP submenu opens to the left.
+  KeePassXC 2.7 minimises itself on every copy unless `MinimizeOnCopy=false` is in `keepassxc.ini`. Raise it from
+  the dock; get back to Chromium by clicking its empty tab strip.
+- Never type an unchecked TOTP: a wrong code counts toward the 10-strike lockout. Read the setup key off the page,
+  compute the code, and compare it with what KeePassXC put on the clipboard before pasting. Copy only with 12 s
+  or more left in the 30 s step.
+- Incognito windows share one session, so a second friend needs a guest window (`chromium-browser --guest`, which
+  the running browser picks up). Afterwards Chromium starts on its profile picker: set `profile.last_used` to
+  `Default`, `last_active_profiles` to `["Default"]` and `show_picker_on_startup` to false in `Local State`.
+- Alt+Tab switches apps; Alt+` switches between Chromium windows in most-recently-used order, so activate the
+  windows off camera in the order the chapter needs.
+- A closed select keeps its options in the DOM: pick `[data-slot=select-item]:visible`, or the first select's
+  "7 days" answers for the second one. Sign-in fields keep the last attempt's text: type with `clear`.
 
 ## Lab and Proxmox
 
@@ -106,6 +121,15 @@ Every entry here cost a retake, a rejected cut or a lost hour. Read the section 
   logins trip its rate limiter (restart the backend). Lab calls must bypass the egress proxy
   (`ProxyHandler({})`, `curl --noproxy '*'`).
 - Prisma resolves `file:` database paths relative to `backend/prisma`.
+- The tailnet path to pve1 goes through a DERP relay and sometimes stalls for a minute. The ssh forward then dies,
+  ProxMate gets ECONNREFUSED, and a container create in flight ends in error. Keep a gentle watchdog running
+  (restart the forward only when its ssh process is gone or three 20 s checks in a row fail; restarting a slow
+  but working forward breaks requests in flight). Delete a failed machine through ProxMate before a retake.
+- Access expiry on camera: set `User.accessExpiresAt` a minute in the past with Prisma, then
+  `docker compose restart backend`. Sign-in is refused at once; the sweep runs about 15 to 20 s after the
+  backend starts and suspends the account and stops its guests (record-part3.cjs `EXPIRE`).
+- Once the admin has two-factor on, password-only API scripts fail: log in with a code computed from the setup
+  key saved in the take's 0600 state.
 - part one's `s03-preroll.cjs` deletes the `proxmate` token that later parts use. Don't run it.
 - Keep the world honest for the camera. If something exists off camera before its scene (a template published
   before the scene that publishes it), hide it first (part two flipped `published` with Prisma) and restore it
@@ -126,6 +150,12 @@ Every entry here cost a retake, a rejected cut or a lost hour. Read the section 
   it instead of clicking it.
 - The Optimization tips card is static (it always suggests the guest agent).
 - The wizard sets the cloud username from the template's OS before a key is picked.
+- The access-expiry banner runs the date into the next word ("On Nov 4, 2026, 05:44 PMyour machines").
+- On a cluster with no guests yet, Test connection warns "VM.Audit is granted but no guests are visible", which is
+  expected there; narrate it as such.
+- At 1920 px the Audit Log's IP column is pushed off the card by long Details, so don't narrate the address.
+- Deleting a user made their redeemed invite link work again (fixed on the working branch after part three's
+  script, not released yet).
 
 ## Edit and colour
 
