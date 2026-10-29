@@ -4,10 +4,13 @@
 # assembler's settings so the end card's stream can be joined as is; the audio is the finished mix, faded with the
 # picture and silent under the end card. Also writes the excerpt's captions from the full video's .srt.
 # usage: teaser.sh <full.mp4> <start s> <end s> <out.mp4> [full.srt]
-#   end = just after the last word you keep; the fade covers the last 0.5 s, so leave that much air after the voice
+#   end = just after the last word you keep and before the next line's first sound; the fade covers the last 0.5 s,
+#   so leave that much air after the voice
 set -euo pipefail
 SRC=$1 START=$2 END=$3 OUT=$4 SRT=${5:-${1%.mp4}.srt}
 HERE=$(cd "$(dirname "$0")" && pwd); CARD=$HERE/endcard/endcard.mp4
+# whole frames, or the end card check below counts from the wrong frame
+END=$(python3 -c "print(round($START + round(($END - $START) * 30) / 30 - 0.001, 4))")
 LEN=$(python3 -c "print(round($END - $START, 3))"); FADE=$(python3 -c "print(round($LEN - 0.5, 3))")
 CARDLEN=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$CARD")
 TOTAL=$(python3 -c "print(round($LEN + $CARDLEN, 3))")
@@ -33,7 +36,8 @@ def st(t): ms = int(round(t * 1000)); h, ms = divmod(ms, 3600000); m, ms = divmo
 cues = []
 for c in open(src).read().strip().split("\n\n"):
     ls = c.split("\n"); a, z = [sec(x) for x in ls[1].split(" --> ")]
-    if a >= a0 and a < a1: cues.append(f"{len(cues) + 1}\n{st(a - a0)} --> {st(min(z, a1) - a0)}\n" + "\n".join(ls[2:]))
+    # a caption that starts inside the closing fade belongs to a line the cut leaves out (captions lead the voice)
+    if a >= a0 and a < a1 - 0.5: cues.append(f"{len(cues) + 1}\n{st(a - a0)} --> {st(min(z, a1) - a0)}\n" + "\n".join(ls[2:]))
 open(out, "w").write("\n\n".join(cues) + "\n"); print(f"{out}: {len(cues)} captions")
 EOF
 fi
