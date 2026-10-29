@@ -1,0 +1,16 @@
+#!/bin/sh
+# Chromium launcher (alex's desktop). The DevTools port lets the recording script read element
+# positions; all input in the video is real X11 mouse/keyboard events.
+# If /etc/lab/chromium-proxy exists, public sites go through the sandbox's egress proxy; the lab LAN
+# (192.168.1.0/24: pve1 and the ProxMate box) is always reached directly.
+# usage: install -m 755 chromium-browser /usr/local/bin/chromium-browser; the dock's chromium.desktop runs it.
+#        Needs Chromium unpacked in /opt/chromium (see README.md); /etc/lab/chromium-proxy is written by docs-mode.sh.
+export GOOGLE_API_KEY=no GOOGLE_DEFAULT_CLIENT_ID=no GOOGLE_DEFAULT_CLIENT_SECRET=no
+PROXY=""
+if [ -s /etc/lab/chromium-proxy ]; then
+  PROXY="--proxy-server=$(cat /etc/lab/chromium-proxy) --proxy-bypass-list=<local>;127.0.0.1;localhost;192.168.1.0/24;pve1;proxmate"
+fi
+exec /opt/chromium/chrome --user-data-dir="$HOME/.config/chromium-alex" --remote-debugging-port=9222 --remote-allow-origins=* \
+  --class=chromium-browser --no-first-run --no-default-browser-check --password-store=basic --disable-session-crashed-bubble \
+  --disable-features=Translate,PrivacySandboxSettings4,OptimizationHints,MediaRouter --hide-crash-restore-bubble \
+  --force-device-scale-factor=1 $PROXY "$@"

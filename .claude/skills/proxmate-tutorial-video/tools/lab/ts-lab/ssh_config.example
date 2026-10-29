@@ -1,0 +1,14 @@
+# ssh config for the real Proxmox node pve1 over the lab tailnet (host alias pve1-lab), via ts-lab/start.sh's tailscaled.
+# Install once (PVE1_TAILNET_IP is pve1's Tailscale address, from `tailscale status`):
+#   sed -e "s#PVE1_TAILNET_IP#<address>#" -e "s#@PMV_TS_DIR@#$PMV_TS_DIR#g" -e "s#@PMV_TS_BIN@#$PMV_TS_BIN#g" \
+#       ssh_config.example > "$PMV_TS_DIR/ssh_config"      (the scripts read $PMV_PVE1_SSH_CONFIG, default that file)
+# The private key /root/.ssh/pve1-lab never enters the repo; its public half is in pve1's /root/.ssh/authorized_keys.
+Host pve1-lab
+  HostName PVE1_TAILNET_IP
+  User root
+  IdentityFile /root/.ssh/pve1-lab
+  IdentitiesOnly yes
+  ProxyCommand @PMV_TS_BIN@/tailscale --socket=@PMV_TS_DIR@/tailscaled.sock nc %h %p
+  StrictHostKeyChecking accept-new
+  UserKnownHostsFile @PMV_TS_DIR@/known_hosts
+  ServerAliveInterval 20

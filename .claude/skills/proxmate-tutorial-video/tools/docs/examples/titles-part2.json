@@ -1,0 +1,22 @@
+{
+ "V01": "A VM that comes ready",
+ "V02": "Three ways to fill the store",
+ "V03": "Add a cloud image",
+ "V04": "Notes, refresh and delete",
+ "V05": "Publish a Proxmox template",
+ "V06": "Cloud-init extras",
+ "V07": "Save your SSH key once",
+ "V08": "Deploy web-01",
+ "V09": "First boot and cloud-init",
+ "V10": "ISO installs and containers",
+ "V11": "Tour the VM page",
+ "V12": "The graphical console",
+ "V13": "The text console",
+ "V14": "Pop out the console",
+ "V15": "Insights and Activity",
+ "V16": "The Actions menu",
+ "V17": "Snapshots and MateStates",
+ "V18": "Settings and recovery",
+ "V19": "Share a VM with a friend",
+ "V20": "Reach it from anywhere"
+}

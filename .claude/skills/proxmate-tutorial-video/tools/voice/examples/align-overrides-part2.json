@@ -1,0 +1,6 @@
+{
+ "_comment": "Hand measurements used for part two (take three). starts: [line id, sentence number, start s from the line's start]: the dip before the /s/ of 'box' looked like the sentence pause. cues: [line id, sentence number, [[piece text, start s or null for the sentence's start], ...]]: a long sentence whose only comma comes too early to split at; 2.96 is the pause between 'option' and 'gives'.",
+ "starts": [["V12-04", 2, 1.64]],
+ "cues": [["V18-05", 1, [["If you forget your password, the Reset guest password option", null],
+                        ["gives you a new one and only shows it once.", 2.96]]]]
+}

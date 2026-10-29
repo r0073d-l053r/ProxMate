@@ -1,0 +1,61 @@
+cloudflare k l ˈ W d f l ˌ ɛ ɹ
+datacenter d ˈ A ɾ ə s ˌ ɛ n ɾ ə ɹ
+here's h ˈ ɪ ɹ z
+mike's m ˈ I k z
+proxmate p ɹ ˈ ɑ k s m ˌ A t
+proxmox p ɹ ˈ ɑ k s m ɑ k s
+that's ð ˈ æ t s
+tokens t ˈ O k ə n z
+ui j ˌ u ˈ I
+ve v ˈ i
+vm v ˌ i ˈ ɛ m
+vms v ˌ i ˈ ɛ m z
+backups b ˈ æ k ʌ p s
+comments k ˈ ɑ m ɛ n t s
+config k ə n f ˈ ɪ ɡ
+defaults d ᵻ f ˈ ɔ l t s
+downloads d ˈ W n l O d z
+explains ɛ k s p l ˈ A n z
+friend's f ɹ ˈ ɛ n d z
+gets ɡ ˈ ɛ t s
+labbing l ˈ æ b ɪ ŋ
+machine's m ə ʃ ˈ i n z
+minutes m ˈ ɪ n ɪ t s
+node's n ˈ O d z
+snippets s n ˈ ɪ p ɪ t s
+tidies t ˈ I d i z
+unticked ʌ n t ˈ ɪ k t
+wants w ˈ ɔ n t s
+dir d ˈ ɜ ɹ
+becomes b ɪ k ˈ ʌ m z
+backend b ˈ æ k ˌ ɛ n d
+vm's v ˌ i ˈ ɛ m z
+copies k ˈ ɑ p ɪ z
+created k ɹ i ˈ A ɾ ᵻ d
+debian d ˈ ɛ b i ə n
+decides d ᵻ s ˈ I d z
+deletes d ᵻ l ˈ i t s
+deploys d ᵻ p l ˈ Y z
+details d i t ˈ A l z
+dev d ˈ ɛ v
+doo d ˈ u
+emails ˈ i m A l z
+finishes f ˈ ɪ n ɪ ʃ ᵻ z
+host's h ˈ O s t s
+insights ˈ ɪ n s I t s
+interrupts ˈ ɪ n t ɚ ɹ ˌ ʌ p t s
+makes m ˈ A k s
+nobody's n ˈ O b ɑ d i z
+one's w ˈ ʌ n z
+opened ˈ O p ə n d
+passthrough p ˈ æ s θ ɹ u
+passwords p ˈ æ s w ɜ ɹ d z
+puts p ˈ ʊ t s
+rebuilds ɹ ᵻ b ˈ ɪ l d z
+scrollback s k ɹ ˈ O l b æ k
+setup's s ˈ ɛ ɾ ʌ p s
+snapshots s n ˈ æ p ʃ ɑ t s
+deployed d ᵻ p l ˈ Y d
+opens ˈ O p ə n z
+resizes ɹ ᵻ s ˈ I z ᵻ z
+mentioned m ˈ ɛ n ʃ ə n d

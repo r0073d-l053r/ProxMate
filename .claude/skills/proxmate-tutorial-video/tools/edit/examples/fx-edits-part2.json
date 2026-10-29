@@ -1,0 +1,301 @@
+{
+ "_note": "Editor's decisions for the polished cut of tutorial 2 (take t2a), applied by tools/edit/assemble.py when FX=1. Times are chapter seconds of that take. Reference copy: a new video's file lives at <take dir>/fx-edits.json.",
+ "ripple_lead": 0.07,
+ "zooms": {
+  "V04": [
+   {
+    "near": 26.66,
+    "in": 25.0,
+    "out": 27.6,
+    "rect": [
+     590,
+     730,
+     1040,
+     140
+    ]
+   }
+  ],
+  "V17": [
+   {
+    "near": 109.15,
+    "in": 108.4,
+    "out": 109.9
+   }
+  ],
+  "V19": [
+   {
+    "near": 25.78,
+    "in": 25.2,
+    "out": 26.7
+   }
+  ],
+  "V01": [
+   {
+    "near": 15.6,
+    "in": 15.6,
+    "out": 19.4
+   }
+  ],
+  "V08": [
+   {
+    "near": 15.84,
+    "in": 15.84,
+    "out": 18.5
+   }
+  ],
+  "V12": [
+   {
+    "near": 23.58,
+    "in": 22.4,
+    "out": 24.6
+   }
+  ],
+  "V15": [
+   {
+    "near": 6.37,
+    "in": 9.4,
+    "out": 11.15
+   }
+  ]
+ },
+ "add_zooms": {
+  "V13": [
+   {
+    "in": 18.6,
+    "out": 26.8,
+    "rect": [
+     540,
+     230,
+     760,
+     560
+    ]
+   }
+  ],
+  "V16": [
+   {
+    "in": 0.15,
+    "out": 10.3,
+    "rect": [
+     1100,
+     200,
+     700,
+     420
+    ]
+   }
+  ]
+ },
+ "add_ff": {
+  "V10": [
+   {
+    "from": 21.0,
+    "to": 28.0,
+    "target": 1.2,
+    "label": "creating debian-iso"
+   },
+   {
+    "from": 29.9,
+    "to": 32.9,
+    "target": 0.7,
+    "label": "opening the console"
+   },
+   {
+    "from": 49.0,
+    "to": 54.1,
+    "target": 1.5,
+    "label": "to New VM"
+   }
+  ],
+  "V16": [
+   {
+    "from": 15.3,
+    "to": 22.0,
+    "target": 1.2,
+    "label": "resize, snapshot first",
+    "under_voice": true
+   },
+   {
+    "from": 30.5,
+    "to": 51.6,
+    "target": 1.0,
+    "label": "shutdown"
+   }
+  ],
+  "V17": [
+   {
+    "from": 12.4,
+    "to": 18.9,
+    "target": 1.5,
+    "label": "taking the snapshot"
+   },
+   {
+    "from": 34.6,
+    "to": 40.5,
+    "target": 1.2,
+    "label": "rolling back"
+   },
+   {
+    "from": 97.2,
+    "to": 105.4,
+    "target": 1.5,
+    "label": "logging in"
+   }
+  ],
+  "V19": [
+   {
+    "from": 10.0,
+    "to": 21.3,
+    "target": 2.5,
+    "label": "Mike signs in"
+   }
+  ],
+  "V07": [
+   {
+    "from": 12.9,
+    "to": 17.0,
+    "target": 1.0,
+    "label": "back to the browser"
+   }
+  ]
+ },
+ "move_say": {
+  "V08": [
+   {
+    "near": 0.41,
+    "to": 2.8
+   },
+   {
+    "near": 42.61,
+    "to": 45.9
+   }
+  ],
+  "V17": [
+   {
+    "near": 19.81,
+    "to": 22.8
+   },
+   {
+    "near": 96.89,
+    "to": 105.4
+   },
+   {
+    "near": 109.15,
+    "to": 109.5
+   }
+  ],
+  "V19": [
+   {
+    "near": 9.91,
+    "to": 21.5
+   },
+   {
+    "near": 26.49,
+    "to": 29.2
+   }
+  ],
+  "V03": [
+   {
+    "near": 11.29,
+    "to": 13.0
+   }
+  ],
+  "V04": [
+   {
+    "near": 19.07,
+    "to": 21.4
+   }
+  ],
+  "V07": [
+   {
+    "near": 11.69,
+    "to": 19.6
+   }
+  ],
+  "V10": [
+   {
+    "near": 49.25,
+    "to": 55.4
+   },
+   {
+    "near": 61.68,
+    "to": 64.0
+   }
+  ],
+  "V13": [
+   {
+    "near": 32.0,
+    "to": 33.6
+   }
+  ],
+  "V14": [
+   {
+    "near": 0.42,
+    "to": 3.0
+   }
+  ],
+  "V15": [
+   {
+    "near": 6.32,
+    "to": 9.7
+   },
+   {
+    "near": 8.23,
+    "to": 7.2
+   }
+  ],
+  "V16": [
+   {
+    "near": 24.11,
+    "to": 25.2
+   }
+  ]
+ },
+ "fade_out": {
+  "V01": 0.35,
+  "V20": 0.5
+ },
+ "fade_in": {
+  "V02": 0.35
+ },
+ "drop_clicks": {
+  "V07": [
+   9.413
+  ],
+  "V10": [
+   35.354
+  ],
+  "V12": [
+   11.262,
+   20.614
+  ],
+  "V13": [
+   5.487,
+   40.873
+  ],
+  "V14": [
+   14.583
+  ],
+  "V15": [
+   1.865
+  ],
+  "V17": [
+   24.187
+  ]
+ },
+ "dissolve": {
+  "V15": 0.3,
+  "V20": 0.3
+ },
+ "split_say": {
+  "V16": [
+   {
+    "near": 25.2,
+    "to": 53.4,
+    "at": {
+     "af_heart": 3.7,
+     "am_michael": 3.29
+    },
+    "text_at": "So, Stop,"
+   }
+  ]
+ }
+}

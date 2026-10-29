@@ -1,0 +1,9 @@
+# How part two's committed script (docs/video-script-vms-templates-consoles.md, commit b7e35a0) was rebuilt.
+# Re-running this against --ref c21a2cd (the version before) or HEAD reproduces that commit byte for byte.
+python3 gen_repo_doc.py docs/video-script-vms-templates-consoles.md \
+  $PMV_WORK/narration-take3.json $PMV_WORK/beats.json $PMV_WORK/final/picture.chapters.json $PMV_WORK/repo-doc.md \
+  --ref c21a2cd \
+  --voice "Kokoro \`af_heart\` at normal speed, the same voice as part one's polished cut" \
+  --narration-note "take three. The creator rewrote V01 to V03 in their own words, and V04 to V20 follow that voice. The rules it was written to are in [narration-style-guide.md](narration-style-guide.md)" \
+  --drop " The ProxMate IDE is left for its own video."
+# then review $PMV_WORK/repo-doc.md and copy it over the doc in the repo

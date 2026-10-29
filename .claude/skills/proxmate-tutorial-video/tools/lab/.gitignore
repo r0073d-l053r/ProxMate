@@ -1,0 +1,26 @@
+# Lab secrets and runtime files never belong in the repo (README.md, "Never commit"). A safety net, not a licence
+# to keep them here: the tools write them under $PMV_WORK / $PMV_LAB, outside the repo.
+*.key
+*.pem
+*.crt
+*.csr
+*.srl
+tokens.json
+*-token.json
+*_ed25519
+*_rsa
+*_ecdsa
+pve1-lab
+.env
+ts-lab/state/
+ts-lab/ssh_config
+ts-lab/known_hosts
+ts-lab/pve-ticket
+ts-lab/pve1.ip
+*.sock
+*.log
+*.stdout
+basefix/su-exec
+basefix/su-exec.installed
+ca/
+rec/

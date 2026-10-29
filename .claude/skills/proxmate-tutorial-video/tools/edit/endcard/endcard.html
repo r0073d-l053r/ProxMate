@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ProxMate end card</title>
+<style>
+  /* ProxMate brand: the app's dark theme, its logo badge, and the site's own fonts (Geist, Instrument Serif). */
+  @font-face { font-family: Geist; font-weight: 100 900; src: url(fonts/geist-normal-latin.woff2) format("woff2"); }
+  @font-face { font-family: "Instrument Serif"; font-style: italic; src: url(fonts/instrument-serif-italic-latin.woff2) format("woff2"); }
+  :root {
+    --bg: oklch(0.17 0.008 248);          /* --background (dark) in ProxMate's globals.css */
+    --fg: oklch(0.97 0.004 248);          /* --foreground */
+    --badge: #e2e5e7;                     /* logo badge (icon.svg) */
+    --glyph: #15191c;
+    --muted: oklch(0.72 0.012 248);
+    --line: oklch(0.34 0.014 248);
+    --glow: oklch(0.30 0.035 248);
+  }
+  html, body { margin: 0; width: 1920px; height: 1080px; background: var(--bg); overflow: hidden; }
+  body { font-family: Geist, system-ui, sans-serif; color: var(--fg); -webkit-font-smoothing: antialiased; }
+
+  .stage { position: absolute; inset: 0; display: grid; place-items: center; }
+  .glow { position: absolute; left: 50%; top: 46%; width: 1500px; height: 1000px; margin: -500px 0 0 -750px;
+          background: radial-gradient(ellipse closest-side at center, rgba(31,45,60,.95) 0%, rgba(31,45,60,.72) 22%, rgba(31,45,60,.42) 45%, rgba(31,45,60,.18) 68%, rgba(31,45,60,.05) 86%, rgba(31,45,60,0) 100%); opacity: 0;
+          animation: glow 7.5s cubic-bezier(.2,.7,.2,1) forwards; }
+  .grid { position: absolute; inset: -60px; opacity: 0;
+          background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+          background-size: 64px 64px;
+          -webkit-mask-image: radial-gradient(ellipse 52% 48% at 50% 46%, #000 0%, transparent 75%);
+          animation: grid 7.5s linear forwards; }
+
+  .card { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; }
+  .brand { display: flex; align-items: center; gap: 34px; }
+  .badge { width: 132px; height: 132px; opacity: 0; transform: scale(.62) rotate(-8deg);
+           animation: badge 1.0s cubic-bezier(.2,1.35,.3,1) .05s forwards; }
+  .word { font-weight: 640; font-size: 148px; letter-spacing: -0.035em; line-height: 1; opacity: 0; transform: translateY(26px);
+          animation: rise .9s cubic-bezier(.2,.9,.2,1) .45s forwards; }
+  .word .dot { color: var(--muted); }
+
+  .tag { margin-top: 46px; font-size: 62px; font-weight: 420; letter-spacing: -0.02em; line-height: 1.1;
+         clip-path: inset(0 100% 0 0); animation: wipe 1.0s cubic-bezier(.6,0,.2,1) 1.25s forwards; }
+  .tag em { font-family: "Instrument Serif", Georgia, serif; font-style: italic; font-weight: 400; font-size: 76px; letter-spacing: 0; }
+
+  .rule { margin-top: 54px; height: 2px; width: 520px; background: linear-gradient(90deg, transparent, var(--line) 18%, var(--line) 82%, transparent);
+          transform: scaleX(0); animation: grow .8s cubic-bezier(.3,.8,.2,1) 2.25s forwards; }
+  .visit { margin-top: 40px; font-size: 38px; font-weight: 400; color: var(--muted); letter-spacing: -0.005em; opacity: 0; transform: translateY(14px);
+           animation: rise .8s cubic-bezier(.2,.9,.2,1) 2.6s forwards; }
+  .visit b { color: var(--fg); font-weight: 560; }
+
+  .fade { position: absolute; inset: 0; background: #000; opacity: 0; animation: out .9s ease-in 6.6s forwards; }
+
+  @keyframes badge { to { opacity: 1; transform: scale(1) rotate(0deg); } }
+  @keyframes rise  { to { opacity: 1; transform: translateY(0); } }
+  @keyframes wipe  { to { clip-path: inset(0 -2% 0 0); } }
+  @keyframes grow  { to { transform: scaleX(1); } }
+  @keyframes glow  { 0% { opacity: 0; transform: scale(.85); } 30% { opacity: .9; } 100% { opacity: 1; transform: scale(1.08); } }
+  @keyframes grid  { 0% { opacity: 0; transform: translateY(0); } 25% { opacity: .32; } 100% { opacity: .32; transform: translateY(-40px); } }
+  @keyframes out   { to { opacity: 1; } }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="grid"></div>
+    <div class="glow"></div>
+    <div class="card">
+      <div class="brand">
+        <!-- ProxMate's logo (frontend/src/app/icon.svg) -->
+        <svg class="badge" viewBox="0 0 64 64" fill="none" aria-label="ProxMate">
+          <rect x="3" y="3" width="58" height="58" rx="14" fill="#e2e5e7"/>
+          <g transform="translate(12 12) scale(1.6667)" stroke="#15191c" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+            <line x1="6" y1="6" x2="6.01" y2="6"/>
+            <line x1="6" y1="18" x2="6.01" y2="18"/>
+          </g>
+        </svg>
+        <div class="word">ProxMate<span class="dot">.</span></div>
+      </div>
+      <div class="tag">Your cluster <em>shared</em> safely</div>
+      <div class="rule"></div>
+      <div class="visit">Visit <b>proxmate.host</b> to learn more</div>
+    </div>
+  </div>
+  <div class="fade"></div>
+</body>
+</html>
