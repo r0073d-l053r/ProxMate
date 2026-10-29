@@ -103,7 +103,7 @@ The central identity row. Every tenant and admin is a `User`; `role` decides adm
 
 - Deleting a user cascades VMs, sessions, keys, tokens and shares, but leaves the non-FK rows listed above (passkeys, recovery codes, reset tokens, audit, samples) as orphans. The admin delete route first checks that every one of the user's machines can be deleted with its guest; if any cannot (a guest without its ownership tag, an unconfirmed location, or a failed destroy) the account is kept and the route answers 409 with the blocked `vms`.[^user-routes]
 - `InviteToken.createdById` is `ON DELETE SET NULL`: deleting an admin who created invites keeps the redeemed ones with no creator; the delete route revokes the unredeemed ones in the same transaction.[^creator-mig] [^user-routes]
-- `InviteToken.usedById` is `SET NULL` on delete: deleting a tenant makes the invite they redeemed look unused again, and it is redeemable if its `expiresAt` has not passed.[^init-mig] [^auth-routes]
+- `InviteToken.usedById` is `SET NULL` on delete, so a bare delete would make the invite the tenant redeemed look unused again, redeemable until its `expiresAt`. The admin delete route deletes that invite in the same transaction, before the user row.[^init-mig] [^auth-routes] [^user-routes]
 - Registration creates the user first, then atomically claims the invite with `updateMany where usedById: null`; on a lost race the new user row is deleted.[^auth-routes]
 
 [^schema]: backend/prisma/schema.prisma

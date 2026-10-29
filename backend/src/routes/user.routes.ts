@@ -177,12 +177,16 @@ router.delete('/:id', async (req: Request, res: Response) => {
     return;
   }
 
-  // Every VM and its guest is gone; the cascade removes sessions and frees the invite.
+  // Every VM and its guest is gone; the cascade removes the account's sessions.
   // Invites this account issued: redeemed ones stay as history (their creator
   // becomes NULL), while links nobody has used yet are revoked with it — once the
   // issuer is gone there is no one accountable for handing them out.
+  // The invite this account redeemed goes too. The delete would otherwise set its
+  // usedById back to NULL, and an unused, unexpired invite is redeemable again, so
+  // anyone who had seen the old link could sign up with its quota.
   await prisma.$transaction([
     prisma.inviteToken.deleteMany({ where: { createdById: targetId, usedById: null } }),
+    prisma.inviteToken.deleteMany({ where: { usedById: targetId } }),
     prisma.user.delete({ where: { id: targetId } }),
   ]);
   await recordAudit({

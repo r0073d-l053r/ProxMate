@@ -75,7 +75,16 @@ describe('DELETE /api/users/:id', () => {
     expect(res.status).toBe(200);
     expect(prisma.inviteToken.deleteMany).toHaveBeenCalledWith({ where: { createdById: 'u1', usedById: null } });
     const ops = vi.mocked(prisma.$transaction).mock.calls[0]?.[0] as unknown as Array<Promise<{ op: string }>>;
-    expect((await Promise.all(ops)).map((o) => o.op)).toEqual(['invite.deleteMany', 'user.delete']);
+    expect((await Promise.all(ops)).map((o) => o.op)).toEqual(['invite.deleteMany', 'invite.deleteMany', 'user.delete']);
+  });
+
+  it('deletes the invite the account redeemed, so its link cannot be redeemed again', async () => {
+    const res = await del();
+    expect(res.status).toBe(200);
+    expect(prisma.inviteToken.deleteMany).toHaveBeenCalledWith({ where: { usedById: 'u1' } });
+    // Before the user row goes: the delete would set usedById back to NULL and re-arm the link.
+    const order = vi.mocked(prisma.inviteToken.deleteMany).mock.invocationCallOrder;
+    expect(Math.max(...order)).toBeLessThan(vi.mocked(prisma.user.delete).mock.invocationCallOrder[0]!);
   });
 
   it('refuses up front, destroying nothing, when a machine\'s guest predates ownership tags', async () => {
