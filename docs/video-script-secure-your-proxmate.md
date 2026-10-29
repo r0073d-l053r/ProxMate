@@ -9,7 +9,7 @@ admin side. Part four moves to HTTPS for passkeys and single sign-on with Keyclo
 Recorded on the same Ubuntu desktop as parts one and two, against the same real Proxmox VE node.
 
 - **Working title:** Secure your ProxMate: two-factor sign-in, safe invites and the security settings (v1.3)
-- **Length:** about 2,150 spoken words; with the real waits sped up it should land near 14 minutes
+- **Length:** about 2,200 spoken words; with the real waits sped up it should land near 14 to 15 minutes
 - **Voice:** Kokoro `af_heart` at normal speed, the same voice as parts one and two
 - **Narration:** written in the creator's voice from part two's take three, to the rules in
   [narration-style-guide.md](narration-style-guide.md)
@@ -35,8 +35,12 @@ What is a stand-in, and said so in the narration or the notes:
   access check runs right away. Waiting seven days is the only other way to film it.
 - The sign-in rate limit is raised for the recording session, because every window on the desktop shares one
   address. It is put back to the default of 20 afterwards. The lockout is explained from the docs, not triggered.
-- Every password, setup key, recovery code, token and invite link on screen belongs to a throwaway lab account,
-  deleted after the recording.
+- Every password, setup key, recovery code, token and invite link on screen belongs to this lab install. Its
+  database is wiped after the recording (`docker compose down -v`), which removes every account, invite and secret
+  shown, and the KeePassXC database used on camera is deleted with it.
+
+Before recording: rehearse Sam creating the container from Sam's own account. The lab rehearsal created it through
+the admin's deploy-for route, and the API takes the owner from whoever is signed in, so the result should match.
 
 Markers: `[ON SCREEN: ...]` is what the viewer sees. `[FF]` is a real wait that is sped up in the edit, with a
 small fast-forward badge. Start times are added once the cut exists.
@@ -87,11 +91,11 @@ Now I'll copy the current code with Copy TOTP, paste it into the code box, and c
 
 [ON SCREEN: the "Save your recovery codes" card at the top of the page: ten codes in two columns, Copy all, I've saved them. Then the card below: "Two-factor authentication is on" and "10 recovery codes left."]
 
-ProxMate now shows ten recovery codes. Each one works once, in case you lose your authenticator.
+ProxMate now shows ten recovery codes. You can use them to get back in if you lose your authenticator, and each one works once.
 
 They won't be shown again, so I'll click Copy all and keep them somewhere safe.
 
-Keep them away from your authenticator, like on paper or in a different password manager. If both live in one place, losing that one place means losing both.
+Try to store them away from your authenticator, like on paper or in a different password manager. If both are in one place, you could lose them at the same time.
 
 Once they're saved, I'll click I've saved them. The card below now says two-factor authentication is on, with ten recovery codes left.
 
@@ -105,7 +109,7 @@ Instead of the dashboard, ProxMate asks for an authentication code. In KeePassXC
 
 I'll paste it in and click Verify, and I'm back on the dashboard.
 
-ProxMate also accepts the code right before and right after this one. So your computer's clock only has to be within about thirty seconds of the server's clock.
+ProxMate also accepts the code right before and right after this one. So the device your authenticator runs on only needs its clock within about thirty seconds of the server's clock.
 
 ## V06 · If you lose your authenticator
 
@@ -117,7 +121,7 @@ It goes in the same box as the code, and the dash and capital letters don't matt
 
 Back on the Security page, it now says nine recovery codes left, because that one is used up.
 
-To get new codes, you would type a current code here and click Disable 2FA. Then you set it up again with a new key.
+To get new codes, you would type a current code or a recovery code here and click Disable 2FA. Then you set it up again with a new key.
 
 Please don't skip saving your recovery codes. No admin can turn off someone else's two-factor authentication, and that includes me.
 
@@ -135,19 +139,19 @@ The SSH keys card is the one we used in part two. Below it are API tokens, for s
 
 I'll make a token called terraform. ProxMate shows the token only once, so you have to copy it right away.
 
-A token can do anything you can do, so treat it like a password. It can't change anything on this Security page, though.
+A token can do most of what you can do, so treat it like a password. It can't change your two-factor settings or make more tokens, though.
 
 When a token isn't needed anymore, the trash icon revokes it right away, without asking first.
 
-At the bottom, Email preferences picks which optional emails you get. This lab has no email server set up, so nothing is sent.
+At the bottom, the Email preferences card picks which optional emails you get. This lab has no email server set up, so nothing is sent.
 
 ## V08 · Settings, the Proxmox tab
 
 [ON SCREEN: Admin, Settings, the Proxmox tab. The Proxmox connection card: point at Verify TLS certificate (unticked) and Proxmox pool (optional). Test connection, the "Connected to Proxmox VE 9.2.2" toast. Scroll to Tenant network isolation: its description, Apply isolation firewall to new VMs (ticked), the amber "Not enforced yet." note, Management subnet, and Enable enforcement, which is not clicked.]
 
-Now for the admin side. Settings has five tabs, and the first one is Proxmox.
+That covers my own account, so let's move over to the admin side. Settings has five tabs, and the first one is Proxmox.
 
-Verify TLS certificate is off here, because my Proxmox node still uses the certificate it made for itself.
+Right now the Verify TLS certificate option is off, because my Proxmox node still uses the certificate it made for itself.
 
 Once Proxmox has a certificate you trust, turn this on, so ProxMate knows it's talking to the real server.
 
@@ -155,13 +159,13 @@ In part one, I used a root token to keep things simple. The docs also have a scr
 
 If you fill in a Proxmox pool, every guest ProxMate makes goes into it. Then the token can be limited to that pool.
 
-Test connection checks the token, and it warns you when a permission is missing.
+The Test connection button checks the token, and it warns you when a permission is missing.
 
 Further down is tenant network isolation. It gives every new VM a firewall that blocks your LAN, the other VMs, and the Proxmox host. The VM can still reach the internet.
 
-The amber note says it isn't enforced yet, because those rules only work once the Proxmox cluster firewall is on.
+This amber note says it isn't enforced yet, because those rules only work once the Proxmox cluster firewall is on.
 
-Enable enforcement turns that firewall on. First, it adds a rule so your management network can still reach Proxmox.
+The Enable enforcement button turns that firewall on. Before it does, it adds a rule so your management network can still reach Proxmox.
 
 I'm leaving my lab node alone, but on your own server, the docs say to do this before you invite anyone.
 
@@ -169,11 +173,11 @@ I'm leaving my lab node alone, but on your own server, the docs say to do this b
 
 [ON SCREEN: the Notifications tab. The Email (SMTP) card: its description, Host, Port, From address. The Notifications card: Webhook URL, ntfy, Telegram, then Notify me about with all five ticked. Point at Account locked (brute-force).]
 
-The Notifications tab starts with email. Without an email server, a forgotten password goes to the admin instead, and we'll see that with Mike in a minute.
+The Notifications tab starts with email. Without an email server, password reset requests go to the admin instead, and we'll see that with Mike a little later.
 
 Below that, ProxMate can alert you through a webhook for Discord or Slack, through ntfy, or through Telegram.
 
-Account locked is checked in this list, so you hear about it when someone keeps guessing a password.
+The Account locked option is checked in this list, so you hear about it when someone keeps guessing a password.
 
 This lab doesn't have a channel set up yet, so these alerts have nowhere to go.
 
@@ -185,11 +189,11 @@ The Access tab is where single sign-on lives. It lets people sign in through an 
 
 Keycloak is popular in homelabs, and it's the one we're setting up in part four.
 
-Keycloak has to be on HTTPS for this to work, so this card stays empty for now.
+It has to be on HTTPS for this to work, so this card stays empty for now.
 
-When we fill it in, the callback URL at the top goes into Keycloak. Members of an admin group in Keycloak can also become ProxMate admins.
+When we fill it in, the callback URL at the top goes into Keycloak. Members of an admin group there can also become ProxMate admins.
 
-Sign-ins through Keycloak skip ProxMate's own code, so the second step for those accounts gets set up in Keycloak.
+People who sign in through Keycloak skip ProxMate's own two-factor code, so their second step gets set up in Keycloak.
 
 Kiosk mode is a full-screen wall panel. An exit PIN stops someone walking past from tapping out into the admin console.
 
@@ -199,13 +203,13 @@ I'll set a PIN here. My account password still works too, so I can't lock myself
 
 [ON SCREEN: the Maintenance tab. Updates: Check for updates, "You're on the latest version (v1.3.4)." App-database backups: the description, Backup directory /var/backups/proxmate, Keep 7, Back up now, the "Snapshot written: …" toast.]
 
-On the Maintenance tab, Check for updates looks for a newer ProxMate release. I'm already on the latest one, version 1.3.4.
+On the Maintenance tab, the Check for updates button looks for a newer ProxMate release. I'm already on the latest one, version 1.3.4.
 
 App-database backups save ProxMate's own database every night, with your users, VM records, and settings.
 
 I'll click Back up now to make one right away.
 
-Point the backup directory at another machine's share if you can, so a dead host doesn't take the backups with it.
+To keep backups off this machine, the dot env file on the host can point this folder at another machine's share. That way a dead host doesn't take the backups with it.
 
 Restoring one also needs the encryption key we backed up in part one, so always keep a copy of both.
 
@@ -237,13 +241,13 @@ The invite page shows Sam's quota and a note that two-step authentication is req
 
 Sam fills in a name, an email, and a password, then clicks Create account.
 
-Instead of the dashboard, Sam lands on the setup page. Passkeys need HTTPS, so Sam picks the authenticator app.
+Instead of the dashboard, the setup page comes up. Passkeys need HTTPS, so Sam picks the authenticator app.
 
-Sam goes through the same steps I did, with the key, KeePassXC, and the six-digit code.
+From here, the steps match what I did earlier, with the key and the six-digit code from KeePassXC.
 
-Sam's recovery codes come up next, and clicking I've saved them goes back to the sign-in page.
+The recovery codes come up next. Clicking I've saved them, sign in, goes back to the sign-in page.
 
-Setup doesn't sign Sam in, so Sam signs in for the first time with the password and a code.
+Setup doesn't sign Sam in, so the first real sign-in uses the password and a code.
 
 If Sam had closed the setup page partway through, signing in with the password would bring it right back.
 
@@ -251,23 +255,23 @@ If Sam had closed the setup page partway through, signing in with the password w
 
 [ON SCREEN: Sam's dashboard: the "Your compute access ends in 7 days." banner with its date and "Nothing is deleted". Sam creates a small Debian container, 1 vCPU, 512 MB and 4 GB, from the debian-12-standard template. FF until it's Running.]
 
-Because Sam's access has an end date, the dashboard shows a banner with seven days left.
+Sam's access ends in a week or less, so the dashboard shows a banner counting down the days.
 
-It says Sam's machines will be powered off on that date, and that nothing will be deleted.
+It says the machines will be powered off on that date, and that nothing will be deleted.
 
-Sam's going to start a small Debian container, the same way we made one in part two.
+Now Sam is going to start a small Debian container, the same way we made one in part two.
 
 Creating it takes a little over a minute, so I'm speeding through the wait.
 
 [FF]
 
-Sam's container is running now, and it counts against Sam's quota.
+The container is running now, and it counts against Sam's quota.
 
 ## V15 · Mike forgot his password
 
 [ON SCREEN: a guest window: the sign-in page, Forgot your password?. Reset your password: mike@example.com, Send reset request, "Request received". Alex's window: reload Users, the "1 password reset request" card, the red "reset requested" badge on Mike's row. The key icon, "Reset password for Mike", Generate a random password, Set password, the toast.]
 
-Mike has forgotten his password from part one, so in this window, he clicks Forgot your password and sends a reset request.
+Next, let's check on Mike, who has forgotten his password from part one. In his guest window, he clicks the Forgot your password link and sends a reset request.
 
 Without an email server, ProxMate can't send a reset link, so the request comes to the admin instead.
 
@@ -283,7 +287,7 @@ Send the new password to Mike somewhere private, and he can sign in with it.
 
 [ON SCREEN: https://proxmate.host/docs/config, the AUTH_RATE_LIMIT_MAX and AUTH_LOCKOUT_MAX / AUTH_LOCKOUT_MINUTES rows. Then https://proxmate.host/docs/security, the brute-force line in the threat model.]
 
-ProxMate also protects the sign-in page from someone guessing passwords. I won't set these off on camera, so we'll go over them in the docs.
+ProxMate also protects the sign-in page from someone guessing passwords. I won't trigger a lockout on camera, so we'll go over the limits in the docs.
 
 Ten wrong passwords in a row lock that account for fifteen minutes. Ten wrong two-factor codes lock it too.
 
@@ -291,23 +295,23 @@ While it's locked, the sign-in page only says the password is wrong, and an admi
 
 On top of that, one address gets twenty sign-in attempts every fifteen minutes before ProxMate makes it wait.
 
-A lock sends the alert we saw on the Notifications tab, and it also shows up in the Audit Log.
+A lock sends the alert we saw on the Notifications tab, and it shows up in the Audit Log. The admin email the docs mention needs an email server.
 
 ## V17 · When access ends
 
-[ON SCREEN: a text card: "Off camera: Sam's end date moved into the past, ProxMate restarted so its access check runs now." Alex's window: Users, Sam's row with the red Suspended badge, and sam-debian Stopped. Sam's window, still signed in: reload, "Your compute access has ended." A fresh sign-in for Sam: the toast "Your compute access ended on … Your machines and data are safe …".]
+[ON SCREEN: a text card: "Off camera: Sam's end date moved into the past, ProxMate restarted so its access check runs now." Alex's window: reload Users about 35 seconds after the restart, Sam's row with the red Suspended badge, then Alex's machine list with sam-debian Stopped. Sam's window, still signed in: reload, "Your compute access has ended." Sam signs out and signs in again: the toast "Your compute access ended on … Your machines and data are safe …".]
 
-Sam's seven days would take a week to run out, so I moved the end date into the past off camera.
+Rather than wait a whole week, I moved Sam's end date into the past off camera.
 
-ProxMate checks for ended access once an hour, and I restarted it so the check would run right away.
+Sign-in stops the moment access ends. ProxMate checks once an hour for ended access, and I restarted it so that check would run right away.
 
-It marked Sam as Suspended and shut the container down.
+The check marked Sam as Suspended and shut the container down.
 
-Sam's window was still open, and it now says Sam's compute access has ended.
+Sam's window was still open, and it now says their compute access has ended.
 
 Signing in again is refused, with a message saying the machines and data are safe.
 
-None of Sam's things were deleted. The container is stopped, and everything on it is still there.
+The container is only stopped, so everything on it is still there.
 
 ## V18 · Giving access back
 
@@ -317,7 +321,7 @@ To give Sam more time, I'll click Sam's name in Users and pick seven days from t
 
 Saving it lifts the suspension right away.
 
-Sam's container doesn't start back up by itself, so Sam signs in and starts it from the Actions menu.
+The container doesn't start back up by itself, so Sam signs in and starts it from the Actions menu.
 
 If you ever delete a user instead, also revoke their old invite on the Invites page. In this version, deleting a user makes that invite link work again.
 
@@ -325,7 +329,7 @@ If you ever delete a user instead, also revoke their old invite on the Invites p
 
 [ON SCREEN: Admin, Audit Log, Refresh. Columns When, Actor, Action, Details, IP. Scroll the rows: invite.create Sam, auth.register, auth.2fa_enabled, auth.login 2fa, apitoken.create and apitoken.revoke, admin.reset_password, auth.login_blocked compute access expired, vm.stop, admin.access_suspended, admin.update_access (suspension lifted).]
 
-Everything we did today is in the Audit Log. It shows who did what, when, and from which address.
+Almost everything we did today is in the Audit Log. It shows who did what, when, and from which address.
 
 There's Sam's invite, the sign-up, two-factor being turned on, and each sign-in with a code.
 
@@ -339,7 +343,7 @@ The page doesn't refresh itself, so click Refresh to see new entries.
 
 [ON SCREEN: https://proxmate.host/docs/security, the checklist table, scrolled slowly.]
 
-The security page in the ProxMate docs ends with a checklist that you can work through on your own server.
+The ProxMate docs have a page about security, and it ends with a checklist for your own server.
 
 We did the encryption key backup in part one, and two-factor authentication for invites today.
 
