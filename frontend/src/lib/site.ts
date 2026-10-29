@@ -57,6 +57,6 @@ export const siteConfig = {
   shortDescription: "Invite-only cloud dashboard for Proxmox VE.",
   // ~125 chars — survives intact in search/preview snippets.
   description:
-    "Self-hosted, invite-only cloud dashboard for Proxmox VE. Spin up VMs and share your homelab — without handing over the keys.",
+    "Self-hosted, invite-only cloud dashboard for Proxmox VE. Spin up VMs and share your homelab without handing over the keys.",
   tagline: "Share your homelab. Keep your boundaries.",
 } as const;

@@ -306,6 +306,10 @@ model VirtualMachine {
   //   native code-server service is up; 'failed' = install errored (retryable).
   ideState   String?
   ideStateAt DateTime?
+  // Why the last install was marked 'failed', when ProxMate can tell:
+  // 'unreachable' = the in-guest install finished but the backend never reached
+  // code-server (routing / firewall between ProxMate and the guest).
+  ideFailReason String?
 
   // Cloud-init deploy lock for THIS guest. When a VM is created (or rebuilt) from
   // a cloud-init template, cloud-init keeps provisioning inside the guest after

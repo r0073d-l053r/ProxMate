@@ -21,7 +21,7 @@ vi.mock('../src/services/vnc-proxy.service.js', async (importOriginal) => {
   return { ...actual, connectVncTarget: vi.fn(), connectSerialTarget: vi.fn() };
 });
 
-import { resolveVmAccess } from '../src/services/vm.service.js';
+import { resolveVmAccess, syncVmNode } from '../src/services/vm.service.js';
 import { verifyToken } from '../src/services/auth.service.js';
 import { connectVncTarget, connectSerialTarget, recordConsoleGrant } from '../src/services/vnc-proxy.service.js';
 import { CAPS_BY_ROLE, ALL_CAPS, type ConsoleMode, type ShareRole } from '../src/services/vm-share.service.js';
@@ -279,6 +279,29 @@ describe('end to end: text console', () => {
     const ticket = grant({ transport: 'serial', mode: 'interactive' });
     const { bytes } = await session(`/api/vms/vm1/serial?${q(ticket)}`, ['root@pam:t\n', '0:3:ls\r', '1:80:24:']);
     expect(bytes.toString('latin1')).toBe('root@pam:t\n0:3:ls\r1:80:24:');
+  });
+
+  it('the auth line sent the moment the socket opens survives a slow node lookup', async () => {
+    // The text console's client speaks first, before Proxmox says anything; the
+    // node lookup (a real /cluster/resources call) must not swallow that line.
+    vi.mocked(syncVmNode).mockImplementationOnce(async (vm) => {
+      await new Promise((r) => setTimeout(r, 100));
+      return vm;
+    });
+    const ticket = grant({ transport: 'serial', mode: 'interactive' });
+    const { bytes } = await session(`/api/vms/vm1/serial?${q(ticket)}`, ['root@pam:t\n', '1:80:24:']);
+    expect(bytes.toString('latin1')).toBe('root@pam:t\n1:80:24:');
+  });
+
+  it('a viewer\'s early messages still go through the filter', async () => {
+    vi.mocked(syncVmNode).mockImplementationOnce(async (vm) => {
+      await new Promise((r) => setTimeout(r, 100));
+      return vm;
+    });
+    asRole('viewer');
+    const ticket = grant({ transport: 'serial', mode: 'view' });
+    const { bytes } = await session(`/api/vms/vm1/serial?${q(ticket)}`, ['root@pam:t\n', '0:3:ls\r', '2']);
+    expect(bytes.toString('latin1')).toBe('root@pam:t\n2');
   });
 
   it('a malformed message closes a view-only session', async () => {

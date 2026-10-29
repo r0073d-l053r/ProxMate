@@ -47,7 +47,7 @@ You only do this once per Cloudflare account.
 
 ## Step 1 — Open your VM's console in ProxMate
 
-In the ProxMate UI, click your VM → **Console**, log in.
+In the ProxMate UI, click your VM → **Console** → **Graphical (noVNC)**, log in. (On a container or a VM built from a cloud image, **Console** → **Text** lets you copy and paste, handy for the login URL in Step 3.)
 
 > Pre-baked templates may already have `cloudflared` installed — the login
 > banner will say so. If yes, skip Step 2.
@@ -189,7 +189,7 @@ without writing any auth code yourself. (Free up to 50 users.)
 |---|---|
 | `cloudflared: command not found` | Step 2 didn't finish. Re-check the apt source line. |
 | `unable to connect to the origin` in `cloudflared` logs | Your app isn't actually listening on the port you put in `config.yml`. Test locally: `curl http://localhost:3000`. |
-| `Error 1033 Argo Tunnel error` in the browser | The tunnel daemon isn't running on the VM. `sudo systemctl status cloudflared`. |
+| `Error 1033` (Cloudflare Tunnel error) in the browser | The tunnel daemon isn't running on the VM. `sudo systemctl status cloudflared`. |
 | Browser shows Cloudflare's "host unreachable" page | DNS record didn't propagate yet (give it ~30 s) or `Step 6` was skipped. Check the DNS tab in the Cloudflare dashboard. |
 | It works for HTTP but not WebSockets | Cloudflare proxies WebSockets by default; no extra config needed. If you see 400s, check that your app sends `Upgrade: websocket` headers correctly. |
 | I want to expose two services on one VM | Add more `hostname:` / `service:` pairs in the `ingress:` list (and a `cloudflared tunnel route dns` for each one). The catch-all `http_status:404` entry must be last. |
@@ -204,6 +204,6 @@ You do **not** need to:
 - adjust ProxMate's per-VM firewall,
 - get a public IP for the VM.
 
-`cloudflared` only makes outbound connections to Cloudflare on `443`, which
-the firewall already allows (outbound to the public internet is permitted by
-default).
+`cloudflared` only makes outbound connections to Cloudflare (the tunnel itself
+uses port `7844`, the API `443`), which the firewall already allows: outbound to
+the public internet is permitted on every port by default.

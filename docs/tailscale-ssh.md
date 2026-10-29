@@ -30,9 +30,11 @@ Sign in to the client with the account you just created. You should now see your
 
 ## Step 1 — Open your VM's console in ProxMate
 
-In the ProxMate UI, click your VM → **Console**. You should see the OS login prompt. Log in with the username/password you set during install.
+In the ProxMate UI, click your VM → **Console** → **Graphical (noVNC)**. You should see the OS login prompt. Log in with the username/password you set during install. On a container or a VM built from a cloud image, **Console** → **Text** gives you a terminal you can copy and paste from, which makes the login URL in Step 3 easy to copy.
 
 > If your VM was deployed from a pre-baked template, Tailscale and `cloudflared` may already be installed — the login banner will say so. Skip to Step 3.
+>
+> If you ticked **Install Tailscale** among the first-boot installs when you deployed a cloud image, Tailscale is already installed too: skip to Step 3.
 
 ---
 
@@ -74,7 +76,8 @@ You should see your VM at the top and your laptop (and any other devices on your
 
 > **Tip:** once Tailscale is running inside the VM, ProxMate shows its **Tailscale IP**
 > (the `100.x` address) with a copy button right on the VM's Overview page, under
-> **Connection details** — no need to hunt for it.
+> **Connection details** — no need to hunt for it. On a VM this needs the QEMU guest agent
+> running inside it.
 
 On the device you installed Tailscale on (e.g. your laptop), find the VM's tailnet hostname:
 

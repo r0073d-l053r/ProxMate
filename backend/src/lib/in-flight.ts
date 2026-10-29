@@ -23,6 +23,24 @@ export function beginInFlight(...ids: string[]): () => void {
   };
 }
 
+/**
+ * Start `work` on the row `id` without waiting for it: the row is registered in
+ * flight until `work` settles. The returned promise carries the outcome, and is
+ * marked handled, so a caller that never awaits it raises no unhandled rejection.
+ */
+export function runInFlight<T>(id: string, work: () => Promise<T>): Promise<T> {
+  const done = beginInFlight(id);
+  const outcome = (async () => {
+    try {
+      return await work();
+    } finally {
+      done();
+    }
+  })();
+  outcome.catch(() => undefined);
+  return outcome;
+}
+
 /** Whether an operation on this row is running in this process right now. */
 export function isInFlight(id: string): boolean {
   return active.has(id);

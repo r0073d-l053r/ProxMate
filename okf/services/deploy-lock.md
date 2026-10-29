@@ -21,7 +21,7 @@ A VM cloned from a cloud-init template is "running" the instant it boots, but cl
 |---|---|---|
 | `deployStateOf` | `(vm) => 'none' \| 'deploying' \| 'ready'` | Normalises the column. |
 | `isDeploying` | `(vm) => boolean` | Gate for destructive VM actions. |
-| `refreshDeployState` | `(vm: VirtualMachine) => Promise<DeployState>` | Called from the VM-detail fetch and the scheduler tick. If past `DEPLOY_TIMEOUT_MS` (8 min) → final password attempt, abandon, mark ready. Else probes cloud-init; when settled → apply password, mark ready. |
+| `refreshDeployState` | `(vm: VirtualMachine) => Promise<DeployState>` | Called from the VM-detail fetch and the scheduler tick. If past `DEPLOY_TIMEOUT_MS` (8 min) → final password attempt, abandon, mark ready (checked on every call). Else probes cloud-init at most once per 10 s per VM (`lib/probe-throttle.ts`): calls during a probe share it, calls in between answer `deploying`; when settled → apply password, mark ready. |
 | `applyPendingCiPassword` (internal) | `(vm)` | Decrypts `pendingCiPassword` and sets it via the guest agent `set-user-password` for the `ciuser`; clears it on success. |
 | `abandonPendingCiPassword` (internal) | `(id)` | Drops the secret, logs at ERROR, and sends `notify({ event: 'deploy.agent_missing' })` naming the source template. |
 | `cloudInitSettled` (internal) | `(vm) => boolean \| null` | Guest-agent ping, then `cloud-init status` via guest exec (8 s). Terminal state or no cloud-init → true; `running`/`not` → false; agent unreachable → null. |

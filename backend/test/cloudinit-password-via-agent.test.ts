@@ -30,7 +30,7 @@ vi.mock('../src/services/vm.service.js', () => ({
 // Real crypto — this test also proves the value we persist is not plaintext.
 import { encrypt } from '../src/lib/crypto.js';
 import * as pve from '../src/services/proxmox.service.js';
-import { refreshDeployState } from '../src/services/deploy-lock.service.js';
+import { refreshDeployState, resetDeployProbes } from '../src/services/deploy-lock.service.js';
 import { requireOurGuest } from '../src/services/vm.service.js';
 
 const setPassword = vi.mocked(pve.setGuestUserPassword);
@@ -63,6 +63,7 @@ function deployingVm(over: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetDeployProbes();
   updateMock.mockResolvedValue({});
   findUniqueMock.mockResolvedValue({ pendingCiPassword: null, name: 'vm' });
   guestExec.mockResolvedValue({ stdout: 'status: done', stderr: '', exitcode: 0 } as never);

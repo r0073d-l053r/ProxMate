@@ -54,6 +54,10 @@ Both Tailscale and Cloudflare Tunnel are **outbound-only** connections from
 inside the VM to a control plane on the internet, so they work with the
 firewall as-is — nothing extra needed.
 
+> **Admins:** if one of your Proxmox nodes is a Tailscale *subnet router*, install the guard on it
+> ([SECURITY.md → 3c](../SECURITY.md#3c-a-tailscale-subnet-router-on-a-proxmox-node)). Without it,
+> tailnet traffic to guests on that node skips their firewall.
+
 You do **not** need to:
 
 - forward any port on the host router,
@@ -66,8 +70,9 @@ You do **not** need to:
 
 If you run the cluster, see [Admin guide — cluster + templates](./admin-guide.md)
 for first-time setup, the firewall-enforcement step, and how to ship a Linux
-template that has Tailscale and `cloudflared` pre-installed so tenants are one
-command away from secure remote access.
+template that has Tailscale and `cloudflared` pre-installed (or offer **Install
+Tailscale** as a first-boot install on cloud images) so tenants are one command
+away from secure remote access.
 
 ## For users (tenants)
 

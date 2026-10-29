@@ -141,6 +141,8 @@ export interface VmDetail extends VirtualMachine {
   filePushMaxBytes?: number;
   /** ProxMate IDE install state: null/'none' | 'installing' | 'ready' | 'failed'. */
   ideState?: "none" | "installing" | "ready" | "failed" | null;
+  /** Why the last IDE install failed, when known: 'unreachable' = it installed, but ProxMate can't reach it. */
+  ideFailReason?: "unreachable" | null;
   /** Cloud-init deploy lock: 'deploying' = still provisioning (locked); else ready. */
   deployState?: "none" | "deploying" | "ready" | null;
 }

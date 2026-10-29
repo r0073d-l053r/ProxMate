@@ -1,6 +1,7 @@
 import type { VirtualMachine } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
+import { probeThrottle } from '../lib/probe-throttle.js';
 import {
   getClient,
   guestAgentPing,
@@ -36,6 +37,17 @@ export type DeployState = 'none' | 'deploying' | 'ready';
 // way stop locking. The agent probe unlocks earlier in the common case.
 const DEPLOY_TIMEOUT_MS = 8 * 60 * 1000;
 
+// The guest-agent probe (a ping plus a `cloud-init status` exec, each retried) is
+// slow, and the VM page asks on every poll. At most one probe per VM per interval;
+// requests in between answer 'deploying' and requests during one share it.
+const PROBE_INTERVAL_MS = 10_000;
+const probes = probeThrottle<DeployState>(PROBE_INTERVAL_MS);
+
+/** Test hook: forget when each VM was last probed. */
+export function resetDeployProbes(): void {
+  probes.reset();
+}
+
 export function deployStateOf(vm: { deployState: string | null }): DeployState {
   const s = vm.deployState;
   return s === 'deploying' || s === 'ready' ? s : 'none';
@@ -47,6 +59,7 @@ export function isDeploying(vm: { deployState: string | null }): boolean {
 }
 
 async function markReady(vm: VirtualMachine): Promise<DeployState> {
+  probes.forget(vm.id);
   await prisma.virtualMachine.update({ where: { id: vm.id }, data: { deployState: 'ready', deployStateAt: new Date() } });
   return 'ready';
 }
@@ -208,7 +221,8 @@ async function cloudInitSettled(vm: VirtualMachine): Promise<boolean | null> {
  * settles (or the timeout elapses). Called from the VM-detail fetch so the lock
  * clears as the tenant watches the VM come up, and from the scheduler's
  * {@link advanceDeployingVms} tick for machines nobody is looking at. No-op for
- * guests that aren't mid-deploy.
+ * guests that aren't mid-deploy. The timeout is checked on every call; the guest
+ * probe runs at most once per PROBE_INTERVAL_MS per VM.
  */
 export async function refreshDeployState(vm: VirtualMachine): Promise<DeployState> {
   const state = deployStateOf(vm);
@@ -223,8 +237,13 @@ export async function refreshDeployState(vm: VirtualMachine): Promise<DeployStat
     return markReady(vm);
   }
 
+  return probes.run(vm.id, 'deploying', () => probeDeploy(vm));
+}
+
+/** One guest probe for a deploying VM: unlocks it once cloud-init has settled. */
+async function probeDeploy(vm: VirtualMachine): Promise<DeployState> {
   // Probe only the guest ProxMate created for this row. Anything else at the VMID
-  // says nothing about this deploy (and must not be exec'd into); the timeout above
+  // says nothing about this deploy (and must not be exec'd into); the timeout
   // still unlocks the row.
   if ((await guestIdentity(vm).catch(() => null)) !== 'ours') return 'deploying';
 

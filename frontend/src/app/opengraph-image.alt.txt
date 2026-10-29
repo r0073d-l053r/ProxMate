@@ -1,1 +1,1 @@
-ProxMate — Share your homelab. Keep your boundaries.
+ProxMate: your cluster, shared safely.

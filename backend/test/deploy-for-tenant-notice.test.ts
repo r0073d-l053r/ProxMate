@@ -33,8 +33,8 @@ vi.mock('../src/services/mail.service.js', async (importOriginal) => ({
 vi.mock('../src/services/vm.service.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/services/vm.service.js')>()),
   resolveCreateTarget: vi.fn(),
-  createVm: vi.fn(),
-  createContainer: vi.fn(),
+  startCreateVm: vi.fn(),
+  startCreateContainer: vi.fn(),
 }));
 
 import vmRouter from '../src/routes/vm.routes.js';
@@ -65,6 +65,9 @@ const row = (userId: string, type = 'qemu') => ({
   proxmoxVmId: 101, proxmoxNode: 'pve1', status: 'running', adminManaged: userId !== 'admin',
 });
 
+// A create answers with its row; the email goes out once provisioning has finished.
+const started = (vm: ReturnType<typeof row>) => ({ vm: { ...vm, status: 'creating' }, finished: Promise.resolve(vm) });
+
 const post = (path: string, body: unknown) =>
   fetch(`${base}/vms${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
@@ -73,7 +76,7 @@ const vmBody = { name: 'lab-01', cpu: 2, ram: 2048, storage: 20, os: 'debian.iso
 describe('deploy for a tenant', () => {
   it('emails the tenant when an admin creates a VM in their account', async () => {
     vi.mocked(vmService.resolveCreateTarget).mockResolvedValue({ id: 'tenant' } as never);
-    vi.mocked(vmService.createVm).mockResolvedValue(row('tenant') as never);
+    vi.mocked(vmService.startCreateVm).mockResolvedValue(started(row('tenant')) as never);
     vi.mocked(prisma.user.findUnique).mockResolvedValue({ email: 't@example.com', displayName: 'Tess', activityEmailOptOut: false } as never);
 
     expect((await post('', { ...vmBody, forUserId: 'tenant' })).status).toBe(201);
@@ -85,7 +88,7 @@ describe('deploy for a tenant', () => {
 
   it('emails for a container too', async () => {
     vi.mocked(vmService.resolveCreateTarget).mockResolvedValue({ id: 'tenant' } as never);
-    vi.mocked(vmService.createContainer).mockResolvedValue(row('tenant', 'lxc') as never);
+    vi.mocked(vmService.startCreateContainer).mockResolvedValue(started(row('tenant', 'lxc')) as never);
     vi.mocked(prisma.user.findUnique).mockResolvedValue({ email: 't@example.com', displayName: 'Tess', activityEmailOptOut: false } as never);
 
     const res = await post('/containers', { name: 'ct-01', cpu: 1, ram: 512, storage: 8, template: 'local:vztmpl/debian.tar.zst', password: 'longenough1', forUserId: 'tenant' });
@@ -96,7 +99,7 @@ describe('deploy for a tenant', () => {
 
   it('sends nothing when an admin creates a VM for themselves', async () => {
     vi.mocked(vmService.resolveCreateTarget).mockResolvedValue({ id: 'admin' } as never);
-    vi.mocked(vmService.createVm).mockResolvedValue(row('admin') as never);
+    vi.mocked(vmService.startCreateVm).mockResolvedValue(started(row('admin')) as never);
     expect((await post('', vmBody)).status).toBe(201);
     await settle();
     expect(sendMail).not.toHaveBeenCalled();
@@ -104,8 +107,18 @@ describe('deploy for a tenant', () => {
 
   it('respects the tenant opting out of activity emails', async () => {
     vi.mocked(vmService.resolveCreateTarget).mockResolvedValue({ id: 'tenant' } as never);
-    vi.mocked(vmService.createVm).mockResolvedValue(row('tenant') as never);
+    vi.mocked(vmService.startCreateVm).mockResolvedValue(started(row('tenant')) as never);
     vi.mocked(prisma.user.findUnique).mockResolvedValue({ email: 't@example.com', displayName: 'Tess', activityEmailOptOut: true } as never);
+    expect((await post('', { ...vmBody, forUserId: 'tenant' })).status).toBe(201);
+    await settle();
+    expect(sendMail).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing when the create fails in the background', async () => {
+    vi.mocked(vmService.resolveCreateTarget).mockResolvedValue({ id: 'tenant' } as never);
+    const failed = Promise.reject(new Error('clone failed'));
+    failed.catch(() => undefined);
+    vi.mocked(vmService.startCreateVm).mockResolvedValue({ vm: row('tenant'), finished: failed } as never);
     expect((await post('', { ...vmBody, forUserId: 'tenant' })).status).toBe(201);
     await settle();
     expect(sendMail).not.toHaveBeenCalled();

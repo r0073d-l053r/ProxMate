@@ -1,3 +1,98 @@
+ProxMate 1.3.4 closes a tenant-isolation gap on a Proxmox node that is also a Tailscale subnet router, says when the ProxMate IDE installed but can't be reached, and fixes the text console. If one of your nodes is a subnet router, run the new guard on it (below); otherwise no configuration changes are needed to upgrade from 1.3.x.
+
+- **Security: the Tailscale subnet-router guard.** On a node that routes your tailnet to the LAN, Tailscale's own firewall rules accepted tailnet traffic to the guests on that node before the Proxmox firewall ran, so every port of those guests was reachable from the tailnet whatever ProxMate's isolation rules said. The same traffic was also masqueraded twice, so replies were lost and the IDE on those guests never opened. Guests on other nodes were not affected.
+  - Run `deploy/proxmox-tailscale-guard.sh` as root on the subnet-router node. It installs a small service that clears Tailscale's mark on bridged traffic at boot, whenever `tailscaled` restarts, and every 2 minutes, so each guest's own firewall decides again.
+  - `--check` reports whether a node needs it and whether it is in place; `--uninstall` removes it.
+  - Afterwards, tailnet devices reach guests on that node only through ports their firewall allows, as on every other node. See SECURITY.md → *3c* and docs/proxmate-ide.md → *Tailscale subnet router on a Proxmox node*.
+- **"Installed, but ProxMate can't reach it."** When an IDE install times out after the install itself finished in the guest, the VM page now says the IDE installed but ProxMate can't reach it over the network, instead of "the last install didn't finish". The admin reachability test names the subnet-router case.
+- **The text console connects again.** Opening a VM's text console could end at once without a login prompt: the browser's sign-in to the console arrived while ProxMate was still looking up the VM's node and was dropped, so Proxmox closed the session. It happened more often the slower ProxMate's link to Proxmox is. ProxMate now keeps what the browser sends until the console is ready. The graphical console was not affected.
+
+## 1.3.3
+
+ProxMate 1.3.3 fixes creating a machine behind a reverse proxy or a Cloudflare Tunnel, and the setup banners that stayed up until the page was reloaded. No configuration changes are needed to upgrade from 1.3.x.
+
+- **Creating a machine answers at once.** Deploying from a template, installing from an ISO, creating a container and restoring an uploaded backup answer as soon as the machine is recorded, so the wizard opens its page right away, even behind a proxy or tunnel that cuts requests off after about 100 seconds. The page shows **Creating** until the machine is running, or why it couldn't be created. Quota, validation and placement errors still show in the wizard. The tenant email and the audit entry follow once the machine is running.
+- **Setup banners clear on their own.** "Finishing setup on this VM…" and "Installing the ProxMate IDE…" clear without a reload: a VM page request that takes longer than 15 seconds is dropped and retried, and opening a VM also picks up a finished IDE install.
+
+## 1.3.2
+
+ProxMate 1.3.2 removes bulk deploys from a template from the Community Edition: deploying several copies at once, or one copy into each of several users' accounts, is now part of ProxMate Pro and EDU. Nothing else changes, and machines already deployed in a batch are ordinary machines and keep working. No configuration changes are needed to upgrade from 1.3.0 or 1.3.1; the rest of these notes describe 1.3.0 and 1.3.1 without that feature.
+
+## 1.3.1
+
+ProxMate 1.3.1 is ProxMate 1.3.0 with its version numbers corrected. The v1.3.0 tag was cut just before the version bump, so an install from it reports itself as 1.2.0 and keeps offering an update. 1.3.1 has the same features and fixes as 1.3.0, described below. Upgrading from 1.3.0 needs no steps beyond the update itself; upgrading from 1.2.x follows the 1.3.0 notes.
+
+## 1.3.0
+
+ProxMate 1.3.0 adds projects, a native Android app, view-only consoles for Viewer shares, tenant notifications and importing existing Proxmox guests. It also settles operations a backend restart interrupted, takes a snapshot before risky changes, and checks every restored backup before it is used. An optional pool-scoped Proxmox token limits what ProxMate's token can reach.
+
+## New in 1.3.0
+
+- **Projects.** A **Projects** page groups your VMs by a `project:<name>` tag. Each project shows its VM and running counts, allocated vCPU, RAM and disk, and average CPU and RAM use over 1, 7 or 14 days. It has Start all, Stop all and Restart all. Set a project on the VM page or with **Move to project…** on the VM list (owner or admin). VMs shared with you are listed separately, without their owner's tags. Admins see every owner's projects.
+- **Android app.** A native app for Android 8 and later. Enter your ProxMate address and sign in with email and password, including 2FA. Passkey and SSO accounts sign in through the web login inside the app. You then get the full ProxMate interface, consoles included.
+  - A self-signed certificate is trusted only after you check and accept its SHA-256 fingerprint. You are asked again if it changes.
+  - The APK is built by the **Android** workflow for every change, and a signed release APK is built for version tags once the signing secrets are set (see `android/README.md`).
+- **View-only console for Viewer shares.** A Viewer share can now watch a VM's graphical and text consoles, but not type into them.
+  - ProxMate's console relay drops keyboard, mouse, clipboard, resize and power messages before they reach Proxmox, and keeps the VNC session shared so a viewer never disconnects anyone else.
+  - Every console open is recorded in the audit log: `vm.console_open`, or `vm.console_view_open` for a view-only session.
+  - A viewer's text console can't be resized.
+- **View the IDE install log.** While the ProxMate IDE installs, or after it failed, the VM's owner or an admin can open **View install log** on the VM page. It shows the end of the install log, read through the guest agent, with Refresh and Download.
+- **Push a file into a VM.** The owner, an admin or a Manager share can upload a small file into a QEMU VM through the guest agent, choosing its path, mode and owner. No SSH is needed.
+  - The default limit is 1 MiB per file (`GUEST_FILE_PUSH_MAX_BYTES`, up to 8 MiB), and 30 pushes per 10 minutes per user.
+  - Each push is recorded with its path, size and SHA-256.
+  - Into a folder other users can write to, the file is written as the chosen owner. Without an owner, such a push is refused.
+- **Tenant notifications.**
+  - A tenant is emailed when an admin sets up a VM in their account.
+  - A user is emailed when a VM is shared with them or their access level changes, at most once a day per VM.
+  - Each user can turn these emails off under Security → Email preferences.
+- **Admin-managed badge.** A VM an admin set up for a tenant shows "Set up by your admin — only an admin can resize or rebuild it." instead of silently missing controls.
+- **ntfy and Telegram** for admin notifications, alongside the webhook and email. Tokens are stored encrypted and only shown masked, and each channel has its own **Send test**.
+- **Weekly usage digest.** Users can opt in (it is off by default, behind an admin switch) to a weekly email with their machines, running hours, average CPU and memory, and quota in use. It is sent on Mondays at 08:00 (`USAGE_DIGEST_CRON`). Admins can send themselves a preview.
+- **Import existing Proxmox guests (admin).** Settings → Maintenance → **Import existing guests** lists the QEMU and LXC guests ProxMate doesn't manage.
+  - Importing one for an owner applies the default bridge and the isolation firewall, tags it as that owner's, and counts it against their quota or as a grant.
+  - A guest is refused if it uses another guest's disks, host devices or host-level settings, or is a privileged container, including inside any of its snapshots.
+- **Automatic snapshots before risky changes.** Before a resize, a data-disk resize or a rescue boot, ProxMate takes a disk-only `pm-auto-…` snapshot of the VM, and refuses the change if the snapshot fails.
+  - It keeps the newest 3 per VM (1–10, Admin → Settings → Maintenance) and only ever deletes snapshots it took itself.
+  - Containers and storage without snapshot support are skipped.
+  - A rebuild isn't covered, because deleting the guest deletes its snapshots: take a backup first.
+- **Interrupted operations are settled.** A backend restart used to leave machines stuck in "creating". At startup and every 5 minutes, ProxMate now settles them from what Proxmox shows.
+  - A finished create is completed and left stopped.
+  - A create that produced no guest is removed and its quota freed.
+  - Anything part-way is held and admins are told which guest to check.
+  - ProxMate writes to a guest only when it can prove the guest came from that machine's own operation. It never deletes a backup.
+  - An operation still running, or younger than `RECONCILE_STUCK_MINUTES` (15 minutes), is left alone.
+- **`ENCRYPTION_KEY` backup reminder.** Admins see a banner on every page until one of them confirms the key is backed up off the host. A changed key brings the banner back. The key itself is never shown or stored.
+- **Pool-scoped Proxmox token (optional).** Set a **Proxmox pool** in the setup wizard or Admin → Settings, and every guest ProxMate creates, clones, restores or imports is placed in it.
+  - `deploy/proxmox-token.sh --pool <name>` grants ProxMate's guest privileges on that pool only, instead of the whole cluster. Use `--dry-run` to see the plan first.
+  - The connection test checks the pool and what the token can still reach, and **Move managed guests into the pool** moves existing machines.
+  - This mode has not yet been run end to end on a live cluster. Try it on a test cluster first, and see DEPLOYMENT.md → *Pool-scoped token*.
+
+## Fixes and changes in 1.3.0
+
+- **Restoring an uploaded backup checks what Proxmox restored.** As soon as the restore ends, autostart, startup order and protection are removed. ProxMate then reads the restored guest's configuration, including pending changes and snapshots, and checks it before the machine can be used. It also clears the firewall rules, IP sets and aliases that came with the backup before applying isolation.
+  - A restored guest that doesn't pass is deleted.
+  - If Proxmox refuses the delete, the guest is held for an admin with its network links down.
+- **Adopt checks the guest's configuration** before tagging it or lifting a hold. Adopting a restored or untagged guest also clears its autostart flags and restored firewall, and brings its network links back up.
+- **Number fields can be cleared and retyped.** Emptying a numeric field no longer leaves a stuck `0` that turns the next digit into "02". Min and max apply when you leave the field.
+- **Rollback** refuses a snapshot that holds host-level settings or another guest's disks.
+- **Machines still being created** refuse every action except delete.
+- **Reserved VMIDs** are honoured by every create path, including cloud-image builds and upload restores.
+
+## Upgrading from 1.2.x
+
+No configuration changes are needed. Two database migrations run on first start:
+- one adds the email preferences (`User.activityEmailOptOut`, `User.usageDigestOptIn`);
+- one adds the operation-tracking fields and the automatic-snapshot table.
+
+- **Back up `ENCRYPTION_KEY`** and confirm it when the banner asks.
+- **Automatic snapshots are on by default.** They use storage that isn't counted against quotas, and on node-local storage a VM with snapshots may not live-migrate. Turn them off or lower the count under Admin → Settings → Maintenance if that matters to you.
+- **File push on PVE 9** needs `VM.GuestAgent.FileWrite`. `deploy/proxmox-token.sh` now always includes it; re-run the script if you use its token.
+- **The usage digest is off** until an admin enables it and users opt in. Set `USAGE_DIGEST_CRON` to change when it is sent (UTC in the Docker image).
+
+---
+
+## 1.2.0
+
 ProxMate 1.2.0 adds sharing with people who haven't signed up yet, spreads template deploys across the cluster, and ships a least-privilege Proxmox token. **Coming from 1.0.x?** Read the 1.1.0 notes below first: they include the upgrade steps.
 
 ## New in 1.2.0
