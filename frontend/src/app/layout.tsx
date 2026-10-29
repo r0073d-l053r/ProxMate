@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const ogTitle = "ProxMate — Invite-only cloud for your Proxmox cluster";
+const ogTitle = "ProxMate · Invite-only cloud for your Proxmox cluster";
 
 // Request-aware so the OG image URL resolves to whatever origin the instance is
 // actually served on (tunnel host, LAN IP, localhost) — a static build-time
