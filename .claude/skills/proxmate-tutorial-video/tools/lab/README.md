@@ -110,6 +110,11 @@ s03-preroll.cjs sets it as the `PVEAuthCookie`. The output is a live credential 
 **pmapi.py**: small ProxMate API client (cookie session plus the CSRF header, like the browser). `admin()` logs in
 with `PMV_ADMIN_EMAIL` / `PMV_ADMIN_PASSWORD`. `from pmapi import admin; a = admin(); a.call("GET", "/templates")`.
 
+**setup_world.py**: resets ProxMate (`compose down -v`) and sets it up off camera through the API: the admin,
+the Proxmox connection (token read from `$PMV_WORK/pve1-token.json`, never printed), defaults, the encryption-key
+backup confirmed, and with `--mike` the friend Mike registered through an invite with part one's quota. Usage:
+`setup_world.py [--no-reset] [--mike]` with `PMV_ADMIN_PASSWORD` (and `PMV_FRIEND_PASSWORD`) set.
+
 **build_ubuntu.py**: builds the "Ubuntu 24.04" Template Store template (amd64 cloud image) through ProxMate, timed.
 `python3 build_ubuntu.py`.
 
@@ -218,7 +223,8 @@ Only what the creator approved in PLAN.md. `S` below is `$PMV_LAB`, `ts-lab` its
 3. **Storage and write cache, if approved:** add `images,rootdir` to `local` and set ProxMate's default storage to
    `local`. Cap the write cache with `sysctl -w vm.dirty_background_bytes=8388608 vm.dirty_bytes=33554432`, and write
    the restore line into the CLEANUP file on pve1.
-4. **Reset ProxMate and set it up off camera**, through `pmapi.py` (cookie session, CSRF header, no proxy):
+4. **Reset ProxMate and set it up off camera** with `setup_world.py --mike`, which makes these calls through
+   `pmapi.py` (cookie session, CSRF header, no proxy):
    - Reset: `runuser -u alex -- ssh alex@proxmate 'cd ~/proxmate && docker compose down -v && docker compose up -d'`,
      then wait for `/api/setup/status`.
    - `POST /setup/admin` (Alex, alex@example.com, password from `PMV_ADMIN_PASSWORD`).
