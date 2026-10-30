@@ -110,6 +110,8 @@ _Nothing yet._
 
 ### Released
 
+- **v1.3.5 — deleted users' invites stay used.** Deleting a user also deletes the invite they signed up
+  with, so its link can't be redeemed again.
 - **v1.3.4 — Tailscale subnet-router guard.** Guests on a Proxmox node that is also a Tailscale subnet
   router get their own firewall for tailnet traffic again (`deploy/proxmox-tailscale-guard.sh`), and
   an IDE that installed but can't be reached says so; the text console connects again.

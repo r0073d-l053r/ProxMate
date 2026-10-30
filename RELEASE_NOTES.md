@@ -1,3 +1,10 @@
+ProxMate 1.3.5 fixes an invite link that came back to life when you deleted the user who had redeemed it. No configuration changes are needed to upgrade from 1.3.x.
+
+- **Security: a deleted user's invite can't be used again.** Deleting a user made the invite they had signed up with usable again until it expired. Anyone who had seen that link could register a new account with the same quota, two-factor requirement and access window, and Admin → Invites listed it as Active with its link. Deleting a user now deletes the invite they redeemed in the same step.
+  - Invites already made usable again by deleting users on 1.3.4 or earlier are not changed by the update, because they can't be told apart from unused invites. If you have deleted users before, open Admin → Invites and revoke any Active invite you don't recognise.
+
+## 1.3.4
+
 ProxMate 1.3.4 closes a tenant-isolation gap on a Proxmox node that is also a Tailscale subnet router, says when the ProxMate IDE installed but can't be reached, and fixes the text console. If one of your nodes is a subnet router, run the new guard on it (below); otherwise no configuration changes are needed to upgrade from 1.3.x.
 
 - **Security: the Tailscale subnet-router guard.** On a node that routes your tailnet to the LAN, Tailscale's own firewall rules accepted tailnet traffic to the guests on that node before the Proxmox firewall ran, so every port of those guests was reachable from the tailnet whatever ProxMate's isolation rules said. The same traffic was also masqueraded twice, so replies were lost and the IDE on those guests never opened. Guests on other nodes were not affected.
