@@ -1,0 +1,30 @@
+# ProxMate video demo (CT 9201). cloudflared (same container) sends both public names here.
+# Cloudflare terminates TLS; Caddy only splits /api and routes sso.proxmate.host to the Keycloak container.
+# Caddy 2.6 (Debian) has no trusted_proxies, so the public scheme is set by hand; ProxMate reads the client IP
+# from Cf-Connecting-Ip, which passes through untouched.
+{
+	auto_https off
+	admin off
+}
+
+http://dashboard.proxmate.host:8080 {
+	bind 127.0.0.1
+	# API + console WebSockets -> backend (keep the /api prefix)
+	handle /api/* {
+		reverse_proxy 127.0.0.1:4000 {
+			header_up X-Forwarded-Proto https
+		}
+	}
+	handle {
+		reverse_proxy 127.0.0.1:3000 {
+			header_up X-Forwarded-Proto https
+		}
+	}
+}
+
+http://sso.proxmate.host:8080 {
+	bind 127.0.0.1
+	reverse_proxy 192.168.50.119:8080 {
+		header_up X-Forwarded-Proto https
+	}
+}
