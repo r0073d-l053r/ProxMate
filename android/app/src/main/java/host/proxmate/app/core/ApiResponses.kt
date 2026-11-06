@@ -8,7 +8,8 @@ import org.json.JSONObject
  * Android and network types so it runs in plain JVM unit tests.
  *
  * The shapes match backend/src/routes/auth.routes.ts and backend/src/app.ts:
- *  - `GET /api/health` → `{ status, service: "proxmate-api", checks, timestamp }`
+ *  - `GET /api/health` → `{ status, service: "proxmate-api" }` (monitoring callers
+ *    with the metrics token also get `checks` and `timestamp`)
  *  - `POST /api/auth/login` → `{ user }` (session cookies set), or
  *    `{ twoFactorRequired: true, challenge }`, or
  *    `{ mfaEnrollmentRequired: true, enrollmentToken }`, or an error

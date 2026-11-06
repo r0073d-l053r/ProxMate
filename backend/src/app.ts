@@ -21,6 +21,7 @@ import ideRoutes from './routes/ide.routes.js';
 import ideGatewayRoutes from './routes/ide-gateway.routes.js';
 import { openApiSpec } from './lib/openapi.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { notFound } from './middleware/notFound.js';
 import { observability } from './middleware/observability.js';
 import { apiWriteLimiter } from './middleware/rate-limit.js';
 import { prisma } from './lib/prisma.js';
@@ -29,6 +30,7 @@ import { getVersion } from './services/proxmox.service.js';
 import { mountIdeProxy } from './services/ide-proxy.service.js';
 import { MODULE_MOUNT_ROOT, moduleRouter } from './modules/registry.js';
 import { envNumber } from './lib/env-number.js';
+import { monitoringAuthorized } from './lib/monitoring-auth.js';
 
 const app = express();
 
@@ -69,9 +71,12 @@ app.use(express.json({ limit: '1mb' }));
 app.use('/api', apiWriteLimiter);
 
 // ─── Health & Observability ───────────────────────────────────
-// Liveness always checks the DB; `?deep=1` additionally probes Proxmox (slower).
+// Liveness always checks the DB. Anyone gets `{ status, service }` (the Docker
+// healthcheck and the Android app's server check need only that). The per-check
+// breakdown, and `?deep=1` (which also probes Proxmox), are for monitoring callers.
 app.get('/api/health', async (req: Request, res: Response) => {
-  const deep = req.query['deep'] === '1' || req.query['deep'] === 'true';
+  const detailed = monitoringAuthorized(req);
+  const deep = detailed && (req.query['deep'] === '1' || req.query['deep'] === 'true');
   const checks: Record<string, string> = {};
   let ok = true;
   try {
@@ -91,9 +96,10 @@ app.get('/api/health', async (req: Request, res: Response) => {
       checks['proxmox'] = 'unreachable';
     }
   }
+  const body = { status: ok ? 'ok' : 'degraded', service: 'proxmate-api' };
   res
     .status(ok ? 200 : 503)
-    .json({ status: ok ? 'ok' : 'degraded', service: 'proxmate-api', checks, timestamp: new Date().toISOString() });
+    .json(detailed ? { ...body, checks, timestamp: new Date().toISOString() } : body);
 });
 
 // Prometheus scrape endpoint.
@@ -154,7 +160,8 @@ app.use('/api/broadcast', broadcastRoutes);
 // impossible rather than merely unlikely. Empty unless PROXMATE_MODULES names a module.
 app.use(MODULE_MOUNT_ROOT, moduleRouter);
 
-// ─── Global Error Handler ─────────────────────────────────────
+// ─── Unknown paths, then the Global Error Handler ─────────────
+app.use(notFound);
 app.use(errorHandler);
 
 export { app };

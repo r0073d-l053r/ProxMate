@@ -169,7 +169,7 @@ curl -H "$AUTH" -H 'content-type: application/json' -X POST \
 
 ## Observability
 
-- `GET /api/health` — liveness; checks the DB. Add `?deep=1` to also probe Proxmox.
+- `GET /api/health` — liveness; checks the DB and answers `{ status, service }`. With the `METRICS_TOKEN` as a Bearer token (or in non-production with no token set) it also returns `checks` and `timestamp`, and `?deep=1` also probes Proxmox.
 - `GET /metrics` — Prometheus metrics (request latency, Proxmox API errors, `proxmate_vm_count`).
   Set `METRICS_TOKEN` to require a Bearer token on this endpoint. **In production `/metrics`
   returns 404 unless `METRICS_TOKEN` is set** — scrape over localhost, or set a token.
