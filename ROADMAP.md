@@ -173,7 +173,7 @@ _Nothing yet._
 - **v0.7.0 — ProxMate IDE (beta).** In-browser code-server + OpenCode AI agent installed natively in
   each tenant VM; per-VM LLM gateway (allow-list, per-VM tokens, streaming, two-layer rate limiting);
   managed isolation-consistent `:8080` firewall pinhole; min-spec guardrails (RAM floor, `cpu:host`/AVX);
-  install + cloud-init **deploy locks**; `DEPLOY_WITH_CLAUDE.md` agent-guided deploy runbook. Off by
+  install + cloud-init **deploy locks**; `DEPLOY_WITH_AN_AGENT.md` agent-guided deploy runbook. Off by
   default. See `docs/proxmate-ide.md`.
 - **v0.6.x — GPU/PCI passthrough hardening + cluster ops.** Passthrough request→admin-attach workflow
   with auto-migration to the device's node, live migration progress bar, and a pre-flight

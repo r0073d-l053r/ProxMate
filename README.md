@@ -174,7 +174,7 @@ single HTTPS origin behind your own reverse proxy, `--dir` to install elsewhere,
 `--ref` to pin a version, `--no-start` to write the configuration without building.
 Run `bash install.sh --help` for the rest.
 
-**Prefer an agent to walk it with you?** [`DEPLOY_WITH_CLAUDE.md`](./DEPLOY_WITH_CLAUDE.md)
+**Prefer an agent to walk it with you?** [`DEPLOY_WITH_AN_AGENT.md`](./DEPLOY_WITH_AN_AGENT.md)
 is a runbook written as executable instructions for a coding agent. It is a supported
 alternative, not a legacy path — point your agent at it and it handles the same deploy
 conversationally.

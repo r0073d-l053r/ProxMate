@@ -191,5 +191,5 @@ allows, as they already do on every other node. `--uninstall` removes it.
 
 ---
 
-*See also: [`../DEPLOYMENT.md`](../DEPLOYMENT.md), [`../DEPLOY_WITH_CLAUDE.md`](../DEPLOY_WITH_CLAUDE.md)
+*See also: [`../DEPLOYMENT.md`](../DEPLOYMENT.md), [`../DEPLOY_WITH_AN_AGENT.md`](../DEPLOY_WITH_AN_AGENT.md)
 (agent-guided deploy), [`../SECURITY.md`](../SECURITY.md), and [`admin-guide.md`](admin-guide.md).*

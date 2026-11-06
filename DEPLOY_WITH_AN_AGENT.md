@@ -1,12 +1,12 @@
-# Deploy ProxMate with Claude Code
+# Deploy ProxMate with a coding agent
 
-This file is an **executable runbook for an AI agent** (Claude Code). Point Claude Code
-at it and it will stand up a production-ready ProxMate — the same shape as a hand-built
+This file is an **executable runbook for an AI coding agent**. Point an agent that can run
+shell commands at it and it will stand up a production-ready ProxMate — the same shape as a hand-built
 deployment: HTTPS, tenant isolation, and (optionally) the in-guest IDE — while stopping to
 confirm every action that touches production or handles a secret.
 
-> **How a human invokes this:** open Claude Code in a clone of this repo (or on the target
-> server) and say: *"Follow DEPLOY_WITH_CLAUDE.md to deploy ProxMate."* Claude Code reads
+> **How a human invokes this:** open your agent in a clone of this repo (or on the target
+> server) and say: *"Follow DEPLOY_WITH_AN_AGENT.md to deploy ProxMate."* The agent reads
 > this file and drives the steps below. **You (the operator) stay in the loop** — you approve
 > each production action and you type every secret yourself.
 

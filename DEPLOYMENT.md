@@ -815,7 +815,7 @@ If you want the per-VM browser IDE, the full setup + security model is in
 - **Owner-only:** the IDE opens only for a VM's owner — not for admins or people the VM is
   shared with. IDEs installed by 1.0.x reinstall once, automatically, on their owner's next open.
 
-Prefer an agent to do it? [`DEPLOY_WITH_CLAUDE.md`](DEPLOY_WITH_CLAUDE.md) covers the IDE in §7.
+Prefer an agent to do it? [`DEPLOY_WITH_AN_AGENT.md`](DEPLOY_WITH_AN_AGENT.md) covers the IDE in §7.
 
 ---
 
