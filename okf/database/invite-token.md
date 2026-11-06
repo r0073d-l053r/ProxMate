@@ -68,7 +68,7 @@ ProxMate registration is invite-only. An admin creates an invite (admin-only rou
 # Gotchas
 
 - `expiresAt` (link lifetime) and `accessDuration` (tenant compute window) are different things and are easy to confuse.[^schema]
-- Because `usedById` is `SET NULL` on user delete, deleting the redeeming user makes an unexpired invite redeemable again.[^init-mig]
+- `usedById` is still `SET NULL` in the schema, so a bare user delete would make the redeemed invite look unused and, if unexpired, redeemable again. `DELETE /api/users/:id` therefore deletes the invite the user redeemed in the same transaction, before the user row. Any other way of deleting a user must do the same.[^init-mig] [^user-routes]
 - `createdById` is `SET NULL`: deleting an admin keeps the invites they issued that were redeemed (creator NULL). `DELETE /api/users/:id` revokes that admin's unredeemed invites in the same transaction.[^creator-mig] [^user-routes]
 
 [^schema]: backend/prisma/schema.prisma

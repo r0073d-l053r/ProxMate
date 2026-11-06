@@ -165,7 +165,7 @@ curl -H "$AUTH" -H 'content-type: application/json' -X POST \
 | `GET /admin/guests/importable` | Proxmox guests ProxMate doesn't manage (no machine references them, no ProxMate tag, not a template): `vmid`, `node`, `name`, `type`, `status`, `cpu`, `ramMb`, `diskGb`, `pool`. |
 | `POST /admin/guests/import` | `{ vmid, ownerId, quotaExempt?, movePool? }` — imports the guest as that user's machine (tagged, default bridge and isolation applied, counted toward their quota unless `quotaExempt`, and added to the configured Proxmox pool). **201** `{ vm, poolNote }`; **409** with the reason when it can't be imported (`code: "pool_move"` when the guest is in another Proxmox pool: resend with `movePool: true` to move it); **403** when it would exceed the owner's quota. |
 | `DELETE /vms/:id?rowOnly=true` | Removes only ProxMate's record and leaves the guest alone. Admin only (**403** otherwise); refused for a machine whose guest is confirmed as its own — delete it normally. |
-| `DELETE /users/:id` | Deletes the account and its machines with their guests. When any machine can't be deleted with its guest, answers **409**, keeps the account and lists those machines in `vms` (`id`, `name`, `proxmoxVmId`, `reason`). |
+| `DELETE /users/:id` | Deletes the account and its machines with their guests, and the invite the account signed up with. When any machine can't be deleted with its guest, answers **409**, keeps the account and lists those machines in `vms` (`id`, `name`, `proxmoxVmId`, `reason`). |
 
 ## Observability
 
