@@ -33,6 +33,12 @@ describe('the error handler', () => {
     expect(errorHandler.length).toBe(4);
   });
 
+  it('comes right after the catch-all 404', () => {
+    // Anything mounted after notFound would be unreachable, so it must be second to last.
+    expect(app).toMatch(/app\.use\(notFound\);\napp\.use\(errorHandler\);/);
+    expect(at('app.use(notFound)')).toBeGreaterThan(at('app.use(MODULE_MOUNT_ROOT, moduleRouter)'));
+  });
+
   it('is the last thing mounted', () => {
     const lastUse = app.lastIndexOf('app.use(');
     expect(app.slice(lastUse)).toMatch(/^app\.use\(errorHandler\);/);
